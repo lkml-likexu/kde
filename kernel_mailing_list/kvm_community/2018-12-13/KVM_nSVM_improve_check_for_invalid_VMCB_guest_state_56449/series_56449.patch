@@ -1,0 +1,179 @@
+From patchwork Thu Dec 13 18:47:19 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+X-Patchwork-Id: 10729611
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 06D3613BF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 13 Dec 2018 18:47:25 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id EC8682C855
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 13 Dec 2018 18:47:24 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id DE0A32C857; Thu, 13 Dec 2018 18:47:24 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-6.9 required=2.0 tests=BAYES_00,FROM_EXCESS_BASE64,
+	MAILING_LIST_MULTI,RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 137152C855
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 13 Dec 2018 18:47:24 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726510AbeLMSrW (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 13 Dec 2018 13:47:22 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:58908 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726448AbeLMSrW (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 13 Dec 2018 13:47:22 -0500
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id F2C2481F0E;
+        Thu, 13 Dec 2018 18:47:21 +0000 (UTC)
+Received: from flask (unknown [10.43.2.138])
+        by smtp.corp.redhat.com (Postfix) with SMTP id 3BDE95D6A9;
+        Thu, 13 Dec 2018 18:47:20 +0000 (UTC)
+Received: by flask (sSMTP sendmail emulation); Thu, 13 Dec 2018 19:47:19 +0100
+Date: Thu, 13 Dec 2018 19:47:19 +0100
+From: Radim =?utf-8?b?S3LEjW3DocWZ?= <rkrcmar@redhat.com>
+To: Jim Mattson <jmattson@google.com>
+Cc: kvm list <kvm@vger.kernel.org>
+Subject: KVM: nSVM: improve check for invalid VMCB guest state
+Message-ID: <20181213184718.GA25132@flask>
+References: 
+ <CALMp9eQKRitA67b=SBW9PX=XiNKLDCcsjbBpKPoJFRx0dFaHDw@mail.gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: inline
+In-Reply-To: 
+ <CALMp9eQKRitA67b=SBW9PX=XiNKLDCcsjbBpKPoJFRx0dFaHDw@mail.gmail.com>
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.27]);
+ Thu, 13 Dec 2018 18:47:22 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+2018-12-12 14:28-0800, Jim Mattson:
+> Just out of curiousity, how does the SVM nested implementation deal
+> with the potential time-of-check to time-of-use bugs that were fixed
+> on the VMX side with commit 4f2777bc9797 ("kvm: x86: nVMX: maintain
+> internal copy of current VMCS")?
+
+It'd be best to move the checks after we load the state.
+
+SVM has a simpler model, where the guest state is checked after loading
+it to the processor and throws a VM exit if something is invalid.
+This means KVM can let the processor do the checks on most fields and
+our pre-check only does three things:
+
+ * intercept contains INTERCEPT_VMRUN
+
+   The check is kind of working because we unconditionally add
+   INTERCEPT_VMRUN later.
+   There is a problem with visibility of writes after the check if we
+   get a write that clears INTERCEPT_VMRUN before a write to VMCB -- the
+   VMRUN will succeed and the later writer will take effect.
+
+ * asid != 0
+
+   Asid is never loaded, but still has the visibility problem.
+
+ * nested_ctl doesn't set SVM_NESTED_CTL_NP_ENABLE when npt is disabled
+
+   Looks buggy as the field could be set after the check.  It creates an
+   interesting scenario where we don't set SVM_NESTED_CTL_NP_ENABLE in
+   nested guest, because we actually preserve the original value, but
+   register npt handlers with nested_svm_init_mmu_context.
+
+I think the solution below could work, but my machine became a BRYCK
+after a reboot, so testing is going to take a while ...
+
+---8<---
+SVM first loads all guest the state and then performs consistency
+checks, triggering an immediate VM exit if some fail.
+
+KVM currently checks some guest state and only then loads it to parent's
+VMCB, which means that the loaded and checked values can differ.  This
+poses a problem with nested->control.nested_ctl, where we could be
+registering NPT handlers in a situation where NPT is disabled in KVM.
+
+We also need to protect nested_svm_init_mmu_context() by npt_enabled, as
+we remove the flimsy condition that was there before.
+
+Reported-by: Jim Mattson <jmattson@google.com>
+Signed-off-by: Radim Krčmář <rkrcmar@redhat.com>
+---
+ arch/x86/kvm/svm.c | 26 +++++++++-----------------
+ 1 file changed, 9 insertions(+), 17 deletions(-)
+
+diff --git a/arch/x86/kvm/svm.c b/arch/x86/kvm/svm.c
+index cc6467b35a85..6db895a4d256 100644
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -3457,12 +3457,6 @@ static void enter_svm_guest_mode(struct vcpu_svm *svm, u64 vmcb_gpa,
+ 	else
+ 		svm->vcpu.arch.hflags &= ~HF_HIF_MASK;
+ 
+-	if (nested_vmcb->control.nested_ctl & SVM_NESTED_CTL_NP_ENABLE) {
+-		kvm_mmu_unload(&svm->vcpu);
+-		svm->nested.nested_cr3 = nested_vmcb->control.nested_cr3;
+-		nested_svm_init_mmu_context(&svm->vcpu);
+-	}
+-
+ 	/* Load the nested guest state */
+ 	svm->vmcb->save.es = nested_vmcb->save.es;
+ 	svm->vmcb->save.cs = nested_vmcb->save.cs;
+@@ -3477,6 +3471,12 @@ static void enter_svm_guest_mode(struct vcpu_svm *svm, u64 vmcb_gpa,
+ 	if (npt_enabled) {
+ 		svm->vmcb->save.cr3 = nested_vmcb->save.cr3;
+ 		svm->vcpu.arch.cr3 = nested_vmcb->save.cr3;
++
++		if (nested_vmcb->control.nested_ctl & SVM_NESTED_CTL_NP_ENABLE) {
++			kvm_mmu_unload(&svm->vcpu);
++			svm->nested.nested_cr3 = nested_vmcb->control.nested_cr3;
++			nested_svm_init_mmu_context(&svm->vcpu);
++		}
+ 	} else
+ 		(void)kvm_set_cr3(&svm->vcpu, nested_vmcb->save.cr3);
+ 
+@@ -3562,17 +3562,6 @@ static bool nested_svm_vmrun(struct vcpu_svm *svm)
+ 	if (!nested_vmcb)
+ 		return false;
+ 
+-	if (!nested_vmcb_checks(nested_vmcb)) {
+-		nested_vmcb->control.exit_code    = SVM_EXIT_ERR;
+-		nested_vmcb->control.exit_code_hi = 0;
+-		nested_vmcb->control.exit_info_1  = 0;
+-		nested_vmcb->control.exit_info_2  = 0;
+-
+-		nested_svm_unmap(page);
+-
+-		return false;
+-	}
+-
+ 	trace_kvm_nested_vmrun(svm->vmcb->save.rip, vmcb_gpa,
+ 			       nested_vmcb->save.rip,
+ 			       nested_vmcb->control.int_ctl,
+@@ -3688,6 +3677,9 @@ static int vmrun_interception(struct vcpu_svm *svm)
+ 	if (!nested_svm_vmrun(svm))
+ 		return 1;
+ 
++	if (!nested_vmcb_checks(svm))
++		goto failed;
++
+ 	if (!nested_svm_vmrun_msrpm(svm))
+ 		goto failed;
+ 

@@ -1,0 +1,1915 @@
+From patchwork Thu Jan 10 18:06:53 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10756597
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 463DB13B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:34 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 35BE729E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:34 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 2A4A429E80; Thu, 10 Jan 2019 18:07:34 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 9453029E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:33 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730741AbfAJSHU (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 10 Jan 2019 13:07:20 -0500
+Received: from mga06.intel.com ([134.134.136.31]:10453 "EHLO mga06.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730177AbfAJSHT (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Jan 2019 13:07:19 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga104.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 10 Jan 2019 10:07:18 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,462,1539673200";
+   d="scan'208";a="137176423"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.154])
+  by fmsmga001.fm.intel.com with ESMTP; 10 Jan 2019 10:07:18 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Xiao Guangrong <guangrong.xiao@gmail.com>
+Subject: [PATCH 01/14] KVM: x86/mmu: Move slot_level_*() helper functions up a
+ few lines
+Date: Thu, 10 Jan 2019 10:06:53 -0800
+Message-Id: <20190110180706.24974-2-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.19.2
+In-Reply-To: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+References: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+...so that kvm_mmu_invalidate_zap_pages_in_memslot() can utilize the
+helpers in future patches.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/mmu.c | 139 +++++++++++++++++++++++----------------------
+ 1 file changed, 70 insertions(+), 69 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index ce770b446238..07ee9b727a68 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -5477,6 +5477,76 @@ void kvm_disable_tdp(void)
+ }
+ EXPORT_SYMBOL_GPL(kvm_disable_tdp);
+ 
++
++/* The return value indicates if tlb flush on all vcpus is needed. */
++typedef bool (*slot_level_handler) (struct kvm *kvm, struct kvm_rmap_head *rmap_head);
++
++/* The caller should hold mmu-lock before calling this function. */
++static __always_inline bool
++slot_handle_level_range(struct kvm *kvm, struct kvm_memory_slot *memslot,
++			slot_level_handler fn, int start_level, int end_level,
++			gfn_t start_gfn, gfn_t end_gfn, bool lock_flush_tlb)
++{
++	struct slot_rmap_walk_iterator iterator;
++	bool flush = false;
++
++	for_each_slot_rmap_range(memslot, start_level, end_level, start_gfn,
++			end_gfn, &iterator) {
++		if (iterator.rmap)
++			flush |= fn(kvm, iterator.rmap);
++
++		if (need_resched() || spin_needbreak(&kvm->mmu_lock)) {
++			if (flush && lock_flush_tlb) {
++				kvm_flush_remote_tlbs(kvm);
++				flush = false;
++			}
++			cond_resched_lock(&kvm->mmu_lock);
++		}
++	}
++
++	if (flush && lock_flush_tlb) {
++		kvm_flush_remote_tlbs(kvm);
++		flush = false;
++	}
++
++	return flush;
++}
++
++static __always_inline bool
++slot_handle_level(struct kvm *kvm, struct kvm_memory_slot *memslot,
++		  slot_level_handler fn, int start_level, int end_level,
++		  bool lock_flush_tlb)
++{
++	return slot_handle_level_range(kvm, memslot, fn, start_level,
++			end_level, memslot->base_gfn,
++			memslot->base_gfn + memslot->npages - 1,
++			lock_flush_tlb);
++}
++
++static __always_inline bool
++slot_handle_all_level(struct kvm *kvm, struct kvm_memory_slot *memslot,
++		      slot_level_handler fn, bool lock_flush_tlb)
++{
++	return slot_handle_level(kvm, memslot, fn, PT_PAGE_TABLE_LEVEL,
++				 PT_MAX_HUGEPAGE_LEVEL, lock_flush_tlb);
++}
++
++static __always_inline bool
++slot_handle_large_level(struct kvm *kvm, struct kvm_memory_slot *memslot,
++			slot_level_handler fn, bool lock_flush_tlb)
++{
++	return slot_handle_level(kvm, memslot, fn, PT_PAGE_TABLE_LEVEL + 1,
++				 PT_MAX_HUGEPAGE_LEVEL, lock_flush_tlb);
++}
++
++static __always_inline bool
++slot_handle_leaf(struct kvm *kvm, struct kvm_memory_slot *memslot,
++		 slot_level_handler fn, bool lock_flush_tlb)
++{
++	return slot_handle_level(kvm, memslot, fn, PT_PAGE_TABLE_LEVEL,
++				 PT_PAGE_TABLE_LEVEL, lock_flush_tlb);
++}
++
+ static void free_mmu_pages(struct kvm_vcpu *vcpu)
+ {
+ 	free_page((unsigned long)vcpu->arch.mmu->pae_root);
+@@ -5551,75 +5621,6 @@ void kvm_mmu_uninit_vm(struct kvm *kvm)
+ 	kvm_page_track_unregister_notifier(kvm, node);
+ }
+ 
+-/* The return value indicates if tlb flush on all vcpus is needed. */
+-typedef bool (*slot_level_handler) (struct kvm *kvm, struct kvm_rmap_head *rmap_head);
+-
+-/* The caller should hold mmu-lock before calling this function. */
+-static __always_inline bool
+-slot_handle_level_range(struct kvm *kvm, struct kvm_memory_slot *memslot,
+-			slot_level_handler fn, int start_level, int end_level,
+-			gfn_t start_gfn, gfn_t end_gfn, bool lock_flush_tlb)
+-{
+-	struct slot_rmap_walk_iterator iterator;
+-	bool flush = false;
+-
+-	for_each_slot_rmap_range(memslot, start_level, end_level, start_gfn,
+-			end_gfn, &iterator) {
+-		if (iterator.rmap)
+-			flush |= fn(kvm, iterator.rmap);
+-
+-		if (need_resched() || spin_needbreak(&kvm->mmu_lock)) {
+-			if (flush && lock_flush_tlb) {
+-				kvm_flush_remote_tlbs(kvm);
+-				flush = false;
+-			}
+-			cond_resched_lock(&kvm->mmu_lock);
+-		}
+-	}
+-
+-	if (flush && lock_flush_tlb) {
+-		kvm_flush_remote_tlbs(kvm);
+-		flush = false;
+-	}
+-
+-	return flush;
+-}
+-
+-static __always_inline bool
+-slot_handle_level(struct kvm *kvm, struct kvm_memory_slot *memslot,
+-		  slot_level_handler fn, int start_level, int end_level,
+-		  bool lock_flush_tlb)
+-{
+-	return slot_handle_level_range(kvm, memslot, fn, start_level,
+-			end_level, memslot->base_gfn,
+-			memslot->base_gfn + memslot->npages - 1,
+-			lock_flush_tlb);
+-}
+-
+-static __always_inline bool
+-slot_handle_all_level(struct kvm *kvm, struct kvm_memory_slot *memslot,
+-		      slot_level_handler fn, bool lock_flush_tlb)
+-{
+-	return slot_handle_level(kvm, memslot, fn, PT_PAGE_TABLE_LEVEL,
+-				 PT_MAX_HUGEPAGE_LEVEL, lock_flush_tlb);
+-}
+-
+-static __always_inline bool
+-slot_handle_large_level(struct kvm *kvm, struct kvm_memory_slot *memslot,
+-			slot_level_handler fn, bool lock_flush_tlb)
+-{
+-	return slot_handle_level(kvm, memslot, fn, PT_PAGE_TABLE_LEVEL + 1,
+-				 PT_MAX_HUGEPAGE_LEVEL, lock_flush_tlb);
+-}
+-
+-static __always_inline bool
+-slot_handle_leaf(struct kvm *kvm, struct kvm_memory_slot *memslot,
+-		 slot_level_handler fn, bool lock_flush_tlb)
+-{
+-	return slot_handle_level(kvm, memslot, fn, PT_PAGE_TABLE_LEVEL,
+-				 PT_PAGE_TABLE_LEVEL, lock_flush_tlb);
+-}
+-
+ void kvm_zap_gfn_range(struct kvm *kvm, gfn_t gfn_start, gfn_t gfn_end)
+ {
+ 	struct kvm_memslots *slots;
+
+From patchwork Thu Jan 10 18:06:54 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10756599
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 49C826C2
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:35 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3BC3C29E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:35 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 3024329E80; Thu, 10 Jan 2019 18:07:35 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id DB87F29E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:34 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730804AbfAJSHd (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 10 Jan 2019 13:07:33 -0500
+Received: from mga06.intel.com ([134.134.136.31]:10453 "EHLO mga06.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729480AbfAJSHU (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Jan 2019 13:07:20 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga104.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 10 Jan 2019 10:07:18 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,462,1539673200";
+   d="scan'208";a="137176424"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.154])
+  by fmsmga001.fm.intel.com with ESMTP; 10 Jan 2019 10:07:18 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Xiao Guangrong <guangrong.xiao@gmail.com>
+Subject: [PATCH 02/14] KVM: x86/mmu: Split remote_flush+zap case out of
+ kvm_mmu_flush_or_zap()
+Date: Thu, 10 Jan 2019 10:06:54 -0800
+Message-Id: <20190110180706.24974-3-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.19.2
+In-Reply-To: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+References: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+...and into a separate helper, kvm_mmu_remote_flush_or_zap(), that does
+not require a vcpu so that the code can be (re)used by
+kvm_mmu_invalidate_zap_pages_in_memslot().
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/mmu.c | 22 ++++++++++++++++------
+ 1 file changed, 16 insertions(+), 6 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index 07ee9b727a68..0f43458f3782 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -2231,18 +2231,28 @@ static bool __kvm_sync_page(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
+ 	return true;
+ }
+ 
++static bool kvm_mmu_remote_flush_or_zap(struct kvm *kvm,
++					struct list_head *invalid_list,
++					bool remote_flush)
++{
++	if (!remote_flush && !list_empty(invalid_list))
++		return false;
++
++	if (remote_flush)
++		kvm_flush_remote_tlbs(kvm);
++	else
++		kvm_mmu_commit_zap_page(kvm, invalid_list);
++	return true;
++}
++
+ static void kvm_mmu_flush_or_zap(struct kvm_vcpu *vcpu,
+ 				 struct list_head *invalid_list,
+ 				 bool remote_flush, bool local_flush)
+ {
+-	if (!list_empty(invalid_list)) {
+-		kvm_mmu_commit_zap_page(vcpu->kvm, invalid_list);
++	if (kvm_mmu_remote_flush_or_zap(vcpu->kvm, invalid_list, remote_flush))
+ 		return;
+-	}
+ 
+-	if (remote_flush)
+-		kvm_flush_remote_tlbs(vcpu->kvm);
+-	else if (local_flush)
++	if (local_flush)
+ 		kvm_make_request(KVM_REQ_TLB_FLUSH, vcpu);
+ }
+ 
+
+From patchwork Thu Jan 10 18:06:55 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10756581
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 356FA17E1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:22 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 26A6329E19
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:22 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 1AE6229E78; Thu, 10 Jan 2019 18:07:22 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A528A29E19
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:21 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730747AbfAJSHU (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 10 Jan 2019 13:07:20 -0500
+Received: from mga06.intel.com ([134.134.136.31]:10460 "EHLO mga06.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730700AbfAJSHU (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Jan 2019 13:07:20 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga104.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 10 Jan 2019 10:07:19 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,462,1539673200";
+   d="scan'208";a="137176425"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.154])
+  by fmsmga001.fm.intel.com with ESMTP; 10 Jan 2019 10:07:18 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Xiao Guangrong <guangrong.xiao@gmail.com>
+Subject: [PATCH 03/14] KVM: x86/mmu: Zap only the relevant pages when removing
+ a memslot
+Date: Thu, 10 Jan 2019 10:06:55 -0800
+Message-Id: <20190110180706.24974-4-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.19.2
+In-Reply-To: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+References: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Modify kvm_mmu_invalidate_zap_pages_in_memslot(), a.k.a. the x86 MMU's
+handler for kvm_arch_flush_shadow_memslot(), to zap only the pages/PTEs
+that actually belong to the memslot being removed.  This improves
+performance, especially why the deleted memslot has only a few shadow
+entries, or even no entries.  E.g. a microbenchmark to access regular
+memory while concurrently reading PCI ROM to trigger memslot deletion
+showed a 5% improvement in throughput.
+
+Cc: Xiao Guangrong <guangrong.xiao@gmail.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/mmu.c | 33 ++++++++++++++++++++++++++++++++-
+ 1 file changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index 0f43458f3782..bb56beb166e4 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -5612,7 +5612,38 @@ static void kvm_mmu_invalidate_zap_pages_in_memslot(struct kvm *kvm,
+ 			struct kvm_memory_slot *slot,
+ 			struct kvm_page_track_notifier_node *node)
+ {
+-	kvm_mmu_invalidate_zap_all_pages(kvm);
++	struct kvm_mmu_page *sp;
++	LIST_HEAD(invalid_list);
++	unsigned long i;
++	bool flush;
++	gfn_t gfn;
++
++	spin_lock(&kvm->mmu_lock);
++
++	if (list_empty(&kvm->arch.active_mmu_pages))
++		goto out_unlock;
++
++	flush = slot_handle_all_level(kvm, slot, kvm_zap_rmapp, false);
++
++	for (i = 0; i < slot->npages; i++) {
++		gfn = slot->base_gfn + i;
++
++		for_each_valid_sp(kvm, sp, gfn) {
++			if (sp->gfn != gfn)
++				continue;
++
++			kvm_mmu_prepare_zap_page(kvm, sp, &invalid_list);
++		}
++		if (need_resched() || spin_needbreak(&kvm->mmu_lock)) {
++			kvm_mmu_remote_flush_or_zap(kvm, &invalid_list, flush);
++			flush = false;
++			cond_resched_lock(&kvm->mmu_lock);
++		}
++	}
++	kvm_mmu_remote_flush_or_zap(kvm, &invalid_list, flush);
++
++out_unlock:
++	spin_unlock(&kvm->mmu_lock);
+ }
+ 
+ void kvm_mmu_init_vm(struct kvm *kvm)
+
+From patchwork Thu Jan 10 18:06:56 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10756587
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id A842013B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:26 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 999A829E19
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:26 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 8DBD229E80; Thu, 10 Jan 2019 18:07:26 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 0CA0A29E19
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:26 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730841AbfAJSHZ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 10 Jan 2019 13:07:25 -0500
+Received: from mga06.intel.com ([134.134.136.31]:10460 "EHLO mga06.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730707AbfAJSHV (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Jan 2019 13:07:21 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga104.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 10 Jan 2019 10:07:19 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,462,1539673200";
+   d="scan'208";a="137176426"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.154])
+  by fmsmga001.fm.intel.com with ESMTP; 10 Jan 2019 10:07:18 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Xiao Guangrong <guangrong.xiao@gmail.com>
+Subject: [PATCH 04/14] Revert "KVM: MMU: document fast invalidate all pages"
+Date: Thu, 10 Jan 2019 10:06:56 -0800
+Message-Id: <20190110180706.24974-5-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.19.2
+In-Reply-To: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+References: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Remove x86 KVM's fast invalidate mechanism, i.e. revert all patches
+from the original series[1].
+
+Though not explicitly stated, for all intents and purposes the fast
+invalidate mechanism was added to speed up the scenario where removing
+a memslot, e.g. as part of accessing reading PCI ROM, caused KVM to
+flush all shadow entries[1].  Now that the memslot case flushes only
+shadow entries belonging to the memslot, i.e. doesn't use the fast
+invalidate mechanism, the only remaining usage of the mechanism are
+when the VM is being destroyed and when the MMIO generation rolls
+over.
+
+When a VM is being destroyed, either there are no active vcpus, i.e.
+there's no lock contention, or the VM has ungracefully terminated, in
+which case we want to reclaim its pages as quickly as possible, i.e.
+not release the MMU lock if there are still CPUs executing in the VM.
+
+The MMIO generation scenario is almost literally a one-in-a-million
+occurrence, i.e. is not a performance sensitive scenario.
+
+Given that lock-breaking is not desirable (VM teardown) or irrelevant
+(MMIO generation overflow), remove the fast invalidate mechanism to
+simplify the code (a small amount) and to discourage future code from
+zapping all pages as using such a big hammer should be a last restort.
+
+This reverts commit f6f8adeef542a18b1cb26a0b772c9781a10bb477.
+
+[1] https://lkml.kernel.org/r/1369960590-14138-1-git-send-email-xiaoguangrong@linux.vnet.ibm.com
+
+Cc: Xiao Guangrong <guangrong.xiao@gmail.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ Documentation/virtual/kvm/mmu.txt | 28 +---------------------------
+ arch/x86/include/asm/kvm_host.h   |  3 ---
+ 2 files changed, 1 insertion(+), 30 deletions(-)
+
+diff --git a/Documentation/virtual/kvm/mmu.txt b/Documentation/virtual/kvm/mmu.txt
+index e507a9e0421e..be1c573e7611 100644
+--- a/Documentation/virtual/kvm/mmu.txt
++++ b/Documentation/virtual/kvm/mmu.txt
+@@ -224,10 +224,6 @@ Shadow pages contain the following information:
+     A bitmap indicating which sptes in spt point (directly or indirectly) at
+     pages that may be unsynchronized.  Used to quickly locate all unsychronized
+     pages reachable from a given page.
+-  mmu_valid_gen:
+-    Generation number of the page.  It is compared with kvm->arch.mmu_valid_gen
+-    during hash table lookup, and used to skip invalidated shadow pages (see
+-    "Zapping all pages" below.)
+   clear_spte_count:
+     Only present on 32-bit hosts, where a 64-bit spte cannot be written
+     atomically.  The reader uses this while running out of the MMU lock
+@@ -402,27 +398,6 @@ causes its disallow_lpage to be incremented, thus preventing instantiation of
+ a large spte.  The frames at the end of an unaligned memory slot have
+ artificially inflated ->disallow_lpages so they can never be instantiated.
+ 
+-Zapping all pages (page generation count)
+-=========================================
+-
+-For the large memory guests, walking and zapping all pages is really slow
+-(because there are a lot of pages), and also blocks memory accesses of
+-all VCPUs because it needs to hold the MMU lock.
+-
+-To make it be more scalable, kvm maintains a global generation number
+-which is stored in kvm->arch.mmu_valid_gen.  Every shadow page stores
+-the current global generation-number into sp->mmu_valid_gen when it
+-is created.  Pages with a mismatching generation number are "obsolete".
+-
+-When KVM need zap all shadow pages sptes, it just simply increases the global
+-generation-number then reload root shadow pages on all vcpus.  As the VCPUs
+-create new shadow page tables, the old pages are not used because of the
+-mismatching generation number.
+-
+-KVM then walks through all pages and zaps obsolete pages.  While the zap
+-operation needs to take the MMU lock, the lock can be released periodically
+-so that the VCPUs can make progress.
+-
+ Fast invalidation of MMIO sptes
+ ===============================
+ 
+@@ -435,8 +410,7 @@ shadow pages, and is made more scalable with a similar technique.
+ MMIO sptes have a few spare bits, which are used to store a
+ generation number.  The global generation number is stored in
+ kvm_memslots(kvm)->generation, and increased whenever guest memory info
+-changes.  This generation number is distinct from the one described in
+-the previous section.
++changes.
+ 
+ When KVM finds an MMIO spte, it checks the generation number of the spte.
+ If the generation number of the spte does not equal the global generation
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 4660ce90de7f..31d05f0ef6d0 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -332,10 +332,7 @@ struct kvm_mmu_page {
+ 	int root_count;          /* Currently serving as active root */
+ 	unsigned int unsync_children;
+ 	struct kvm_rmap_head parent_ptes; /* rmap pointers to parent sptes */
+-
+-	/* The page is obsolete if mmu_valid_gen != kvm->arch.mmu_valid_gen.  */
+ 	unsigned long mmu_valid_gen;
+-
+ 	DECLARE_BITMAP(unsync_child_bitmap, 512);
+ 
+ #ifdef CONFIG_X86_32
+
+From patchwork Thu Jan 10 18:06:57 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10756589
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 0ED5817E1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:27 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 0079B29E19
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:27 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id E8DBE29E7D; Thu, 10 Jan 2019 18:07:26 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 88E2F29E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:26 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730845AbfAJSHZ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 10 Jan 2019 13:07:25 -0500
+Received: from mga06.intel.com ([134.134.136.31]:10453 "EHLO mga06.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730700AbfAJSHU (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Jan 2019 13:07:20 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga104.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 10 Jan 2019 10:07:19 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,462,1539673200";
+   d="scan'208";a="137176427"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.154])
+  by fmsmga001.fm.intel.com with ESMTP; 10 Jan 2019 10:07:18 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Xiao Guangrong <guangrong.xiao@gmail.com>
+Subject: [PATCH 05/14] Revert "KVM: MMU: drop kvm_mmu_zap_mmio_sptes"
+Date: Thu, 10 Jan 2019 10:06:57 -0800
+Message-Id: <20190110180706.24974-6-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.19.2
+In-Reply-To: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+References: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Revert back to a dedicated (and slower) mechanism for handling the
+scenario where all MMIO shadow PTEs need to be zapped due to overflowing
+the MMIO generation number.  The MMIO generation scenario is almost
+literally a one-in-a-million occurrence, i.e. is not a performance
+sensitive scenario.
+
+Restoring kvm_mmu_zap_mmio_sptes() leaves VM teardown as the only user
+of kvm_mmu_invalidate_zap_all_pages() and paves the way for removing
+the fast invalidate mechanism altogether.
+
+This reverts commit a8eca9dcc656a405a28ffba43f3d86a1ff0eb331.
+
+Cc: Xiao Guangrong <guangrong.xiao@gmail.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  1 +
+ arch/x86/kvm/mmu.c              | 22 +++++++++++++++++++++-
+ 2 files changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 31d05f0ef6d0..c2d49ad19a25 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -318,6 +318,7 @@ struct kvm_mmu_page {
+ 	struct list_head link;
+ 	struct hlist_node hash_link;
+ 	bool unsync;
++	bool mmio_cached;
+ 
+ 	/*
+ 	 * The following two entries are used to key the shadow page in the
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index bb56beb166e4..df41193aba38 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -386,6 +386,8 @@ static void mark_mmio_spte(struct kvm_vcpu *vcpu, u64 *sptep, u64 gfn,
+ 	mask |= (gpa & shadow_nonpresent_or_rsvd_mask)
+ 		<< shadow_nonpresent_or_rsvd_mask_len;
+ 
++	page_header(__pa(sptep))->mmio_cached = true;
++
+ 	trace_mark_mmio_spte(sptep, gfn, access, gen);
+ 	mmu_spte_set(sptep, mask);
+ }
+@@ -5932,6 +5934,24 @@ static bool kvm_has_zapped_obsolete_pages(struct kvm *kvm)
+ 	return unlikely(!list_empty_careful(&kvm->arch.zapped_obsolete_pages));
+ }
+ 
++static void kvm_mmu_zap_mmio_sptes(struct kvm *kvm)
++{
++	struct kvm_mmu_page *sp, *node;
++	LIST_HEAD(invalid_list);
++
++	spin_lock(&kvm->mmu_lock);
++restart:
++	list_for_each_entry_safe(sp, node, &kvm->arch.active_mmu_pages, link) {
++		if (!sp->mmio_cached)
++			continue;
++		if (kvm_mmu_prepare_zap_page(kvm, sp, &invalid_list))
++			goto restart;
++	}
++
++	kvm_mmu_commit_zap_page(kvm, &invalid_list);
++	spin_unlock(&kvm->mmu_lock);
++}
++
+ void kvm_mmu_invalidate_mmio_sptes(struct kvm *kvm, struct kvm_memslots *slots)
+ {
+ 	/*
+@@ -5940,7 +5960,7 @@ void kvm_mmu_invalidate_mmio_sptes(struct kvm *kvm, struct kvm_memslots *slots)
+ 	 */
+ 	if (unlikely((slots->generation & MMIO_GEN_MASK) == 0)) {
+ 		kvm_debug_ratelimited("kvm: zapping shadow pages for mmio generation wraparound\n");
+-		kvm_mmu_invalidate_zap_all_pages(kvm);
++		kvm_mmu_zap_mmio_sptes(kvm);
+ 	}
+ }
+ 
+
+From patchwork Thu Jan 10 18:06:58 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10756583
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id F34A46C2
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:23 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E567429E19
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:23 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id D9F1D29E7D; Thu, 10 Jan 2019 18:07:23 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7CC5C29E19
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:23 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730783AbfAJSHW (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 10 Jan 2019 13:07:22 -0500
+Received: from mga06.intel.com ([134.134.136.31]:10453 "EHLO mga06.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730765AbfAJSHV (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Jan 2019 13:07:21 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga104.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 10 Jan 2019 10:07:19 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,462,1539673200";
+   d="scan'208";a="137176428"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.154])
+  by fmsmga001.fm.intel.com with ESMTP; 10 Jan 2019 10:07:19 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Xiao Guangrong <guangrong.xiao@gmail.com>
+Subject: [PATCH 06/14] KVM: x86/mmu: Remove is_obsolete() call
+Date: Thu, 10 Jan 2019 10:06:58 -0800
+Message-Id: <20190110180706.24974-7-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.19.2
+In-Reply-To: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+References: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Unwinding usage of is_obsolete() is a step towards removing x86's fast
+invalidate mechanism, i.e. this is one part of a revert all patches from
+the series that introduced the mechanism[1].
+
+This is a partial revert of commit 05988d728dcd ("KVM: MMU: reduce
+KVM_REQ_MMU_RELOAD when root page is zapped").
+
+[1] https://lkml.kernel.org/r/1369960590-14138-1-git-send-email-xiaoguangrong@linux.vnet.ibm.com
+
+Cc: Xiao Guangrong <guangrong.xiao@gmail.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/mmu.c | 6 +-----
+ 1 file changed, 1 insertion(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index df41193aba38..3d92c49003b0 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -2704,11 +2704,7 @@ static int kvm_mmu_prepare_zap_page(struct kvm *kvm, struct kvm_mmu_page *sp,
+ 	} else {
+ 		list_move(&sp->link, &kvm->arch.active_mmu_pages);
+ 
+-		/*
+-		 * The obsolete pages can not be used on any vcpus.
+-		 * See the comments in kvm_mmu_invalidate_zap_all_pages().
+-		 */
+-		if (!sp->role.invalid && !is_obsolete_sp(kvm, sp))
++		if (!sp->role.invalid)
+ 			kvm_reload_remote_mmus(kvm);
+ 	}
+ 
+
+From patchwork Thu Jan 10 18:07:00 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10756595
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 28CB213B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:32 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1928229E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:32 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 0D8E629E80; Thu, 10 Jan 2019 18:07:32 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 9F3BF29E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:31 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730824AbfAJSHY (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 10 Jan 2019 13:07:24 -0500
+Received: from mga06.intel.com ([134.134.136.31]:10453 "EHLO mga06.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730776AbfAJSHV (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Jan 2019 13:07:21 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga104.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 10 Jan 2019 10:07:19 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,462,1539673200";
+   d="scan'208";a="137176432"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.154])
+  by fmsmga001.fm.intel.com with ESMTP; 10 Jan 2019 10:07:19 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Xiao Guangrong <guangrong.xiao@gmail.com>
+Subject: [PATCH 08/14] Revert "KVM: MMU: collapse TLB flushes when zap all
+ pages"
+Date: Thu, 10 Jan 2019 10:07:00 -0800
+Message-Id: <20190110180706.24974-9-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.19.2
+In-Reply-To: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+References: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Unwinding optimizations related to obsolete pages is a step towards
+removing x86 KVM's fast invalidate mechanism, i.e. this is one part of
+a revert all patches from the series that introduced the mechanism[1].
+
+This reverts commit f34d251d66ba263c077ed9d2bbd1874339a4c887.
+
+[1] https://lkml.kernel.org/r/1369960590-14138-1-git-send-email-xiaoguangrong@linux.vnet.ibm.com
+
+Cc: Xiao Guangrong <guangrong.xiao@gmail.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/mmu.c | 31 +++----------------------------
+ 1 file changed, 3 insertions(+), 28 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index df76255c8568..178b47de011f 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -2202,14 +2202,6 @@ static int kvm_mmu_prepare_zap_page(struct kvm *kvm, struct kvm_mmu_page *sp,
+ static void kvm_mmu_commit_zap_page(struct kvm *kvm,
+ 				    struct list_head *invalid_list);
+ 
+-/*
+- * NOTE: we should pay more attention on the zapped-obsolete page
+- * (is_obsolete_sp(sp) && sp->role.invalid) when you do hash list walk
+- * since it has been deleted from active_mmu_pages but still can be found
+- * at hast list.
+- *
+- * for_each_valid_sp() has skipped that kind of pages.
+- */
+ #define for_each_valid_sp(_kvm, _sp, _gfn)				\
+ 	hlist_for_each_entry(_sp,					\
+ 	  &(_kvm)->arch.mmu_page_hash[kvm_page_table_hashfn(_gfn)], hash_link) \
+@@ -5871,13 +5863,11 @@ static void kvm_zap_obsolete_pages(struct kvm *kvm)
+ 		if (sp->role.invalid)
+ 			continue;
+ 
+-		/*
+-		 * Need not flush tlb since we only zap the sp with invalid
+-		 * generation number.
+-		 */
+ 		if (batch >= BATCH_ZAP_PAGES &&
+-		      cond_resched_lock(&kvm->mmu_lock)) {
++		      (need_resched() || spin_needbreak(&kvm->mmu_lock))) {
+ 			batch = 0;
++			kvm_mmu_commit_zap_page(kvm, &invalid_list);
++			cond_resched_lock(&kvm->mmu_lock);
+ 			goto restart;
+ 		}
+ 
+@@ -5888,10 +5878,6 @@ static void kvm_zap_obsolete_pages(struct kvm *kvm)
+ 			goto restart;
+ 	}
+ 
+-	/*
+-	 * Should flush tlb before free page tables since lockless-walking
+-	 * may use the pages.
+-	 */
+ 	kvm_mmu_commit_zap_page(kvm, &invalid_list);
+ }
+ 
+@@ -5910,17 +5896,6 @@ void kvm_mmu_invalidate_zap_all_pages(struct kvm *kvm)
+ 	trace_kvm_mmu_invalidate_zap_all_pages(kvm);
+ 	kvm->arch.mmu_valid_gen++;
+ 
+-	/*
+-	 * Notify all vcpus to reload its shadow page table
+-	 * and flush TLB. Then all vcpus will switch to new
+-	 * shadow page table with the new mmu_valid_gen.
+-	 *
+-	 * Note: we should do this under the protection of
+-	 * mmu-lock, otherwise, vcpu would purge shadow page
+-	 * but miss tlb flush.
+-	 */
+-	kvm_reload_remote_mmus(kvm);
+-
+ 	kvm_zap_obsolete_pages(kvm);
+ 	spin_unlock(&kvm->mmu_lock);
+ }
+
+From patchwork Thu Jan 10 18:07:01 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10756601
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 0FACC13B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:37 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 01C1729E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:37 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id E9D5A29E80; Thu, 10 Jan 2019 18:07:36 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 880FF29E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:36 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730858AbfAJSHf (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 10 Jan 2019 13:07:35 -0500
+Received: from mga02.intel.com ([134.134.136.20]:30783 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730811AbfAJSHf (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Jan 2019 13:07:35 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 10 Jan 2019 10:07:19 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,462,1539673200";
+   d="scan'208";a="137176434"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.154])
+  by fmsmga001.fm.intel.com with ESMTP; 10 Jan 2019 10:07:19 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Xiao Guangrong <guangrong.xiao@gmail.com>
+Subject: [PATCH 09/14] Revert "KVM: MMU: zap pages in batch"
+Date: Thu, 10 Jan 2019 10:07:01 -0800
+Message-Id: <20190110180706.24974-10-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.19.2
+In-Reply-To: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+References: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Unwinding optimizations related to obsolete pages is a step towards
+removing x86 KVM's fast invalidate mechanism, i.e. this is one part of
+a revert all patches from the series that introduced the mechanism[1].
+
+This reverts commit e7d11c7a894986a13817c1c001e1e7668c5c4eb4.
+
+[1] https://lkml.kernel.org/r/1369960590-14138-1-git-send-email-xiaoguangrong@linux.vnet.ibm.com
+
+Cc: Xiao Guangrong <guangrong.xiao@gmail.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/mmu.c | 35 ++++++++++++++++++++++++-----------
+ 1 file changed, 24 insertions(+), 11 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index 178b47de011f..431cc545ac92 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -5836,18 +5836,14 @@ void kvm_mmu_slot_set_dirty(struct kvm *kvm,
+ }
+ EXPORT_SYMBOL_GPL(kvm_mmu_slot_set_dirty);
+ 
+-#define BATCH_ZAP_PAGES	10
+ static void kvm_zap_obsolete_pages(struct kvm *kvm)
+ {
+ 	struct kvm_mmu_page *sp, *node;
+ 	LIST_HEAD(invalid_list);
+-	int batch = 0;
+ 
+ restart:
+ 	list_for_each_entry_safe_reverse(sp, node,
+ 	      &kvm->arch.active_mmu_pages, link) {
+-		int ret;
+-
+ 		/*
+ 		 * No obsolete page exists before new created page since
+ 		 * active_mmu_pages is the FIFO list.
+@@ -5856,6 +5852,28 @@ static void kvm_zap_obsolete_pages(struct kvm *kvm)
+ 			break;
+ 
+ 		/*
++		 * Do not repeatedly zap a root page to avoid unnecessary
++		 * KVM_REQ_MMU_RELOAD, otherwise we may not be able to
++		 * progress:
++		 *    vcpu 0                        vcpu 1
++		 *                         call vcpu_enter_guest():
++		 *                            1): handle KVM_REQ_MMU_RELOAD
++		 *                                and require mmu-lock to
++		 *                                load mmu
++		 * repeat:
++		 *    1): zap root page and
++		 *        send KVM_REQ_MMU_RELOAD
++		 *
++		 *    2): if (cond_resched_lock(mmu-lock))
++		 *
++		 *                            2): hold mmu-lock and load mmu
++		 *
++		 *                            3): see KVM_REQ_MMU_RELOAD bit
++		 *                                on vcpu->requests is set
++		 *                                then return 1 to call
++		 *                                vcpu_enter_guest() again.
++		 *            goto repeat;
++		 *
+ 		 * Since we are reversely walking the list and the invalid
+ 		 * list will be moved to the head, skip the invalid page
+ 		 * can help us to avoid the infinity list walking.
+@@ -5863,18 +5881,13 @@ static void kvm_zap_obsolete_pages(struct kvm *kvm)
+ 		if (sp->role.invalid)
+ 			continue;
+ 
+-		if (batch >= BATCH_ZAP_PAGES &&
+-		      (need_resched() || spin_needbreak(&kvm->mmu_lock))) {
+-			batch = 0;
++		if (need_resched() || spin_needbreak(&kvm->mmu_lock)) {
+ 			kvm_mmu_commit_zap_page(kvm, &invalid_list);
+ 			cond_resched_lock(&kvm->mmu_lock);
+ 			goto restart;
+ 		}
+ 
+-		ret = kvm_mmu_prepare_zap_page(kvm, sp, &invalid_list);
+-		batch += ret;
+-
+-		if (ret)
++		if (kvm_mmu_prepare_zap_page(kvm, sp, &invalid_list))
+ 			goto restart;
+ 	}
+ 
+
+From patchwork Thu Jan 10 18:07:02 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10756593
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id CD8F06C2
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:30 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id BF30029E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:30 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id B396529E80; Thu, 10 Jan 2019 18:07:30 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5BF0B29E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:30 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730829AbfAJSHZ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 10 Jan 2019 13:07:25 -0500
+Received: from mga06.intel.com ([134.134.136.31]:10463 "EHLO mga06.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730801AbfAJSHV (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Jan 2019 13:07:21 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga104.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 10 Jan 2019 10:07:19 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,462,1539673200";
+   d="scan'208";a="137176437"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.154])
+  by fmsmga001.fm.intel.com with ESMTP; 10 Jan 2019 10:07:19 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Xiao Guangrong <guangrong.xiao@gmail.com>
+Subject: [PATCH 10/14] Revert "KVM: MMU: add tracepoint for
+ kvm_mmu_invalidate_all_pages"
+Date: Thu, 10 Jan 2019 10:07:02 -0800
+Message-Id: <20190110180706.24974-11-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.19.2
+In-Reply-To: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+References: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+...as part of removing x86 KVM's fast invalidate mechanism, i.e. this
+is one part of a revert all patches from the series that introduced the
+mechanism[1].
+
+This reverts commit 35006126f024f68727c67001b9cb703c38f69268.
+
+[1] https://lkml.kernel.org/r/1369960590-14138-1-git-send-email-xiaoguangrong@linux.vnet.ibm.com
+
+Cc: Xiao Guangrong <guangrong.xiao@gmail.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/mmu.c      |  1 -
+ arch/x86/kvm/mmutrace.h | 21 ---------------------
+ 2 files changed, 22 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index 431cc545ac92..ce5d5ec99fa5 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -5906,7 +5906,6 @@ static void kvm_zap_obsolete_pages(struct kvm *kvm)
+ void kvm_mmu_invalidate_zap_all_pages(struct kvm *kvm)
+ {
+ 	spin_lock(&kvm->mmu_lock);
+-	trace_kvm_mmu_invalidate_zap_all_pages(kvm);
+ 	kvm->arch.mmu_valid_gen++;
+ 
+ 	kvm_zap_obsolete_pages(kvm);
+diff --git a/arch/x86/kvm/mmutrace.h b/arch/x86/kvm/mmutrace.h
+index c73bf4e4988c..cac88910b310 100644
+--- a/arch/x86/kvm/mmutrace.h
++++ b/arch/x86/kvm/mmutrace.h
+@@ -282,27 +282,6 @@ TRACE_EVENT(
+ 	)
+ );
+ 
+-TRACE_EVENT(
+-	kvm_mmu_invalidate_zap_all_pages,
+-	TP_PROTO(struct kvm *kvm),
+-	TP_ARGS(kvm),
+-
+-	TP_STRUCT__entry(
+-		__field(unsigned long, mmu_valid_gen)
+-		__field(unsigned int, mmu_used_pages)
+-	),
+-
+-	TP_fast_assign(
+-		__entry->mmu_valid_gen = kvm->arch.mmu_valid_gen;
+-		__entry->mmu_used_pages = kvm->arch.n_used_mmu_pages;
+-	),
+-
+-	TP_printk("kvm-mmu-valid-gen %lx used_pages %x",
+-		  __entry->mmu_valid_gen, __entry->mmu_used_pages
+-	)
+-);
+-
+-
+ TRACE_EVENT(
+ 	check_mmio_spte,
+ 	TP_PROTO(u64 spte, unsigned int kvm_gen, unsigned int spte_gen),
+
+From patchwork Thu Jan 10 18:07:03 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10756605
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 820D36C2
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:40 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7407F29E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:40 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 68A8F29E93; Thu, 10 Jan 2019 18:07:40 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 144FC29E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:40 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730847AbfAJSHj (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 10 Jan 2019 13:07:39 -0500
+Received: from mga02.intel.com ([134.134.136.20]:30783 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730851AbfAJSHf (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Jan 2019 13:07:35 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 10 Jan 2019 10:07:19 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,462,1539673200";
+   d="scan'208";a="137176438"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.154])
+  by fmsmga001.fm.intel.com with ESMTP; 10 Jan 2019 10:07:19 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Xiao Guangrong <guangrong.xiao@gmail.com>
+Subject: [PATCH 11/14] Revert "KVM: MMU: show mmu_valid_gen in shadow page
+ related tracepoints"
+Date: Thu, 10 Jan 2019 10:07:03 -0800
+Message-Id: <20190110180706.24974-12-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.19.2
+In-Reply-To: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+References: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+...as part of removing x86 KVM's fast invalidate mechanism, i.e. this
+is one part of a revert all patches from the series that introduced the
+mechanism[1].
+
+This reverts commit 2248b023219251908aedda0621251cffc548f258.
+
+[1] https://lkml.kernel.org/r/1369960590-14138-1-git-send-email-xiaoguangrong@linux.vnet.ibm.com
+
+Cc: Xiao Guangrong <guangrong.xiao@gmail.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/mmutrace.h | 21 +++++++++------------
+ 1 file changed, 9 insertions(+), 12 deletions(-)
+
+diff --git a/arch/x86/kvm/mmutrace.h b/arch/x86/kvm/mmutrace.h
+index cac88910b310..9f6c855a0043 100644
+--- a/arch/x86/kvm/mmutrace.h
++++ b/arch/x86/kvm/mmutrace.h
+@@ -8,18 +8,16 @@
+ #undef TRACE_SYSTEM
+ #define TRACE_SYSTEM kvmmmu
+ 
+-#define KVM_MMU_PAGE_FIELDS			\
+-	__field(unsigned long, mmu_valid_gen)	\
+-	__field(__u64, gfn)			\
+-	__field(__u32, role)			\
+-	__field(__u32, root_count)		\
++#define KVM_MMU_PAGE_FIELDS \
++	__field(__u64, gfn) \
++	__field(__u32, role) \
++	__field(__u32, root_count) \
+ 	__field(bool, unsync)
+ 
+-#define KVM_MMU_PAGE_ASSIGN(sp)				\
+-	__entry->mmu_valid_gen = sp->mmu_valid_gen;	\
+-	__entry->gfn = sp->gfn;				\
+-	__entry->role = sp->role.word;			\
+-	__entry->root_count = sp->root_count;		\
++#define KVM_MMU_PAGE_ASSIGN(sp)			     \
++	__entry->gfn = sp->gfn;			     \
++	__entry->role = sp->role.word;		     \
++	__entry->root_count = sp->root_count;        \
+ 	__entry->unsync = sp->unsync;
+ 
+ #define KVM_MMU_PAGE_PRINTK() ({				        \
+@@ -31,9 +29,8 @@
+ 								        \
+ 	role.word = __entry->role;					\
+ 									\
+-	trace_seq_printf(p, "sp gen %lx gfn %llx l%u%s q%u%s %s%s"	\
++	trace_seq_printf(p, "sp gfn %llx l%u%s q%u%s %s%s"		\
+ 			 " %snxe %sad root %u %s%c",			\
+-			 __entry->mmu_valid_gen,			\
+ 			 __entry->gfn, role.level,			\
+ 			 role.cr4_pae ? " pae" : "",			\
+ 			 role.quadrant,					\
+
+From patchwork Thu Jan 10 18:07:04 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10756603
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id AFEB517E1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:37 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A168529E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:37 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 95EEC29E80; Thu, 10 Jan 2019 18:07:37 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 41C8C29E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:37 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730867AbfAJSHg (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 10 Jan 2019 13:07:36 -0500
+Received: from mga02.intel.com ([134.134.136.20]:30783 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730856AbfAJSHf (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Jan 2019 13:07:35 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 10 Jan 2019 10:07:19 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,462,1539673200";
+   d="scan'208";a="137176439"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.154])
+  by fmsmga001.fm.intel.com with ESMTP; 10 Jan 2019 10:07:19 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Xiao Guangrong <guangrong.xiao@gmail.com>
+Subject: [PATCH 12/14] Revert "KVM: x86: use the fast way to invalidate all
+ pages"
+Date: Thu, 10 Jan 2019 10:07:04 -0800
+Message-Id: <20190110180706.24974-13-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.19.2
+In-Reply-To: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+References: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Revert to a slow kvm_mmu_zap_all() for kvm_arch_flush_shadow_all().
+Flushing all shadow entries is only done during VM teardown, i.e.
+kvm_arch_flush_shadow_all() is only called when the associated MM struct
+is being released or when the VM instance is being freed.
+
+In normal operation there aren't any active vCPUs to defer to, and in an
+unexpected teardown KVM deferring to running vCPUs is not desirable.
+
+An argument can be made that KVM should still schedule voluntarily
+during VM teardown (since it's a common path) to play nice with the rest
+of the kernel, but during teardown that can be done without the fast
+invalidate mechanism, e.g. marking the VM as dead to prevent MMU
+activity.
+
+This reverts commit 6ca18b6950f8dee29361722f28f69847724b276f.
+
+Cc: Xiao Guangrong <guangrong.xiao@gmail.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/mmu.c | 15 +++++++++++++++
+ arch/x86/kvm/x86.c |  2 +-
+ 2 files changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index ce5d5ec99fa5..291356af4a00 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -5836,6 +5836,21 @@ void kvm_mmu_slot_set_dirty(struct kvm *kvm,
+ }
+ EXPORT_SYMBOL_GPL(kvm_mmu_slot_set_dirty);
+ 
++void kvm_mmu_zap_all(struct kvm *kvm)
++{
++	struct kvm_mmu_page *sp, *node;
++	LIST_HEAD(invalid_list);
++
++	spin_lock(&kvm->mmu_lock);
++restart:
++	list_for_each_entry_safe(sp, node, &kvm->arch.active_mmu_pages, link)
++		if (kvm_mmu_prepare_zap_page(kvm, sp, &invalid_list))
++			goto restart;
++
++	kvm_mmu_commit_zap_page(kvm, &invalid_list);
++	spin_unlock(&kvm->mmu_lock);
++}
++
+ static void kvm_zap_obsolete_pages(struct kvm *kvm)
+ {
+ 	struct kvm_mmu_page *sp, *node;
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index bd903779610e..5d7def8fabe2 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -9450,7 +9450,7 @@ void kvm_arch_commit_memory_region(struct kvm *kvm,
+ 
+ void kvm_arch_flush_shadow_all(struct kvm *kvm)
+ {
+-	kvm_mmu_invalidate_zap_all_pages(kvm);
++	kvm_mmu_zap_all(kvm);
+ }
+ 
+ void kvm_arch_flush_shadow_memslot(struct kvm *kvm,
+
+From patchwork Thu Jan 10 18:07:05 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10756585
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 5AC0617E1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:24 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4BEED29E19
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:24 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4055D29E78; Thu, 10 Jan 2019 18:07:24 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A90D129E6A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:23 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730696AbfAJSHV (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 10 Jan 2019 13:07:21 -0500
+Received: from mga03.intel.com ([134.134.136.65]:36338 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730756AbfAJSHV (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Jan 2019 13:07:21 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 10 Jan 2019 10:07:20 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,462,1539673200";
+   d="scan'208";a="137176441"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.154])
+  by fmsmga001.fm.intel.com with ESMTP; 10 Jan 2019 10:07:19 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Xiao Guangrong <guangrong.xiao@gmail.com>
+Subject: [PATCH 13/14] Revert "KVM: MMU: fast invalidate all pages"
+Date: Thu, 10 Jan 2019 10:07:05 -0800
+Message-Id: <20190110180706.24974-14-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.19.2
+In-Reply-To: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+References: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Remove x86 KVM's fast invalidate mechanism, i.e. revert all patches
+from the original series[1], now that all users of the fast invalidate
+mechanism are gone.
+
+This reverts commit 5304b8d37c2a5ebca48330f5e7868d240eafbed1.
+
+[1] https://lkml.kernel.org/r/1369960590-14138-1-git-send-email-xiaoguangrong@linux.vnet.ibm.com
+
+Cc: Xiao Guangrong <guangrong.xiao@gmail.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  2 -
+ arch/x86/kvm/mmu.c              | 98 +--------------------------------
+ arch/x86/kvm/mmu.h              |  1 -
+ 3 files changed, 1 insertion(+), 100 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 9dfc618f250d..153470b3e036 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -333,7 +333,6 @@ struct kvm_mmu_page {
+ 	int root_count;          /* Currently serving as active root */
+ 	unsigned int unsync_children;
+ 	struct kvm_rmap_head parent_ptes; /* rmap pointers to parent sptes */
+-	unsigned long mmu_valid_gen;
+ 	DECLARE_BITMAP(unsync_child_bitmap, 512);
+ 
+ #ifdef CONFIG_X86_32
+@@ -844,7 +843,6 @@ struct kvm_arch {
+ 	unsigned int n_requested_mmu_pages;
+ 	unsigned int n_max_mmu_pages;
+ 	unsigned int indirect_shadow_pages;
+-	unsigned long mmu_valid_gen;
+ 	struct hlist_head mmu_page_hash[KVM_NUM_MMU_PAGES];
+ 	/*
+ 	 * Hash table of struct kvm_mmu_page.
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index 291356af4a00..6707500da41a 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -2051,12 +2051,6 @@ static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct
+ 	if (!direct)
+ 		sp->gfns = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_cache);
+ 	set_page_private(virt_to_page(sp->spt), (unsigned long)sp);
+-
+-	/*
+-	 * The active_mmu_pages list is the FIFO list, do not move the
+-	 * page until it is zapped. kvm_zap_obsolete_pages depends on
+-	 * this feature. See the comments in kvm_zap_obsolete_pages().
+-	 */
+ 	list_add(&sp->link, &vcpu->kvm->arch.active_mmu_pages);
+ 	kvm_mod_used_mmu_pages(vcpu->kvm, +1);
+ 	return sp;
+@@ -2205,7 +2199,7 @@ static void kvm_mmu_commit_zap_page(struct kvm *kvm,
+ #define for_each_valid_sp(_kvm, _sp, _gfn)				\
+ 	hlist_for_each_entry(_sp,					\
+ 	  &(_kvm)->arch.mmu_page_hash[kvm_page_table_hashfn(_gfn)], hash_link) \
+-		if (is_obsolete_sp((_kvm), (_sp)) || (_sp)->role.invalid) {    \
++		if ((_sp)->role.invalid) {    \
+ 		} else
+ 
+ #define for_each_gfn_indirect_valid_sp(_kvm, _sp, _gfn)			\
+@@ -2257,11 +2251,6 @@ static void kvm_mmu_audit(struct kvm_vcpu *vcpu, int point) { }
+ static void mmu_audit_disable(void) { }
+ #endif
+ 
+-static bool is_obsolete_sp(struct kvm *kvm, struct kvm_mmu_page *sp)
+-{
+-	return unlikely(sp->mmu_valid_gen != kvm->arch.mmu_valid_gen);
+-}
+-
+ static bool kvm_sync_page(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp,
+ 			 struct list_head *invalid_list)
+ {
+@@ -2486,7 +2475,6 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
+ 		if (level > PT_PAGE_TABLE_LEVEL && need_sync)
+ 			flush |= kvm_sync_pages(vcpu, gfn, &invalid_list);
+ 	}
+-	sp->mmu_valid_gen = vcpu->kvm->arch.mmu_valid_gen;
+ 	clear_page(sp->spt);
+ 	trace_kvm_mmu_get_page(sp, true);
+ 
+@@ -4197,14 +4185,6 @@ static bool fast_cr3_switch(struct kvm_vcpu *vcpu, gpa_t new_cr3,
+ 			return false;
+ 
+ 		if (cached_root_available(vcpu, new_cr3, new_role)) {
+-			/*
+-			 * It is possible that the cached previous root page is
+-			 * obsolete because of a change in the MMU
+-			 * generation number. However, that is accompanied by
+-			 * KVM_REQ_MMU_RELOAD, which will free the root that we
+-			 * have set here and allocate a new one.
+-			 */
+-
+ 			kvm_make_request(KVM_REQ_LOAD_CR3, vcpu);
+ 			if (!skip_tlb_flush) {
+ 				kvm_make_request(KVM_REQ_MMU_SYNC, vcpu);
+@@ -5851,82 +5831,6 @@ void kvm_mmu_zap_all(struct kvm *kvm)
+ 	spin_unlock(&kvm->mmu_lock);
+ }
+ 
+-static void kvm_zap_obsolete_pages(struct kvm *kvm)
+-{
+-	struct kvm_mmu_page *sp, *node;
+-	LIST_HEAD(invalid_list);
+-
+-restart:
+-	list_for_each_entry_safe_reverse(sp, node,
+-	      &kvm->arch.active_mmu_pages, link) {
+-		/*
+-		 * No obsolete page exists before new created page since
+-		 * active_mmu_pages is the FIFO list.
+-		 */
+-		if (!is_obsolete_sp(kvm, sp))
+-			break;
+-
+-		/*
+-		 * Do not repeatedly zap a root page to avoid unnecessary
+-		 * KVM_REQ_MMU_RELOAD, otherwise we may not be able to
+-		 * progress:
+-		 *    vcpu 0                        vcpu 1
+-		 *                         call vcpu_enter_guest():
+-		 *                            1): handle KVM_REQ_MMU_RELOAD
+-		 *                                and require mmu-lock to
+-		 *                                load mmu
+-		 * repeat:
+-		 *    1): zap root page and
+-		 *        send KVM_REQ_MMU_RELOAD
+-		 *
+-		 *    2): if (cond_resched_lock(mmu-lock))
+-		 *
+-		 *                            2): hold mmu-lock and load mmu
+-		 *
+-		 *                            3): see KVM_REQ_MMU_RELOAD bit
+-		 *                                on vcpu->requests is set
+-		 *                                then return 1 to call
+-		 *                                vcpu_enter_guest() again.
+-		 *            goto repeat;
+-		 *
+-		 * Since we are reversely walking the list and the invalid
+-		 * list will be moved to the head, skip the invalid page
+-		 * can help us to avoid the infinity list walking.
+-		 */
+-		if (sp->role.invalid)
+-			continue;
+-
+-		if (need_resched() || spin_needbreak(&kvm->mmu_lock)) {
+-			kvm_mmu_commit_zap_page(kvm, &invalid_list);
+-			cond_resched_lock(&kvm->mmu_lock);
+-			goto restart;
+-		}
+-
+-		if (kvm_mmu_prepare_zap_page(kvm, sp, &invalid_list))
+-			goto restart;
+-	}
+-
+-	kvm_mmu_commit_zap_page(kvm, &invalid_list);
+-}
+-
+-/*
+- * Fast invalidate all shadow pages and use lock-break technique
+- * to zap obsolete pages.
+- *
+- * It's required when memslot is being deleted or VM is being
+- * destroyed, in these cases, we should ensure that KVM MMU does
+- * not use any resource of the being-deleted slot or all slots
+- * after calling the function.
+- */
+-void kvm_mmu_invalidate_zap_all_pages(struct kvm *kvm)
+-{
+-	spin_lock(&kvm->mmu_lock);
+-	kvm->arch.mmu_valid_gen++;
+-
+-	kvm_zap_obsolete_pages(kvm);
+-	spin_unlock(&kvm->mmu_lock);
+-}
+-
+ static void kvm_mmu_zap_mmio_sptes(struct kvm *kvm)
+ {
+ 	struct kvm_mmu_page *sp, *node;
+diff --git a/arch/x86/kvm/mmu.h b/arch/x86/kvm/mmu.h
+index c7b333147c4a..bbdc60f2fae8 100644
+--- a/arch/x86/kvm/mmu.h
++++ b/arch/x86/kvm/mmu.h
+@@ -203,7 +203,6 @@ static inline u8 permission_fault(struct kvm_vcpu *vcpu, struct kvm_mmu *mmu,
+ 	return -(u32)fault & errcode;
+ }
+ 
+-void kvm_mmu_invalidate_zap_all_pages(struct kvm *kvm);
+ void kvm_zap_gfn_range(struct kvm *kvm, gfn_t gfn_start, gfn_t gfn_end);
+ 
+ void kvm_mmu_gfn_disallow_lpage(struct kvm_memory_slot *slot, gfn_t gfn);
+
+From patchwork Thu Jan 10 18:07:06 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10756591
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3CFBC6C2
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:29 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2E2C229E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:29 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 22B5A29E80; Thu, 10 Jan 2019 18:07:29 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id BE4AE29E78
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 10 Jan 2019 18:07:28 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730576AbfAJSHZ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 10 Jan 2019 13:07:25 -0500
+Received: from mga03.intel.com ([134.134.136.65]:36338 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730766AbfAJSHV (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Jan 2019 13:07:21 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 10 Jan 2019 10:07:20 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,462,1539673200";
+   d="scan'208";a="137176442"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.154])
+  by fmsmga001.fm.intel.com with ESMTP; 10 Jan 2019 10:07:19 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Xiao Guangrong <guangrong.xiao@gmail.com>
+Subject: [PATCH 14/14] KVM: x86/mmu: Consolidate kvm_mmu_zap_all() and
+ kvm_mmu_zap_mmio_sptes()
+Date: Thu, 10 Jan 2019 10:07:06 -0800
+Message-Id: <20190110180706.24974-15-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.19.2
+In-Reply-To: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+References: <20190110180706.24974-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+...via a new helper, __kvm_mmu_zap_all().  An alternative to passing a
+'bool mmio_only' would be to pass a callback function to filter the
+shadow page, i.e. to make __kvm_mmu_zap_all() generic and reusable, but
+zapping all shadow pages is a last resort, i.e. making the helper less
+extensible is a feature of sorts.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/mmu.c | 26 ++++++++------------------
+ 1 file changed, 8 insertions(+), 18 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index 6707500da41a..c9134b54125f 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -5816,22 +5816,7 @@ void kvm_mmu_slot_set_dirty(struct kvm *kvm,
+ }
+ EXPORT_SYMBOL_GPL(kvm_mmu_slot_set_dirty);
+ 
+-void kvm_mmu_zap_all(struct kvm *kvm)
+-{
+-	struct kvm_mmu_page *sp, *node;
+-	LIST_HEAD(invalid_list);
+-
+-	spin_lock(&kvm->mmu_lock);
+-restart:
+-	list_for_each_entry_safe(sp, node, &kvm->arch.active_mmu_pages, link)
+-		if (kvm_mmu_prepare_zap_page(kvm, sp, &invalid_list))
+-			goto restart;
+-
+-	kvm_mmu_commit_zap_page(kvm, &invalid_list);
+-	spin_unlock(&kvm->mmu_lock);
+-}
+-
+-static void kvm_mmu_zap_mmio_sptes(struct kvm *kvm)
++static void __kvm_mmu_zap_all(struct kvm *kvm, bool mmio_only)
+ {
+ 	struct kvm_mmu_page *sp, *node;
+ 	LIST_HEAD(invalid_list);
+@@ -5839,7 +5824,7 @@ static void kvm_mmu_zap_mmio_sptes(struct kvm *kvm)
+ 	spin_lock(&kvm->mmu_lock);
+ restart:
+ 	list_for_each_entry_safe(sp, node, &kvm->arch.active_mmu_pages, link) {
+-		if (!sp->mmio_cached)
++		if (mmio_only && !sp->mmio_cached)
+ 			continue;
+ 		if (kvm_mmu_prepare_zap_page(kvm, sp, &invalid_list))
+ 			goto restart;
+@@ -5849,6 +5834,11 @@ static void kvm_mmu_zap_mmio_sptes(struct kvm *kvm)
+ 	spin_unlock(&kvm->mmu_lock);
+ }
+ 
++void kvm_mmu_zap_all(struct kvm *kvm)
++{
++	return __kvm_mmu_zap_all(kvm, false);
++}
++
+ void kvm_mmu_invalidate_mmio_sptes(struct kvm *kvm, struct kvm_memslots *slots)
+ {
+ 	/*
+@@ -5857,7 +5847,7 @@ void kvm_mmu_invalidate_mmio_sptes(struct kvm *kvm, struct kvm_memslots *slots)
+ 	 */
+ 	if (unlikely((slots->generation & MMIO_GEN_MASK) == 0)) {
+ 		kvm_debug_ratelimited("kvm: zapping shadow pages for mmio generation wraparound\n");
+-		kvm_mmu_zap_mmio_sptes(kvm);
++		__kvm_mmu_zap_all(kvm, true);
+ 	}
+ }
+ 

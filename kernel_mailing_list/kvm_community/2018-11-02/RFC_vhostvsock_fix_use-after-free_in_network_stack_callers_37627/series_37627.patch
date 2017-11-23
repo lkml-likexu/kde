@@ -1,0 +1,244 @@
+From patchwork Fri Nov  2 10:50:26 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefan Hajnoczi <stefanha@redhat.com>
+X-Patchwork-Id: 10665263
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id ED85814E2
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  2 Nov 2018 10:50:30 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id DDFC72B1F7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  2 Nov 2018 10:50:30 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id D267B2B226; Fri,  2 Nov 2018 10:50:30 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5284F2B1F7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  2 Nov 2018 10:50:30 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726775AbeKBT5L (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 2 Nov 2018 15:57:11 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:20375 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726059AbeKBT5L (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 2 Nov 2018 15:57:11 -0400
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id B8ACE7AE93
+        for <kvm@vger.kernel.org>; Fri,  2 Nov 2018 10:50:27 +0000 (UTC)
+Received: from localhost (ovpn-116-29.ams2.redhat.com [10.36.116.29])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 49FC25D9C6;
+        Fri,  2 Nov 2018 10:50:27 +0000 (UTC)
+From: Stefan Hajnoczi <stefanha@redhat.com>
+To: kvm@vger.kernel.org
+Cc: jasowang@redhat.com, "Michael S. Tsirkin" <mst@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>
+Subject: [RFC] vhost/vsock: fix use-after-free in network stack callers
+Date: Fri,  2 Nov 2018 10:50:26 +0000
+Message-Id: <20181102105026.28020-1-stefanha@redhat.com>
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.25]);
+ Fri, 02 Nov 2018 10:50:27 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+If the network stack calls .send_pkt()/.cancel_pkt() during .release(),
+a struct vhost_vsock use-after-free is possible.  This occurs because
+.release() does not wait for other CPUs to stop using struct
+vhost_vsock.
+
+Switch to an RCU-enabled hashtable (indexed by guest CID) so that
+.release() can wait for other CPUs by calling synchronize_rcu().  This
+also eliminates vhost_vsock_lock acquisition in the data path so it
+could have a positive effect on performance.
+
+Reported-and-tested-by: syzbot+bd391451452fb0b93039@syzkaller.appspotmail.com
+Reported-by: syzbot+e3e074963495f92a89ed@syzkaller.appspotmail.com
+Reported-by: syzbot+d5a0a170c5069658b141@syzkaller.appspotmail.com
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+---
+Hi Jason,
+Thanks for encouraging me to try the RCU hashtable approach.  This patch
+passes syzbot but I'm going to do some manual testing now.  Thoughts?
+
+ drivers/vhost/vsock.c | 57 +++++++++++++++++++++++++------------------
+ 1 file changed, 33 insertions(+), 24 deletions(-)
+
+diff --git a/drivers/vhost/vsock.c b/drivers/vhost/vsock.c
+index 34bc3ab40c6d..51879ed18652 100644
+--- a/drivers/vhost/vsock.c
++++ b/drivers/vhost/vsock.c
+@@ -15,6 +15,7 @@
+ #include <net/sock.h>
+ #include <linux/virtio_vsock.h>
+ #include <linux/vhost.h>
++#include <linux/hashtable.h>
+ 
+ #include <net/af_vsock.h>
+ #include "vhost.h"
+@@ -27,14 +28,14 @@ enum {
+ 
+ /* Used to track all the vhost_vsock instances on the system. */
+ static DEFINE_SPINLOCK(vhost_vsock_lock);
+-static LIST_HEAD(vhost_vsock_list);
++static DEFINE_READ_MOSTLY_HASHTABLE(vhost_vsock_hash, 8);
+ 
+ struct vhost_vsock {
+ 	struct vhost_dev dev;
+ 	struct vhost_virtqueue vqs[2];
+ 
+-	/* Link to global vhost_vsock_list, protected by vhost_vsock_lock */
+-	struct list_head list;
++	/* Link to global vhost_vsock_hash, writes use vhost_vsock_lock */
++	struct hlist_node hash;
+ 
+ 	struct vhost_work send_pkt_work;
+ 	spinlock_t send_pkt_list_lock;
+@@ -50,11 +51,14 @@ static u32 vhost_transport_get_local_cid(void)
+ 	return VHOST_VSOCK_DEFAULT_HOST_CID;
+ }
+ 
+-static struct vhost_vsock *__vhost_vsock_get(u32 guest_cid)
++/* Callers that dereference the return value must hold vhost_vsock_lock or the
++ * RCU read lock.
++ */
++static struct vhost_vsock *vhost_vsock_get(u32 guest_cid)
+ {
+ 	struct vhost_vsock *vsock;
+ 
+-	list_for_each_entry(vsock, &vhost_vsock_list, list) {
++	hash_for_each_possible_rcu(vhost_vsock_hash, vsock, hash, guest_cid) {
+ 		u32 other_cid = vsock->guest_cid;
+ 
+ 		/* Skip instances that have no CID yet */
+@@ -69,17 +73,6 @@ static struct vhost_vsock *__vhost_vsock_get(u32 guest_cid)
+ 	return NULL;
+ }
+ 
+-static struct vhost_vsock *vhost_vsock_get(u32 guest_cid)
+-{
+-	struct vhost_vsock *vsock;
+-
+-	spin_lock_bh(&vhost_vsock_lock);
+-	vsock = __vhost_vsock_get(guest_cid);
+-	spin_unlock_bh(&vhost_vsock_lock);
+-
+-	return vsock;
+-}
+-
+ static void
+ vhost_transport_do_send_pkt(struct vhost_vsock *vsock,
+ 			    struct vhost_virtqueue *vq)
+@@ -210,9 +203,12 @@ vhost_transport_send_pkt(struct virtio_vsock_pkt *pkt)
+ 	struct vhost_vsock *vsock;
+ 	int len = pkt->len;
+ 
++	rcu_read_lock();
++
+ 	/* Find the vhost_vsock according to guest context id  */
+ 	vsock = vhost_vsock_get(le64_to_cpu(pkt->hdr.dst_cid));
+ 	if (!vsock) {
++		rcu_read_unlock();
+ 		virtio_transport_free_pkt(pkt);
+ 		return -ENODEV;
+ 	}
+@@ -225,6 +221,8 @@ vhost_transport_send_pkt(struct virtio_vsock_pkt *pkt)
+ 	spin_unlock_bh(&vsock->send_pkt_list_lock);
+ 
+ 	vhost_work_queue(&vsock->dev, &vsock->send_pkt_work);
++
++	rcu_read_unlock();
+ 	return len;
+ }
+ 
+@@ -234,12 +232,15 @@ vhost_transport_cancel_pkt(struct vsock_sock *vsk)
+ 	struct vhost_vsock *vsock;
+ 	struct virtio_vsock_pkt *pkt, *n;
+ 	int cnt = 0;
++	int ret = -ENODEV;
+ 	LIST_HEAD(freeme);
+ 
++	rcu_read_lock();
++
+ 	/* Find the vhost_vsock according to guest context id  */
+ 	vsock = vhost_vsock_get(vsk->remote_addr.svm_cid);
+ 	if (!vsock)
+-		return -ENODEV;
++		goto out;
+ 
+ 	spin_lock_bh(&vsock->send_pkt_list_lock);
+ 	list_for_each_entry_safe(pkt, n, &vsock->send_pkt_list, list) {
+@@ -265,7 +266,10 @@ vhost_transport_cancel_pkt(struct vsock_sock *vsk)
+ 			vhost_poll_queue(&tx_vq->poll);
+ 	}
+ 
+-	return 0;
++	ret = 0;
++out:
++	rcu_read_unlock();
++	return ret;
+ }
+ 
+ static struct virtio_vsock_pkt *
+@@ -533,10 +537,6 @@ static int vhost_vsock_dev_open(struct inode *inode, struct file *file)
+ 	spin_lock_init(&vsock->send_pkt_list_lock);
+ 	INIT_LIST_HEAD(&vsock->send_pkt_list);
+ 	vhost_work_init(&vsock->send_pkt_work, vhost_transport_send_pkt_work);
+-
+-	spin_lock_bh(&vhost_vsock_lock);
+-	list_add_tail(&vsock->list, &vhost_vsock_list);
+-	spin_unlock_bh(&vhost_vsock_lock);
+ 	return 0;
+ 
+ out:
+@@ -577,9 +577,13 @@ static int vhost_vsock_dev_release(struct inode *inode, struct file *file)
+ 	struct vhost_vsock *vsock = file->private_data;
+ 
+ 	spin_lock_bh(&vhost_vsock_lock);
+-	list_del(&vsock->list);
++	if (vsock->guest_cid)
++		hash_del_rcu(&vsock->hash);
+ 	spin_unlock_bh(&vhost_vsock_lock);
+ 
++	/* Wait for other CPUs to finish using vsock */
++	synchronize_rcu();
++
+ 	/* Iterating over all connections for all CIDs to find orphans is
+ 	 * inefficient.  Room for improvement here. */
+ 	vsock_for_each_connected_socket(vhost_vsock_reset_orphans);
+@@ -620,12 +624,17 @@ static int vhost_vsock_set_cid(struct vhost_vsock *vsock, u64 guest_cid)
+ 
+ 	/* Refuse if CID is already in use */
+ 	spin_lock_bh(&vhost_vsock_lock);
+-	other = __vhost_vsock_get(guest_cid);
++	other = vhost_vsock_get(guest_cid);
+ 	if (other && other != vsock) {
+ 		spin_unlock_bh(&vhost_vsock_lock);
+ 		return -EADDRINUSE;
+ 	}
++
++	if (vsock->guest_cid)
++		hash_del_rcu(&vsock->hash);
++
+ 	vsock->guest_cid = guest_cid;
++	hash_add_rcu(vhost_vsock_hash, &vsock->hash, guest_cid);
+ 	spin_unlock_bh(&vhost_vsock_lock);
+ 
+ 	return 0;

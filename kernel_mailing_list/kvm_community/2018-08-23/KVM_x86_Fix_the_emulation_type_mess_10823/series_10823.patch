@@ -1,0 +1,1200 @@
+From patchwork Thu Aug 23 20:56:46 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10574555
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 01CE013B6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:09 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E9EAA2C307
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:08 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id DDFE22C33A; Thu, 23 Aug 2018 20:57:08 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 83DF62C3AF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:08 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727626AbeHXA2d (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 Aug 2018 20:28:33 -0400
+Received: from mga14.intel.com ([192.55.52.115]:1999 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727584AbeHXA2c (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 Aug 2018 20:28:32 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga001.jf.intel.com ([10.7.209.18])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Aug 2018 13:57:05 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.53,279,1531810800";
+   d="scan'208";a="84411988"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.132])
+  by orsmga001.jf.intel.com with ESMTP; 23 Aug 2018 13:57:05 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Brijesh Singh <brijesh.singh@amd.com>,
+        Jim Mattson <jmattson@google.com>,
+        Krish Sadhukhan <krish.sadhukhan@oracle.com>,
+        Xiao Guangrong <xiaoguangrong@tencent.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>
+Subject: [PATCH v2 1/8] KVM: VMX: Do not allow reexecute_instruction() when
+ skipping MMIO instr
+Date: Thu, 23 Aug 2018 13:56:46 -0700
+Message-Id: <20180823205653.3264-2-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.18.0
+In-Reply-To: <20180823205653.3264-1-sean.j.christopherson@intel.com>
+References: <20180823205653.3264-1-sean.j.christopherson@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Re-execution after an emulation decode failure is only intended to
+handle a case where two or vCPUs race to write a shadowed page, i.e.
+we should never re-execute an instruction as part of MMIO emulation.
+As handle_ept_misconfig() is only used for MMIO emulation, it should
+pass EMULTYPE_NO_REEXECUTE when using the emulator to skip an instr
+in the fast-MMIO case where VM_EXIT_INSTRUCTION_LEN is invalid.
+
+And because the cr2 value passed to x86_emulate_instruction() is only
+destined for use when retrying or reexecuting, we can simply call
+emulate_instruction().
+
+Fixes: d391f1207067 ("x86/kvm/vmx: do not use vm-exit instruction length
+                      for fast MMIO when running nested")
+Cc: Vitaly Kuznetsov <vkuznets@redhat.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx.c b/arch/x86/kvm/vmx.c
+index 8dae47e7267a..efb5721a6c46 100644
+--- a/arch/x86/kvm/vmx.c
++++ b/arch/x86/kvm/vmx.c
+@@ -7704,8 +7704,8 @@ static int handle_ept_misconfig(struct kvm_vcpu *vcpu)
+ 		if (!static_cpu_has(X86_FEATURE_HYPERVISOR))
+ 			return kvm_skip_emulated_instruction(vcpu);
+ 		else
+-			return x86_emulate_instruction(vcpu, gpa, EMULTYPE_SKIP,
+-						       NULL, 0) == EMULATE_DONE;
++			return emulate_instruction(vcpu, EMULTYPE_SKIP) ==
++								EMULATE_DONE;
+ 	}
+ 
+ 	return kvm_mmu_page_fault(vcpu, gpa, PFERR_RSVD_MASK, NULL, 0);
+
+From patchwork Thu Aug 23 20:56:47 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10574557
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 7C51D1390
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:09 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 6DE282C307
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:09 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 6270D2C391; Thu, 23 Aug 2018 20:57:09 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 099772C307
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:09 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727635AbeHXA2e (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 Aug 2018 20:28:34 -0400
+Received: from mga14.intel.com ([192.55.52.115]:1999 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727134AbeHXA2d (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 Aug 2018 20:28:33 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga001.jf.intel.com ([10.7.209.18])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Aug 2018 13:57:05 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.53,279,1531810800";
+   d="scan'208";a="84411992"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.132])
+  by orsmga001.jf.intel.com with ESMTP; 23 Aug 2018 13:57:05 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Brijesh Singh <brijesh.singh@amd.com>,
+        Jim Mattson <jmattson@google.com>,
+        Krish Sadhukhan <krish.sadhukhan@oracle.com>,
+        Xiao Guangrong <xiaoguangrong@tencent.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>
+Subject: [PATCH v2 2/8] KVM: x86: SVM: Set EMULTYPE_NO_REEXECUTE for RSM
+ emulation
+Date: Thu, 23 Aug 2018 13:56:47 -0700
+Message-Id: <20180823205653.3264-3-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.18.0
+In-Reply-To: <20180823205653.3264-1-sean.j.christopherson@intel.com>
+References: <20180823205653.3264-1-sean.j.christopherson@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Re-execution after an emulation decode failure is only intended to
+handle a case where two or vCPUs race to write a shadowed page, i.e.
+we should never re-execute an instruction as part of RSM emulation.
+
+Add a new helper, kvm_emulate_instruction_from_buffer(), to support
+emulating from a pre-defined buffer.  This eliminates the last direct
+call to x86_emulate_instruction() outside of kvm_mmu_page_fault(),
+which means x86_emulate_instruction() can be unexported in a future
+patch.
+
+Fixes: 7607b7174405 ("KVM: SVM: install RSM intercept")
+Cc: Brijesh Singh <brijesh.singh@amd.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h | 7 +++++++
+ arch/x86/kvm/svm.c              | 4 ++--
+ 2 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 00ddb0c9e612..3b220b86c8e4 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1251,6 +1251,13 @@ static inline int emulate_instruction(struct kvm_vcpu *vcpu,
+ 			emulation_type | EMULTYPE_NO_REEXECUTE, NULL, 0);
+ }
+ 
++static inline int kvm_emulate_instruction_from_buffer(struct kvm_vcpu *vcpu,
++						      void *insn, int insn_len)
++{
++	return x86_emulate_instruction(vcpu, 0, EMULTYPE_NO_REEXECUTE,
++				       insn, insn_len);
++}
++
+ void kvm_enable_efer_bits(u64);
+ bool kvm_valid_efer(struct kvm_vcpu *vcpu, u64 efer);
+ int kvm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr);
+diff --git a/arch/x86/kvm/svm.c b/arch/x86/kvm/svm.c
+index 6276140044d0..f50c6ecffad9 100644
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -3874,8 +3874,8 @@ static int emulate_on_interception(struct vcpu_svm *svm)
+ 
+ static int rsm_interception(struct vcpu_svm *svm)
+ {
+-	return x86_emulate_instruction(&svm->vcpu, 0, 0,
+-				       rsm_ins_bytes, 2) == EMULATE_DONE;
++	return kvm_emulate_instruction_from_buffer(&svm->vcpu,
++					rsm_ins_bytes, 2) == EMULATE_DONE;
+ }
+ 
+ static int rdpmc_interception(struct vcpu_svm *svm)
+
+From patchwork Thu Aug 23 20:56:48 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10574563
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 7291C1390
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:13 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 67A932C307
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:13 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 5B9E42C37F; Thu, 23 Aug 2018 20:57:13 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 009EF2C307
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727629AbeHXA2d (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 Aug 2018 20:28:33 -0400
+Received: from mga14.intel.com ([192.55.52.115]:2009 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727622AbeHXA2d (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 Aug 2018 20:28:33 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga001.jf.intel.com ([10.7.209.18])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Aug 2018 13:57:06 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.53,279,1531810800";
+   d="scan'208";a="84411995"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.132])
+  by orsmga001.jf.intel.com with ESMTP; 23 Aug 2018 13:57:05 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Brijesh Singh <brijesh.singh@amd.com>,
+        Jim Mattson <jmattson@google.com>,
+        Krish Sadhukhan <krish.sadhukhan@oracle.com>,
+        Xiao Guangrong <xiaoguangrong@tencent.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>
+Subject: [PATCH v2 3/8] KVM: x86: Invert emulation re-execute behavior to make
+ it opt-in
+Date: Thu, 23 Aug 2018 13:56:48 -0700
+Message-Id: <20180823205653.3264-4-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.18.0
+In-Reply-To: <20180823205653.3264-1-sean.j.christopherson@intel.com>
+References: <20180823205653.3264-1-sean.j.christopherson@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Re-execution of an instruction after emulation decode failure is
+intended to be used only when emulating shadow page accesses.  Invert
+the flag to make allowing re-execution opt-in since that behavior is
+by far in the minority.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h | 8 +++-----
+ arch/x86/kvm/mmu.c              | 2 +-
+ arch/x86/kvm/x86.c              | 2 +-
+ 3 files changed, 5 insertions(+), 7 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 3b220b86c8e4..a69ea11f3bab 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1238,7 +1238,7 @@ enum emulation_result {
+ #define EMULTYPE_TRAP_UD	    (1 << 1)
+ #define EMULTYPE_SKIP		    (1 << 2)
+ #define EMULTYPE_RETRY		    (1 << 3)
+-#define EMULTYPE_NO_REEXECUTE	    (1 << 4)
++#define EMULTYPE_ALLOW_REEXECUTE    (1 << 4)
+ #define EMULTYPE_NO_UD_ON_FAIL	    (1 << 5)
+ #define EMULTYPE_VMWARE		    (1 << 6)
+ int x86_emulate_instruction(struct kvm_vcpu *vcpu, unsigned long cr2,
+@@ -1247,15 +1247,13 @@ int x86_emulate_instruction(struct kvm_vcpu *vcpu, unsigned long cr2,
+ static inline int emulate_instruction(struct kvm_vcpu *vcpu,
+ 			int emulation_type)
+ {
+-	return x86_emulate_instruction(vcpu, 0,
+-			emulation_type | EMULTYPE_NO_REEXECUTE, NULL, 0);
++	return x86_emulate_instruction(vcpu, 0, emulation_type, NULL, 0);
+ }
+ 
+ static inline int kvm_emulate_instruction_from_buffer(struct kvm_vcpu *vcpu,
+ 						      void *insn, int insn_len)
+ {
+-	return x86_emulate_instruction(vcpu, 0, EMULTYPE_NO_REEXECUTE,
+-				       insn, insn_len);
++	return x86_emulate_instruction(vcpu, 0, 0, insn, insn_len);
+ }
+ 
+ void kvm_enable_efer_bits(u64);
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index a282321329b5..4508c34eef20 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -5217,7 +5217,7 @@ static int make_mmu_pages_available(struct kvm_vcpu *vcpu)
+ int kvm_mmu_page_fault(struct kvm_vcpu *vcpu, gva_t cr2, u64 error_code,
+ 		       void *insn, int insn_len)
+ {
+-	int r, emulation_type = EMULTYPE_RETRY;
++	int r, emulation_type = EMULTYPE_RETRY | EMULTYPE_ALLOW_REEXECUTE;
+ 	enum emulation_result er;
+ 	bool direct = vcpu->arch.mmu.direct_map;
+ 
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 14ee9a814888..c858703e1f26 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -5870,7 +5870,7 @@ static bool reexecute_instruction(struct kvm_vcpu *vcpu, gva_t cr2,
+ 	gpa_t gpa = cr2;
+ 	kvm_pfn_t pfn;
+ 
+-	if (emulation_type & EMULTYPE_NO_REEXECUTE)
++	if (!(emulation_type & EMULTYPE_ALLOW_REEXECUTE))
+ 		return false;
+ 
+ 	if (!vcpu->arch.mmu.direct_map) {
+
+From patchwork Thu Aug 23 20:56:49 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10574567
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 23C51139B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:15 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1775D2C307
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:15 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 0B8F22C391; Thu, 23 Aug 2018 20:57:15 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 9F52A2C307
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:14 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727655AbeHXA2i (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 Aug 2018 20:28:38 -0400
+Received: from mga14.intel.com ([192.55.52.115]:2009 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727584AbeHXA2d (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 Aug 2018 20:28:33 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga001.jf.intel.com ([10.7.209.18])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Aug 2018 13:57:06 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.53,279,1531810800";
+   d="scan'208";a="84411998"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.132])
+  by orsmga001.jf.intel.com with ESMTP; 23 Aug 2018 13:57:05 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Brijesh Singh <brijesh.singh@amd.com>,
+        Jim Mattson <jmattson@google.com>,
+        Krish Sadhukhan <krish.sadhukhan@oracle.com>,
+        Xiao Guangrong <xiaoguangrong@tencent.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>
+Subject: [PATCH v2 4/8] KVM: x86: Merge EMULTYPE_RETRY and
+ EMULTYPE_ALLOW_REEXECUTE
+Date: Thu, 23 Aug 2018 13:56:49 -0700
+Message-Id: <20180823205653.3264-5-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.18.0
+In-Reply-To: <20180823205653.3264-1-sean.j.christopherson@intel.com>
+References: <20180823205653.3264-1-sean.j.christopherson@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+retry_instruction() and reexecute_instruction() are a package deal,
+i.e. there is no scenario where one is allowed and the other is not.
+Merge their controlling emulation type flags to enforce this in code.
+Name the combined flag EMULTYPE_ALLOW_RETRY to make it abundantly
+clear that we are allowing re{try,execute} to occur, as opposed to
+explicitly requesting retry of a previously failed instruction.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h | 7 +++----
+ arch/x86/kvm/mmu.c              | 2 +-
+ arch/x86/kvm/x86.c              | 4 ++--
+ 3 files changed, 6 insertions(+), 7 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index a69ea11f3bab..35e03b13edcb 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1237,10 +1237,9 @@ enum emulation_result {
+ #define EMULTYPE_NO_DECODE	    (1 << 0)
+ #define EMULTYPE_TRAP_UD	    (1 << 1)
+ #define EMULTYPE_SKIP		    (1 << 2)
+-#define EMULTYPE_RETRY		    (1 << 3)
+-#define EMULTYPE_ALLOW_REEXECUTE    (1 << 4)
+-#define EMULTYPE_NO_UD_ON_FAIL	    (1 << 5)
+-#define EMULTYPE_VMWARE		    (1 << 6)
++#define EMULTYPE_ALLOW_RETRY	    (1 << 3)
++#define EMULTYPE_NO_UD_ON_FAIL	    (1 << 4)
++#define EMULTYPE_VMWARE		    (1 << 5)
+ int x86_emulate_instruction(struct kvm_vcpu *vcpu, unsigned long cr2,
+ 			    int emulation_type, void *insn, int insn_len);
+ 
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index 4508c34eef20..0246a1ea7f55 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -5217,7 +5217,7 @@ static int make_mmu_pages_available(struct kvm_vcpu *vcpu)
+ int kvm_mmu_page_fault(struct kvm_vcpu *vcpu, gva_t cr2, u64 error_code,
+ 		       void *insn, int insn_len)
+ {
+-	int r, emulation_type = EMULTYPE_RETRY | EMULTYPE_ALLOW_REEXECUTE;
++	int r, emulation_type = EMULTYPE_ALLOW_RETRY;
+ 	enum emulation_result er;
+ 	bool direct = vcpu->arch.mmu.direct_map;
+ 
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index c858703e1f26..07b2f97a0dc5 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -5870,7 +5870,7 @@ static bool reexecute_instruction(struct kvm_vcpu *vcpu, gva_t cr2,
+ 	gpa_t gpa = cr2;
+ 	kvm_pfn_t pfn;
+ 
+-	if (!(emulation_type & EMULTYPE_ALLOW_REEXECUTE))
++	if (!(emulation_type & EMULTYPE_ALLOW_RETRY))
+ 		return false;
+ 
+ 	if (!vcpu->arch.mmu.direct_map) {
+@@ -5958,7 +5958,7 @@ static bool retry_instruction(struct x86_emulate_ctxt *ctxt,
+ 	 */
+ 	vcpu->arch.last_retry_eip = vcpu->arch.last_retry_addr = 0;
+ 
+-	if (!(emulation_type & EMULTYPE_RETRY))
++	if (!(emulation_type & EMULTYPE_ALLOW_RETRY))
+ 		return false;
+ 
+ 	if (x86_page_table_writing_insn(ctxt))
+
+From patchwork Thu Aug 23 20:56:50 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10574565
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 0E5A113B6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:14 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 0255D2C307
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:14 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id EA79A2C391; Thu, 23 Aug 2018 20:57:13 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 805C52C307
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:13 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727660AbeHXA2i (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 Aug 2018 20:28:38 -0400
+Received: from mga14.intel.com ([192.55.52.115]:1999 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727627AbeHXA2d (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 Aug 2018 20:28:33 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga001.jf.intel.com ([10.7.209.18])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Aug 2018 13:57:06 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.53,279,1531810800";
+   d="scan'208";a="84412001"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.132])
+  by orsmga001.jf.intel.com with ESMTP; 23 Aug 2018 13:57:05 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Brijesh Singh <brijesh.singh@amd.com>,
+        Jim Mattson <jmattson@google.com>,
+        Krish Sadhukhan <krish.sadhukhan@oracle.com>,
+        Xiao Guangrong <xiaoguangrong@tencent.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>
+Subject: [PATCH v2 5/8] KVM: x86: Default to not allowing emulation retry in
+ kvm_mmu_page_fault
+Date: Thu, 23 Aug 2018 13:56:50 -0700
+Message-Id: <20180823205653.3264-6-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.18.0
+In-Reply-To: <20180823205653.3264-1-sean.j.christopherson@intel.com>
+References: <20180823205653.3264-1-sean.j.christopherson@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Effectively force kvm_mmu_page_fault() to opt-in to allowing retry to
+make it more obvious when and why it allows emulation to be retried.
+Previously this approach was less convenient due to retry and
+re-execute behavior being controlled by separate flags that were also
+inverted in their implementations (opt-in versus opt-out).
+
+Suggested-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/mmu.c | 18 ++++++++++++------
+ 1 file changed, 12 insertions(+), 6 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index 0246a1ea7f55..01fb8701ccd0 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -5217,7 +5217,7 @@ static int make_mmu_pages_available(struct kvm_vcpu *vcpu)
+ int kvm_mmu_page_fault(struct kvm_vcpu *vcpu, gva_t cr2, u64 error_code,
+ 		       void *insn, int insn_len)
+ {
+-	int r, emulation_type = EMULTYPE_ALLOW_RETRY;
++	int r, emulation_type = 0;
+ 	enum emulation_result er;
+ 	bool direct = vcpu->arch.mmu.direct_map;
+ 
+@@ -5230,10 +5230,8 @@ int kvm_mmu_page_fault(struct kvm_vcpu *vcpu, gva_t cr2, u64 error_code,
+ 	r = RET_PF_INVALID;
+ 	if (unlikely(error_code & PFERR_RSVD_MASK)) {
+ 		r = handle_mmio_page_fault(vcpu, cr2, direct);
+-		if (r == RET_PF_EMULATE) {
+-			emulation_type = 0;
++		if (r == RET_PF_EMULATE)
+ 			goto emulate;
+-		}
+ 	}
+ 
+ 	if (r == RET_PF_INVALID) {
+@@ -5260,8 +5258,16 @@ int kvm_mmu_page_fault(struct kvm_vcpu *vcpu, gva_t cr2, u64 error_code,
+ 		return 1;
+ 	}
+ 
+-	if (mmio_info_in_cache(vcpu, cr2, direct))
+-		emulation_type = 0;
++	/*
++	 * vcpu->arch.mmu.page_fault returned RET_PF_EMULATE, but we can still
++	 * optimistically try to just unprotect the page and let the processor
++	 * re-execute the instruction that caused the page fault.  Do not allow
++	 * retrying MMIO emulation, as it's not only pointless but could also
++	 * cause us to enter an infinite loop because the processor will keep
++	 * faulting on the non-existent MMIO address.
++	 */
++	if (!mmio_info_in_cache(vcpu, cr2, direct))
++		emulation_type = EMULTYPE_ALLOW_RETRY;
+ emulate:
+ 	/*
+ 	 * On AMD platforms, under certain conditions insn_len may be zero on #NPF.
+
+From patchwork Thu Aug 23 20:56:51 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10574569
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9EAE0139B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:16 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 908A22C307
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:16 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 84B272C391; Thu, 23 Aug 2018 20:57:16 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E1BBA2C307
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:15 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727651AbeHXA2i (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 Aug 2018 20:28:38 -0400
+Received: from mga14.intel.com ([192.55.52.115]:1999 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727622AbeHXA2e (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 Aug 2018 20:28:34 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga001.jf.intel.com ([10.7.209.18])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Aug 2018 13:57:06 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.53,279,1531810800";
+   d="scan'208";a="84412007"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.132])
+  by orsmga001.jf.intel.com with ESMTP; 23 Aug 2018 13:57:05 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Brijesh Singh <brijesh.singh@amd.com>,
+        Jim Mattson <jmattson@google.com>,
+        Krish Sadhukhan <krish.sadhukhan@oracle.com>,
+        Xiao Guangrong <xiaoguangrong@tencent.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>
+Subject: [PATCH v2 6/8] KVM: x86: Do not re-{try,execute} after failed
+ emulation in L2
+Date: Thu, 23 Aug 2018 13:56:51 -0700
+Message-Id: <20180823205653.3264-7-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.18.0
+In-Reply-To: <20180823205653.3264-1-sean.j.christopherson@intel.com>
+References: <20180823205653.3264-1-sean.j.christopherson@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Commit a6f177efaa58 ("KVM: Reenter guest after emulation failure if
+due to access to non-mmio address") added reexecute_instruction() to
+handle the scenario where two (or more) vCPUS race to write a shadowed
+page, i.e. reexecute_instruction() is intended to return true if and
+only if the instruction being emulated was accessing a shadowed page.
+As L0 is only explicitly shadowing L1 tables, an emulation failure of
+a nested VM instruction cannot be due to a race to write a shadowed
+page and so should never be re-executed.
+
+This fixes an issue where an "MMIO" emulation failure[1] in L2 is all
+but guaranteed to result in an infinite loop when TDP is enabled.
+Because "cr2" is actually an L2 GPA when TDP is enabled, calling
+kvm_mmu_gva_to_gpa_write() to translate cr2 in the non-direct mapped
+case (L2 is never direct mapped) will almost always yield UNMAPPED_GVA
+and cause reexecute_instruction() to immediately return true.  The
+!mmio_info_in_cache() check in kvm_mmu_page_fault() doesn't catch this
+case because mmio_info_in_cache() returns false for a nested MMU (the
+MMIO caching currently handles L1 only, e.g. to cache nested guests'
+GPAs we'd have to manually flush the cache when switching between
+VMs and when L1 updated its page tables controlling the nested guest).
+
+Way back when, commit 68be0803456b ("KVM: x86: never re-execute
+instruction with enabled tdp") changed reexecute_instruction() to
+always return false when using TDP under the assumption that KVM would
+only get into the emulator for MMIO.  Commit 95b3cf69bdf8 ("KVM: x86:
+let reexecute_instruction work for tdp") effectively reverted that
+behavior in order to handle the scenario where emulation failed due to
+an access from L1 to the shadow page tables for L2, but it didn't
+account for the case where emulation failed in L2 with TDP enabled.
+
+All of the above logic also applies to retry_instruction(), added by
+commit 1cb3f3ae5a38 ("KVM: x86: retry non-page-table writing
+instructions").  An indefinite loop in retry_instruction() should be
+impossible as it protects against retrying the same instruction over
+and over, but it's still correct to not retry an L2 instruction in
+the first place.
+
+Fix the immediate issue by adding a check for a nested guest when
+determining whether or not to allow retry in kvm_mmu_page_fault().
+In addition to fixing the immediate bug, add WARN_ON_ONCE in the
+retry functions since they are not designed to handle nested cases,
+i.e. they need to be modified even if there is some scenario in the
+future where we want to allow retrying a nested guest.
+
+[1] This issue was encountered after commit 3a2936dedd20 ("kvm: mmu:
+    Don't expose private memslots to L2") changed the page fault path
+    to return KVM_PFN_NOSLOT when translating an L2 access to a
+    prive memslot.  Returning KVM_PFN_NOSLOT is semantically correct
+    when we want to hide a memslot from L2, i.e. there effectively is
+    no defined memory region for L2, but it has the unfortunate side
+    effect of making KVM think the GFN is a MMIO page, thus triggering
+    emulation.  The failure occurred with in-development code that
+    deliberately exposed a private memslot to L2, which L2 accessed
+    with an instruction that is not emulated by KVM.
+
+Fixes: 95b3cf69bdf8 ("KVM: x86: let reexecute_instruction work for tdp")
+Fixes: 1cb3f3ae5a38 ("KVM: x86: retry non-page-table writing instructions")
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Cc: Jim Mattson <jmattson@google.com>
+Cc: Krish Sadhukhan <krish.sadhukhan@oracle.com>
+Cc: Xiao Guangrong <xiaoguangrong@tencent.com>
+---
+ arch/x86/kvm/mmu.c | 7 +++++--
+ arch/x86/kvm/x86.c | 6 ++++++
+ 2 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index 01fb8701ccd0..f7e83b1e0eb2 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -5264,9 +5264,12 @@ int kvm_mmu_page_fault(struct kvm_vcpu *vcpu, gva_t cr2, u64 error_code,
+ 	 * re-execute the instruction that caused the page fault.  Do not allow
+ 	 * retrying MMIO emulation, as it's not only pointless but could also
+ 	 * cause us to enter an infinite loop because the processor will keep
+-	 * faulting on the non-existent MMIO address.
++	 * faulting on the non-existent MMIO address.  Retrying an instruction
++	 * from a nested guest is also pointless and dangerous as we are only
++	 * explicitly shadowing L1's page tables, i.e. unprotecting something
++	 * for L1 isn't going to magically fix whatever issue cause L2 to fail.
+ 	 */
+-	if (!mmio_info_in_cache(vcpu, cr2, direct))
++	if (!mmio_info_in_cache(vcpu, cr2, direct) && !is_guest_mode(vcpu))
+ 		emulation_type = EMULTYPE_ALLOW_RETRY;
+ emulate:
+ 	/*
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 07b2f97a0dc5..cb050065b725 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -5873,6 +5873,9 @@ static bool reexecute_instruction(struct kvm_vcpu *vcpu, gva_t cr2,
+ 	if (!(emulation_type & EMULTYPE_ALLOW_RETRY))
+ 		return false;
+ 
++	if (WARN_ON_ONCE(is_guest_mode(vcpu)))
++		return false;
++
+ 	if (!vcpu->arch.mmu.direct_map) {
+ 		/*
+ 		 * Write permission should be allowed since only
+@@ -5961,6 +5964,9 @@ static bool retry_instruction(struct x86_emulate_ctxt *ctxt,
+ 	if (!(emulation_type & EMULTYPE_ALLOW_RETRY))
+ 		return false;
+ 
++	if (WARN_ON_ONCE(is_guest_mode(vcpu)))
++		return false;
++
+ 	if (x86_page_table_writing_insn(ctxt))
+ 		return false;
+ 
+
+From patchwork Thu Aug 23 20:56:52 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10574559
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 2556F139B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:11 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1731A2C307
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:11 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 0B0A62C391; Thu, 23 Aug 2018 20:57:11 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7245A2C307
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727650AbeHXA2f (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 Aug 2018 20:28:35 -0400
+Received: from mga14.intel.com ([192.55.52.115]:2009 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727632AbeHXA2e (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 Aug 2018 20:28:34 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga001.jf.intel.com ([10.7.209.18])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Aug 2018 13:57:06 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.53,279,1531810800";
+   d="scan'208";a="84412009"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.132])
+  by orsmga001.jf.intel.com with ESMTP; 23 Aug 2018 13:57:05 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Brijesh Singh <brijesh.singh@amd.com>,
+        Jim Mattson <jmattson@google.com>,
+        Krish Sadhukhan <krish.sadhukhan@oracle.com>,
+        Xiao Guangrong <xiaoguangrong@tencent.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>
+Subject: [PATCH v2 7/8] KVM: x86: Rename emulate_instruction() to
+ kvm_emulate_instruction()
+Date: Thu, 23 Aug 2018 13:56:52 -0700
+Message-Id: <20180823205653.3264-8-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.18.0
+In-Reply-To: <20180823205653.3264-1-sean.j.christopherson@intel.com>
+References: <20180823205653.3264-1-sean.j.christopherson@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Lack of the kvm_ prefix gives the impression that it's a VMX or SVM
+specific function, and there's no conflict that prevents adding the
+kvm_ prefix.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  2 +-
+ arch/x86/kvm/svm.c              | 12 ++++++------
+ arch/x86/kvm/vmx.c              | 16 ++++++++--------
+ arch/x86/kvm/x86.c              |  4 ++--
+ 4 files changed, 17 insertions(+), 17 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 35e03b13edcb..8c9023661351 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1243,7 +1243,7 @@ enum emulation_result {
+ int x86_emulate_instruction(struct kvm_vcpu *vcpu, unsigned long cr2,
+ 			    int emulation_type, void *insn, int insn_len);
+ 
+-static inline int emulate_instruction(struct kvm_vcpu *vcpu,
++static inline int kvm_emulate_instruction(struct kvm_vcpu *vcpu,
+ 			int emulation_type)
+ {
+ 	return x86_emulate_instruction(vcpu, 0, emulation_type, NULL, 0);
+diff --git a/arch/x86/kvm/svm.c b/arch/x86/kvm/svm.c
+index f50c6ecffad9..302cbdee825a 100644
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -776,7 +776,7 @@ static void skip_emulated_instruction(struct kvm_vcpu *vcpu)
+ 	}
+ 
+ 	if (!svm->next_rip) {
+-		if (emulate_instruction(vcpu, EMULTYPE_SKIP) !=
++		if (kvm_emulate_instruction(vcpu, EMULTYPE_SKIP) !=
+ 				EMULATE_DONE)
+ 			printk(KERN_DEBUG "%s: NOP\n", __func__);
+ 		return;
+@@ -2715,7 +2715,7 @@ static int gp_interception(struct vcpu_svm *svm)
+ 
+ 	WARN_ON_ONCE(!enable_vmware_backdoor);
+ 
+-	er = emulate_instruction(vcpu,
++	er = kvm_emulate_instruction(vcpu,
+ 		EMULTYPE_VMWARE | EMULTYPE_NO_UD_ON_FAIL);
+ 	if (er == EMULATE_USER_EXIT)
+ 		return 0;
+@@ -2819,7 +2819,7 @@ static int io_interception(struct vcpu_svm *svm)
+ 	string = (io_info & SVM_IOIO_STR_MASK) != 0;
+ 	in = (io_info & SVM_IOIO_TYPE_MASK) != 0;
+ 	if (string)
+-		return emulate_instruction(vcpu, 0) == EMULATE_DONE;
++		return kvm_emulate_instruction(vcpu, 0) == EMULATE_DONE;
+ 
+ 	port = io_info >> 16;
+ 	size = (io_info & SVM_IOIO_SIZE_MASK) >> SVM_IOIO_SIZE_SHIFT;
+@@ -3861,7 +3861,7 @@ static int iret_interception(struct vcpu_svm *svm)
+ static int invlpg_interception(struct vcpu_svm *svm)
+ {
+ 	if (!static_cpu_has(X86_FEATURE_DECODEASSISTS))
+-		return emulate_instruction(&svm->vcpu, 0) == EMULATE_DONE;
++		return kvm_emulate_instruction(&svm->vcpu, 0) == EMULATE_DONE;
+ 
+ 	kvm_mmu_invlpg(&svm->vcpu, svm->vmcb->control.exit_info_1);
+ 	return kvm_skip_emulated_instruction(&svm->vcpu);
+@@ -3869,7 +3869,7 @@ static int invlpg_interception(struct vcpu_svm *svm)
+ 
+ static int emulate_on_interception(struct vcpu_svm *svm)
+ {
+-	return emulate_instruction(&svm->vcpu, 0) == EMULATE_DONE;
++	return kvm_emulate_instruction(&svm->vcpu, 0) == EMULATE_DONE;
+ }
+ 
+ static int rsm_interception(struct vcpu_svm *svm)
+@@ -4700,7 +4700,7 @@ static int avic_unaccelerated_access_interception(struct vcpu_svm *svm)
+ 		ret = avic_unaccel_trap_write(svm);
+ 	} else {
+ 		/* Handling Fault */
+-		ret = (emulate_instruction(&svm->vcpu, 0) == EMULATE_DONE);
++		ret = (kvm_emulate_instruction(&svm->vcpu, 0) == EMULATE_DONE);
+ 	}
+ 
+ 	return ret;
+diff --git a/arch/x86/kvm/vmx.c b/arch/x86/kvm/vmx.c
+index efb5721a6c46..6acf89c172c2 100644
+--- a/arch/x86/kvm/vmx.c
++++ b/arch/x86/kvm/vmx.c
+@@ -6983,7 +6983,7 @@ static int handle_rmode_exception(struct kvm_vcpu *vcpu,
+ 	 * Cause the #SS fault with 0 error code in VM86 mode.
+ 	 */
+ 	if (((vec == GP_VECTOR) || (vec == SS_VECTOR)) && err_code == 0) {
+-		if (emulate_instruction(vcpu, 0) == EMULATE_DONE) {
++		if (kvm_emulate_instruction(vcpu, 0) == EMULATE_DONE) {
+ 			if (vcpu->arch.halt_request) {
+ 				vcpu->arch.halt_request = 0;
+ 				return kvm_vcpu_halt(vcpu);
+@@ -7054,7 +7054,7 @@ static int handle_exception(struct kvm_vcpu *vcpu)
+ 
+ 	if (!vmx->rmode.vm86_active && is_gp_fault(intr_info)) {
+ 		WARN_ON_ONCE(!enable_vmware_backdoor);
+-		er = emulate_instruction(vcpu,
++		er = kvm_emulate_instruction(vcpu,
+ 			EMULTYPE_VMWARE | EMULTYPE_NO_UD_ON_FAIL);
+ 		if (er == EMULATE_USER_EXIT)
+ 			return 0;
+@@ -7157,7 +7157,7 @@ static int handle_io(struct kvm_vcpu *vcpu)
+ 	++vcpu->stat.io_exits;
+ 
+ 	if (string)
+-		return emulate_instruction(vcpu, 0) == EMULATE_DONE;
++		return kvm_emulate_instruction(vcpu, 0) == EMULATE_DONE;
+ 
+ 	port = exit_qualification >> 16;
+ 	size = (exit_qualification & 7) + 1;
+@@ -7231,7 +7231,7 @@ static int handle_set_cr4(struct kvm_vcpu *vcpu, unsigned long val)
+ static int handle_desc(struct kvm_vcpu *vcpu)
+ {
+ 	WARN_ON(!(vcpu->arch.cr4 & X86_CR4_UMIP));
+-	return emulate_instruction(vcpu, 0) == EMULATE_DONE;
++	return kvm_emulate_instruction(vcpu, 0) == EMULATE_DONE;
+ }
+ 
+ static int handle_cr(struct kvm_vcpu *vcpu)
+@@ -7480,7 +7480,7 @@ static int handle_vmcall(struct kvm_vcpu *vcpu)
+ 
+ static int handle_invd(struct kvm_vcpu *vcpu)
+ {
+-	return emulate_instruction(vcpu, 0) == EMULATE_DONE;
++	return kvm_emulate_instruction(vcpu, 0) == EMULATE_DONE;
+ }
+ 
+ static int handle_invlpg(struct kvm_vcpu *vcpu)
+@@ -7547,7 +7547,7 @@ static int handle_apic_access(struct kvm_vcpu *vcpu)
+ 			return kvm_skip_emulated_instruction(vcpu);
+ 		}
+ 	}
+-	return emulate_instruction(vcpu, 0) == EMULATE_DONE;
++	return kvm_emulate_instruction(vcpu, 0) == EMULATE_DONE;
+ }
+ 
+ static int handle_apic_eoi_induced(struct kvm_vcpu *vcpu)
+@@ -7704,7 +7704,7 @@ static int handle_ept_misconfig(struct kvm_vcpu *vcpu)
+ 		if (!static_cpu_has(X86_FEATURE_HYPERVISOR))
+ 			return kvm_skip_emulated_instruction(vcpu);
+ 		else
+-			return emulate_instruction(vcpu, EMULTYPE_SKIP) ==
++			return kvm_emulate_instruction(vcpu, EMULTYPE_SKIP) ==
+ 								EMULATE_DONE;
+ 	}
+ 
+@@ -7748,7 +7748,7 @@ static int handle_invalid_guest_state(struct kvm_vcpu *vcpu)
+ 		if (kvm_test_request(KVM_REQ_EVENT, vcpu))
+ 			return 1;
+ 
+-		err = emulate_instruction(vcpu, 0);
++		err = kvm_emulate_instruction(vcpu, 0);
+ 
+ 		if (err == EMULATE_USER_EXIT) {
+ 			++vcpu->stat.mmio_exits;
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index cb050065b725..6b5a74629340 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -4987,7 +4987,7 @@ int handle_ud(struct kvm_vcpu *vcpu)
+ 		emul_type = 0;
+ 	}
+ 
+-	er = emulate_instruction(vcpu, emul_type);
++	er = kvm_emulate_instruction(vcpu, emul_type);
+ 	if (er == EMULATE_USER_EXIT)
+ 		return 0;
+ 	if (er != EMULATE_DONE)
+@@ -7737,7 +7737,7 @@ static inline int complete_emulated_io(struct kvm_vcpu *vcpu)
+ {
+ 	int r;
+ 	vcpu->srcu_idx = srcu_read_lock(&vcpu->kvm->srcu);
+-	r = emulate_instruction(vcpu, EMULTYPE_NO_DECODE);
++	r = kvm_emulate_instruction(vcpu, EMULTYPE_NO_DECODE);
+ 	srcu_read_unlock(&vcpu->kvm->srcu, vcpu->srcu_idx);
+ 	if (r != EMULATE_DONE)
+ 		return 0;
+
+From patchwork Thu Aug 23 20:56:53 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10574561
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D647E13B6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:11 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C8AEA2C307
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:11 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id BCC182C37F; Thu, 23 Aug 2018 20:57:11 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5A0F62C307
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Aug 2018 20:57:11 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727645AbeHXA2f (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 Aug 2018 20:28:35 -0400
+Received: from mga14.intel.com ([192.55.52.115]:2009 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727134AbeHXA2e (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 Aug 2018 20:28:34 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga001.jf.intel.com ([10.7.209.18])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Aug 2018 13:57:06 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.53,279,1531810800";
+   d="scan'208";a="84412012"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.132])
+  by orsmga001.jf.intel.com with ESMTP; 23 Aug 2018 13:57:05 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Brijesh Singh <brijesh.singh@amd.com>,
+        Jim Mattson <jmattson@google.com>,
+        Krish Sadhukhan <krish.sadhukhan@oracle.com>,
+        Xiao Guangrong <xiaoguangrong@tencent.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>
+Subject: [PATCH v2 8/8] KVM: x86: Unexport x86_emulate_instruction()
+Date: Thu, 23 Aug 2018 13:56:53 -0700
+Message-Id: <20180823205653.3264-9-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.18.0
+In-Reply-To: <20180823205653.3264-1-sean.j.christopherson@intel.com>
+References: <20180823205653.3264-1-sean.j.christopherson@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Allowing x86_emulate_instruction() to be called directly has led to
+subtle bugs being introduced, e.g. not setting EMULTYPE_NO_REEXECUTE
+in the emulation type.  While most of the blame lies on re-execute
+being opt-out, exporting x86_emulate_instruction() also exposes its
+cr2 parameter, which may have contributed to commit d391f1207067
+("x86/kvm/vmx: do not use vm-exit instruction length for fast MMIO
+when running nested") using x86_emulate_instruction() instead of
+emulate_instruction() because "hey, I have a cr2!", which in turn
+introduced its EMULTYPE_NO_REEXECUTE bug.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h | 17 +++--------------
+ arch/x86/kvm/x86.c              | 14 +++++++++++++-
+ arch/x86/kvm/x86.h              |  2 ++
+ 3 files changed, 18 insertions(+), 15 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 8c9023661351..e12916e7c2fb 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1240,20 +1240,9 @@ enum emulation_result {
+ #define EMULTYPE_ALLOW_RETRY	    (1 << 3)
+ #define EMULTYPE_NO_UD_ON_FAIL	    (1 << 4)
+ #define EMULTYPE_VMWARE		    (1 << 5)
+-int x86_emulate_instruction(struct kvm_vcpu *vcpu, unsigned long cr2,
+-			    int emulation_type, void *insn, int insn_len);
+-
+-static inline int kvm_emulate_instruction(struct kvm_vcpu *vcpu,
+-			int emulation_type)
+-{
+-	return x86_emulate_instruction(vcpu, 0, emulation_type, NULL, 0);
+-}
+-
+-static inline int kvm_emulate_instruction_from_buffer(struct kvm_vcpu *vcpu,
+-						      void *insn, int insn_len)
+-{
+-	return x86_emulate_instruction(vcpu, 0, 0, insn, insn_len);
+-}
++int kvm_emulate_instruction(struct kvm_vcpu *vcpu, int emulation_type);
++int kvm_emulate_instruction_from_buffer(struct kvm_vcpu *vcpu,
++					void *insn, int insn_len);
+ 
+ void kvm_enable_efer_bits(u64);
+ bool kvm_valid_efer(struct kvm_vcpu *vcpu, u64 efer);
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 6b5a74629340..e4e873d36ed5 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -6282,7 +6282,19 @@ int x86_emulate_instruction(struct kvm_vcpu *vcpu,
+ 
+ 	return r;
+ }
+-EXPORT_SYMBOL_GPL(x86_emulate_instruction);
++
++int kvm_emulate_instruction(struct kvm_vcpu *vcpu, int emulation_type)
++{
++	return x86_emulate_instruction(vcpu, 0, emulation_type, NULL, 0);
++}
++EXPORT_SYMBOL_GPL(kvm_emulate_instruction);
++
++int kvm_emulate_instruction_from_buffer(struct kvm_vcpu *vcpu,
++					void *insn, int insn_len)
++{
++	return x86_emulate_instruction(vcpu, 0, 0, insn, insn_len);
++}
++EXPORT_SYMBOL_GPL(kvm_emulate_instruction_from_buffer);
+ 
+ static int kvm_fast_pio_out(struct kvm_vcpu *vcpu, int size,
+ 			    unsigned short port)
+diff --git a/arch/x86/kvm/x86.h b/arch/x86/kvm/x86.h
+index 257f27620bc2..67b9568613f3 100644
+--- a/arch/x86/kvm/x86.h
++++ b/arch/x86/kvm/x86.h
+@@ -274,6 +274,8 @@ int kvm_mtrr_get_msr(struct kvm_vcpu *vcpu, u32 msr, u64 *pdata);
+ bool kvm_mtrr_check_gfn_range_consistency(struct kvm_vcpu *vcpu, gfn_t gfn,
+ 					  int page_num);
+ bool kvm_vector_hashing_enabled(void);
++int x86_emulate_instruction(struct kvm_vcpu *vcpu, unsigned long cr2,
++			    int emulation_type, void *insn, int insn_len);
+ 
+ #define KVM_SUPPORTED_XCR0     (XFEATURE_MASK_FP | XFEATURE_MASK_SSE \
+ 				| XFEATURE_MASK_YMM | XFEATURE_MASK_BNDREGS \

@@ -1,0 +1,454 @@
+From patchwork Mon Dec  3 19:25:26 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexander Duyck <alexander.h.duyck@linux.intel.com>
+X-Patchwork-Id: 10710407
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 35CD214BD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  3 Dec 2018 19:25:35 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 298DD2A962
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  3 Dec 2018 19:25:35 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 1D9482AF77; Mon,  3 Dec 2018 19:25:35 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B10692B1A4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  3 Dec 2018 19:25:34 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726094AbeLCTZb (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 3 Dec 2018 14:25:31 -0500
+Received: from mga09.intel.com ([134.134.136.24]:12025 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726056AbeLCTZa (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 3 Dec 2018 14:25:30 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga001.jf.intel.com ([10.7.209.18])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 03 Dec 2018 11:25:26 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,311,1539673200";
+   d="scan'208";a="115600470"
+Received: from ahduyck-desk1.amr.corp.intel.com ([10.7.198.76])
+  by orsmga001.jf.intel.com with ESMTP; 03 Dec 2018 11:25:26 -0800
+Subject: [PATCH RFC 1/3] kvm: Split use cases for kvm_is_reserved_pfn to
+ kvm_is_refcounted_pfn
+From: Alexander Duyck <alexander.h.duyck@linux.intel.com>
+To: dan.j.williams@intel.com, pbonzini@redhat.com,
+        yi.z.zhang@linux.intel.com, brho@google.com, kvm@vger.kernel.org,
+        linux-nvdimm@lists.01.org
+Cc: linux-kernel@vger.kernel.org, linux-mm@kvack.org,
+        dave.jiang@intel.com, yu.c.zhang@intel.com, pagupta@redhat.com,
+        david@redhat.com, jack@suse.cz, hch@lst.de, rkrcmar@redhat.com,
+        jglisse@redhat.com
+Date: Mon, 03 Dec 2018 11:25:26 -0800
+Message-ID: 
+ <154386512606.27193.13867450982940890636.stgit@ahduyck-desk1.amr.corp.intel.com>
+In-Reply-To: 
+ <154386493754.27193.1300965403157243427.stgit@ahduyck-desk1.amr.corp.intel.com>
+References: 
+ <154386493754.27193.1300965403157243427.stgit@ahduyck-desk1.amr.corp.intel.com>
+User-Agent: StGit/unknown-version
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+The function kvm_is_reserved_pfn really has two uses. One is to test for if
+we should be updating the reference count on a page when we are accessing
+it. The other is to determine if we should be updating the dirty flag or
+marking pages as accessed.
+
+In preparation for blurring the lines between ZONE_DEVICE and system RAM I
+am splitting out the dirty/accessed cases into their own checks. Doing this
+allows us to add ZONE_DEVICE to the list of refcounted pages without having
+to worry about us introducing possible issues with pages being marked as
+dirty or accessed and possibly causing any issues with attempted LRU
+accesses on the ZONE_DEVICE pages.
+
+Signed-off-by: Alexander Duyck <alexander.h.duyck@linux.intel.com>
+---
+ arch/x86/kvm/mmu.c       |    6 +++---
+ include/linux/kvm_host.h |    2 +-
+ virt/kvm/kvm_main.c      |   22 +++++++++++++---------
+ 3 files changed, 17 insertions(+), 13 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index 7c03c0f35444..7c61cc260c23 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -798,7 +798,7 @@ static int mmu_spte_clear_track_bits(u64 *sptep)
+ 	 * kvm mmu, before reclaiming the page, we should
+ 	 * unmap it from mmu first.
+ 	 */
+-	WARN_ON(!kvm_is_reserved_pfn(pfn) && !page_count(pfn_to_page(pfn)));
++	WARN_ON(kvm_is_refcounted_pfn(pfn) && !page_count(pfn_to_page(pfn)));
+ 
+ 	if (is_accessed_spte(old_spte))
+ 		kvm_set_pfn_accessed(pfn);
+@@ -3166,7 +3166,7 @@ static void transparent_hugepage_adjust(struct kvm_vcpu *vcpu,
+ 	 * PT_PAGE_TABLE_LEVEL and there would be no adjustment done
+ 	 * here.
+ 	 */
+-	if (!is_error_noslot_pfn(pfn) && !kvm_is_reserved_pfn(pfn) &&
++	if (!is_error_noslot_pfn(pfn) && kvm_is_refcounted_pfn(pfn) &&
+ 	    level == PT_PAGE_TABLE_LEVEL &&
+ 	    PageTransCompoundMap(pfn_to_page(pfn)) &&
+ 	    !mmu_gfn_lpage_is_disallowed(vcpu, gfn, PT_DIRECTORY_LEVEL)) {
+@@ -5668,7 +5668,7 @@ static bool kvm_mmu_zap_collapsible_spte(struct kvm *kvm,
+ 		 * mapping if the indirect sp has level = 1.
+ 		 */
+ 		if (sp->role.direct &&
+-			!kvm_is_reserved_pfn(pfn) &&
++			kvm_is_refcounted_pfn(pfn) &&
+ 			PageTransCompoundMap(pfn_to_page(pfn))) {
+ 			pte_list_remove(rmap_head, sptep);
+ 			need_tlb_flush = 1;
+diff --git a/include/linux/kvm_host.h b/include/linux/kvm_host.h
+index c926698040e0..132e5dbc9049 100644
+--- a/include/linux/kvm_host.h
++++ b/include/linux/kvm_host.h
+@@ -906,7 +906,7 @@ void kvm_arch_sync_events(struct kvm *kvm);
+ int kvm_cpu_has_pending_timer(struct kvm_vcpu *vcpu);
+ void kvm_vcpu_kick(struct kvm_vcpu *vcpu);
+ 
+-bool kvm_is_reserved_pfn(kvm_pfn_t pfn);
++bool kvm_is_refcounted_pfn(kvm_pfn_t pfn);
+ 
+ struct kvm_irq_ack_notifier {
+ 	struct hlist_node link;
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index 2679e476b6c3..5e666df5666d 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -146,7 +146,15 @@ __weak int kvm_arch_mmu_notifier_invalidate_range(struct kvm *kvm,
+ 	return 0;
+ }
+ 
+-bool kvm_is_reserved_pfn(kvm_pfn_t pfn)
++bool kvm_is_refcounted_pfn(kvm_pfn_t pfn)
++{
++	if (pfn_valid(pfn))
++		return !PageReserved(pfn_to_page(pfn));
++
++	return false;
++}
++
++static bool kvm_is_reserved_pfn(kvm_pfn_t pfn)
+ {
+ 	if (pfn_valid(pfn))
+ 		return PageReserved(pfn_to_page(pfn));
+@@ -1678,7 +1686,7 @@ EXPORT_SYMBOL_GPL(kvm_release_page_clean);
+ 
+ void kvm_release_pfn_clean(kvm_pfn_t pfn)
+ {
+-	if (!is_error_noslot_pfn(pfn) && !kvm_is_reserved_pfn(pfn))
++	if (!is_error_noslot_pfn(pfn) && kvm_is_refcounted_pfn(pfn))
+ 		put_page(pfn_to_page(pfn));
+ }
+ EXPORT_SYMBOL_GPL(kvm_release_pfn_clean);
+@@ -1700,12 +1708,8 @@ EXPORT_SYMBOL_GPL(kvm_release_pfn_dirty);
+ 
+ void kvm_set_pfn_dirty(kvm_pfn_t pfn)
+ {
+-	if (!kvm_is_reserved_pfn(pfn)) {
+-		struct page *page = pfn_to_page(pfn);
+-
+-		if (!PageReserved(page))
+-			SetPageDirty(page);
+-	}
++	if (!kvm_is_reserved_pfn(pfn))
++		SetPageDirty(pfn_to_page(pfn));
+ }
+ EXPORT_SYMBOL_GPL(kvm_set_pfn_dirty);
+ 
+@@ -1718,7 +1722,7 @@ EXPORT_SYMBOL_GPL(kvm_set_pfn_accessed);
+ 
+ void kvm_get_pfn(kvm_pfn_t pfn)
+ {
+-	if (!kvm_is_reserved_pfn(pfn))
++	if (kvm_is_refcounted_pfn(pfn))
+ 		get_page(pfn_to_page(pfn));
+ }
+ EXPORT_SYMBOL_GPL(kvm_get_pfn);
+
+From patchwork Mon Dec  3 19:25:31 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexander Duyck <alexander.h.duyck@linux.intel.com>
+X-Patchwork-Id: 10710419
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6882213BF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  3 Dec 2018 19:25:46 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5BD492AF77
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  3 Dec 2018 19:25:46 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4CAA82B20E; Mon,  3 Dec 2018 19:25:46 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E264B2AF77
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  3 Dec 2018 19:25:45 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726151AbeLCTZg (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 3 Dec 2018 14:25:36 -0500
+Received: from mga14.intel.com ([192.55.52.115]:36607 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725987AbeLCTZg (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 3 Dec 2018 14:25:36 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga001.jf.intel.com ([10.7.209.18])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 03 Dec 2018 11:25:31 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,311,1539673200";
+   d="scan'208";a="115600505"
+Received: from ahduyck-desk1.amr.corp.intel.com ([10.7.198.76])
+  by orsmga001.jf.intel.com with ESMTP; 03 Dec 2018 11:25:31 -0800
+Subject: [PATCH RFC 2/3] mm: Add support for exposing if dev_pagemap
+ supports refcount pinning
+From: Alexander Duyck <alexander.h.duyck@linux.intel.com>
+To: dan.j.williams@intel.com, pbonzini@redhat.com,
+        yi.z.zhang@linux.intel.com, brho@google.com, kvm@vger.kernel.org,
+        linux-nvdimm@lists.01.org
+Cc: linux-kernel@vger.kernel.org, linux-mm@kvack.org,
+        dave.jiang@intel.com, yu.c.zhang@intel.com, pagupta@redhat.com,
+        david@redhat.com, jack@suse.cz, hch@lst.de, rkrcmar@redhat.com,
+        jglisse@redhat.com
+Date: Mon, 03 Dec 2018 11:25:31 -0800
+Message-ID: 
+ <154386513120.27193.7977541941078967487.stgit@ahduyck-desk1.amr.corp.intel.com>
+In-Reply-To: 
+ <154386493754.27193.1300965403157243427.stgit@ahduyck-desk1.amr.corp.intel.com>
+References: 
+ <154386493754.27193.1300965403157243427.stgit@ahduyck-desk1.amr.corp.intel.com>
+User-Agent: StGit/unknown-version
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Add a means of exposing if a pagemap supports refcount pinning. I am doing
+this to expose if a given pagemap has backing struct pages that will allow
+for the reference count of the page to be incremented to lock the page
+into place.
+
+The KVM code already has several spots where it was trying to use a
+pfn_valid check combined with a PageReserved check to determien if it could
+take a reference on the page. I am adding this check so in the case of the
+page having the reserved flag checked we can check the pagemap for the page
+to determine if we might fall into the special DAX case.
+
+Signed-off-by: Alexander Duyck <alexander.h.duyck@linux.intel.com>
+---
+ drivers/nvdimm/pfn_devs.c |    2 ++
+ include/linux/memremap.h  |    5 ++++-
+ include/linux/mm.h        |   11 +++++++++++
+ 3 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/nvdimm/pfn_devs.c b/drivers/nvdimm/pfn_devs.c
+index 6f22272e8d80..7a4a85bcf7f4 100644
+--- a/drivers/nvdimm/pfn_devs.c
++++ b/drivers/nvdimm/pfn_devs.c
+@@ -640,6 +640,8 @@ static int __nvdimm_setup_pfn(struct nd_pfn *nd_pfn, struct dev_pagemap *pgmap)
+ 	} else
+ 		return -ENXIO;
+ 
++	pgmap->support_refcount_pinning = true;
++
+ 	return 0;
+ }
+ 
+diff --git a/include/linux/memremap.h b/include/linux/memremap.h
+index 55db66b3716f..6e7b85542208 100644
+--- a/include/linux/memremap.h
++++ b/include/linux/memremap.h
+@@ -109,6 +109,8 @@ typedef void (*dev_page_free_t)(struct page *page, void *data);
+  * @page_fault: callback when CPU fault on an unaddressable device page
+  * @page_free: free page callback when page refcount reaches 1
+  * @altmap: pre-allocated/reserved memory for vmemmap allocations
++ * @altmap_valid: bitflag indicating if altmap is valid
++ * @support_refcount_pinning: bitflag indicating if we support refcount pinning
+  * @res: physical address range covered by @ref
+  * @ref: reference count that pins the devm_memremap_pages() mapping
+  * @kill: callback to transition @ref to the dead state
+@@ -120,7 +122,8 @@ struct dev_pagemap {
+ 	dev_page_fault_t page_fault;
+ 	dev_page_free_t page_free;
+ 	struct vmem_altmap altmap;
+-	bool altmap_valid;
++	bool altmap_valid:1;
++	bool support_refcount_pinning:1;
+ 	struct resource res;
+ 	struct percpu_ref *ref;
+ 	void (*kill)(struct percpu_ref *ref);
+diff --git a/include/linux/mm.h b/include/linux/mm.h
+index 3eb3bf7774f1..5faf66dd4559 100644
+--- a/include/linux/mm.h
++++ b/include/linux/mm.h
+@@ -970,6 +970,12 @@ static inline bool is_pci_p2pdma_page(const struct page *page)
+ }
+ #endif /* CONFIG_PCI_P2PDMA */
+ 
++static inline bool is_device_pinnable_page(const struct page *page)
++{
++	return is_zone_device_page(page) &&
++		page->pgmap->support_refcount_pinning;
++}
++
+ #else /* CONFIG_DEV_PAGEMAP_OPS */
+ static inline void dev_pagemap_get_ops(void)
+ {
+@@ -998,6 +1004,11 @@ static inline bool is_pci_p2pdma_page(const struct page *page)
+ {
+ 	return false;
+ }
++
++static inline bool is_device_pinnable_page(const struct page *page)
++{
++	return false;
++}
+ #endif /* CONFIG_DEV_PAGEMAP_OPS */
+ 
+ static inline void get_page(struct page *page)
+
+From patchwork Mon Dec  3 19:25:36 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexander Duyck <alexander.h.duyck@linux.intel.com>
+X-Patchwork-Id: 10710417
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3385913BF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  3 Dec 2018 19:25:42 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2658E2AD54
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  3 Dec 2018 19:25:42 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 1A3052AF77; Mon,  3 Dec 2018 19:25:42 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C8B562AF6C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  3 Dec 2018 19:25:41 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726184AbeLCTZm (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 3 Dec 2018 14:25:42 -0500
+Received: from mga18.intel.com ([134.134.136.126]:5026 "EHLO mga18.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725908AbeLCTZl (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 3 Dec 2018 14:25:41 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga106.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 03 Dec 2018 11:25:36 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,311,1539673200";
+   d="scan'208";a="97705143"
+Received: from ahduyck-desk1.amr.corp.intel.com ([10.7.198.76])
+  by orsmga006.jf.intel.com with ESMTP; 03 Dec 2018 11:25:36 -0800
+Subject: [PATCH RFC 3/3] kvm: Add additional check to determine if a page is
+ refcounted
+From: Alexander Duyck <alexander.h.duyck@linux.intel.com>
+To: dan.j.williams@intel.com, pbonzini@redhat.com,
+        yi.z.zhang@linux.intel.com, brho@google.com, kvm@vger.kernel.org,
+        linux-nvdimm@lists.01.org
+Cc: linux-kernel@vger.kernel.org, linux-mm@kvack.org,
+        dave.jiang@intel.com, yu.c.zhang@intel.com, pagupta@redhat.com,
+        david@redhat.com, jack@suse.cz, hch@lst.de, rkrcmar@redhat.com,
+        jglisse@redhat.com
+Date: Mon, 03 Dec 2018 11:25:36 -0800
+Message-ID: 
+ <154386513636.27193.9038916677163713072.stgit@ahduyck-desk1.amr.corp.intel.com>
+In-Reply-To: 
+ <154386493754.27193.1300965403157243427.stgit@ahduyck-desk1.amr.corp.intel.com>
+References: 
+ <154386493754.27193.1300965403157243427.stgit@ahduyck-desk1.amr.corp.intel.com>
+User-Agent: StGit/unknown-version
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+The function kvm_is_refcounted_page is used primarily to determine if KVM
+is allowed to take a reference on the page. It was using the PG_reserved
+flag to determine this previously, however in the case of DAX the page has
+the PG_reserved flag set, but supports pinning by taking a reference on
+the page. As such I have updated the check to add a special case for
+ZONE_DEVICE pages that have the new support_refcount_pinning flag set.
+
+Signed-off-by: Alexander Duyck <alexander.h.duyck@linux.intel.com>
+---
+ virt/kvm/kvm_main.c |   16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index 5e666df5666d..2e7e9fbb67bf 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -148,8 +148,20 @@ __weak int kvm_arch_mmu_notifier_invalidate_range(struct kvm *kvm,
+ 
+ bool kvm_is_refcounted_pfn(kvm_pfn_t pfn)
+ {
+-	if (pfn_valid(pfn))
+-		return !PageReserved(pfn_to_page(pfn));
++	if (pfn_valid(pfn)) {
++		struct page *page = pfn_to_page(pfn);
++
++		/*
++		 * The reference count for MMIO pages are not updated.
++		 * Previously this was being tested for with just the
++		 * PageReserved check, however now ZONE_DEVICE pages may
++		 * also allow for the refcount to be updated for the sake
++		 * of pinning the pages so use the additional check provided
++		 * to determine if the reference count on the page can be
++		 * used to pin it.
++		 */
++		return !PageReserved(page) || is_device_pinnable_page(page);
++	}
+ 
+ 	return false;
+ }

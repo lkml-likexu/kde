@@ -1,0 +1,256 @@
+From patchwork Fri Oct 12 12:20:17 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Wang, Wei W" <wei.w.wang@intel.com>
+X-Patchwork-Id: 10638647
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D04D917E1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 12:51:54 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id BECE62BA36
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 12:51:54 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id B18862BA58; Fri, 12 Oct 2018 12:51:54 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 093722BA36
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 12:51:54 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728405AbeJLUYH (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 12 Oct 2018 16:24:07 -0400
+Received: from mga12.intel.com ([192.55.52.136]:11509 "EHLO mga12.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728321AbeJLUYH (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 12 Oct 2018 16:24:07 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga106.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 12 Oct 2018 05:51:45 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.54,372,1534834800";
+   d="scan'208";a="80924794"
+Received: from devel-ww.sh.intel.com ([10.239.48.119])
+  by orsmga008.jf.intel.com with ESMTP; 12 Oct 2018 05:51:43 -0700
+From: Wei Wang <wei.w.wang@intel.com>
+To: linux-kernel@vger.kernel.org, kvm@vger.kernel.org,
+        pbonzini@redhat.com, ak@linux.intel.com
+Cc: peterz@infradead.org, mingo@redhat.com, rkrcmar@redhat.com,
+        like.xu@intel.com
+Subject: [PATCH v1] KVM/x86/vPMU: Guest PMI Optimization
+Date: Fri, 12 Oct 2018 20:20:17 +0800
+Message-Id: <1539346817-8638-1-git-send-email-wei.w.wang@intel.com>
+X-Mailer: git-send-email 2.7.4
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Guest changing MSR_CORE_PERF_GLOBAL_CTRL causes KVM to reprogram pmc
+counters, which re-allocates a host perf event. This process is
+heavyweight and results in a long guest pmi handling time. This also
+makes the perf samping events in the guest hard to move forward as the
+sampling rate will be adjusted to a low value (e.g. the minimum 250).
+
+This patch implements a fast path to handle the guest change of
+MSR_CORE_PERF_GLOBAL_CTRL for the guest pmi case. Guest change of the
+msr will be applied to the hardware when entering the guest, and the
+old perf event will continue to be used. The guest setting of the
+perf counter for the next irq period in pmi will also be written
+directly to the hardware counter when entering the guest.
+
+Tests:
+1. CPU: Intel(R) Xeon(R) CPU E5-2699 v4 @ 2.20GHz
+2. Add host booting parameter "nowatchdog" to avoid the noise from
+   watchdog_hld
+3. Run "perf stat -e cycles ./test_program" on the guest
+4. Results
+    - Without this optimization, the guest pmi handling time is
+      ~4500000 ns, and the max sampling rate is reduced to 250.
+    - With this optimization, the guest pmi handling time is ~9000 ns
+      (i.e. 1 / 500 of the non-optimization case), and the max sampling
+      rate remains at the original 100000.
+
+Signed-off-by: Wei Wang <wei.w.wang@intel.com>
+Cc: Andi Kleen <ak@linux.intel.com>
+Cc: Peter Zijlstra <peterz@infradead.org>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/events/intel/core.c      | 35 +++++++++++++++++++++++++++
+ arch/x86/include/asm/kvm_host.h   |  2 ++
+ arch/x86/include/asm/perf_event.h |  2 ++
+ arch/x86/kvm/pmu.c                |  1 +
+ arch/x86/kvm/pmu_intel.c          | 50 ++++++++++++++++++++++++++++++++++++---
+ 5 files changed, 87 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/events/intel/core.c b/arch/x86/events/intel/core.c
+index 035c374..b1e1294 100644
+--- a/arch/x86/events/intel/core.c
++++ b/arch/x86/events/intel/core.c
+@@ -1858,6 +1858,41 @@ static __initconst const u64 knl_hw_cache_extra_regs
+ 	},
+ };
+ 
++/**
++ * intel_pmu_disable_guest_counters - disable perf counters for the guest
++ *
++ * Disable all the perf counters for the guest via setting the host mask.
++ * This will cause all the perf counters to be disabled when entering
++ * the guest.
++ *
++ * Returns: the old counter mask.
++ */
++u64 intel_pmu_disable_guest_counters(void)
++{
++	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
++	u64 mask = cpuc->intel_ctrl_host_mask;
++
++	cpuc->intel_ctrl_host_mask = ULONG_MAX;
++
++	return mask;
++}
++EXPORT_SYMBOL_GPL(intel_pmu_disable_guest_counters);
++
++/**
++ * intel_pmu_enable_guest_counters - enable perf counters for the guest
++ *
++ * Enable perf counters for the guest via setting the host mask to the
++ * caller's counter mask. The counters corresponding to the unmasked bits
++ * will be enabled when entering the guest.
++ */
++void intel_pmu_enable_guest_counters(u64 mask)
++{
++	struct cpu_hw_events *cpuc = this_cpu_ptr(&cpu_hw_events);
++
++	cpuc->intel_ctrl_host_mask = mask;
++}
++EXPORT_SYMBOL_GPL(intel_pmu_enable_guest_counters);
++
+ /*
+  * Used from PMIs where the LBRs are already disabled.
+  *
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 09b2e3e..9dc2fed 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -427,6 +427,8 @@ struct kvm_pmu {
+ 	u64 counter_bitmask[2];
+ 	u64 global_ctrl_mask;
+ 	u64 reserved_bits;
++	u64 counter_mask;
++	bool in_pmi;
+ 	u8 version;
+ 	struct kvm_pmc gp_counters[INTEL_PMC_MAX_GENERIC];
+ 	struct kvm_pmc fixed_counters[INTEL_PMC_MAX_FIXED];
+diff --git a/arch/x86/include/asm/perf_event.h b/arch/x86/include/asm/perf_event.h
+index 78241b7..d653b12 100644
+--- a/arch/x86/include/asm/perf_event.h
++++ b/arch/x86/include/asm/perf_event.h
+@@ -296,6 +296,8 @@ static inline void perf_check_microcode(void) { }
+ 
+ #ifdef CONFIG_CPU_SUP_INTEL
+  extern void intel_pt_handle_vmx(int on);
++extern u64 intel_pmu_disable_guest_counters(void);
++extern void intel_pmu_enable_guest_counters(u64 mask);
+ #endif
+ 
+ #if defined(CONFIG_PERF_EVENTS) && defined(CONFIG_CPU_SUP_AMD)
+diff --git a/arch/x86/kvm/pmu.c b/arch/x86/kvm/pmu.c
+index 58ead7d..210e5df 100644
+--- a/arch/x86/kvm/pmu.c
++++ b/arch/x86/kvm/pmu.c
+@@ -80,6 +80,7 @@ static void kvm_perf_overflow_intr(struct perf_event *perf_event,
+ 			      (unsigned long *)&pmu->reprogram_pmi)) {
+ 		__set_bit(pmc->idx, (unsigned long *)&pmu->global_status);
+ 		kvm_make_request(KVM_REQ_PMU, pmc->vcpu);
++		pmu->in_pmi = true;
+ 
+ 		/*
+ 		 * Inject PMI. If vcpu was in a guest mode during NMI PMI
+diff --git a/arch/x86/kvm/pmu_intel.c b/arch/x86/kvm/pmu_intel.c
+index 5ab4a36..5f6ac3c 100644
+--- a/arch/x86/kvm/pmu_intel.c
++++ b/arch/x86/kvm/pmu_intel.c
+@@ -55,6 +55,27 @@ static void reprogram_fixed_counters(struct kvm_pmu *pmu, u64 data)
+ 	pmu->fixed_ctr_ctrl = data;
+ }
+ 
++static void fast_global_ctrl_changed(struct kvm_pmu *pmu, u64 data)
++{
++	pmu->global_ctrl = data;
++
++	if (!data) {
++		/*
++		 * The guest PMI handler is asking for disabling all the perf
++		 * counters
++		 */
++		pmu->counter_mask = intel_pmu_disable_guest_counters();
++	} else {
++		/*
++		 * The guest PMI handler is asking for enabling the perf
++		 * counters. This happens at the end of the guest PMI handler,
++		 * so clear in_pmi.
++		 */
++		intel_pmu_enable_guest_counters(pmu->counter_mask);
++		pmu->in_pmi = false;
++	}
++}
++
+ /* function is called when global control register has been updated. */
+ static void global_ctrl_changed(struct kvm_pmu *pmu, u64 data)
+ {
+@@ -219,6 +240,15 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 		}
+ 		break; /* RO MSR */
+ 	case MSR_CORE_PERF_GLOBAL_CTRL:
++		/*
++		 * If this is from the guest PMI handler to disable or enable
++		 * the perf counters, there is no need to release and allocate
++		 * a new perf event, which is too time consuming.
++		 */
++		if (pmu->in_pmi) {
++			fast_global_ctrl_changed(pmu, data);
++			return 0;
++		}
+ 		if (pmu->global_ctrl == data)
+ 			return 0;
+ 		if (!(data & pmu->global_ctrl_mask)) {
+@@ -237,9 +267,23 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 	default:
+ 		if ((pmc = get_gp_pmc(pmu, msr, MSR_IA32_PERFCTR0)) ||
+ 		    (pmc = get_fixed_pmc(pmu, msr))) {
+-			if (!msr_info->host_initiated)
+-				data = (s64)(s32)data;
+-			pmc->counter += data - pmc_read_counter(pmc);
++			if (pmu->in_pmi) {
++				/*
++				 * Since we are not re-allocating a perf event
++				 * to reconfigure the sampling time when the
++				 * guest pmu is in PMI, just set the value to
++				 * the hardware perf counter. Counting will
++				 * continue after the guest enables the
++				 * counter bit in MSR_CORE_PERF_GLOBAL_CTRL.
++				 */
++				struct hw_perf_event *hwc =
++						&pmc->perf_event->hw;
++				wrmsrl(hwc->event_base, data);
++			} else {
++				if (!msr_info->host_initiated)
++					data = (s64)(s32)data;
++				pmc->counter += data - pmc_read_counter(pmc);
++			}
+ 			return 0;
+ 		} else if ((pmc = get_gp_pmc(pmu, msr, MSR_P6_EVNTSEL0))) {
+ 			if (data == pmc->eventsel)

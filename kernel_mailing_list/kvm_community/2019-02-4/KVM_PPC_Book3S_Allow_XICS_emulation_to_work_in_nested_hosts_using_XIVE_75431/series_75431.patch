@@ -1,0 +1,410 @@
+From patchwork Mon Feb  4 11:07:20 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Paul Mackerras <paulus@ozlabs.org>
+X-Patchwork-Id: 10795407
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8D58B6C2
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  4 Feb 2019 11:07:37 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 78DA7288EC
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  4 Feb 2019 11:07:37 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 6CF552B081; Mon,  4 Feb 2019 11:07:37 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-8.0 required=2.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,MAILING_LIST_MULTI,RCVD_IN_DNSWL_HI autolearn=ham
+	version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 80849288EC
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  4 Feb 2019 11:07:36 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731092AbfBDLHf (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 4 Feb 2019 06:07:35 -0500
+Received: from ozlabs.org ([203.11.71.1]:48601 "EHLO ozlabs.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730088AbfBDLHd (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 4 Feb 2019 06:07:33 -0500
+Received: by ozlabs.org (Postfix, from userid 1003)
+        id 43tQ0K0d5Cz9s3x; Mon,  4 Feb 2019 22:07:28 +1100 (AEDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=ozlabs.org; s=201707;
+        t=1549278449; bh=Bjv2Igx+9d/KvaxUDhCdLFMHk/l/S5OPW/gx+tFLO1A=;
+        h=Date:From:To:Cc:Subject:From;
+        b=UaOaL4f5h08ATT+ibTgkT6oOlgIfy6wE5HShxhDosxhX4SA8i0CR07dV1qByjVAEC
+         7NXrKMn0qbp51eZAVZbmGw4FKJhLw5jKscNPDBt5c7urB9vUBdzupT5ng5MbjlxkAM
+         uLWjslDKcU02es4fKh3874rNPAnDoQA+Yf6+mUe0PiUa2Ry88j9GpTlnRtLGD+w0G0
+         L6bRKhh/uim3tR8ci1JPatBZS9u05PrPTiWFKb1zg8GD3od161yLdV1pgYkm45p4il
+         izzuEGUYn2MLIV9Md48J8cwoX/OIC34cDxPRMgMQxWn2Fhb6oXa4b/WITNMibgSkWt
+         6x5dqNFplNTyA==
+Date: Mon, 4 Feb 2019 22:07:20 +1100
+From: Paul Mackerras <paulus@ozlabs.org>
+To: kvm@vger.kernel.org, kvm-ppc@vger.kernel.org
+Cc: =?iso-8859-1?q?C=E9dric?= Le Goater <clg@kaod.org>,
+ David Gibson <david@gibson.dropbear.id.au>
+Subject: [PATCH] KVM: PPC: Book3S: Allow XICS emulation to work in nested
+ hosts using XIVE
+Message-ID: <20190204110720.GB938@blackberry>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.5.24 (2015-08-30)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Currently, the KVM code assumes that if the host kernel is using the
+XIVE interrupt controller (the new interrupt controller that first
+appeared in POWER9 systems), then the in-kernel XICS emulation will
+use the XIVE hardware to deliver interrupts to the guest.  However,
+this only works when the host is running in hypervisor mode and has
+full access to all of the XIVE functionality.  It doesn't work in any
+nested virtualization scenario, either with PR KVM or nested-HV KVM,
+because the XICS-on-XIVE code calls directly into the native-XIVE
+routines, which are not initialized and cannot function correctly
+because they use OPAL calls, and OPAL is not available in a guest.
+
+This means that using the in-kernel XICS emulation in a nested
+hypervisor that is using XIVE as its interrupt controller will cause a
+(nested) host kernel crash.  To fix this, we change most of the places
+where the current code calls xive_enabled() to select between the
+XICS-on-XIVE emulation and the plain XICS emulation to call a new
+function, xics_on_xive(), which returns false in a guest.
+
+However, there is a further twist.  The plain XICS emulation has some
+functions which are used in real mode and access the underlying XICS
+controller (the interrupt controller of the host) directly.  In the
+case of a nested hypervisor, this means doing XICS hypercalls
+directly.  When the nested host is using XIVE as its interrupt
+controller, these hypercalls will fail.  Therefore this also adds
+checks in the places where the XICS emulation wants to access the
+underlying interrupt controller directly, and if that is XIVE, makes
+the code use the virtual mode fallback paths, which call generic
+kernel infrastructure rather than doing direct XICS access.
+
+Signed-off-by: Paul Mackerras <paulus@ozlabs.org>
+Reviewed-by: Cédric Le Goater <clg@kaod.org>
+---
+ arch/powerpc/include/asm/kvm_ppc.h   | 14 ++++++++++++++
+ arch/powerpc/kvm/book3s.c            | 10 +++++-----
+ arch/powerpc/kvm/book3s_hv.c         | 16 ++++++++--------
+ arch/powerpc/kvm/book3s_hv_builtin.c | 14 +++++++-------
+ arch/powerpc/kvm/book3s_hv_rm_xics.c |  7 +++++++
+ arch/powerpc/kvm/book3s_rtas.c       |  8 ++++----
+ arch/powerpc/kvm/powerpc.c           |  4 ++--
+ 7 files changed, 47 insertions(+), 26 deletions(-)
+
+diff --git a/arch/powerpc/include/asm/kvm_ppc.h b/arch/powerpc/include/asm/kvm_ppc.h
+index eb0d79f..b3bf4f6 100644
+--- a/arch/powerpc/include/asm/kvm_ppc.h
++++ b/arch/powerpc/include/asm/kvm_ppc.h
+@@ -36,6 +36,8 @@
+ #endif
+ #ifdef CONFIG_KVM_BOOK3S_64_HANDLER
+ #include <asm/paca.h>
++#include <asm/xive.h>
++#include <asm/cpu_has_feature.h>
+ #endif
+ 
+ /*
+@@ -616,6 +618,18 @@ static inline int kvmppc_xive_set_irq(struct kvm *kvm, int irq_source_id, u32 ir
+ static inline void kvmppc_xive_push_vcpu(struct kvm_vcpu *vcpu) { }
+ #endif /* CONFIG_KVM_XIVE */
+ 
++#ifdef CONFIG_PPC_POWERNV
++static inline bool xics_on_xive(void)
++{
++	return xive_enabled() && cpu_has_feature(CPU_FTR_HVMODE);
++}
++#else
++static inline bool xics_on_xive(void)
++{
++	return false;
++}
++#endif
++
+ /*
+  * Prototypes for functions called only from assembler code.
+  * Having prototypes reduces sparse errors.
+diff --git a/arch/powerpc/kvm/book3s.c b/arch/powerpc/kvm/book3s.c
+index bd1a677..601c094 100644
+--- a/arch/powerpc/kvm/book3s.c
++++ b/arch/powerpc/kvm/book3s.c
+@@ -635,7 +635,7 @@ int kvmppc_get_one_reg(struct kvm_vcpu *vcpu, u64 id,
+ 				r = -ENXIO;
+ 				break;
+ 			}
+-			if (xive_enabled())
++			if (xics_on_xive())
+ 				*val = get_reg_val(id, kvmppc_xive_get_icp(vcpu));
+ 			else
+ 				*val = get_reg_val(id, kvmppc_xics_get_icp(vcpu));
+@@ -708,7 +708,7 @@ int kvmppc_set_one_reg(struct kvm_vcpu *vcpu, u64 id,
+ 				r = -ENXIO;
+ 				break;
+ 			}
+-			if (xive_enabled())
++			if (xics_on_xive())
+ 				r = kvmppc_xive_set_icp(vcpu, set_reg_val(id, *val));
+ 			else
+ 				r = kvmppc_xics_set_icp(vcpu, set_reg_val(id, *val));
+@@ -984,7 +984,7 @@ int kvmppc_book3s_hcall_implemented(struct kvm *kvm, unsigned long hcall)
+ int kvm_set_irq(struct kvm *kvm, int irq_source_id, u32 irq, int level,
+ 		bool line_status)
+ {
+-	if (xive_enabled())
++	if (xics_on_xive())
+ 		return kvmppc_xive_set_irq(kvm, irq_source_id, irq, level,
+ 					   line_status);
+ 	else
+@@ -1037,7 +1037,7 @@ static int kvmppc_book3s_init(void)
+ 
+ #ifdef CONFIG_KVM_XICS
+ #ifdef CONFIG_KVM_XIVE
+-	if (xive_enabled()) {
++	if (xics_on_xive()) {
+ 		kvmppc_xive_init_module();
+ 		kvm_register_device_ops(&kvm_xive_ops, KVM_DEV_TYPE_XICS);
+ 	} else
+@@ -1050,7 +1050,7 @@ static int kvmppc_book3s_init(void)
+ static void kvmppc_book3s_exit(void)
+ {
+ #ifdef CONFIG_KVM_XICS
+-	if (xive_enabled())
++	if (xics_on_xive())
+ 		kvmppc_xive_exit_module();
+ #endif
+ #ifdef CONFIG_KVM_BOOK3S_32_HANDLER
+diff --git a/arch/powerpc/kvm/book3s_hv.c b/arch/powerpc/kvm/book3s_hv.c
+index 5a066fc..94b620b 100644
+--- a/arch/powerpc/kvm/book3s_hv.c
++++ b/arch/powerpc/kvm/book3s_hv.c
+@@ -922,7 +922,7 @@ int kvmppc_pseries_do_hcall(struct kvm_vcpu *vcpu)
+ 	case H_IPOLL:
+ 	case H_XIRR_X:
+ 		if (kvmppc_xics_enabled(vcpu)) {
+-			if (xive_enabled()) {
++			if (xics_on_xive()) {
+ 				ret = H_NOT_AVAILABLE;
+ 				return RESUME_GUEST;
+ 			}
+@@ -1431,7 +1431,7 @@ static int kvmppc_handle_nested_exit(struct kvm_run *run, struct kvm_vcpu *vcpu)
+ 	case BOOK3S_INTERRUPT_HV_RM_HARD:
+ 		vcpu->arch.trap = 0;
+ 		r = RESUME_GUEST;
+-		if (!xive_enabled())
++		if (!xics_on_xive())
+ 			kvmppc_xics_rm_complete(vcpu, 0);
+ 		break;
+ 	default:
+@@ -3649,7 +3649,7 @@ static void shrink_halt_poll_ns(struct kvmppc_vcore *vc)
+ #ifdef CONFIG_KVM_XICS
+ static inline bool xive_interrupt_pending(struct kvm_vcpu *vcpu)
+ {
+-	if (!xive_enabled())
++	if (!xics_on_xive())
+ 		return false;
+ 	return vcpu->arch.irq_pending || vcpu->arch.xive_saved_state.pipr <
+ 		vcpu->arch.xive_saved_state.cppr;
+@@ -4209,7 +4209,7 @@ static int kvmppc_vcpu_run_hv(struct kvm_run *run, struct kvm_vcpu *vcpu)
+ 				vcpu->arch.fault_dar, vcpu->arch.fault_dsisr);
+ 			srcu_read_unlock(&kvm->srcu, srcu_idx);
+ 		} else if (r == RESUME_PASSTHROUGH) {
+-			if (WARN_ON(xive_enabled()))
++			if (WARN_ON(xics_on_xive()))
+ 				r = H_SUCCESS;
+ 			else
+ 				r = kvmppc_xics_rm_complete(vcpu, 0);
+@@ -4733,7 +4733,7 @@ static int kvmppc_core_init_vm_hv(struct kvm *kvm)
+ 		 * If xive is enabled, we route 0x500 interrupts directly
+ 		 * to the guest.
+ 		 */
+-		if (xive_enabled())
++		if (xics_on_xive())
+ 			lpcr |= LPCR_LPES;
+ 	}
+ 
+@@ -4969,7 +4969,7 @@ static int kvmppc_set_passthru_irq(struct kvm *kvm, int host_irq, int guest_gsi)
+ 	if (i == pimap->n_mapped)
+ 		pimap->n_mapped++;
+ 
+-	if (xive_enabled())
++	if (xics_on_xive())
+ 		rc = kvmppc_xive_set_mapped(kvm, guest_gsi, desc);
+ 	else
+ 		kvmppc_xics_set_mapped(kvm, guest_gsi, desc->irq_data.hwirq);
+@@ -5010,7 +5010,7 @@ static int kvmppc_clr_passthru_irq(struct kvm *kvm, int host_irq, int guest_gsi)
+ 		return -ENODEV;
+ 	}
+ 
+-	if (xive_enabled())
++	if (xics_on_xive())
+ 		rc = kvmppc_xive_clr_mapped(kvm, guest_gsi, pimap->mapped[i].desc);
+ 	else
+ 		kvmppc_xics_clr_mapped(kvm, guest_gsi, pimap->mapped[i].r_hwirq);
+@@ -5389,7 +5389,7 @@ static int kvmppc_book3s_init_hv(void)
+ 	 * indirectly, via OPAL.
+ 	 */
+ #ifdef CONFIG_SMP
+-	if (!xive_enabled() && !kvmhv_on_pseries() &&
++	if (!xics_on_xive() && !kvmhv_on_pseries() &&
+ 	    !local_paca->kvm_hstate.xics_phys) {
+ 		struct device_node *np;
+ 
+diff --git a/arch/powerpc/kvm/book3s_hv_builtin.c b/arch/powerpc/kvm/book3s_hv_builtin.c
+index a71e2fc..b0cf224 100644
+--- a/arch/powerpc/kvm/book3s_hv_builtin.c
++++ b/arch/powerpc/kvm/book3s_hv_builtin.c
+@@ -257,7 +257,7 @@ void kvmhv_rm_send_ipi(int cpu)
+ 	}
+ 
+ 	/* We should never reach this */
+-	if (WARN_ON_ONCE(xive_enabled()))
++	if (WARN_ON_ONCE(xics_on_xive()))
+ 	    return;
+ 
+ 	/* Else poke the target with an IPI */
+@@ -577,7 +577,7 @@ unsigned long kvmppc_rm_h_xirr(struct kvm_vcpu *vcpu)
+ {
+ 	if (!kvmppc_xics_enabled(vcpu))
+ 		return H_TOO_HARD;
+-	if (xive_enabled()) {
++	if (xics_on_xive()) {
+ 		if (is_rm())
+ 			return xive_rm_h_xirr(vcpu);
+ 		if (unlikely(!__xive_vm_h_xirr))
+@@ -592,7 +592,7 @@ unsigned long kvmppc_rm_h_xirr_x(struct kvm_vcpu *vcpu)
+ 	if (!kvmppc_xics_enabled(vcpu))
+ 		return H_TOO_HARD;
+ 	vcpu->arch.regs.gpr[5] = get_tb();
+-	if (xive_enabled()) {
++	if (xics_on_xive()) {
+ 		if (is_rm())
+ 			return xive_rm_h_xirr(vcpu);
+ 		if (unlikely(!__xive_vm_h_xirr))
+@@ -606,7 +606,7 @@ unsigned long kvmppc_rm_h_ipoll(struct kvm_vcpu *vcpu, unsigned long server)
+ {
+ 	if (!kvmppc_xics_enabled(vcpu))
+ 		return H_TOO_HARD;
+-	if (xive_enabled()) {
++	if (xics_on_xive()) {
+ 		if (is_rm())
+ 			return xive_rm_h_ipoll(vcpu, server);
+ 		if (unlikely(!__xive_vm_h_ipoll))
+@@ -621,7 +621,7 @@ int kvmppc_rm_h_ipi(struct kvm_vcpu *vcpu, unsigned long server,
+ {
+ 	if (!kvmppc_xics_enabled(vcpu))
+ 		return H_TOO_HARD;
+-	if (xive_enabled()) {
++	if (xics_on_xive()) {
+ 		if (is_rm())
+ 			return xive_rm_h_ipi(vcpu, server, mfrr);
+ 		if (unlikely(!__xive_vm_h_ipi))
+@@ -635,7 +635,7 @@ int kvmppc_rm_h_cppr(struct kvm_vcpu *vcpu, unsigned long cppr)
+ {
+ 	if (!kvmppc_xics_enabled(vcpu))
+ 		return H_TOO_HARD;
+-	if (xive_enabled()) {
++	if (xics_on_xive()) {
+ 		if (is_rm())
+ 			return xive_rm_h_cppr(vcpu, cppr);
+ 		if (unlikely(!__xive_vm_h_cppr))
+@@ -649,7 +649,7 @@ int kvmppc_rm_h_eoi(struct kvm_vcpu *vcpu, unsigned long xirr)
+ {
+ 	if (!kvmppc_xics_enabled(vcpu))
+ 		return H_TOO_HARD;
+-	if (xive_enabled()) {
++	if (xics_on_xive()) {
+ 		if (is_rm())
+ 			return xive_rm_h_eoi(vcpu, xirr);
+ 		if (unlikely(!__xive_vm_h_eoi))
+diff --git a/arch/powerpc/kvm/book3s_hv_rm_xics.c b/arch/powerpc/kvm/book3s_hv_rm_xics.c
+index b3f5786..3b9662a 100644
+--- a/arch/powerpc/kvm/book3s_hv_rm_xics.c
++++ b/arch/powerpc/kvm/book3s_hv_rm_xics.c
+@@ -144,6 +144,13 @@ static void icp_rm_set_vcpu_irq(struct kvm_vcpu *vcpu,
+ 		return;
+ 	}
+ 
++	if (xive_enabled() && kvmhv_on_pseries()) {
++		/* No XICS access or hypercalls available, too hard */
++		this_icp->rm_action |= XICS_RM_KICK_VCPU;
++		this_icp->rm_kick_target = vcpu;
++		return;
++	}
++
+ 	/*
+ 	 * Check if the core is loaded,
+ 	 * if not, find an available host core to post to wake the VCPU,
+diff --git a/arch/powerpc/kvm/book3s_rtas.c b/arch/powerpc/kvm/book3s_rtas.c
+index 2d3b2b1..4e178c4 100644
+--- a/arch/powerpc/kvm/book3s_rtas.c
++++ b/arch/powerpc/kvm/book3s_rtas.c
+@@ -33,7 +33,7 @@ static void kvm_rtas_set_xive(struct kvm_vcpu *vcpu, struct rtas_args *args)
+ 	server = be32_to_cpu(args->args[1]);
+ 	priority = be32_to_cpu(args->args[2]);
+ 
+-	if (xive_enabled())
++	if (xics_on_xive())
+ 		rc = kvmppc_xive_set_xive(vcpu->kvm, irq, server, priority);
+ 	else
+ 		rc = kvmppc_xics_set_xive(vcpu->kvm, irq, server, priority);
+@@ -56,7 +56,7 @@ static void kvm_rtas_get_xive(struct kvm_vcpu *vcpu, struct rtas_args *args)
+ 	irq = be32_to_cpu(args->args[0]);
+ 
+ 	server = priority = 0;
+-	if (xive_enabled())
++	if (xics_on_xive())
+ 		rc = kvmppc_xive_get_xive(vcpu->kvm, irq, &server, &priority);
+ 	else
+ 		rc = kvmppc_xics_get_xive(vcpu->kvm, irq, &server, &priority);
+@@ -83,7 +83,7 @@ static void kvm_rtas_int_off(struct kvm_vcpu *vcpu, struct rtas_args *args)
+ 
+ 	irq = be32_to_cpu(args->args[0]);
+ 
+-	if (xive_enabled())
++	if (xics_on_xive())
+ 		rc = kvmppc_xive_int_off(vcpu->kvm, irq);
+ 	else
+ 		rc = kvmppc_xics_int_off(vcpu->kvm, irq);
+@@ -105,7 +105,7 @@ static void kvm_rtas_int_on(struct kvm_vcpu *vcpu, struct rtas_args *args)
+ 
+ 	irq = be32_to_cpu(args->args[0]);
+ 
+-	if (xive_enabled())
++	if (xics_on_xive())
+ 		rc = kvmppc_xive_int_on(vcpu->kvm, irq);
+ 	else
+ 		rc = kvmppc_xics_int_on(vcpu->kvm, irq);
+diff --git a/arch/powerpc/kvm/powerpc.c b/arch/powerpc/kvm/powerpc.c
+index b90a7d1..8c69af1 100644
+--- a/arch/powerpc/kvm/powerpc.c
++++ b/arch/powerpc/kvm/powerpc.c
+@@ -748,7 +748,7 @@ void kvm_arch_vcpu_free(struct kvm_vcpu *vcpu)
+ 		kvmppc_mpic_disconnect_vcpu(vcpu->arch.mpic, vcpu);
+ 		break;
+ 	case KVMPPC_IRQ_XICS:
+-		if (xive_enabled())
++		if (xics_on_xive())
+ 			kvmppc_xive_cleanup_vcpu(vcpu);
+ 		else
+ 			kvmppc_xics_free_icp(vcpu);
+@@ -1931,7 +1931,7 @@ static int kvm_vcpu_ioctl_enable_cap(struct kvm_vcpu *vcpu,
+ 		r = -EPERM;
+ 		dev = kvm_device_from_filp(f.file);
+ 		if (dev) {
+-			if (xive_enabled())
++			if (xics_on_xive())
+ 				r = kvmppc_xive_connect_vcpu(dev, vcpu, cap->args[1]);
+ 			else
+ 				r = kvmppc_xics_connect_vcpu(dev, vcpu, cap->args[1]);

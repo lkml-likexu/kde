@@ -1,0 +1,209 @@
+From patchwork Fri Jan 25 22:06:05 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Eduardo Habkost <ehabkost@redhat.com>
+X-Patchwork-Id: 10782083
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 16EB3746
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 25 Jan 2019 22:06:14 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 04BF23083D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 25 Jan 2019 22:06:14 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id EC1EA308F7; Fri, 25 Jan 2019 22:06:13 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 8F1713083D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 25 Jan 2019 22:06:13 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729373AbfAYWGM (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 25 Jan 2019 17:06:12 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:53354 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726218AbfAYWGM (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 25 Jan 2019 17:06:12 -0500
+Received: from smtp.corp.redhat.com (int-mx02.intmail.prod.int.phx2.redhat.com
+ [10.5.11.12])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 885438BA01;
+        Fri, 25 Jan 2019 22:06:11 +0000 (UTC)
+Received: from localhost (ovpn-116-63.gru2.redhat.com [10.97.116.63])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id AFB6060FDF;
+        Fri, 25 Jan 2019 22:06:10 +0000 (UTC)
+From: Eduardo Habkost <ehabkost@redhat.com>
+To: qemu-devel@nongnu.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ Eduardo Habkost <ehabkost@redhat.com>,
+ Robert Hoo <robert.hu@linux.intel.com>, Richard Henderson <rth@twiddle.net>,
+ Marcelo Tosatti <mtosatti@redhat.com>, Tao Xu <tao5.xu@intel.com>,
+ Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>,
+ Jim Mattson <jmattson@google.com>, KarimAllah Ahmed <karahmed@amazon.de>,
+ David Woodhouse <dwmw@amazon.co.uk>, Darren Kenny <darren.kenny@oracle.com>
+Subject: [PATCH 1/2] i386: kvm: Disable arch_capabilities if MSR can't be set
+Date: Fri, 25 Jan 2019 20:06:05 -0200
+Message-Id: <20190125220606.4864-2-ehabkost@redhat.com>
+In-Reply-To: <20190125220606.4864-1-ehabkost@redhat.com>
+References: <20190125220606.4864-1-ehabkost@redhat.com>
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.12
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.25]);
+ Fri, 25 Jan 2019 22:06:11 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+KVM has two bugs in the handling of MSR_IA32_ARCH_CAPABILITIES:
+
+1) Linux commit commit 1eaafe91a0df ("kvm: x86: IA32_ARCH_CAPABILITIES
+   is always supported") makes GET_SUPPORTED_CPUID return
+   arch_capabilities even if running on SVM.  This makes "-cpu
+   host,migratable=off" incorrectly expose arch_capabilities on CPUID on
+   AMD hosts (where the MSR is not emulated by KVM).
+
+2) KVM_GET_MSR_INDEX_LIST does not return MSR_IA32_ARCH_CAPABILITIES if
+   the MSR is not supported by the host CPU.  This makes QEMU not
+   initialize the MSR properly at kvm_put_msrs() on those hosts.
+
+Work around both bugs on the QEMU side, by checking if the MSR
+was returned by KVM_GET_MSR_INDEX_LIST before returning the
+feature flag on kvm_arch_get_supported_cpuid().
+
+This has the unfortunate side effect of making arch_capabilities
+unavailable on hosts without hardware support for the MSR until bug #2
+is fixed on KVM, but I can't see another way to work around bug #1
+without that side effect.
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+---
+Cc: Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Cc: Jim Mattson <jmattson@google.com>
+Cc: KarimAllah Ahmed <karahmed@amazon.de>
+Cc: David Woodhouse <dwmw@amazon.co.uk>
+Cc: Darren Kenny <darren.kenny@oracle.com>
+---
+ target/i386/kvm.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/target/i386/kvm.c b/target/i386/kvm.c
+index 9af4542fb8..4fa3e3806a 100644
+--- a/target/i386/kvm.c
++++ b/target/i386/kvm.c
+@@ -389,6 +389,15 @@ uint32_t kvm_arch_get_supported_cpuid(KVMState *s, uint32_t function,
+         if (host_tsx_blacklisted()) {
+             ret &= ~(CPUID_7_0_EBX_RTM | CPUID_7_0_EBX_HLE);
+         }
++    } else if (function == 7 && index == 0 && reg == R_EDX) {
++        /*
++         * Linux incorrectly v4.17-v4.20 return ARCH_CAPABILITIES on SVM.
++         * We can detect the bug by checking if MSR_IA32_ARCH_CAPABILITIES is
++         * returned by KVM_GET_MSR_INDEX_LIST.
++         */
++        if (!has_msr_arch_capabs) {
++            ret &= ~CPUID_7_0_EDX_ARCH_CAPABILITIES;
++        }
+     } else if (function == 0x80000001 && reg == R_ECX) {
+         /*
+          * It's safe to enable TOPOEXT even if it's not returned by
+
+From patchwork Fri Jan 25 22:06:06 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Eduardo Habkost <ehabkost@redhat.com>
+X-Patchwork-Id: 10782085
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B3D60746
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 25 Jan 2019 22:06:15 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A31633083D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 25 Jan 2019 22:06:15 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 9680F308F7; Fri, 25 Jan 2019 22:06:15 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3615C3083D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 25 Jan 2019 22:06:15 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729388AbfAYWGO (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 25 Jan 2019 17:06:14 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:60002 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728236AbfAYWGN (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 25 Jan 2019 17:06:13 -0500
+Received: from smtp.corp.redhat.com (int-mx03.intmail.prod.int.phx2.redhat.com
+ [10.5.11.13])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id B93B17BDA7;
+        Fri, 25 Jan 2019 22:06:13 +0000 (UTC)
+Received: from localhost (ovpn-116-63.gru2.redhat.com [10.97.116.63])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 242FF608C3;
+        Fri, 25 Jan 2019 22:06:12 +0000 (UTC)
+From: Eduardo Habkost <ehabkost@redhat.com>
+To: qemu-devel@nongnu.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ Eduardo Habkost <ehabkost@redhat.com>,
+ Robert Hoo <robert.hu@linux.intel.com>, Richard Henderson <rth@twiddle.net>,
+ Marcelo Tosatti <mtosatti@redhat.com>, Tao Xu <tao5.xu@intel.com>
+Subject: [PATCH 2/2] i386: Make arch_capabilities migratable
+Date: Fri, 25 Jan 2019 20:06:06 -0200
+Message-Id: <20190125220606.4864-3-ehabkost@redhat.com>
+In-Reply-To: <20190125220606.4864-1-ehabkost@redhat.com>
+References: <20190125220606.4864-1-ehabkost@redhat.com>
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.13
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.26]);
+ Fri, 25 Jan 2019 22:06:13 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Now that kvm_arch_get_supported_cpuid() will only return
+arch_capabilities if QEMU is able to initialize the MSR properly,
+we know that the feature is safely migratable.
+
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+---
+ target/i386/cpu.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/target/i386/cpu.c b/target/i386/cpu.c
+index 2f5412592d..3ff91d794d 100644
+--- a/target/i386/cpu.c
++++ b/target/i386/cpu.c
+@@ -1088,7 +1088,6 @@ static FeatureWordInfo feature_word_info[FEATURE_WORDS] = {
+             .reg = R_EDX,
+         },
+         .tcg_features = TCG_7_0_EDX_FEATURES,
+-        .unmigratable_flags = CPUID_7_0_EDX_ARCH_CAPABILITIES,
+     },
+     [FEAT_8000_0007_EDX] = {
+         .type = CPUID_FEATURE_WORD,

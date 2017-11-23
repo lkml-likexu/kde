@@ -1,0 +1,2297 @@
+From patchwork Thu Dec 20 15:21:18 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Julien Grall <julien.grall@arm.com>
+X-Patchwork-Id: 10739049
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 5DEBE14E2
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:42 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4C0BA28D2D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:42 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4A68328C8A; Thu, 20 Dec 2018 15:21:42 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E651D28D30
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:41 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2387765AbeLTPVk (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 20 Dec 2018 10:21:40 -0500
+Received: from usa-sjc-mx-foss1.foss.arm.com ([217.140.101.70]:57834 "EHLO
+        foss.arm.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729693AbeLTPVk (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 20 Dec 2018 10:21:40 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 2DD3E1596;
+        Thu, 20 Dec 2018 07:21:40 -0800 (PST)
+Received: from e108454-lin.cambridge.arm.com (e108454-lin.cambridge.arm.com
+ [10.1.196.50])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ EC8393F5C0;
+        Thu, 20 Dec 2018 07:21:38 -0800 (PST)
+From: Julien Grall <julien.grall@arm.com>
+To: kvm@vger.kernel.org
+Cc: suzuki.poulose@arm.com, marc.zyngier@arm.com, will.deacon@arm.com,
+        Andre Przywara <andre.przywara@arm.com>,
+        Julien Grall <julien.grall@arm.com>
+Subject: [PATCH kvmtool v3 1/9] arm: Allow use of hugepage with 16K pagesize
+ host
+Date: Thu, 20 Dec 2018 15:21:18 +0000
+Message-Id: <20181220152126.18741-2-julien.grall@arm.com>
+X-Mailer: git-send-email 2.11.0
+In-Reply-To: <20181220152126.18741-1-julien.grall@arm.com>
+References: <20181220152126.18741-1-julien.grall@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Suzuki K Poulose <suzuki.poulose@arm.com>
+
+With 16K pagesize, the hugepage size is 32M. Align the guest
+memory to the hugepagesize for 16K.
+
+Cc: Marc Zyngier <marc.zyngier@arm.com>
+Cc: Andre Przywara <andre.przywara@arm.com>
+Cc: Will Deacon <will.deacon@arm.com>
+Signed-off-by: Suzuki K Poulose <suzuki.poulose@arm.com>
+Signed-off-by: Julien Grall <julien.grall@arm.com>
+---
+ arm/kvm.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/arm/kvm.c b/arm/kvm.c
+index b824f63..5b1f73c 100644
+--- a/arm/kvm.c
++++ b/arm/kvm.c
+@@ -59,14 +59,22 @@ void kvm__arch_set_cmdline(char *cmdline, bool video)
+ 
+ void kvm__arch_init(struct kvm *kvm, const char *hugetlbfs_path, u64 ram_size)
+ {
++	unsigned long alignment;
++
+ 	/*
+ 	 * Allocate guest memory. We must align our buffer to 64K to
+ 	 * correlate with the maximum guest page size for virtio-mmio.
+ 	 * If using THP, then our minimal alignment becomes 2M.
+ 	 * 2M trumps 64K, so let's go with that.
++	 * If we are running with 16K page size, align the memory to
++	 * 32M, so that we can make use of the THP.
+ 	 */
++	if (sysconf(_SC_PAGESIZE) == SZ_16K)
++		alignment = SZ_32M;
++	else
++		alignment = SZ_2M;
+ 	kvm->ram_size = min(ram_size, (u64)ARM_MAX_MEMORY(kvm));
+-	kvm->arch.ram_alloc_size = kvm->ram_size + SZ_2M;
++	kvm->arch.ram_alloc_size = kvm->ram_size + alignment;
+ 	kvm->arch.ram_alloc_start = mmap_anon_or_hugetlbfs(kvm, hugetlbfs_path,
+ 						kvm->arch.ram_alloc_size);
+ 
+@@ -75,7 +83,7 @@ void kvm__arch_init(struct kvm *kvm, const char *hugetlbfs_path, u64 ram_size)
+ 		    kvm->arch.ram_alloc_size, errno);
+ 
+ 	kvm->ram_start = (void *)ALIGN((unsigned long)kvm->arch.ram_alloc_start,
+-					SZ_2M);
++					alignment);
+ 
+ 	madvise(kvm->arch.ram_alloc_start, kvm->arch.ram_alloc_size,
+ 		MADV_MERGEABLE);
+
+From patchwork Thu Dec 20 15:21:19 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Julien Grall <julien.grall@arm.com>
+X-Patchwork-Id: 10739053
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 49E2313BF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:44 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 36A2F28CFB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:44 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 342F528C3B; Thu, 20 Dec 2018 15:21:44 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id CB93128D41
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:43 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2387784AbeLTPVm (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 20 Dec 2018 10:21:42 -0500
+Received: from foss.arm.com ([217.140.101.70]:57840 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729693AbeLTPVl (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 20 Dec 2018 10:21:41 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 7A934EBD;
+        Thu, 20 Dec 2018 07:21:41 -0800 (PST)
+Received: from e108454-lin.cambridge.arm.com (e108454-lin.cambridge.arm.com
+ [10.1.196.50])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 688433F5C0;
+        Thu, 20 Dec 2018 07:21:40 -0800 (PST)
+From: Julien Grall <julien.grall@arm.com>
+To: kvm@vger.kernel.org
+Cc: suzuki.poulose@arm.com, marc.zyngier@arm.com, will.deacon@arm.com,
+        Julien Grall <julien.grall@arm.com>
+Subject: [PATCH kvmtool v3 2/9] kvm__arch_init: Don't pass hugetlbfs_path and
+ ram_size in parameter
+Date: Thu, 20 Dec 2018 15:21:19 +0000
+Message-Id: <20181220152126.18741-3-julien.grall@arm.com>
+X-Mailer: git-send-email 2.11.0
+In-Reply-To: <20181220152126.18741-1-julien.grall@arm.com>
+References: <20181220152126.18741-1-julien.grall@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+The structure KVM already contains a pointer to the configuration. Both
+hugetlbfs_path and ram_size are part of the configuration, so is it not
+necessary to path them again in parameter.
+
+Signed-off-by: Julien Grall <julien.grall@arm.com>
+---
+ arm/kvm.c         | 7 +++++--
+ include/kvm/kvm.h | 2 +-
+ kvm.c             | 2 +-
+ mips/kvm.c        | 5 ++++-
+ powerpc/kvm.c     | 5 ++++-
+ x86/kvm.c         | 5 ++++-
+ 6 files changed, 19 insertions(+), 7 deletions(-)
+
+diff --git a/arm/kvm.c b/arm/kvm.c
+index 5b1f73c..5a68c9a 100644
+--- a/arm/kvm.c
++++ b/arm/kvm.c
+@@ -57,10 +57,13 @@ void kvm__arch_set_cmdline(char *cmdline, bool video)
+ {
+ }
+ 
+-void kvm__arch_init(struct kvm *kvm, const char *hugetlbfs_path, u64 ram_size)
++void kvm__arch_init(struct kvm *kvm)
+ {
+ 	unsigned long alignment;
+ 
++	/* Convenience aliases */
++	const char *hugetlbfs_path = kvm->cfg.hugetlbfs_path;
++
+ 	/*
+ 	 * Allocate guest memory. We must align our buffer to 64K to
+ 	 * correlate with the maximum guest page size for virtio-mmio.
+@@ -73,7 +76,7 @@ void kvm__arch_init(struct kvm *kvm, const char *hugetlbfs_path, u64 ram_size)
+ 		alignment = SZ_32M;
+ 	else
+ 		alignment = SZ_2M;
+-	kvm->ram_size = min(ram_size, (u64)ARM_MAX_MEMORY(kvm));
++	kvm->ram_size = min(kvm->cfg.ram_size, (u64)ARM_MAX_MEMORY(kvm));
+ 	kvm->arch.ram_alloc_size = kvm->ram_size + alignment;
+ 	kvm->arch.ram_alloc_start = mmap_anon_or_hugetlbfs(kvm, hugetlbfs_path,
+ 						kvm->arch.ram_alloc_size);
+diff --git a/include/kvm/kvm.h b/include/kvm/kvm.h
+index 1edacfd..2d58ff4 100644
+--- a/include/kvm/kvm.h
++++ b/include/kvm/kvm.h
+@@ -136,7 +136,7 @@ int kvm__enumerate_instances(int (*callback)(const char *name, int pid));
+ void kvm__remove_socket(const char *name);
+ 
+ void kvm__arch_set_cmdline(char *cmdline, bool video);
+-void kvm__arch_init(struct kvm *kvm, const char *hugetlbfs_path, u64 ram_size);
++void kvm__arch_init(struct kvm *kvm);
+ void kvm__arch_delete_ram(struct kvm *kvm);
+ int kvm__arch_setup_firmware(struct kvm *kvm);
+ int kvm__arch_free_firmware(struct kvm *kvm);
+diff --git a/kvm.c b/kvm.c
+index d5249a0..ea239e7 100644
+--- a/kvm.c
++++ b/kvm.c
+@@ -388,7 +388,7 @@ int kvm__init(struct kvm *kvm)
+ 		goto err_vm_fd;
+ 	}
+ 
+-	kvm__arch_init(kvm, kvm->cfg.hugetlbfs_path, kvm->cfg.ram_size);
++	kvm__arch_init(kvm);
+ 
+ 	INIT_LIST_HEAD(&kvm->mem_banks);
+ 	kvm__init_ram(kvm);
+diff --git a/mips/kvm.c b/mips/kvm.c
+index 211770d..e2a0c63 100644
+--- a/mips/kvm.c
++++ b/mips/kvm.c
+@@ -57,9 +57,12 @@ void kvm__arch_set_cmdline(char *cmdline, bool video)
+ }
+ 
+ /* Architecture-specific KVM init */
+-void kvm__arch_init(struct kvm *kvm, const char *hugetlbfs_path, u64 ram_size)
++void kvm__arch_init(struct kvm *kvm)
+ {
+ 	int ret;
++	/* Convenience aliases */
++	u64 ram_size = kvm->cfg.ram_size;
++	const char *hugetlbfs_path = kvm->cfg.hugetlbfs_path;
+ 
+ 	kvm->ram_start = mmap_anon_or_hugetlbfs(kvm, hugetlbfs_path, ram_size);
+ 	kvm->ram_size = ram_size;
+diff --git a/powerpc/kvm.c b/powerpc/kvm.c
+index 702d67d..034bc46 100644
+--- a/powerpc/kvm.c
++++ b/powerpc/kvm.c
+@@ -88,10 +88,13 @@ void kvm__arch_set_cmdline(char *cmdline, bool video)
+ }
+ 
+ /* Architecture-specific KVM init */
+-void kvm__arch_init(struct kvm *kvm, const char *hugetlbfs_path, u64 ram_size)
++void kvm__arch_init(struct kvm *kvm)
+ {
+ 	int cap_ppc_rma;
+ 	unsigned long hpt;
++	/* Convenience aliases */
++	u64 ram_size = kvm->cfg.ram_size;
++	const char *hugetlbfs_path = kvm->cfg.hugetlbfs_path;
+ 
+ 	kvm->ram_size		= ram_size;
+ 
+diff --git a/x86/kvm.c b/x86/kvm.c
+index 3e0f0b7..5abb41e 100644
+--- a/x86/kvm.c
++++ b/x86/kvm.c
+@@ -130,10 +130,13 @@ void kvm__arch_set_cmdline(char *cmdline, bool video)
+ }
+ 
+ /* Architecture-specific KVM init */
+-void kvm__arch_init(struct kvm *kvm, const char *hugetlbfs_path, u64 ram_size)
++void kvm__arch_init(struct kvm *kvm)
+ {
+ 	struct kvm_pit_config pit_config = { .flags = 0, };
+ 	int ret;
++	/* Convenience aliases */
++	u64 ram_size = kvm->cfg.ram_size;
++	const char *hugetlbfs_path = kvm->cfg.hugetlbfs_path;
+ 
+ 	ret = ioctl(kvm->vm_fd, KVM_SET_TSS_ADDR, 0xfffbd000);
+ 	if (ret < 0)
+
+From patchwork Thu Dec 20 15:21:20 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Julien Grall <julien.grall@arm.com>
+X-Patchwork-Id: 10739055
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D997213B5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:45 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id CB13C28C8A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:45 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C975528CCC; Thu, 20 Dec 2018 15:21:45 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 626E328D3F
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:45 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2387766AbeLTPVn (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 20 Dec 2018 10:21:43 -0500
+Received: from foss.arm.com ([217.140.101.70]:57848 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729693AbeLTPVn (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 20 Dec 2018 10:21:43 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id C74E31596;
+        Thu, 20 Dec 2018 07:21:42 -0800 (PST)
+Received: from e108454-lin.cambridge.arm.com (e108454-lin.cambridge.arm.com
+ [10.1.196.50])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ B56663F5C0;
+        Thu, 20 Dec 2018 07:21:41 -0800 (PST)
+From: Julien Grall <julien.grall@arm.com>
+To: kvm@vger.kernel.org
+Cc: suzuki.poulose@arm.com, marc.zyngier@arm.com, will.deacon@arm.com,
+        Julien Grall <julien.grall@arm.com>
+Subject: [PATCH kvmtool v3 3/9] virtio/scsi: Allow to use multiple banks
+Date: Thu, 20 Dec 2018 15:21:20 +0000
+Message-Id: <20181220152126.18741-4-julien.grall@arm.com>
+X-Mailer: git-send-email 2.11.0
+In-Reply-To: <20181220152126.18741-1-julien.grall@arm.com>
+References: <20181220152126.18741-1-julien.grall@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+At the moment, virtio scsi only register a bank starting at 0. On some
+architectures this may not be true and the guest may have multiple
+memory region.
+
+Register all the memory regions to vhost by browsing kvm->mem_banks. The
+code is based on the virtio_net__vhost_init implementation.
+
+Signed-off-by: Julien Grall <julien.grall@arm.com>
+---
+
+This code was not tested as I don't have any setup with scsi.
+
+    Changes in v3:
+        - Don't forget to increment i in the loop.
+---
+ virtio/scsi.c | 21 +++++++++++++--------
+ 1 file changed, 13 insertions(+), 8 deletions(-)
+
+diff --git a/virtio/scsi.c b/virtio/scsi.c
+index a429ac8..e541ab5 100644
+--- a/virtio/scsi.c
++++ b/virtio/scsi.c
+@@ -178,24 +178,29 @@ static struct virtio_ops scsi_dev_virtio_ops = {
+ 
+ static void virtio_scsi_vhost_init(struct kvm *kvm, struct scsi_dev *sdev)
+ {
++	struct kvm_mem_bank *bank;
+ 	struct vhost_memory *mem;
+ 	u64 features;
+-	int r;
++	int r, i;
+ 
+ 	sdev->vhost_fd = open("/dev/vhost-scsi", O_RDWR);
+ 	if (sdev->vhost_fd < 0)
+ 		die_perror("Failed openning vhost-scsi device");
+ 
+-	mem = calloc(1, sizeof(*mem) + sizeof(struct vhost_memory_region));
++	mem = calloc(1, sizeof(*mem) + kvm->mem_slots * sizeof(struct vhost_memory_region));
+ 	if (mem == NULL)
+ 		die("Failed allocating memory for vhost memory map");
+ 
+-	mem->nregions = 1;
+-	mem->regions[0] = (struct vhost_memory_region) {
+-		.guest_phys_addr	= 0,
+-		.memory_size		= kvm->ram_size,
+-		.userspace_addr		= (unsigned long)kvm->ram_start,
+-	};
++	i = 0;
++	list_for_each_entry(bank, &kvm->mem_banks, list) {
++		mem->regions[0] = (struct vhost_memory_region) {
++			.guest_phys_addr	= bank->guest_phys_addr,
++			.memory_size		= bank->size,
++			.userspace_addr		= (unsigned long)bank->host_addr,
++		};
++		i++;
++	}
++	mem->nregions = i;
+ 
+ 	r = ioctl(sdev->vhost_fd, VHOST_SET_OWNER);
+ 	if (r != 0)
+
+From patchwork Thu Dec 20 15:21:21 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Julien Grall <julien.grall@arm.com>
+X-Patchwork-Id: 10739057
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D8AAE13B5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:47 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C985028CA2
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:47 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C7CF928CEC; Thu, 20 Dec 2018 15:21:47 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2C81028D2A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:46 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2387783AbeLTPVp (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 20 Dec 2018 10:21:45 -0500
+Received: from usa-sjc-mx-foss1.foss.arm.com ([217.140.101.70]:57856 "EHLO
+        foss.arm.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729693AbeLTPVo (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 20 Dec 2018 10:21:44 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 1FE1715AD;
+        Thu, 20 Dec 2018 07:21:44 -0800 (PST)
+Received: from e108454-lin.cambridge.arm.com (e108454-lin.cambridge.arm.com
+ [10.1.196.50])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 0E0AC3F5C0;
+        Thu, 20 Dec 2018 07:21:42 -0800 (PST)
+From: Julien Grall <julien.grall@arm.com>
+To: kvm@vger.kernel.org
+Cc: suzuki.poulose@arm.com, marc.zyngier@arm.com, will.deacon@arm.com,
+        Julien Grall <julien.grall@arm.com>
+Subject: [PATCH kvmtool v3 4/9] Fold kvm__init_ram call in kvm__arch_init
+Date: Thu, 20 Dec 2018 15:21:21 +0000
+Message-Id: <20181220152126.18741-5-julien.grall@arm.com>
+X-Mailer: git-send-email 2.11.0
+In-Reply-To: <20181220152126.18741-1-julien.grall@arm.com>
+References: <20181220152126.18741-1-julien.grall@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+The split between kvm__init_ram and kvm__arch_init for setting up the
+RAM can be quite subttle. By moving the former call in the later, it
+will be possible to make the RAM initialization easier on Arm with multi
+RAM banks support.
+
+Note that it is necessary to move the call to kvm__arch_init after the
+initialization of the list kvm->mem_banks because kvm__init_ram is
+relying on it.
+
+Signed-off-by: Julien Grall <julien.grall@arm.com>
+---
+ arm/kvm.c         | 4 +++-
+ include/kvm/kvm.h | 1 -
+ kvm.c             | 4 +---
+ mips/kvm.c        | 4 +++-
+ powerpc/kvm.c     | 4 +++-
+ x86/kvm.c         | 4 +++-
+ 6 files changed, 13 insertions(+), 8 deletions(-)
+
+diff --git a/arm/kvm.c b/arm/kvm.c
+index 5a68c9a..b6ff2e2 100644
+--- a/arm/kvm.c
++++ b/arm/kvm.c
+@@ -24,7 +24,7 @@ bool kvm__arch_cpu_supports_vm(void)
+ 	return true;
+ }
+ 
+-void kvm__init_ram(struct kvm *kvm)
++static void kvm__init_ram(struct kvm *kvm)
+ {
+ 	int err;
+ 	u64 phys_start, phys_size;
+@@ -97,6 +97,8 @@ void kvm__arch_init(struct kvm *kvm)
+ 	/* Create the virtual GIC. */
+ 	if (gic__create(kvm, kvm->cfg.arch.irqchip))
+ 		die("Failed to create virtual GIC");
++
++	kvm__init_ram(kvm);
+ }
+ 
+ #define FDT_ALIGN	SZ_2M
+diff --git a/include/kvm/kvm.h b/include/kvm/kvm.h
+index 2d58ff4..ee2c5ab 100644
+--- a/include/kvm/kvm.h
++++ b/include/kvm/kvm.h
+@@ -90,7 +90,6 @@ int kvm__init(struct kvm *kvm);
+ struct kvm *kvm__new(void);
+ int kvm__recommended_cpus(struct kvm *kvm);
+ int kvm__max_cpus(struct kvm *kvm);
+-void kvm__init_ram(struct kvm *kvm);
+ int kvm__exit(struct kvm *kvm);
+ bool kvm__load_firmware(struct kvm *kvm, const char *firmware_filename);
+ bool kvm__load_kernel(struct kvm *kvm, const char *kernel_filename,
+diff --git a/kvm.c b/kvm.c
+index ea239e7..d4e1f4a 100644
+--- a/kvm.c
++++ b/kvm.c
+@@ -388,10 +388,8 @@ int kvm__init(struct kvm *kvm)
+ 		goto err_vm_fd;
+ 	}
+ 
+-	kvm__arch_init(kvm);
+-
+ 	INIT_LIST_HEAD(&kvm->mem_banks);
+-	kvm__init_ram(kvm);
++	kvm__arch_init(kvm);
+ 
+ 	if (!kvm->cfg.firmware_filename) {
+ 		if (!kvm__load_kernel(kvm, kvm->cfg.kernel_filename,
+diff --git a/mips/kvm.c b/mips/kvm.c
+index e2a0c63..2ccefe8 100644
+--- a/mips/kvm.c
++++ b/mips/kvm.c
+@@ -17,7 +17,7 @@ void kvm__arch_read_term(struct kvm *kvm)
+ 	virtio_console__inject_interrupt(kvm);
+ }
+ 
+-void kvm__init_ram(struct kvm *kvm)
++static void kvm__init_ram(struct kvm *kvm)
+ {
+ 	u64	phys_start, phys_size;
+ 	void	*host_mem;
+@@ -75,6 +75,8 @@ void kvm__arch_init(struct kvm *kvm)
+ 	ret = ioctl(kvm->vm_fd, KVM_CREATE_IRQCHIP);
+ 	if (ret < 0)
+ 		die_perror("KVM_CREATE_IRQCHIP ioctl");
++
++	kvm__init_ram(kvm);
+ }
+ 
+ void kvm__irq_line(struct kvm *kvm, int irq, int level)
+diff --git a/powerpc/kvm.c b/powerpc/kvm.c
+index 034bc46..be99598 100644
+--- a/powerpc/kvm.c
++++ b/powerpc/kvm.c
+@@ -60,7 +60,7 @@ bool kvm__arch_cpu_supports_vm(void)
+ 	return true;
+ }
+ 
+-void kvm__init_ram(struct kvm *kvm)
++static void kvm__init_ram(struct kvm *kvm)
+ {
+ 	u64	phys_start, phys_size;
+ 	void	*host_mem;
+@@ -139,6 +139,8 @@ void kvm__arch_init(struct kvm *kvm)
+ 			 SPAPR_PCI_MEM_WIN_SIZE,
+ 			 SPAPR_PCI_IO_WIN_ADDR,
+ 			 SPAPR_PCI_IO_WIN_SIZE);
++
++	kvm__init_ram(kvm);
+ }
+ 
+ void kvm__arch_delete_ram(struct kvm *kvm)
+diff --git a/x86/kvm.c b/x86/kvm.c
+index 5abb41e..a22fa65 100644
+--- a/x86/kvm.c
++++ b/x86/kvm.c
+@@ -86,7 +86,7 @@ bool kvm__arch_cpu_supports_vm(void)
+  * a gap between 0xe0000000 and 0x100000000 in the guest virtual mem space.
+  */
+ 
+-void kvm__init_ram(struct kvm *kvm)
++static void kvm__init_ram(struct kvm *kvm)
+ {
+ 	u64	phys_start, phys_size;
+ 	void	*host_mem;
+@@ -167,6 +167,8 @@ void kvm__arch_init(struct kvm *kvm)
+ 	ret = ioctl(kvm->vm_fd, KVM_CREATE_IRQCHIP);
+ 	if (ret < 0)
+ 		die_perror("KVM_CREATE_IRQCHIP ioctl");
++
++	kvm__init_ram(kvm);
+ }
+ 
+ void kvm__arch_delete_ram(struct kvm *kvm)
+
+From patchwork Thu Dec 20 15:21:22 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Julien Grall <julien.grall@arm.com>
+X-Patchwork-Id: 10739059
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 0C8FC13B5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:49 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id F277828D00
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:48 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id EE22728D27; Thu, 20 Dec 2018 15:21:48 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 9A13A28D2A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:48 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2387797AbeLTPVr (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 20 Dec 2018 10:21:47 -0500
+Received: from foss.arm.com ([217.140.101.70]:57860 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2387822AbeLTPVp (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 20 Dec 2018 10:21:45 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 6C7461596;
+        Thu, 20 Dec 2018 07:21:45 -0800 (PST)
+Received: from e108454-lin.cambridge.arm.com (e108454-lin.cambridge.arm.com
+ [10.1.196.50])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 5AC993F5C0;
+        Thu, 20 Dec 2018 07:21:44 -0800 (PST)
+From: Julien Grall <julien.grall@arm.com>
+To: kvm@vger.kernel.org
+Cc: suzuki.poulose@arm.com, marc.zyngier@arm.com, will.deacon@arm.com,
+        Julien Grall <julien.grall@arm.com>
+Subject: [PATCH kvmtool v3 5/9] arm: Add an helper to sanitize KVM
+ configuration
+Date: Thu, 20 Dec 2018 15:21:22 +0000
+Message-Id: <20181220152126.18741-6-julien.grall@arm.com>
+X-Mailer: git-send-email 2.11.0
+In-Reply-To: <20181220152126.18741-1-julien.grall@arm.com>
+References: <20181220152126.18741-1-julien.grall@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+At the moment only the RAM size is checked. A follow-up patch will add
+more sanity check.
+
+Signed-off-by: Julien Grall <julien.grall@arm.com>
+---
+    Changes in v2:
+        - Add missing commit message
+---
+ arm/aarch64/include/kvm/kvm-arch.h |  2 +-
+ arm/kvm.c                          | 13 ++++++++++++-
+ 2 files changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/arm/aarch64/include/kvm/kvm-arch.h b/arm/aarch64/include/kvm/kvm-arch.h
+index 9de623a..1b3d0a5 100644
+--- a/arm/aarch64/include/kvm/kvm-arch.h
++++ b/arm/aarch64/include/kvm/kvm-arch.h
+@@ -5,7 +5,7 @@
+ 				0x8000				:	\
+ 				0x80000)
+ 
+-#define ARM_MAX_MEMORY(kvm)	((kvm)->cfg.arch.aarch32_guest	?	\
++#define ARM_MAX_MEMORY(cfg)	((cfg)->arch.aarch32_guest	?	\
+ 				ARM_LOMAP_MAX_MEMORY		:	\
+ 				ARM_HIMAP_MAX_MEMORY)
+ 
+diff --git a/arm/kvm.c b/arm/kvm.c
+index b6ff2e2..45022aa 100644
+--- a/arm/kvm.c
++++ b/arm/kvm.c
+@@ -57,6 +57,15 @@ void kvm__arch_set_cmdline(char *cmdline, bool video)
+ {
+ }
+ 
++static void kvm__arch_sanitize_cfg(struct kvm_config *cfg)
++{
++	if (cfg->ram_size > ARM_MAX_MEMORY(cfg)) {
++		cfg->ram_size = ARM_MAX_MEMORY(cfg);
++		pr_warning("sanitize: Capping memory to %lluMB",
++			   cfg->ram_size >> 20);
++	}
++}
++
+ void kvm__arch_init(struct kvm *kvm)
+ {
+ 	unsigned long alignment;
+@@ -64,6 +73,8 @@ void kvm__arch_init(struct kvm *kvm)
+ 	/* Convenience aliases */
+ 	const char *hugetlbfs_path = kvm->cfg.hugetlbfs_path;
+ 
++	kvm__arch_sanitize_cfg(&kvm->cfg);
++
+ 	/*
+ 	 * Allocate guest memory. We must align our buffer to 64K to
+ 	 * correlate with the maximum guest page size for virtio-mmio.
+@@ -76,7 +87,7 @@ void kvm__arch_init(struct kvm *kvm)
+ 		alignment = SZ_32M;
+ 	else
+ 		alignment = SZ_2M;
+-	kvm->ram_size = min(kvm->cfg.ram_size, (u64)ARM_MAX_MEMORY(kvm));
++	kvm->ram_size = kvm->cfg.ram_size;
+ 	kvm->arch.ram_alloc_size = kvm->ram_size + alignment;
+ 	kvm->arch.ram_alloc_start = mmap_anon_or_hugetlbfs(kvm, hugetlbfs_path,
+ 						kvm->arch.ram_alloc_size);
+
+From patchwork Thu Dec 20 15:21:23 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Julien Grall <julien.grall@arm.com>
+X-Patchwork-Id: 10739061
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 5E10113B5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:50 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4F37028CF7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:50 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4D36F28D1E; Thu, 20 Dec 2018 15:21:50 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D877C28CFB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:49 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2387813AbeLTPVs (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 20 Dec 2018 10:21:48 -0500
+Received: from foss.arm.com ([217.140.101.70]:57864 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2387827AbeLTPVr (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 20 Dec 2018 10:21:47 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id B915DEBD;
+        Thu, 20 Dec 2018 07:21:46 -0800 (PST)
+Received: from e108454-lin.cambridge.arm.com (e108454-lin.cambridge.arm.com
+ [10.1.196.50])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ A75493F5C0;
+        Thu, 20 Dec 2018 07:21:45 -0800 (PST)
+From: Julien Grall <julien.grall@arm.com>
+To: kvm@vger.kernel.org
+Cc: suzuki.poulose@arm.com, marc.zyngier@arm.com, will.deacon@arm.com,
+        Julien Grall <julien.grall@arm.com>
+Subject: [PATCH kvmtool v3 6/9] arm: Move anything related to RAM
+ initialization in kvm__init_ram
+Date: Thu, 20 Dec 2018 15:21:23 +0000
+Message-Id: <20181220152126.18741-7-julien.grall@arm.com>
+X-Mailer: git-send-email 2.11.0
+In-Reply-To: <20181220152126.18741-1-julien.grall@arm.com>
+References: <20181220152126.18741-1-julien.grall@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+RAM initialization is currently split between kvm__init_ram and
+kvm__arch_init. Move all code related to RAM initialization in the
+former, this will help with the introduction of multi-banks support in a
+follow-up patch.
+
+Signed-off-by: Julien Grall <julien.grall@arm.com>
+---
+    Changes in v2:
+        - Add missing commit message
+---
+ arm/kvm.c | 68 +++++++++++++++++++++++++++++++--------------------------------
+ 1 file changed, 33 insertions(+), 35 deletions(-)
+
+diff --git a/arm/kvm.c b/arm/kvm.c
+index 45022aa..9623aa5 100644
+--- a/arm/kvm.c
++++ b/arm/kvm.c
+@@ -29,6 +29,39 @@ static void kvm__init_ram(struct kvm *kvm)
+ 	int err;
+ 	u64 phys_start, phys_size;
+ 	void *host_mem;
++	unsigned long alignment;
++	/* Convenience aliases */
++	const char *hugetlbfs_path = kvm->cfg.hugetlbfs_path;
++
++	/*
++	 * Allocate guest memory. We must align our buffer to 64K to
++	 * correlate with the maximum guest page size for virtio-mmio.
++	 * If using THP, then our minimal alignment becomes 2M.
++	 * 2M trumps 64K, so let's go with that.
++	 * If we are running with 16K page size, align the memory to
++	 * 32M, so that we can make use of the THP.
++	 */
++	if (sysconf(_SC_PAGESIZE) == SZ_16K)
++		alignment = SZ_32M;
++	else
++		alignment = SZ_2M;
++	kvm->ram_size = kvm->cfg.ram_size;
++	kvm->arch.ram_alloc_size = kvm->ram_size + alignment;
++	kvm->arch.ram_alloc_start = mmap_anon_or_hugetlbfs(kvm, hugetlbfs_path,
++						kvm->arch.ram_alloc_size);
++
++	if (kvm->arch.ram_alloc_start == MAP_FAILED)
++		die("Failed to map %lld bytes for guest memory (%d)",
++		    kvm->arch.ram_alloc_size, errno);
++
++	kvm->ram_start = (void *)ALIGN((unsigned long)kvm->arch.ram_alloc_start,
++					SZ_2M);
++
++	madvise(kvm->arch.ram_alloc_start, kvm->arch.ram_alloc_size,
++		MADV_MERGEABLE);
++
++	madvise(kvm->arch.ram_alloc_start, kvm->arch.ram_alloc_size,
++		MADV_HUGEPAGE);
+ 
+ 	phys_start	= ARM_MEMORY_AREA;
+ 	phys_size	= kvm->ram_size;
+@@ -68,43 +101,8 @@ static void kvm__arch_sanitize_cfg(struct kvm_config *cfg)
+ 
+ void kvm__arch_init(struct kvm *kvm)
+ {
+-	unsigned long alignment;
+-
+-	/* Convenience aliases */
+-	const char *hugetlbfs_path = kvm->cfg.hugetlbfs_path;
+-
+ 	kvm__arch_sanitize_cfg(&kvm->cfg);
+ 
+-	/*
+-	 * Allocate guest memory. We must align our buffer to 64K to
+-	 * correlate with the maximum guest page size for virtio-mmio.
+-	 * If using THP, then our minimal alignment becomes 2M.
+-	 * 2M trumps 64K, so let's go with that.
+-	 * If we are running with 16K page size, align the memory to
+-	 * 32M, so that we can make use of the THP.
+-	 */
+-	if (sysconf(_SC_PAGESIZE) == SZ_16K)
+-		alignment = SZ_32M;
+-	else
+-		alignment = SZ_2M;
+-	kvm->ram_size = kvm->cfg.ram_size;
+-	kvm->arch.ram_alloc_size = kvm->ram_size + alignment;
+-	kvm->arch.ram_alloc_start = mmap_anon_or_hugetlbfs(kvm, hugetlbfs_path,
+-						kvm->arch.ram_alloc_size);
+-
+-	if (kvm->arch.ram_alloc_start == MAP_FAILED)
+-		die("Failed to map %lld bytes for guest memory (%d)",
+-		    kvm->arch.ram_alloc_size, errno);
+-
+-	kvm->ram_start = (void *)ALIGN((unsigned long)kvm->arch.ram_alloc_start,
+-					alignment);
+-
+-	madvise(kvm->arch.ram_alloc_start, kvm->arch.ram_alloc_size,
+-		MADV_MERGEABLE);
+-
+-	madvise(kvm->arch.ram_alloc_start, kvm->arch.ram_alloc_size,
+-		MADV_HUGEPAGE);
+-
+ 	/* Create the virtual GIC. */
+ 	if (gic__create(kvm, kvm->cfg.arch.irqchip))
+ 		die("Failed to create virtual GIC");
+
+From patchwork Thu Dec 20 15:21:24 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Julien Grall <julien.grall@arm.com>
+X-Patchwork-Id: 10739063
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 5D52413BF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:51 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4B36F28CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:51 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4966A28D18; Thu, 20 Dec 2018 15:21:51 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7C0CF28D2C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:50 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2387814AbeLTPVt (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 20 Dec 2018 10:21:49 -0500
+Received: from usa-sjc-mx-foss1.foss.arm.com ([217.140.101.70]:57868 "EHLO
+        foss.arm.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2387825AbeLTPVs (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 20 Dec 2018 10:21:48 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 3515AEBD;
+        Thu, 20 Dec 2018 07:21:48 -0800 (PST)
+Received: from e108454-lin.cambridge.arm.com (e108454-lin.cambridge.arm.com
+ [10.1.196.50])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ F40053F5C0;
+        Thu, 20 Dec 2018 07:21:46 -0800 (PST)
+From: Julien Grall <julien.grall@arm.com>
+To: kvm@vger.kernel.org
+Cc: suzuki.poulose@arm.com, marc.zyngier@arm.com, will.deacon@arm.com,
+        Julien Grall <julien.grall@arm.com>
+Subject: [PATCH kvmtool v3 7/9] Allow the user to specify where the RAM is
+ placed in the memory
+Date: Thu, 20 Dec 2018 15:21:24 +0000
+Message-Id: <20181220152126.18741-8-julien.grall@arm.com>
+X-Mailer: git-send-email 2.11.0
+In-Reply-To: <20181220152126.18741-1-julien.grall@arm.com>
+References: <20181220152126.18741-1-julien.grall@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+At the moment the user is only able to give the amount of memory used by
+the guest. The placement of the RAM in the layout is left to the
+software. It would be useful to give more freedom to the user where the
+RAM regions will live in the memory layout and the size of them.
+
+The command line to specify the size of the memory (-m/-mem) is now extended
+in a compatible way to allow specifiying the base address: <size>[@<addr>].
+
+The <addr> is mandatory if the option is specified multiple (i.e the
+user request).
+
+As not all the architecture will support multiple RAM region or even
+specificying the address, it is left to the architecture to enable the
+feature (see MAX_RAM_BANKS and ARCH_SUPPORT_CFG_RAM_BASE).
+
+At the moment no-one is taking advantages of it, this will change in a
+follow-up patch.
+
+Signed-off-by: Julien Grall <julien.grall@arm.com>
+---
+ arm/fdt.c                |  2 +-
+ arm/kvm.c                | 33 +++++++++---------
+ builtin-run.c            | 87 +++++++++++++++++++++++++++++++++++++++++++-----
+ include/kvm/kvm-config.h | 16 ++++++++-
+ include/kvm/kvm.h        | 21 ++++++++++--
+ kvm.c                    |  4 +++
+ mips/kvm.c               | 40 ++++++++++++----------
+ powerpc/kvm.c            | 26 ++++++++-------
+ x86/bios.c               |  8 +++--
+ x86/kvm.c                | 47 +++++++++++++++-----------
+ 10 files changed, 204 insertions(+), 80 deletions(-)
+
+diff --git a/arm/fdt.c b/arm/fdt.c
+index 980015b..6ac0b33 100644
+--- a/arm/fdt.c
++++ b/arm/fdt.c
+@@ -116,7 +116,7 @@ static int setup_fdt(struct kvm *kvm)
+ 	u8 staging_fdt[FDT_MAX_SIZE];
+ 	u64 mem_reg_prop[]	= {
+ 		cpu_to_fdt64(kvm->arch.memory_guest_start),
+-		cpu_to_fdt64(kvm->ram_size),
++		cpu_to_fdt64(kvm->ram[0].size),
+ 	};
+ 	struct psci_fns *fns;
+ 	void *fdt		= staging_fdt;
+diff --git a/arm/kvm.c b/arm/kvm.c
+index 9623aa5..2a55b41 100644
+--- a/arm/kvm.c
++++ b/arm/kvm.c
+@@ -27,11 +27,11 @@ bool kvm__arch_cpu_supports_vm(void)
+ static void kvm__init_ram(struct kvm *kvm)
+ {
+ 	int err;
+-	u64 phys_start, phys_size;
+-	void *host_mem;
++	u64 phys_start;
+ 	unsigned long alignment;
+ 	/* Convenience aliases */
+ 	const char *hugetlbfs_path = kvm->cfg.hugetlbfs_path;
++	struct kvm_ram_region *ram = &kvm->ram[0];
+ 
+ 	/*
+ 	 * Allocate guest memory. We must align our buffer to 64K to
+@@ -45,8 +45,8 @@ static void kvm__init_ram(struct kvm *kvm)
+ 		alignment = SZ_32M;
+ 	else
+ 		alignment = SZ_2M;
+-	kvm->ram_size = kvm->cfg.ram_size;
+-	kvm->arch.ram_alloc_size = kvm->ram_size + alignment;
++	ram->size = kvm->cfg.ram[0].size;
++	kvm->arch.ram_alloc_size = ram->size + alignment;
+ 	kvm->arch.ram_alloc_start = mmap_anon_or_hugetlbfs(kvm, hugetlbfs_path,
+ 						kvm->arch.ram_alloc_size);
+ 
+@@ -54,8 +54,8 @@ static void kvm__init_ram(struct kvm *kvm)
+ 		die("Failed to map %lld bytes for guest memory (%d)",
+ 		    kvm->arch.ram_alloc_size, errno);
+ 
+-	kvm->ram_start = (void *)ALIGN((unsigned long)kvm->arch.ram_alloc_start,
+-					SZ_2M);
++	ram->start = (void *)ALIGN((unsigned long)kvm->arch.ram_alloc_start,
++				   SZ_2M);
+ 
+ 	madvise(kvm->arch.ram_alloc_start, kvm->arch.ram_alloc_size,
+ 		MADV_MERGEABLE);
+@@ -64,13 +64,11 @@ static void kvm__init_ram(struct kvm *kvm)
+ 		MADV_HUGEPAGE);
+ 
+ 	phys_start	= ARM_MEMORY_AREA;
+-	phys_size	= kvm->ram_size;
+-	host_mem	= kvm->ram_start;
+ 
+-	err = kvm__register_ram(kvm, phys_start, phys_size, host_mem);
++	err = kvm__register_ram(kvm, phys_start, ram->size, ram->start);
+ 	if (err)
+ 		die("Failed to register %lld bytes of memory at physical "
+-		    "address 0x%llx [err %d]", phys_size, phys_start, err);
++		    "address 0x%llx [err %d]", ram->size, phys_start, err);
+ 
+ 	kvm->arch.memory_guest_start = phys_start;
+ }
+@@ -92,10 +90,13 @@ void kvm__arch_set_cmdline(char *cmdline, bool video)
+ 
+ static void kvm__arch_sanitize_cfg(struct kvm_config *cfg)
+ {
+-	if (cfg->ram_size > ARM_MAX_MEMORY(cfg)) {
+-		cfg->ram_size = ARM_MAX_MEMORY(cfg);
++	/* Convenience aliases */
++	struct kvm_ram_config *bank0 = &cfg->ram[0];
++
++	if (bank0->size > ARM_MAX_MEMORY(cfg)) {
++		bank0->size = ARM_MAX_MEMORY(cfg);
+ 		pr_warning("sanitize: Capping memory to %lluMB",
+-			   cfg->ram_size >> 20);
++			   bank0->size >> 20);
+ 	}
+ }
+ 
+@@ -118,14 +119,16 @@ bool kvm__arch_load_kernel_image(struct kvm *kvm, int fd_kernel, int fd_initrd,
+ 	void *pos, *kernel_end, *limit;
+ 	unsigned long guest_addr;
+ 	ssize_t file_size;
++	/* Convenience aliases */
++	struct kvm_ram_region *ram0 = &kvm->ram[0];
+ 
+ 	/*
+ 	 * Linux requires the initrd and dtb to be mapped inside lowmem,
+ 	 * so we can't just place them at the top of memory.
+ 	 */
+-	limit = kvm->ram_start + min(kvm->ram_size, (u64)SZ_256M) - 1;
++	limit = ram0->start + min(ram0->size, (u64)SZ_256M) - 1;
+ 
+-	pos = kvm->ram_start + ARM_KERN_OFFSET(kvm);
++	pos = ram0->start + ARM_KERN_OFFSET(kvm);
+ 	kvm->arch.kern_guest_start = host_to_guest_flat(kvm, pos);
+ 	file_size = read_file(fd_kernel, pos, limit - pos);
+ 	if (file_size < 0) {
+diff --git a/builtin-run.c b/builtin-run.c
+index 443c10b..568af5c 100644
+--- a/builtin-run.c
++++ b/builtin-run.c
+@@ -87,6 +87,63 @@ void kvm_run_set_wrapper_sandbox(void)
+ 	kvm_run_wrapper = KVM_RUN_SANDBOX;
+ }
+ 
++static int mem_parser(const struct option *opt, const char *arg, int unset)
++{
++	struct kvm_config *cfg = opt->value;
++	const char *p = arg;
++	char *next;
++	u64 size, addr;
++	int base;
++
++	/* parse out size */
++	size = strtoll(p, &next, 10);
++
++	if (next == p)
++		die("mem: no size specified.\n");
++
++	if (*next != '@' && *next != '\0')
++		die("mem: unexpected chars after size.\n");
++
++	if (*next == '\0')
++		p = next;
++	else
++		p = next + 1;
++
++	/* parse out guest addr */
++	base = 10;
++	if (strcasestr(p, "0x"))
++		base = 16;
++	addr = strtoll(p, &next, base);
++	if (next == p && addr == 0) {
++		/*
++		 * To keep backward compatibility, the <addr> is not
++		 * mandatory for the first bank.
++		 */
++		if (cfg->nr_ram > 0)
++			die("mem: <addr> must be specified\n");
++		addr = INVALID_RAM_ADDR;
++	}
++
++	if ( cfg->nr_ram == MAX_RAM_BANKS )
++		die("mem: Too many banks\n");
++
++	/*
++	 * Allow the architecture to tell whether it is possible to configure
++	 * the RAM base address.
++	 */
++#ifndef ARCH_SUPPORT_CFG_RAM_BASE
++	if (addr == INVALID_RAM_ADDR)
++		die("mem: specifying <addr> is not allowed\n");
++#endif
++
++	cfg->ram[cfg->nr_ram].base = addr;
++	cfg->ram[cfg->nr_ram].size = size;
++
++	cfg->nr_ram++;
++
++	return 0;
++}
++
+ #ifndef OPT_ARCH_RUN
+ #define OPT_ARCH_RUN(...)
+ #endif
+@@ -97,8 +154,11 @@ void kvm_run_set_wrapper_sandbox(void)
+ 	OPT_STRING('\0', "name", &(cfg)->guest_name, "guest name",	\
+ 			"A name for the guest"),			\
+ 	OPT_INTEGER('c', "cpus", &(cfg)->nrcpus, "Number of CPUs"),	\
+-	OPT_U64('m', "mem", &(cfg)->ram_size, "Virtual machine memory"	\
+-		" size in MiB."),					\
++	OPT_CALLBACK('m', "mem", cfg,					\
++		     "<size>[@<addr>]",					\
++		     "Virtual machine memory region, size in MiB."	\
++		     "<addr> must be specified in case of multiple regions", \
++		     mem_parser, NULL),					\
+ 	OPT_CALLBACK('\0', "shmem", NULL,				\
+ 		     "[pci:]<addr>:<size>[:handle=<handle>][:create]",	\
+ 		     "Share host shmem with guest via pci device",	\
+@@ -460,6 +520,8 @@ static struct kvm *kvm_cmd_run_init(int argc, const char **argv)
+ 	unsigned int nr_online_cpus;
+ 	struct kvm *kvm = kvm__new();
+ 	bool video;
++	u64 total_ram = 0;
++	unsigned int i;
+ 
+ 	if (IS_ERR(kvm))
+ 		return kvm;
+@@ -526,16 +588,23 @@ static struct kvm *kvm_cmd_run_init(int argc, const char **argv)
+ 	if (kvm->cfg.nrcpus == 0)
+ 		kvm->cfg.nrcpus = nr_online_cpus;
+ 
+-	if (!kvm->cfg.ram_size)
+-		kvm->cfg.ram_size = get_ram_size(kvm->cfg.nrcpus);
++	/* Deal with user not specifiying memory */
++	if (kvm->cfg.nr_ram == 0 && !kvm->cfg.ram[0].size) {
++		kvm->cfg.ram[0].size = get_ram_size(kvm->cfg.nrcpus);
++		kvm->cfg.nr_ram = 1;
++	}
++
++	for (i = 0; i < kvm->cfg.nr_ram; i++) {
++		total_ram += kvm->cfg.ram[i].size;
++		/* The user input is in MB, but the internal deals with bytes */
++		kvm->cfg.ram[i].size <<= MB_SHIFT;
++	}
+ 
+-	if (kvm->cfg.ram_size > host_ram_size())
++	if (total_ram > host_ram_size())
+ 		pr_warning("Guest memory size %lluMB exceeds host physical RAM size %lluMB",
+-			(unsigned long long)kvm->cfg.ram_size,
++			(unsigned long long)total_ram,
+ 			(unsigned long long)host_ram_size());
+ 
+-	kvm->cfg.ram_size <<= MB_SHIFT;
+-
+ 	if (!kvm->cfg.dev)
+ 		kvm->cfg.dev = DEFAULT_KVM_DEV;
+ 
+@@ -641,7 +710,7 @@ static struct kvm *kvm_cmd_run_init(int argc, const char **argv)
+ 
+ 	printf("  # %s run -k %s -m %Lu -c %d --name %s\n", KVM_BINARY_NAME,
+ 		kvm->cfg.kernel_filename,
+-		(unsigned long long)kvm->cfg.ram_size / 1024 / 1024,
++		(unsigned long long)kvm->cfg.ram[0].size / 1024 / 1024,
+ 		kvm->cfg.nrcpus, kvm->cfg.guest_name);
+ 
+ 	if (init_list__init(kvm) < 0)
+diff --git a/include/kvm/kvm-config.h b/include/kvm/kvm-config.h
+index a052b0b..f258316 100644
+--- a/include/kvm/kvm-config.h
++++ b/include/kvm/kvm-config.h
+@@ -18,11 +18,25 @@
+ #define MIN_RAM_SIZE_MB		(64ULL)
+ #define MIN_RAM_SIZE_BYTE	(MIN_RAM_SIZE_MB << MB_SHIFT)
+ 
++#define INVALID_RAM_ADDR	(~0ULL)
++
++/* By default the user is only able to speficy one RAM bank */
++#ifndef MAX_RAM_BANKS
++#define MAX_RAM_BANKS	1
++#endif
++
++struct kvm_ram_config
++{
++	u64 base;
++	u64 size;
++};
++
+ struct kvm_config {
+ 	struct kvm_config_arch arch;
+ 	struct disk_image_params disk_image[MAX_DISK_IMAGES];
+ 	struct vfio_device_params *vfio_devices;
+-	u64 ram_size;
++	struct kvm_ram_config ram[MAX_RAM_BANKS];
++	u8 nr_ram;
+ 	u8  image_count;
+ 	u8 num_net_devices;
+ 	u8 num_vfio_devices;
+diff --git a/include/kvm/kvm.h b/include/kvm/kvm.h
+index ee2c5ab..2eb25cf 100644
+--- a/include/kvm/kvm.h
++++ b/include/kvm/kvm.h
+@@ -57,6 +57,11 @@ struct kvm_mem_bank {
+ 	enum kvm_mem_type	type;
+ };
+ 
++struct kvm_ram_region {
++	void			*start;
++	u64			size;
++};
++
+ struct kvm {
+ 	struct kvm_arch		arch;
+ 	struct kvm_config	cfg;
+@@ -68,8 +73,8 @@ struct kvm {
+ 	struct kvm_cpu		**cpus;
+ 
+ 	u32			mem_slots;	/* for KVM_SET_USER_MEMORY_REGION */
+-	u64			ram_size;
+-	void			*ram_start;
++	struct kvm_ram_region	ram[MAX_RAM_BANKS];
++	u32			nr_ram;
+ 	u64			ram_pagesize;
+ 	struct list_head	mem_banks;
+ 
+@@ -177,7 +182,17 @@ extern const char *kvm_exit_reasons[];
+ 
+ static inline bool host_ptr_in_ram(struct kvm *kvm, void *p)
+ {
+-	return kvm->ram_start <= p && p < (kvm->ram_start + kvm->ram_size);
++	unsigned int i;
++
++	for (i = 0; i < kvm->nr_ram; i++ )
++	{
++		struct kvm_ram_region *ram = &kvm->ram[i];
++
++		if (ram->start <= p && p < (ram->start + ram->size))
++			return true;
++	}
++
++	return false;
+ }
+ 
+ bool kvm__supports_extension(struct kvm *kvm, unsigned int extension);
+diff --git a/kvm.c b/kvm.c
+index d4e1f4a..3d5c026 100644
+--- a/kvm.c
++++ b/kvm.c
+@@ -153,6 +153,7 @@ static int kvm__check_extensions(struct kvm *kvm)
+ 
+ struct kvm *kvm__new(void)
+ {
++	unsigned int i;
+ 	struct kvm *kvm = calloc(1, sizeof(*kvm));
+ 	if (!kvm)
+ 		return ERR_PTR(-ENOMEM);
+@@ -160,6 +161,9 @@ struct kvm *kvm__new(void)
+ 	kvm->sys_fd = -1;
+ 	kvm->vm_fd = -1;
+ 
++	for ( i = 0; i < MAX_RAM_BANKS; i++)
++		kvm->cfg.ram[i].base = INVALID_RAM_ADDR;
++
+ 	return kvm;
+ }
+ 
+diff --git a/mips/kvm.c b/mips/kvm.c
+index 2ccefe8..13d2255 100644
+--- a/mips/kvm.c
++++ b/mips/kvm.c
+@@ -21,26 +21,28 @@ static void kvm__init_ram(struct kvm *kvm)
+ {
+ 	u64	phys_start, phys_size;
+ 	void	*host_mem;
++	/* Convenience aliases */
++	const struct kvm_ram_region *ram = &kvm->ram[0];
+ 
+-	if (kvm->ram_size <= KVM_MMIO_START) {
++	if (ram->size <= KVM_MMIO_START) {
+ 		/* one region for all memory */
+ 		phys_start = 0;
+-		phys_size  = kvm->ram_size;
+-		host_mem   = kvm->ram_start;
++		phys_size  = ram->size;
++		host_mem   = ram->start;
+ 
+ 		kvm__register_ram(kvm, phys_start, phys_size, host_mem);
+ 	} else {
+ 		/* one region for memory that fits below MMIO range */
+ 		phys_start = 0;
+ 		phys_size  = KVM_MMIO_START;
+-		host_mem   = kvm->ram_start;
++		host_mem   = ram->start;
+ 
+ 		kvm__register_ram(kvm, phys_start, phys_size, host_mem);
+ 
+ 		/* one region for rest of memory */
+ 		phys_start = KVM_MMIO_START + KVM_MMIO_SIZE;
+-		phys_size  = kvm->ram_size - KVM_MMIO_START;
+-		host_mem   = kvm->ram_start + KVM_MMIO_START;
++		phys_size  = ram->size - KVM_MMIO_START;
++		host_mem   = ram->start + KVM_MMIO_START;
+ 
+ 		kvm__register_ram(kvm, phys_start, phys_size, host_mem);
+ 	}
+@@ -48,7 +50,7 @@ static void kvm__init_ram(struct kvm *kvm)
+ 
+ void kvm__arch_delete_ram(struct kvm *kvm)
+ {
+-	munmap(kvm->ram_start, kvm->ram_size);
++	munmap(kvm->ram[0].start, kvm->ram[0].size);
+ }
+ 
+ void kvm__arch_set_cmdline(char *cmdline, bool video)
+@@ -61,16 +63,18 @@ void kvm__arch_init(struct kvm *kvm)
+ {
+ 	int ret;
+ 	/* Convenience aliases */
+-	u64 ram_size = kvm->cfg.ram_size;
++	u64 ram_size = kvm->cfg.ram[0].size;
+ 	const char *hugetlbfs_path = kvm->cfg.hugetlbfs_path;
++	struct kvm_ram_region *ram = &kvm->ram[0];
+ 
+-	kvm->ram_start = mmap_anon_or_hugetlbfs(kvm, hugetlbfs_path, ram_size);
+-	kvm->ram_size = ram_size;
++	kvm->nr_ram = 1;
++	ram->start = mmap_anon_or_hugetlbfs(kvm, hugetlbfs_path, ram_size);
++	ram->size = ram_size;
+ 
+-	if (kvm->ram_start == MAP_FAILED)
++	if (ram->start == MAP_FAILED)
+ 		die("out of memory");
+ 
+-	madvise(kvm->ram_start, kvm->ram_size, MADV_MERGEABLE);
++	madvise(ram->start, ram->size, MADV_MERGEABLE);
+ 
+ 	ret = ioctl(kvm->vm_fd, KVM_CREATE_IRQCHIP);
+ 	if (ret < 0)
+@@ -124,20 +128,22 @@ int kvm__arch_setup_firmware(struct kvm *kvm)
+ 
+ static void kvm__mips_install_cmdline(struct kvm *kvm)
+ {
+-	char *p = kvm->ram_start;
+ 	u64 cmdline_offset = 0x2000;
+ 	u64 argv_start = 0x3000;
+ 	u64 argv_offset = argv_start;
+ 	u64 argc = 0;
++	/* Convenience aliases */
++	struct kvm_ram_region *ram = &kvm->ram[0];
+ 
++	char *p = ram->start;
+ 
+-	if ((u64) kvm->ram_size <= KVM_MMIO_START)
++	if ((u64) ram->size <= KVM_MMIO_START)
+ 		sprintf(p + cmdline_offset, "mem=0x%llx@0 ",
+-			(unsigned long long)kvm->ram_size);
++			(unsigned long long)ram->size);
+ 	else
+ 		sprintf(p + cmdline_offset, "mem=0x%llx@0 mem=0x%llx@0x%llx ",
+ 			(unsigned long long)KVM_MMIO_START,
+-			(unsigned long long)kvm->ram_size - KVM_MMIO_START,
++			(unsigned long long)ram->size - KVM_MMIO_START,
+ 			(unsigned long long)(KVM_MMIO_START + KVM_MMIO_SIZE));
+ 
+ 	strcat(p + cmdline_offset, kvm->cfg.real_cmdline); /* maximum size is 2K */
+@@ -181,7 +187,7 @@ static bool load_flat_binary(struct kvm *kvm, int fd_kernel)
+ 	p = k_start = guest_flat_to_host(kvm, KERNEL_LOAD_ADDR);
+ 
+ 	kernel_size = read_file(fd_kernel, p,
+-				kvm->cfg.ram_size - KERNEL_LOAD_ADDR);
++				kvm->cfg.ram[0].size - KERNEL_LOAD_ADDR);
+ 	if (kernel_size == -1) {
+ 		if (errno == ENOMEM)
+ 			die("kernel too big for guest memory");
+diff --git a/powerpc/kvm.c b/powerpc/kvm.c
+index be99598..4b1c34a 100644
+--- a/powerpc/kvm.c
++++ b/powerpc/kvm.c
+@@ -66,8 +66,8 @@ static void kvm__init_ram(struct kvm *kvm)
+ 	void	*host_mem;
+ 
+ 	phys_start = 0;
+-	phys_size  = kvm->ram_size;
+-	host_mem   = kvm->ram_start;
++	phys_size  = kvm->ram[0].size;
++	host_mem   = kvm->ram[0].start;
+ 
+ 	/*
+ 	 * We put MMIO at PPC_MMIO_START, high up.  Make sure that this doesn't
+@@ -93,26 +93,28 @@ void kvm__arch_init(struct kvm *kvm)
+ 	int cap_ppc_rma;
+ 	unsigned long hpt;
+ 	/* Convenience aliases */
+-	u64 ram_size = kvm->cfg.ram_size;
++	u64 ram_size = kvm->cfg.ram[0].size;
+ 	const char *hugetlbfs_path = kvm->cfg.hugetlbfs_path;
++	struct kvm_ram_region *ram = &kvm->ram[0];
+ 
+-	kvm->ram_size		= ram_size;
++	kvm->nr_ram		= 1;
++	ram->size		= ram_size;
+ 
+ 	/* Map "default" hugetblfs path to the standard 16M mount point */
+ 	if (hugetlbfs_path && !strcmp(hugetlbfs_path, "default"))
+ 		hugetlbfs_path = HUGETLBFS_PATH;
+ 
+-	kvm->ram_start = mmap_anon_or_hugetlbfs(kvm, hugetlbfs_path, kvm->ram_size);
++	ram->start = mmap_anon_or_hugetlbfs(kvm, hugetlbfs_path, ram->size);
+ 
+-	if (kvm->ram_start == MAP_FAILED)
++	if (ram->start == MAP_FAILED)
+ 		die("Couldn't map %lld bytes for RAM (%d)\n",
+-		    kvm->ram_size, errno);
++		    ram->size, errno);
+ 
+ 	/* FDT goes at top of memory, RTAS just below */
+-	kvm->arch.fdt_gra = kvm->ram_size - FDT_MAX_SIZE;
++	kvm->arch.fdt_gra = ram->size - FDT_MAX_SIZE;
+ 	/* FIXME: Not all PPC systems have RTAS */
+ 	kvm->arch.rtas_gra = kvm->arch.fdt_gra - RTAS_MAX_SIZE;
+-	madvise(kvm->ram_start, kvm->ram_size, MADV_MERGEABLE);
++	madvise(ram->start, ram->size, MADV_MERGEABLE);
+ 
+ 	/* FIXME:  SPAPR-PR specific; allocate a guest HPT. */
+ 	if (posix_memalign((void **)&hpt, (1<<HPT_ORDER), (1<<HPT_ORDER)))
+@@ -145,7 +147,7 @@ void kvm__arch_init(struct kvm *kvm)
+ 
+ void kvm__arch_delete_ram(struct kvm *kvm)
+ {
+-	munmap(kvm->ram_start, kvm->ram_size);
++	munmap(kvm->ram[0].start, kvm->ram[0].size);
+ }
+ 
+ void kvm__irq_trigger(struct kvm *kvm, int irq)
+@@ -186,7 +188,7 @@ bool kvm__arch_load_kernel_image(struct kvm *kvm, int fd_kernel, int fd_initrd,
+ 		p = guest_flat_to_host(kvm, INITRD_LOAD_ADDR);
+ 
+ 		filesize = read_file(fd_initrd, p,
+-			       (kvm->ram_start + kvm->ram_size) - p);
++			       (kvm->ram[0].start + kvm->ram[0].size) - p);
+ 		if (filesize < 0) {
+ 			if (errno == ENOMEM)
+ 				die("initrd too big to contain in guest RAM.\n");
+@@ -283,7 +285,7 @@ static void generate_segment_page_sizes(struct kvm_ppc_smmu_info *info, struct f
+  */
+ static int setup_fdt(struct kvm *kvm)
+ {
+-	uint64_t 	mem_reg_property[] = { 0, cpu_to_be64(kvm->ram_size) };
++	uint64_t 	mem_reg_property[] = { 0, cpu_to_be64(kvm->ram[0].size) };
+ 	int 		smp_cpus = kvm->nrcpus;
+ 	uint32_t	int_server_ranges_prop[] = {0, cpu_to_be32(smp_cpus)};
+ 	char 		hypertas_prop_kvm[] = "hcall-pft\0hcall-term\0"
+diff --git a/x86/bios.c b/x86/bios.c
+index 5ac9e24..2efd771 100644
+--- a/x86/bios.c
++++ b/x86/bios.c
+@@ -59,6 +59,8 @@ static void e820_setup(struct kvm *kvm)
+ 	struct e820map *e820;
+ 	struct e820entry *mem_map;
+ 	unsigned int i = 0;
++	/* Convenience aliases */
++	const struct kvm_ram_region *ram = &kvm->ram[0];
+ 
+ 	e820		= guest_flat_to_host(kvm, E820_MAP_START);
+ 	mem_map		= e820->map;
+@@ -78,10 +80,10 @@ static void e820_setup(struct kvm *kvm)
+ 		.size		= MB_BIOS_END - MB_BIOS_BEGIN,
+ 		.type		= E820_RESERVED,
+ 	};
+-	if (kvm->ram_size < KVM_32BIT_GAP_START) {
++	if (ram->size < KVM_32BIT_GAP_START) {
+ 		mem_map[i++]	= (struct e820entry) {
+ 			.addr		= BZ_KERNEL_START,
+-			.size		= kvm->ram_size - BZ_KERNEL_START,
++			.size		= ram->size - BZ_KERNEL_START,
+ 			.type		= E820_RAM,
+ 		};
+ 	} else {
+@@ -92,7 +94,7 @@ static void e820_setup(struct kvm *kvm)
+ 		};
+ 		mem_map[i++]	= (struct e820entry) {
+ 			.addr		= KVM_32BIT_MAX_MEM_SIZE,
+-			.size		= kvm->ram_size - KVM_32BIT_MAX_MEM_SIZE,
++			.size		= ram->size - KVM_32BIT_MAX_MEM_SIZE,
+ 			.type		= E820_RAM,
+ 		};
+ 	}
+diff --git a/x86/kvm.c b/x86/kvm.c
+index a22fa65..2fe4928 100644
+--- a/x86/kvm.c
++++ b/x86/kvm.c
+@@ -90,13 +90,15 @@ static void kvm__init_ram(struct kvm *kvm)
+ {
+ 	u64	phys_start, phys_size;
+ 	void	*host_mem;
++	/* Convenience aliases */
++	const struct kvm_ram_region *ram = &kvm->ram[0];
+ 
+-	if (kvm->ram_size < KVM_32BIT_GAP_START) {
++	if (ram->size < KVM_32BIT_GAP_START) {
+ 		/* Use a single block of RAM for 32bit RAM */
+ 
+ 		phys_start = 0;
+-		phys_size  = kvm->ram_size;
+-		host_mem   = kvm->ram_start;
++		phys_size  = ram->size;
++		host_mem   = ram->start;
+ 
+ 		kvm__register_ram(kvm, phys_start, phys_size, host_mem);
+ 	} else {
+@@ -104,15 +106,15 @@ static void kvm__init_ram(struct kvm *kvm)
+ 
+ 		phys_start = 0;
+ 		phys_size  = KVM_32BIT_GAP_START;
+-		host_mem   = kvm->ram_start;
++		host_mem   = ram->start;
+ 
+ 		kvm__register_ram(kvm, phys_start, phys_size, host_mem);
+ 
+ 		/* Second RAM range from 4GB to the end of RAM: */
+ 
+ 		phys_start = KVM_32BIT_MAX_MEM_SIZE;
+-		phys_size  = kvm->ram_size - phys_start;
+-		host_mem   = kvm->ram_start + phys_start;
++		phys_size  = ram->size - phys_start;
++		host_mem   = ram->start + phys_start;
+ 
+ 		kvm__register_ram(kvm, phys_start, phys_size, host_mem);
+ 	}
+@@ -135,8 +137,9 @@ void kvm__arch_init(struct kvm *kvm)
+ 	struct kvm_pit_config pit_config = { .flags = 0, };
+ 	int ret;
+ 	/* Convenience aliases */
+-	u64 ram_size = kvm->cfg.ram_size;
++	u64 ram_size = kvm->cfg.ram[0].size;
+ 	const char *hugetlbfs_path = kvm->cfg.hugetlbfs_path;
++	struct kvm_ram_region *ram = &kvm->ram[0];
+ 
+ 	ret = ioctl(kvm->vm_fd, KVM_SET_TSS_ADDR, 0xfffbd000);
+ 	if (ret < 0)
+@@ -146,23 +149,29 @@ void kvm__arch_init(struct kvm *kvm)
+ 	if (ret < 0)
+ 		die_perror("KVM_CREATE_PIT2 ioctl");
+ 
++	kvm->nr_ram = 1;
+ 	if (ram_size < KVM_32BIT_GAP_START) {
+-		kvm->ram_size = ram_size;
+-		kvm->ram_start = mmap_anon_or_hugetlbfs(kvm, hugetlbfs_path, ram_size);
++		ram->size = ram_size;
++		ram->start = mmap_anon_or_hugetlbfs(kvm, hugetlbfs_path,
++						    ram_size);
+ 	} else {
+-		kvm->ram_start = mmap_anon_or_hugetlbfs(kvm, hugetlbfs_path, ram_size + KVM_32BIT_GAP_SIZE);
+-		kvm->ram_size = ram_size + KVM_32BIT_GAP_SIZE;
+-		if (kvm->ram_start != MAP_FAILED)
++		ram->start = mmap_anon_or_hugetlbfs(kvm,
++						    hugetlbfs_path,
++						    ram_size + KVM_32BIT_GAP_SIZE);
++		ram->size = ram_size + KVM_32BIT_GAP_SIZE;
++		if (ram->start != MAP_FAILED)
+ 			/*
+ 			 * We mprotect the gap (see kvm__init_ram() for details) PROT_NONE so that
+ 			 * if we accidently write to it, we will know.
+ 			 */
+-			mprotect(kvm->ram_start + KVM_32BIT_GAP_START, KVM_32BIT_GAP_SIZE, PROT_NONE);
++			mprotect(ram->start + KVM_32BIT_GAP_START,
++				 KVM_32BIT_GAP_SIZE, PROT_NONE);
+ 	}
+-	if (kvm->ram_start == MAP_FAILED)
++	if (ram->start == MAP_FAILED)
+ 		die("out of memory");
+ 
+-	madvise(kvm->ram_start, kvm->ram_size, MADV_MERGEABLE);
++	madvise(ram->start, ram->size,
++		MADV_MERGEABLE);
+ 
+ 	ret = ioctl(kvm->vm_fd, KVM_CREATE_IRQCHIP);
+ 	if (ret < 0)
+@@ -173,7 +182,7 @@ void kvm__arch_init(struct kvm *kvm)
+ 
+ void kvm__arch_delete_ram(struct kvm *kvm)
+ {
+-	munmap(kvm->ram_start, kvm->ram_size);
++	munmap(kvm->ram[0].start, kvm->ram[0].size);
+ }
+ 
+ void kvm__irq_line(struct kvm *kvm, int irq, int level)
+@@ -221,7 +230,7 @@ static bool load_flat_binary(struct kvm *kvm, int fd_kernel)
+ 
+ 	p = guest_real_to_host(kvm, BOOT_LOADER_SELECTOR, BOOT_LOADER_IP);
+ 
+-	if (read_file(fd_kernel, p, kvm->cfg.ram_size) < 0)
++	if (read_file(fd_kernel, p, kvm->cfg.ram[0].size) < 0)
+ 		die_perror("read");
+ 
+ 	kvm->arch.boot_selector	= BOOT_LOADER_SELECTOR;
+@@ -270,7 +279,7 @@ static bool load_bzimage(struct kvm *kvm, int fd_kernel, int fd_initrd,
+ 	/* read actual kernel image (vmlinux.bin) to BZ_KERNEL_START */
+ 	p = guest_flat_to_host(kvm, BZ_KERNEL_START);
+ 	file_size = read_file(fd_kernel, p,
+-			      kvm->cfg.ram_size - BZ_KERNEL_START);
++			      kvm->cfg.ram[0].size - BZ_KERNEL_START);
+ 	if (file_size < 0)
+ 		die_perror("kernel read");
+ 
+@@ -316,7 +325,7 @@ static bool load_bzimage(struct kvm *kvm, int fd_kernel, int fd_initrd,
+ 		for (;;) {
+ 			if (addr < BZ_KERNEL_START)
+ 				die("Not enough memory for initrd");
+-			else if (addr < (kvm->ram_size - initrd_stat.st_size))
++			else if (addr < (kvm->ram[0].size - initrd_stat.st_size))
+ 				break;
+ 			addr -= 0x100000;
+ 		}
+
+From patchwork Thu Dec 20 15:21:25 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Julien Grall <julien.grall@arm.com>
+X-Patchwork-Id: 10739067
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id EB98D13B5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:55 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id DBE8428AC2
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:55 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id DA45E28CC0; Thu, 20 Dec 2018 15:21:55 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4BCC228CE5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:55 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2387827AbeLTPVy (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 20 Dec 2018 10:21:54 -0500
+Received: from foss.arm.com ([217.140.101.70]:57872 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2387825AbeLTPVu (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 20 Dec 2018 10:21:50 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 81A91EBD;
+        Thu, 20 Dec 2018 07:21:49 -0800 (PST)
+Received: from e108454-lin.cambridge.arm.com (e108454-lin.cambridge.arm.com
+ [10.1.196.50])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 7003D3F5C0;
+        Thu, 20 Dec 2018 07:21:48 -0800 (PST)
+From: Julien Grall <julien.grall@arm.com>
+To: kvm@vger.kernel.org
+Cc: suzuki.poulose@arm.com, marc.zyngier@arm.com, will.deacon@arm.com,
+        Julien Grall <julien.grall@arm.com>
+Subject: [PATCH kvmtool v3 8/9] arm: Add support for multi memory regions
+Date: Thu, 20 Dec 2018 15:21:25 +0000
+Message-Id: <20181220152126.18741-9-julien.grall@arm.com>
+X-Mailer: git-send-email 2.11.0
+In-Reply-To: <20181220152126.18741-1-julien.grall@arm.com>
+References: <20181220152126.18741-1-julien.grall@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Currently, the RAM will always be contiguous and start 2GB. This patch
+is giving the possibility to the user to specificy multiple RAM region
+and
+
+Note that at the moment it is not possible to place any RAM region below
+2GB as the MMIO region is still static.
+
+The implementation for multi memory regions is fairly straight-forward,
+althought it the following points are worth to be mention:
+    - The banks are sorted by base address, so it is easier to fetch the
+    lowest bank later on and do sanity checking
+    - If the user does not specify the address of the first bank, the
+    old behavior is kept.
+
+Signed-off-by: Julien Grall <julien.grall@arm.com>
+---
+    Changes in v2:
+        - Check whether memory banks overlap with the MMIO area
+---
+ arm/aarch32/include/kvm/kvm-arch.h |   2 +-
+ arm/aarch64/include/kvm/kvm-arch.h |   4 +-
+ arm/fdt.c                          |  19 ++++--
+ arm/include/arm-common/kvm-arch.h  |  24 +++++--
+ arm/kvm.c                          | 129 +++++++++++++++++++++++++++++--------
+ 5 files changed, 133 insertions(+), 45 deletions(-)
+
+diff --git a/arm/aarch32/include/kvm/kvm-arch.h b/arm/aarch32/include/kvm/kvm-arch.h
+index cd31e72..2ee0cb1 100644
+--- a/arm/aarch32/include/kvm/kvm-arch.h
++++ b/arm/aarch32/include/kvm/kvm-arch.h
+@@ -3,7 +3,7 @@
+ 
+ #define ARM_KERN_OFFSET(...)	0x8000
+ 
+-#define ARM_MAX_MEMORY(...)	ARM_LOMAP_MAX_MEMORY
++#define ARM_MAX_PHYS_SHIFT(...)	32
+ 
+ #include "arm-common/kvm-arch.h"
+ 
+diff --git a/arm/aarch64/include/kvm/kvm-arch.h b/arm/aarch64/include/kvm/kvm-arch.h
+index 1b3d0a5..53ac20f 100644
+--- a/arm/aarch64/include/kvm/kvm-arch.h
++++ b/arm/aarch64/include/kvm/kvm-arch.h
+@@ -5,9 +5,7 @@
+ 				0x8000				:	\
+ 				0x80000)
+ 
+-#define ARM_MAX_MEMORY(cfg)	((cfg)->arch.aarch32_guest	?	\
+-				ARM_LOMAP_MAX_MEMORY		:	\
+-				ARM_HIMAP_MAX_MEMORY)
++#define ARM_MAX_PHYS_SHIFT(cfg)	((cfg)->arch.aarch32_guest ? 32 : 40)
+ 
+ #include "arm-common/kvm-arch.h"
+ 
+diff --git a/arm/fdt.c b/arm/fdt.c
+index 6ac0b33..2a010c7 100644
+--- a/arm/fdt.c
++++ b/arm/fdt.c
+@@ -29,7 +29,7 @@ static void dump_fdt(const char *dtb_file, void *fdt)
+ 	int count, fd;
+ 
+ 	fd = open(dtb_file, O_CREAT | O_TRUNC | O_RDWR, 0666);
+-	if (fd < 0)
++
+ 		die("Failed to write dtb to %s", dtb_file);
+ 
+ 	count = write(fd, fdt, FDT_MAX_SIZE);
+@@ -114,10 +114,7 @@ static int setup_fdt(struct kvm *kvm)
+ {
+ 	struct device_header *dev_hdr;
+ 	u8 staging_fdt[FDT_MAX_SIZE];
+-	u64 mem_reg_prop[]	= {
+-		cpu_to_fdt64(kvm->arch.memory_guest_start),
+-		cpu_to_fdt64(kvm->ram[0].size),
+-	};
++	fdt64_t mem_reg_prop[2 * MAX_RAM_BANKS];
+ 	struct psci_fns *fns;
+ 	void *fdt		= staging_fdt;
+ 	void *fdt_dest		= guest_flat_to_host(kvm,
+@@ -126,6 +123,8 @@ static int setup_fdt(struct kvm *kvm)
+ 					void (*)(void *, u8, enum irq_type));
+ 	void (*generate_cpu_peripheral_fdt_nodes)(void *, struct kvm *)
+ 					= kvm->cpus[0]->generate_fdt_nodes;
++	unsigned int i;
++	const struct kvm_config *cfg = &kvm->cfg;
+ 
+ 	/* Create new tree without a reserve map */
+ 	_FDT(fdt_create(fdt, FDT_MAX_SIZE));
+@@ -158,9 +157,17 @@ static int setup_fdt(struct kvm *kvm)
+ 	_FDT(fdt_end_node(fdt));
+ 
+ 	/* Memory */
++	for (i = 0; i < cfg->nr_ram; i++) {
++		fdt64_t *reg = &mem_reg_prop[i * 2];
++
++		reg[0] = cpu_to_fdt64(cfg->ram[i].base);
++		reg[1] = cpu_to_fdt64(cfg->ram[i].size);
++	}
++
+ 	_FDT(fdt_begin_node(fdt, "memory"));
+ 	_FDT(fdt_property_string(fdt, "device_type", "memory"));
+-	_FDT(fdt_property(fdt, "reg", mem_reg_prop, sizeof(mem_reg_prop)));
++	_FDT(fdt_property(fdt, "reg", mem_reg_prop,
++			  2 * sizeof(fdt64_t) * cfg->nr_ram));
+ 	_FDT(fdt_end_node(fdt));
+ 
+ 	/* CPU and peripherals (interrupt controller, timers, etc) */
+diff --git a/arm/include/arm-common/kvm-arch.h b/arm/include/arm-common/kvm-arch.h
+index b9d486d..1dd4fa5 100644
+--- a/arm/include/arm-common/kvm-arch.h
++++ b/arm/include/arm-common/kvm-arch.h
+@@ -10,10 +10,9 @@
+ #define ARM_IOPORT_AREA		_AC(0x0000000000000000, UL)
+ #define ARM_MMIO_AREA		_AC(0x0000000000010000, UL)
+ #define ARM_AXI_AREA		_AC(0x0000000040000000, UL)
+-#define ARM_MEMORY_AREA		_AC(0x0000000080000000, UL)
++#define ARM_IOMEM_AREA_END	_AC(0x0000000080000000, UL)
+ 
+-#define ARM_LOMAP_MAX_MEMORY	((1ULL << 32) - ARM_MEMORY_AREA)
+-#define ARM_HIMAP_MAX_MEMORY	((1ULL << 40) - ARM_MEMORY_AREA)
++#define ARM_MEMORY_AREA		ARM_IOMEM_AREA_END
+ 
+ #define ARM_GIC_DIST_BASE	(ARM_AXI_AREA - ARM_GIC_DIST_SIZE)
+ #define ARM_GIC_CPUI_BASE	(ARM_GIC_DIST_BASE - ARM_GIC_CPUI_SIZE)
+@@ -24,7 +23,7 @@
+ #define ARM_IOPORT_SIZE		(ARM_MMIO_AREA - ARM_IOPORT_AREA)
+ #define ARM_VIRTIO_MMIO_SIZE	(ARM_AXI_AREA - (ARM_MMIO_AREA + ARM_GIC_SIZE))
+ #define ARM_PCI_CFG_SIZE	(1ULL << 24)
+-#define ARM_PCI_MMIO_SIZE	(ARM_MEMORY_AREA - \
++#define ARM_PCI_MMIO_SIZE	(ARM_IOMEM_AREA_END - \
+ 				(ARM_AXI_AREA + ARM_PCI_CFG_SIZE))
+ 
+ #define KVM_IOPORT_AREA		ARM_IOPORT_AREA
+@@ -34,6 +33,8 @@
+ 
+ #define KVM_IOEVENTFD_HAS_PIO	0
+ 
++#define ARM_MAX_PHYS_ADDR(cfg)	(1UL << ARM_MAX_PHYS_SHIFT(cfg))
++
+ /*
+  * On a GICv3 there must be one redistributor per vCPU.
+  * The value here is the size for one, we multiply this at runtime with
+@@ -56,18 +57,27 @@ static inline bool arm_addr_in_ioport_region(u64 phys_addr)
+ 	return phys_addr >= KVM_IOPORT_AREA && phys_addr < limit;
+ }
+ 
++#define MAX_RAM_BANKS	8
++
++#define ARCH_SUPPORT_CFG_RAM_BASE 1
++
++struct kvm_arch_ram_region
++{
++	void	*start;
++	u64	size;
++};
++
+ struct kvm_arch {
+ 	/*
+ 	 * We may have to align the guest memory for virtio, so keep the
+ 	 * original pointers here for munmap.
+ 	 */
+-	void	*ram_alloc_start;
+-	u64	ram_alloc_size;
++	struct kvm_arch_ram_region ram_alloc[MAX_RAM_BANKS];
+ 
+ 	/*
+ 	 * Guest addresses for memory layout.
+ 	 */
+-	u64	memory_guest_start;
++	unsigned int	nr_mem_banks;
+ 	u64	kern_guest_start;
+ 	u64	initrd_guest_start;
+ 	u64	initrd_size;
+diff --git a/arm/kvm.c b/arm/kvm.c
+index 2a55b41..3c93d2d 100644
+--- a/arm/kvm.c
++++ b/arm/kvm.c
+@@ -11,6 +11,8 @@
+ #include <linux/kvm.h>
+ #include <linux/sizes.h>
+ 
++#include <stdlib.h>
++
+ struct kvm_ext kvm_req_ext[] = {
+ 	{ DEFINE_KVM_EXT(KVM_CAP_IRQCHIP) },
+ 	{ DEFINE_KVM_EXT(KVM_CAP_ONE_REG) },
+@@ -24,14 +26,15 @@ bool kvm__arch_cpu_supports_vm(void)
+ 	return true;
+ }
+ 
+-static void kvm__init_ram(struct kvm *kvm)
++static void kvm__init_ram(struct kvm *kvm,
++			  const struct kvm_ram_config *ram_cfg,
++			  struct kvm_ram_region *ram,
++			  struct kvm_arch_ram_region *ram_alloc)
+ {
+ 	int err;
+-	u64 phys_start;
+ 	unsigned long alignment;
+ 	/* Convenience aliases */
+ 	const char *hugetlbfs_path = kvm->cfg.hugetlbfs_path;
+-	struct kvm_ram_region *ram = &kvm->ram[0];
+ 
+ 	/*
+ 	 * Allocate guest memory. We must align our buffer to 64K to
+@@ -45,37 +48,42 @@ static void kvm__init_ram(struct kvm *kvm)
+ 		alignment = SZ_32M;
+ 	else
+ 		alignment = SZ_2M;
+-	ram->size = kvm->cfg.ram[0].size;
+-	kvm->arch.ram_alloc_size = ram->size + alignment;
+-	kvm->arch.ram_alloc_start = mmap_anon_or_hugetlbfs(kvm, hugetlbfs_path,
+-						kvm->arch.ram_alloc_size);
++	ram->size = ram_cfg->size;
++	ram_alloc->size = ram->size + alignment;
++	ram_alloc->start = mmap_anon_or_hugetlbfs(kvm, hugetlbfs_path,
++						  ram_alloc->size);
+ 
+-	if (kvm->arch.ram_alloc_start == MAP_FAILED)
++	if (ram_alloc->start == MAP_FAILED)
+ 		die("Failed to map %lld bytes for guest memory (%d)",
+-		    kvm->arch.ram_alloc_size, errno);
+-
+-	ram->start = (void *)ALIGN((unsigned long)kvm->arch.ram_alloc_start,
+-				   SZ_2M);
++		    ram_alloc->size, errno);
+ 
+-	madvise(kvm->arch.ram_alloc_start, kvm->arch.ram_alloc_size,
+-		MADV_MERGEABLE);
++	ram->start = (void *)ALIGN((unsigned long)ram_alloc->start, SZ_2M);
+ 
+-	madvise(kvm->arch.ram_alloc_start, kvm->arch.ram_alloc_size,
+-		MADV_HUGEPAGE);
++	madvise(ram_alloc->start, ram_alloc->size, MADV_MERGEABLE);
+ 
+-	phys_start	= ARM_MEMORY_AREA;
++	madvise(ram_alloc->start, ram_alloc->size, MADV_HUGEPAGE);
+ 
+-	err = kvm__register_ram(kvm, phys_start, ram->size, ram->start);
++	err = kvm__register_ram(kvm, ram_cfg->base, ram_cfg->size,
++				ram->start);
+ 	if (err)
+ 		die("Failed to register %lld bytes of memory at physical "
+-		    "address 0x%llx [err %d]", ram->size, phys_start, err);
+-
+-	kvm->arch.memory_guest_start = phys_start;
++		    "address 0x%llx [err %d]",
++		    ram_cfg->size,
++		    ram_cfg->base,
++		    err);
++
++	pr_info("Registered memory bank 0x%llx-0x%llx\n",
++		ram_cfg->base,
++		ram_cfg->base + ram_cfg->size);
+ }
+ 
+ void kvm__arch_delete_ram(struct kvm *kvm)
+ {
+-	munmap(kvm->arch.ram_alloc_start, kvm->arch.ram_alloc_size);
++	unsigned int i;
++
++	for (i = 0; i < kvm->nr_ram; i++)
++		munmap(kvm->arch.ram_alloc[i].start,
++		       kvm->arch.ram_alloc[i].size);
+ }
+ 
+ void kvm__arch_read_term(struct kvm *kvm)
+@@ -88,27 +96,90 @@ void kvm__arch_set_cmdline(char *cmdline, bool video)
+ {
+ }
+ 
++/* Only sort the bank by base address */
++static int cmp_bank(const void *p1, const void *p2)
++{
++	const struct kvm_ram_config *bank1 = p1;
++	const struct kvm_ram_config *bank2 = p2;
++
++	if (bank1->base < bank2->base)
++		return -1;
++	else if (bank1->base == bank2->base)
++		return 0;
++	else
++		return 1;
++}
++
+ static void kvm__arch_sanitize_cfg(struct kvm_config *cfg)
+ {
++	unsigned int i;
+ 	/* Convenience aliases */
+ 	struct kvm_ram_config *bank0 = &cfg->ram[0];
+ 
+-	if (bank0->size > ARM_MAX_MEMORY(cfg)) {
+-		bank0->size = ARM_MAX_MEMORY(cfg);
+-		pr_warning("sanitize: Capping memory to %lluMB",
+-			   bank0->size >> 20);
++	/*
++	 * The user may not have set an address for the first bank. (To keep the
++	 * command line backward compatible).
++	 */
++	if (bank0->base == INVALID_RAM_ADDR) {
++		/*
++		 * Impose the user to set address for the first bank when
++		 * multiple banks are specified.
++		 */
++		if (cfg->nr_ram > 1)
++			die("sanitize: Base address should be specified for all the banks\n");
++		bank0->base = ARM_MEMORY_AREA;
++		/*
++		 * Keep compatibility with old KVM command line behavior where
++		 * the memory is capped.
++		 */
++		if ((bank0->base + bank0->size) > ARM_MAX_PHYS_ADDR(cfg)) {
++			bank0->size = ARM_MAX_PHYS_ADDR(cfg) - bank0->base;
++			pr_warning("sanitize: Capping memory to %lluMB",
++				   bank0->size >> 20);
++		}
++	}
++
++	/* Sort banks by address to make easier later on. */
++	qsort(cfg->ram, cfg->nr_ram, sizeof(*cfg->ram), cmp_bank);
++
++	/* Check banks are not overlapping */
++	for (i = 1; i < cfg->nr_ram; i++) {
++		const struct kvm_ram_config *bank1 = &cfg->ram[i - 1];
++		const struct kvm_ram_config *bank2 = &cfg->ram[i];
++		unsigned long long end1 = bank1->base + bank1->size - 1;
++		unsigned long long end2 = bank2->base + bank2->size - 1;
++
++		if (!((end1 < bank2->base) || (bank1->base > end2)))
++			die("Memory bank 0x%llx-0x%llx overlapping with 0x%llx-0x%llx\n",
++			    bank1->base, end1, bank2->base, end2);
+ 	}
++
++	/* Check the memory is below the IPA size supported */
++	i = cfg->nr_ram - 1;
++	if ((cfg->ram[i].base + cfg->ram[i].size) > ARM_MAX_PHYS_ADDR(cfg))
++		die("Memory bank outside of the maximum IPA\n");
++
++	/* For now, the MMIO area is static and will be below 2GB */
++	if (cfg->ram[0].base < ARM_IOMEM_AREA_END)
++		die("Memory bank overlapping with the MMIO area\n");
+ }
+ 
+ void kvm__arch_init(struct kvm *kvm)
+ {
++	unsigned int i;
++	/* Convenience aliases */
++	struct kvm_config *cfg = &kvm->cfg;
++
+ 	kvm__arch_sanitize_cfg(&kvm->cfg);
+ 
+ 	/* Create the virtual GIC. */
+ 	if (gic__create(kvm, kvm->cfg.arch.irqchip))
+ 		die("Failed to create virtual GIC");
+ 
+-	kvm__init_ram(kvm);
++	for (i = 0; i < cfg->nr_ram; i++)
++		kvm__init_ram(kvm, &cfg->ram[i], &kvm->ram[i],
++			      &kvm->arch.ram_alloc[i]);
++	kvm->nr_ram = cfg->nr_ram;
+ }
+ 
+ #define FDT_ALIGN	SZ_2M
+@@ -125,6 +196,8 @@ bool kvm__arch_load_kernel_image(struct kvm *kvm, int fd_kernel, int fd_initrd,
+ 	/*
+ 	 * Linux requires the initrd and dtb to be mapped inside lowmem,
+ 	 * so we can't just place them at the top of memory.
++	 *
++	 * Let's place it in the first memory bank.
+ 	 */
+ 	limit = ram0->start + min(ram0->size, (u64)SZ_256M) - 1;
+ 
+@@ -133,7 +206,7 @@ bool kvm__arch_load_kernel_image(struct kvm *kvm, int fd_kernel, int fd_initrd,
+ 	file_size = read_file(fd_kernel, pos, limit - pos);
+ 	if (file_size < 0) {
+ 		if (errno == ENOMEM)
+-			die("kernel image too big to contain in guest memory.");
++			die("kernel image too big to contain in the first memory bank of the guest.");
+ 
+ 		die_perror("kernel read");
+ 	}
+
+From patchwork Thu Dec 20 15:21:26 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Julien Grall <julien.grall@arm.com>
+X-Patchwork-Id: 10739065
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C825913BF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:54 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B917328AC2
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:54 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id B788F28CE5; Thu, 20 Dec 2018 15:21:54 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1D8F028D07
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 20 Dec 2018 15:21:53 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2387843AbeLTPVw (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 20 Dec 2018 10:21:52 -0500
+Received: from usa-sjc-mx-foss1.foss.arm.com ([217.140.101.70]:57876 "EHLO
+        foss.arm.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2387823AbeLTPVv (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 20 Dec 2018 10:21:51 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id AC20E15AD;
+        Thu, 20 Dec 2018 07:21:50 -0800 (PST)
+Received: from e108454-lin.cambridge.arm.com (e108454-lin.cambridge.arm.com
+ [10.1.196.50])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ BCA053F5C0;
+        Thu, 20 Dec 2018 07:21:49 -0800 (PST)
+From: Julien Grall <julien.grall@arm.com>
+To: kvm@vger.kernel.org
+Cc: suzuki.poulose@arm.com, marc.zyngier@arm.com, will.deacon@arm.com
+Subject: [PATCH kvmtool v3 9/9] kvmtool: Allow standard size specifiers for
+ memory bank
+Date: Thu, 20 Dec 2018 15:21:26 +0000
+Message-Id: <20181220152126.18741-10-julien.grall@arm.com>
+X-Mailer: git-send-email 2.11.0
+In-Reply-To: <20181220152126.18741-1-julien.grall@arm.com>
+References: <20181220152126.18741-1-julien.grall@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Suzuki K Poulose <suzuki.poulose@arm.com>
+
+Allow standard suffixes, K, M, G, T & P suffixes for sizes and addresses for
+memory bank parameters. By default, the size is specified in MB.
+
+Signed-off-by: Suzuki K Poulose <suzuki.poulose@arm.com>
+---
+
+    Changes in v2:
+        - Patch added
+---
+ builtin-run.c | 50 ++++++++++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 42 insertions(+), 8 deletions(-)
+
+diff --git a/builtin-run.c b/builtin-run.c
+index 568af5c..c907295 100644
+--- a/builtin-run.c
++++ b/builtin-run.c
+@@ -49,9 +49,11 @@
+ #include <ctype.h>
+ #include <stdio.h>
+ 
+-#define MB_SHIFT		(20)
+ #define KB_SHIFT		(10)
++#define MB_SHIFT		(20)
+ #define GB_SHIFT		(30)
++#define TB_SHIFT		(40)
++#define PB_SHIFT		(50)
+ 
+ __thread struct kvm_cpu *current_kvm_cpu;
+ 
+@@ -87,6 +89,37 @@ void kvm_run_set_wrapper_sandbox(void)
+ 	kvm_run_wrapper = KVM_RUN_SANDBOX;
+ }
+ 
++static int __parse_size_spec(char **next)
++{
++	int shift = 0;
++
++	switch(**next) {
++	case 'K': shift = KB_SHIFT; break;
++	case 'M': shift = MB_SHIFT; break;
++	case 'G': shift = GB_SHIFT; break;
++	case 'T': shift = TB_SHIFT; break;
++	case 'P': shift = PB_SHIFT; break;
++	}
++	if (shift)
++		(*next)++;
++	return shift;
++}
++
++static u64 parse_mem_size_spec(char **next)
++{
++	int shift = __parse_size_spec(next);
++
++	/* By default the size is in MB, if none is specified */
++	if (!shift)
++		shift = 20;
++	return ((u64)1) << shift;
++}
++
++static u64 parse_addr_spec(char **next)
++{
++	return ((u64)1) << __parse_size_spec(next);
++}
++
+ static int mem_parser(const struct option *opt, const char *arg, int unset)
+ {
+ 	struct kvm_config *cfg = opt->value;
+@@ -101,6 +134,8 @@ static int mem_parser(const struct option *opt, const char *arg, int unset)
+ 	if (next == p)
+ 		die("mem: no size specified.\n");
+ 
++	size *= parse_mem_size_spec(&next);
++
+ 	if (*next != '@' && *next != '\0')
+ 		die("mem: unexpected chars after size.\n");
+ 
+@@ -122,6 +157,8 @@ static int mem_parser(const struct option *opt, const char *arg, int unset)
+ 		if (cfg->nr_ram > 0)
+ 			die("mem: <addr> must be specified\n");
+ 		addr = INVALID_RAM_ADDR;
++	} else {
++		addr *= parse_addr_spec(&next);
+ 	}
+ 
+ 	if ( cfg->nr_ram == MAX_RAM_BANKS )
+@@ -322,7 +359,7 @@ static u64 host_ram_size(void)
+ 		return 0;
+ 	}
+ 
+-	return (nr_pages * page_size) >> MB_SHIFT;
++	return (nr_pages * page_size);
+ }
+ 
+ /*
+@@ -336,11 +373,11 @@ static u64 get_ram_size(int nr_cpus)
+ 	u64 available;
+ 	u64 ram_size;
+ 
+-	ram_size	= 64 * (nr_cpus + 3);
++	ram_size	= (64 * (nr_cpus + 3)) << MB_SHIFT;
+ 
+ 	available	= host_ram_size() * RAM_SIZE_RATIO;
+ 	if (!available)
+-		available = MIN_RAM_SIZE_MB;
++		available = MIN_RAM_SIZE_MB << MB_SHIFT;
+ 
+ 	if (ram_size > available)
+ 		ram_size	= available;
+@@ -594,11 +631,8 @@ static struct kvm *kvm_cmd_run_init(int argc, const char **argv)
+ 		kvm->cfg.nr_ram = 1;
+ 	}
+ 
+-	for (i = 0; i < kvm->cfg.nr_ram; i++) {
++	for (i = 0; i < kvm->cfg.nr_ram; i++)
+ 		total_ram += kvm->cfg.ram[i].size;
+-		/* The user input is in MB, but the internal deals with bytes */
+-		kvm->cfg.ram[i].size <<= MB_SHIFT;
+-	}
+ 
+ 	if (total_ram > host_ram_size())
+ 		pr_warning("Guest memory size %lluMB exceeds host physical RAM size %lluMB",

@@ -1,0 +1,140 @@
+From patchwork Mon Jan 28 20:51:02 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10784733
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id BAB1213B5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 28 Jan 2019 20:53:02 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 9E4972B713
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 28 Jan 2019 20:53:02 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 8F8BC2BD0F; Mon, 28 Jan 2019 20:53:02 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 034BE2B713
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 28 Jan 2019 20:53:02 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726862AbfA1UxA (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 28 Jan 2019 15:53:00 -0500
+Received: from mga14.intel.com ([192.55.52.115]:49557 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726719AbfA1UxA (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 28 Jan 2019 15:53:00 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga002.jf.intel.com ([10.7.209.21])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Jan 2019 12:53:00 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,534,1539673200";
+   d="scan'208";a="129618826"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga002.jf.intel.com with ESMTP; 28 Jan 2019 12:52:59 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Sasha Levin <sashal@kernel.org>
+Cc: kvm@vger.kernel.org, stable@vger.kernel.org,
+ Greg Kroah-Hartman <gregkh@linuxfoundation.org>,
+ Peter Xu <peterx@redhat.com>, Rik van Riel <riel@redhat.com>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Thomas Lindroth <thomas.lindroth@gmail.com>
+Subject: [PATCH] KVM: x86: Fix a 4.14 backport regression related to
+ userspace/guest FPU
+Date: Mon, 28 Jan 2019 12:51:02 -0800
+Message-Id: <20190128205102.29393-1-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Upstream commit:
+
+    f775b13eedee ("x86,kvm: move qemu/guest FPU switching out to vcpu_run")
+
+introduced a bug, which was later fixed by upstream commit:
+
+    5663d8f9bbe4 ("kvm: x86: fix WARN due to uninitialized guest FPU state")
+
+For reasons unknown, both commits were initially passed-over for
+inclusion in the 4.14 stable branch despite being tagged for stable.
+Eventually, someone noticed that the fixup, commit 5663d8f9bbe4, was
+missing from stable[1], and so it was queued up for 4.14 and included in
+release v4.14.79.
+
+Even later, the original buggy patch, commit f775b13eedee, was also
+applied to the 4.14 stable branch.  Through an unlucky coincidence, the
+incorrect ordering did not generate a conflict between the two patches,
+and led to v4.14.94 and later releases containing a spurious call to
+kvm_load_guest_fpu() in kvm_arch_vcpu_ioctl_run().  As a result, KVM may
+reload stale guest FPU state, e.g. after accepting in INIT event.  This
+can manifest as crashes during boot, segfaults, failed checksums and so
+on and so forth.
+
+Remove the unwanted kvm_{load,put}_guest_fpu() calls, i.e. make
+kvm_arch_vcpu_ioctl_run() look like commit 5663d8f9bbe4 was backported
+after commit f775b13eedee.
+
+[1] https://www.spinics.net/lists/stable/msg263931.html
+
+Fixes: 4124a4cff344 ("x86,kvm: move qemu/guest FPU switching out to vcpu_run")
+Cc: stable@vger.kernel.org
+Cc: Sasha Levin <sashal@kernel.org>
+Cc: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Cc: Peter Xu <peterx@redhat.com>
+Cc: Rik van Riel <riel@redhat.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Radim Krčmář <rkrcmar@redhat.com>
+Reported-by: Roman Mamedov
+Reported-by: Thomas Lindroth <thomas.lindroth@gmail.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/x86.c | 6 +-----
+ 1 file changed, 1 insertion(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 130be2efafbe..af7ab2c71786 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7423,14 +7423,12 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
+ 		}
+ 	}
+ 
+-	kvm_load_guest_fpu(vcpu);
+-
+ 	if (unlikely(vcpu->arch.complete_userspace_io)) {
+ 		int (*cui)(struct kvm_vcpu *) = vcpu->arch.complete_userspace_io;
+ 		vcpu->arch.complete_userspace_io = NULL;
+ 		r = cui(vcpu);
+ 		if (r <= 0)
+-			goto out_fpu;
++			goto out;
+ 	} else
+ 		WARN_ON(vcpu->arch.pio.count || vcpu->mmio_needed);
+ 
+@@ -7439,8 +7437,6 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
+ 	else
+ 		r = vcpu_run(vcpu);
+ 
+-out_fpu:
+-	kvm_put_guest_fpu(vcpu);
+ out:
+ 	kvm_put_guest_fpu(vcpu);
+ 	post_kvm_run_save(vcpu);

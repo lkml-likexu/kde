@@ -1,0 +1,98 @@
+From patchwork Mon Feb 11 07:49:17 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexey Kardashevskiy <aik@ozlabs.ru>
+X-Patchwork-Id: 10805227
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 768111515
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 11 Feb 2019 07:49:23 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 6726629AA4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 11 Feb 2019 07:49:23 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 571B129B94; Mon, 11 Feb 2019 07:49:23 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id F0BAA29AA4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 11 Feb 2019 07:49:22 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726977AbfBKHtW (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 11 Feb 2019 02:49:22 -0500
+Received: from ozlabs.ru ([107.173.13.209]:39172 "EHLO ozlabs.ru"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725931AbfBKHtW (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Feb 2019 02:49:22 -0500
+Received: from fstn1-p1.ozlabs.ibm.com (localhost [IPv6:::1])
+        by ozlabs.ru (Postfix) with ESMTP id 59F58AE80013;
+        Mon, 11 Feb 2019 02:49:19 -0500 (EST)
+From: Alexey Kardashevskiy <aik@ozlabs.ru>
+To: linuxppc-dev@lists.ozlabs.org
+Cc: Alexey Kardashevskiy <aik@ozlabs.ru>,
+        David Gibson <david@gibson.dropbear.id.au>,
+        kvm-ppc@vger.kernel.org,
+        Alex Williamson <alex.williamson@redhat.com>,
+        kvm@vger.kernel.org
+Subject: [PATCH kernel] vfio/spapr_tce: Skip unsetting already unset table
+Date: Mon, 11 Feb 2019 18:49:17 +1100
+Message-Id: <20190211074917.125723-1-aik@ozlabs.ru>
+X-Mailer: git-send-email 2.17.1
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+VFIO TCE IOMMU v2 owns IOMMU tables so when detach a IOMMU group from
+a container, we need to unset those from a group so we call unset_window()
+so do we unconditionally. We also unset tables when removing a DMA window
+via the VFIO_IOMMU_SPAPR_TCE_REMOVE ioctl.
+
+The window removal checks if the table actually exists (hidden inside
+tce_iommu_find_table()) but the group detaching does not so the user
+may see duplicating messages:
+pci 0009:03     : [PE# fd] Removing DMA window #0
+pci 0009:03     : [PE# fd] Removing DMA window #1
+pci 0009:03     : [PE# fd] Removing DMA window #0
+pci 0009:03     : [PE# fd] Removing DMA window #1
+
+At the moment this is not a problem as the second invocation
+of unset_window() writes zeroes to the HW registers again and exits early
+as there is no table.
+
+Signed-off-by: Alexey Kardashevskiy <aik@ozlabs.ru>
+Reviewed-by: David Gibson <david@gibson.dropbear.id.au>
+---
+
+When doing VFIO PCI hot unplug, first we remove the DMA window and
+set container->tables[num] - this is a first couple of messages.
+Then we detach the group and then we see another couple of the same
+messages which confused myself.
+---
+ drivers/vfio/vfio_iommu_spapr_tce.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/vfio/vfio_iommu_spapr_tce.c b/drivers/vfio/vfio_iommu_spapr_tce.c
+index c424913..8dbb270 100644
+--- a/drivers/vfio/vfio_iommu_spapr_tce.c
++++ b/drivers/vfio/vfio_iommu_spapr_tce.c
+@@ -1235,7 +1235,8 @@ static void tce_iommu_release_ownership_ddw(struct tce_container *container,
+ 	}
+ 
+ 	for (i = 0; i < IOMMU_TABLE_GROUP_MAX_TABLES; ++i)
+-		table_group->ops->unset_window(table_group, i);
++		if (container->tables[i])
++			table_group->ops->unset_window(table_group, i);
+ 
+ 	table_group->ops->release_ownership(table_group);
+ }

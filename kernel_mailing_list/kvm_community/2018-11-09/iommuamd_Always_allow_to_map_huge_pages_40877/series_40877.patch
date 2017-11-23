@@ -1,0 +1,882 @@
+From patchwork Fri Nov  9 11:07:06 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 10675749
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id DFC3F15A6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:08:26 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id CEC8F2E62E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:08:26 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C29D62E63A; Fri,  9 Nov 2018 11:08:26 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 535392E62E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:08:26 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728279AbeKIUr1 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 9 Nov 2018 15:47:27 -0500
+Received: from 8bytes.org ([81.169.241.247]:48926 "EHLO theia.8bytes.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727560AbeKIUr1 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 9 Nov 2018 15:47:27 -0500
+Received: by theia.8bytes.org (Postfix, from userid 1000)
+        id 5089E22F; Fri,  9 Nov 2018 12:07:19 +0100 (CET)
+From: Joerg Roedel <joro@8bytes.org>
+To: Alex Williamson <alex.williamson@redhat.com>,
+        Joerg Roedel <joro@8bytes.org>
+Cc: iommu@lists.linux-foundation.org, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jroedel@suse.de
+Subject: [PATCH 1/7] iommu/amd: Collect page-table pages in freelist
+Date: Fri,  9 Nov 2018 12:07:06 +0100
+Message-Id: <20181109110712.12469-2-joro@8bytes.org>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20181109110712.12469-1-joro@8bytes.org>
+References: <20181109110712.12469-1-joro@8bytes.org>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Joerg Roedel <jroedel@suse.de>
+
+Collect all pages that belong to a page-table in a list and
+free them after the tree has been traversed. This allows to
+implement safer page-table updates in subsequent patches.
+Also move the functions for page-table freeing a bit upwards
+in the file so that they are usable from the iommu_map() path.
+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ drivers/iommu/amd_iommu.c | 144 ++++++++++++++++++++++----------------
+ 1 file changed, 83 insertions(+), 61 deletions(-)
+
+diff --git a/drivers/iommu/amd_iommu.c b/drivers/iommu/amd_iommu.c
+index 1167ff0416cf..2655bd91af93 100644
+--- a/drivers/iommu/amd_iommu.c
++++ b/drivers/iommu/amd_iommu.c
+@@ -1317,6 +1317,89 @@ static void domain_flush_devices(struct protection_domain *domain)
+  *
+  ****************************************************************************/
+ 
++static void free_page_list(struct page *freelist)
++{
++	while (freelist != NULL) {
++		unsigned long p = (unsigned long)page_address(freelist);
++		freelist = freelist->freelist;
++		free_page(p);
++	}
++}
++
++static struct page *free_pt_page(unsigned long pt, struct page *freelist)
++{
++	struct page *p = virt_to_page((void *)pt);
++
++	p->freelist = freelist;
++
++	return p;
++}
++
++#define DEFINE_FREE_PT_FN(LVL, FN)						\
++static struct page *free_pt_##LVL (unsigned long __pt, struct page *freelist)	\
++{										\
++	unsigned long p;							\
++	u64 *pt;								\
++	int i;									\
++										\
++	pt = (u64 *)__pt;							\
++										\
++	for (i = 0; i < 512; ++i) {						\
++		/* PTE present? */						\
++		if (!IOMMU_PTE_PRESENT(pt[i]))					\
++			continue;						\
++										\
++		/* Large PTE? */						\
++		if (PM_PTE_LEVEL(pt[i]) == 0 ||					\
++		    PM_PTE_LEVEL(pt[i]) == 7)					\
++			continue;						\
++										\
++		p = (unsigned long)IOMMU_PTE_PAGE(pt[i]);			\
++		freelist = FN(p, freelist);					\
++	}									\
++										\
++	return free_pt_page((unsigned long)pt, freelist);			\
++}
++
++DEFINE_FREE_PT_FN(l2, free_pt_page)
++DEFINE_FREE_PT_FN(l3, free_pt_l2)
++DEFINE_FREE_PT_FN(l4, free_pt_l3)
++DEFINE_FREE_PT_FN(l5, free_pt_l4)
++DEFINE_FREE_PT_FN(l6, free_pt_l5)
++
++static void free_pagetable(struct protection_domain *domain)
++{
++	unsigned long root = (unsigned long)domain->pt_root;
++	struct page *freelist = NULL;
++
++	switch (domain->mode) {
++	case PAGE_MODE_NONE:
++		break;
++	case PAGE_MODE_1_LEVEL:
++		freelist = free_pt_page(root, freelist);
++		break;
++	case PAGE_MODE_2_LEVEL:
++		freelist = free_pt_l2(root, freelist);
++		break;
++	case PAGE_MODE_3_LEVEL:
++		freelist = free_pt_l3(root, freelist);
++		break;
++	case PAGE_MODE_4_LEVEL:
++		freelist = free_pt_l4(root, freelist);
++		break;
++	case PAGE_MODE_5_LEVEL:
++		freelist = free_pt_l5(root, freelist);
++		break;
++	case PAGE_MODE_6_LEVEL:
++		freelist = free_pt_l6(root, freelist);
++		break;
++	default:
++		BUG();
++	}
++
++	free_page_list(freelist);
++}
++
+ /*
+  * This function is used to add another level to an IO page table. Adding
+  * another level increases the size of the address space by 9 bits to a size up
+@@ -1638,67 +1721,6 @@ static void domain_id_free(int id)
+ 	spin_unlock(&pd_bitmap_lock);
+ }
+ 
+-#define DEFINE_FREE_PT_FN(LVL, FN)				\
+-static void free_pt_##LVL (unsigned long __pt)			\
+-{								\
+-	unsigned long p;					\
+-	u64 *pt;						\
+-	int i;							\
+-								\
+-	pt = (u64 *)__pt;					\
+-								\
+-	for (i = 0; i < 512; ++i) {				\
+-		/* PTE present? */				\
+-		if (!IOMMU_PTE_PRESENT(pt[i]))			\
+-			continue;				\
+-								\
+-		/* Large PTE? */				\
+-		if (PM_PTE_LEVEL(pt[i]) == 0 ||			\
+-		    PM_PTE_LEVEL(pt[i]) == 7)			\
+-			continue;				\
+-								\
+-		p = (unsigned long)IOMMU_PTE_PAGE(pt[i]);	\
+-		FN(p);						\
+-	}							\
+-	free_page((unsigned long)pt);				\
+-}
+-
+-DEFINE_FREE_PT_FN(l2, free_page)
+-DEFINE_FREE_PT_FN(l3, free_pt_l2)
+-DEFINE_FREE_PT_FN(l4, free_pt_l3)
+-DEFINE_FREE_PT_FN(l5, free_pt_l4)
+-DEFINE_FREE_PT_FN(l6, free_pt_l5)
+-
+-static void free_pagetable(struct protection_domain *domain)
+-{
+-	unsigned long root = (unsigned long)domain->pt_root;
+-
+-	switch (domain->mode) {
+-	case PAGE_MODE_NONE:
+-		break;
+-	case PAGE_MODE_1_LEVEL:
+-		free_page(root);
+-		break;
+-	case PAGE_MODE_2_LEVEL:
+-		free_pt_l2(root);
+-		break;
+-	case PAGE_MODE_3_LEVEL:
+-		free_pt_l3(root);
+-		break;
+-	case PAGE_MODE_4_LEVEL:
+-		free_pt_l4(root);
+-		break;
+-	case PAGE_MODE_5_LEVEL:
+-		free_pt_l5(root);
+-		break;
+-	case PAGE_MODE_6_LEVEL:
+-		free_pt_l6(root);
+-		break;
+-	default:
+-		BUG();
+-	}
+-}
+-
+ static void free_gcr3_tbl_level1(u64 *tbl)
+ {
+ 	u64 *ptr;
+
+From patchwork Fri Nov  9 11:07:07 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 10675741
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 07E6B14E2
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:07:52 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id EBAA92E544
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:07:51 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id DFD5C2E62F; Fri,  9 Nov 2018 11:07:51 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7421F2E544
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:07:51 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728352AbeKIUr2 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 9 Nov 2018 15:47:28 -0500
+Received: from 8bytes.org ([81.169.241.247]:48936 "EHLO theia.8bytes.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728249AbeKIUr1 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 9 Nov 2018 15:47:27 -0500
+Received: by theia.8bytes.org (Postfix, from userid 1000)
+        id 74A4748C; Fri,  9 Nov 2018 12:07:19 +0100 (CET)
+From: Joerg Roedel <joro@8bytes.org>
+To: Alex Williamson <alex.williamson@redhat.com>,
+        Joerg Roedel <joro@8bytes.org>
+Cc: iommu@lists.linux-foundation.org, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jroedel@suse.de
+Subject: [PATCH 2/7] iommu/amd: Introduce free_sub_pt() function
+Date: Fri,  9 Nov 2018 12:07:07 +0100
+Message-Id: <20181109110712.12469-3-joro@8bytes.org>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20181109110712.12469-1-joro@8bytes.org>
+References: <20181109110712.12469-1-joro@8bytes.org>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Joerg Roedel <jroedel@suse.de>
+
+The function is a more generic version of free_pagetable()
+and will be used to free only specific sub-trees of a
+page-table.
+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ drivers/iommu/amd_iommu.c | 18 +++++++++++++-----
+ 1 file changed, 13 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/iommu/amd_iommu.c b/drivers/iommu/amd_iommu.c
+index 2655bd91af93..1186571f77e1 100644
+--- a/drivers/iommu/amd_iommu.c
++++ b/drivers/iommu/amd_iommu.c
+@@ -1367,12 +1367,10 @@ DEFINE_FREE_PT_FN(l4, free_pt_l3)
+ DEFINE_FREE_PT_FN(l5, free_pt_l4)
+ DEFINE_FREE_PT_FN(l6, free_pt_l5)
+ 
+-static void free_pagetable(struct protection_domain *domain)
++static struct page *free_sub_pt(unsigned long root, int mode,
++				struct page *freelist)
+ {
+-	unsigned long root = (unsigned long)domain->pt_root;
+-	struct page *freelist = NULL;
+-
+-	switch (domain->mode) {
++	switch (mode) {
+ 	case PAGE_MODE_NONE:
+ 		break;
+ 	case PAGE_MODE_1_LEVEL:
+@@ -1397,6 +1395,16 @@ static void free_pagetable(struct protection_domain *domain)
+ 		BUG();
+ 	}
+ 
++	return freelist;
++}
++
++static void free_pagetable(struct protection_domain *domain)
++{
++	unsigned long root = (unsigned long)domain->pt_root;
++	struct page *freelist = NULL;
++
++	free_sub_pt(root, domain->mode, freelist);
++
+ 	free_page_list(freelist);
+ }
+ 
+
+From patchwork Fri Nov  9 11:07:08 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 10675745
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id BFFF115A6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:08:04 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B00822E544
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:08:04 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id A47B12E62F; Fri,  9 Nov 2018 11:08:04 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 49E482E544
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:08:04 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728312AbeKIUr1 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 9 Nov 2018 15:47:27 -0500
+Received: from 8bytes.org ([81.169.241.247]:48954 "EHLO theia.8bytes.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728267AbeKIUr1 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 9 Nov 2018 15:47:27 -0500
+Received: by theia.8bytes.org (Postfix, from userid 1000)
+        id 9F2954E4; Fri,  9 Nov 2018 12:07:19 +0100 (CET)
+From: Joerg Roedel <joro@8bytes.org>
+To: Alex Williamson <alex.williamson@redhat.com>,
+        Joerg Roedel <joro@8bytes.org>
+Cc: iommu@lists.linux-foundation.org, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jroedel@suse.de
+Subject: [PATCH 3/7] iommu/amd: Ignore page-mode 7 in free_sub_pt()
+Date: Fri,  9 Nov 2018 12:07:08 +0100
+Message-Id: <20181109110712.12469-4-joro@8bytes.org>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20181109110712.12469-1-joro@8bytes.org>
+References: <20181109110712.12469-1-joro@8bytes.org>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Joerg Roedel <jroedel@suse.de>
+
+The page-mode 7 is a special one as it marks a final PTE to
+a page with an intermediary size.
+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ drivers/iommu/amd_iommu.c       | 4 ++++
+ drivers/iommu/amd_iommu_types.h | 1 +
+ 2 files changed, 5 insertions(+)
+
+diff --git a/drivers/iommu/amd_iommu.c b/drivers/iommu/amd_iommu.c
+index 1186571f77e1..49b5d3115e56 100644
+--- a/drivers/iommu/amd_iommu.c
++++ b/drivers/iommu/amd_iommu.c
+@@ -1372,6 +1372,7 @@ static struct page *free_sub_pt(unsigned long root, int mode,
+ {
+ 	switch (mode) {
+ 	case PAGE_MODE_NONE:
++	case PAGE_MODE_7_LEVEL:
+ 		break;
+ 	case PAGE_MODE_1_LEVEL:
+ 		freelist = free_pt_page(root, freelist);
+@@ -1403,6 +1404,9 @@ static void free_pagetable(struct protection_domain *domain)
+ 	unsigned long root = (unsigned long)domain->pt_root;
+ 	struct page *freelist = NULL;
+ 
++	BUG_ON(domain->mode < PAGE_MODE_NONE ||
++	       domain->mode > PAGE_MODE_6_LEVEL);
++
+ 	free_sub_pt(root, domain->mode, freelist);
+ 
+ 	free_page_list(freelist);
+diff --git a/drivers/iommu/amd_iommu_types.h b/drivers/iommu/amd_iommu_types.h
+index e2b342e65a7b..eae0741f72dc 100644
+--- a/drivers/iommu/amd_iommu_types.h
++++ b/drivers/iommu/amd_iommu_types.h
+@@ -269,6 +269,7 @@
+ #define PAGE_MODE_4_LEVEL 0x04
+ #define PAGE_MODE_5_LEVEL 0x05
+ #define PAGE_MODE_6_LEVEL 0x06
++#define PAGE_MODE_7_LEVEL 0x07
+ 
+ #define PM_LEVEL_SHIFT(x)	(12 + ((x) * 9))
+ #define PM_LEVEL_SIZE(x)	(((x) < 6) ? \
+
+From patchwork Fri Nov  9 11:07:09 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 10675747
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C425215A6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:08:09 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B373A2E62E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:08:09 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id A4DD22E63A; Fri,  9 Nov 2018 11:08:09 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 56E7D2E62E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:08:09 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728526AbeKIUsL (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 9 Nov 2018 15:48:11 -0500
+Received: from 8bytes.org ([81.169.241.247]:48966 "EHLO theia.8bytes.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728273AbeKIUr1 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 9 Nov 2018 15:47:27 -0500
+Received: by theia.8bytes.org (Postfix, from userid 1000)
+        id C80C14EB; Fri,  9 Nov 2018 12:07:19 +0100 (CET)
+From: Joerg Roedel <joro@8bytes.org>
+To: Alex Williamson <alex.williamson@redhat.com>,
+        Joerg Roedel <joro@8bytes.org>
+Cc: iommu@lists.linux-foundation.org, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jroedel@suse.de
+Subject: [PATCH 4/7] iommu/amd: Allow downgrading page-sizes in alloc_pte()
+Date: Fri,  9 Nov 2018 12:07:09 +0100
+Message-Id: <20181109110712.12469-5-joro@8bytes.org>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20181109110712.12469-1-joro@8bytes.org>
+References: <20181109110712.12469-1-joro@8bytes.org>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Joerg Roedel <jroedel@suse.de>
+
+Before this patch it was not possible the downgrade a
+mapping established with page-mode 7 to a mapping using
+smaller page-sizes, because the pte_level != level check
+prevented that.
+
+Treat page-mode 7 like a non-present mapping and allow to
+overwrite it in alloc_pte().
+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ drivers/iommu/amd_iommu.c | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/iommu/amd_iommu.c b/drivers/iommu/amd_iommu.c
+index 49b5d3115e56..6a88ba9321d1 100644
+--- a/drivers/iommu/amd_iommu.c
++++ b/drivers/iommu/amd_iommu.c
+@@ -1460,10 +1460,13 @@ static u64 *alloc_pte(struct protection_domain *domain,
+ 
+ 	while (level > end_lvl) {
+ 		u64 __pte, __npte;
++		int pte_level;
+ 
+-		__pte = *pte;
++		__pte     = *pte;
++		pte_level = PM_PTE_LEVEL(__pte);
+ 
+-		if (!IOMMU_PTE_PRESENT(__pte)) {
++		if (!IOMMU_PTE_PRESENT(__pte) ||
++		    pte_level == PAGE_MODE_7_LEVEL) {
+ 			page = (u64 *)get_zeroed_page(gfp);
+ 			if (!page)
+ 				return NULL;
+@@ -1475,10 +1478,13 @@ static u64 *alloc_pte(struct protection_domain *domain,
+ 				free_page((unsigned long)page);
+ 				continue;
+ 			}
++
++			if (pte_level == PAGE_MODE_7_LEVEL)
++				domain->updated = true;
+ 		}
+ 
+ 		/* No level skipping support yet */
+-		if (PM_PTE_LEVEL(*pte) != level)
++		if (pte_level != level)
+ 			return NULL;
+ 
+ 		level -= 1;
+
+From patchwork Fri Nov  9 11:07:10 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 10675733
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E258D15A6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:07:33 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D07922E50D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:07:33 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C4D882E62E; Fri,  9 Nov 2018 11:07:33 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 864CE2E50D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:07:32 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728439AbeKIUre (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 9 Nov 2018 15:47:34 -0500
+Received: from 8bytes.org ([81.169.241.247]:48986 "EHLO theia.8bytes.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728267AbeKIUr3 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 9 Nov 2018 15:47:29 -0500
+Received: by theia.8bytes.org (Postfix, from userid 1000)
+        id ECF27527; Fri,  9 Nov 2018 12:07:19 +0100 (CET)
+From: Joerg Roedel <joro@8bytes.org>
+To: Alex Williamson <alex.williamson@redhat.com>,
+        Joerg Roedel <joro@8bytes.org>
+Cc: iommu@lists.linux-foundation.org, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jroedel@suse.de
+Subject: [PATCH 5/7] iommu/amd: Restart loop if cmpxchg64 succeeded in
+ alloc_pte()
+Date: Fri,  9 Nov 2018 12:07:10 +0100
+Message-Id: <20181109110712.12469-6-joro@8bytes.org>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20181109110712.12469-1-joro@8bytes.org>
+References: <20181109110712.12469-1-joro@8bytes.org>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Joerg Roedel <jroedel@suse.de>
+
+This makes sure that __pte always contains the correct value
+when the pointer to the next page-table level is derived.
+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ drivers/iommu/amd_iommu.c | 11 +++++------
+ 1 file changed, 5 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/iommu/amd_iommu.c b/drivers/iommu/amd_iommu.c
+index 6a88ba9321d1..c539b2a59019 100644
+--- a/drivers/iommu/amd_iommu.c
++++ b/drivers/iommu/amd_iommu.c
+@@ -1474,13 +1474,12 @@ static u64 *alloc_pte(struct protection_domain *domain,
+ 			__npte = PM_LEVEL_PDE(level, iommu_virt_to_phys(page));
+ 
+ 			/* pte could have been changed somewhere. */
+-			if (cmpxchg64(pte, __pte, __npte) != __pte) {
++			if (cmpxchg64(pte, __pte, __npte) != __pte)
+ 				free_page((unsigned long)page);
+-				continue;
+-			}
+-
+-			if (pte_level == PAGE_MODE_7_LEVEL)
++			else if (pte_level == PAGE_MODE_7_LEVEL)
+ 				domain->updated = true;
++
++			continue;
+ 		}
+ 
+ 		/* No level skipping support yet */
+@@ -1489,7 +1488,7 @@ static u64 *alloc_pte(struct protection_domain *domain,
+ 
+ 		level -= 1;
+ 
+-		pte = IOMMU_PTE_PAGE(*pte);
++		pte = IOMMU_PTE_PAGE(__pte);
+ 
+ 		if (pte_page && level == end_lvl)
+ 			*pte_page = pte;
+
+From patchwork Fri Nov  9 11:07:11 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 10675739
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 84B7B15A6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:07:44 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7432E2E544
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:07:44 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 68BAC2E62F; Fri,  9 Nov 2018 11:07:44 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 15C462E544
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:07:44 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728475AbeKIUro (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 9 Nov 2018 15:47:44 -0500
+Received: from 8bytes.org ([81.169.241.247]:48988 "EHLO theia.8bytes.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728343AbeKIUr2 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 9 Nov 2018 15:47:28 -0500
+Received: by theia.8bytes.org (Postfix, from userid 1000)
+        id 1F032533; Fri,  9 Nov 2018 12:07:20 +0100 (CET)
+From: Joerg Roedel <joro@8bytes.org>
+To: Alex Williamson <alex.williamson@redhat.com>,
+        Joerg Roedel <joro@8bytes.org>
+Cc: iommu@lists.linux-foundation.org, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jroedel@suse.de
+Subject: [PATCH 6/7] iommu/amd: Allow to upgrade page-size
+Date: Fri,  9 Nov 2018 12:07:11 +0100
+Message-Id: <20181109110712.12469-7-joro@8bytes.org>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20181109110712.12469-1-joro@8bytes.org>
+References: <20181109110712.12469-1-joro@8bytes.org>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Joerg Roedel <jroedel@suse.de>
+
+Before this patch the iommu_map_page() function failed when
+it tried to map a huge-page where smaller mappings existed
+before.
+
+With this change the page-table pages of the old mappings
+are teared down, so that the huge-page can be mapped.
+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ drivers/iommu/amd_iommu.c | 29 +++++++++++++++++++++++++++--
+ 1 file changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/iommu/amd_iommu.c b/drivers/iommu/amd_iommu.c
+index c539b2a59019..71797b3d67e5 100644
+--- a/drivers/iommu/amd_iommu.c
++++ b/drivers/iommu/amd_iommu.c
+@@ -1557,6 +1557,25 @@ static u64 *fetch_pte(struct protection_domain *domain,
+ 	return pte;
+ }
+ 
++static struct page *free_clear_pte(u64 *pte, u64 pteval, struct page *freelist)
++{
++	unsigned long pt;
++	int mode;
++
++	while (cmpxchg64(pte, pteval, 0) != pteval) {
++		pr_warn("AMD-Vi: IOMMU pte changed since we read it\n");
++		pteval = *pte;
++	}
++
++	if (!IOMMU_PTE_PRESENT(pteval))
++		return freelist;
++
++	pt   = (unsigned long)IOMMU_PTE_PAGE(pteval);
++	mode = IOMMU_PTE_MODE(pteval);
++
++	return free_sub_pt(pt, mode, freelist);
++}
++
+ /*
+  * Generic mapping functions. It maps a physical address into a DMA
+  * address space. It allocates the page table pages if necessary.
+@@ -1571,6 +1590,7 @@ static int iommu_map_page(struct protection_domain *dom,
+ 			  int prot,
+ 			  gfp_t gfp)
+ {
++	struct page *freelist = NULL;
+ 	u64 __pte, *pte;
+ 	int i, count;
+ 
+@@ -1587,8 +1607,10 @@ static int iommu_map_page(struct protection_domain *dom,
+ 		return -ENOMEM;
+ 
+ 	for (i = 0; i < count; ++i)
+-		if (IOMMU_PTE_PRESENT(pte[i]))
+-			return -EBUSY;
++		freelist = free_clear_pte(&pte[i], pte[i], freelist);
++
++	if (freelist != NULL)
++		dom->updated = true;
+ 
+ 	if (count > 1) {
+ 		__pte = PAGE_SIZE_PTE(__sme_set(phys_addr), page_size);
+@@ -1606,6 +1628,9 @@ static int iommu_map_page(struct protection_domain *dom,
+ 
+ 	update_domain(dom);
+ 
++	/* Everything flushed out, free pages now */
++	free_page_list(freelist);
++
+ 	return 0;
+ }
+ 
+
+From patchwork Fri Nov  9 11:07:12 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 10675735
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9CD2615A6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:07:35 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 8B9FA2E50D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:07:35 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 8002F2E62E; Fri,  9 Nov 2018 11:07:35 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1C6462E50D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  9 Nov 2018 11:07:35 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728409AbeKIUr3 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 9 Nov 2018 15:47:29 -0500
+Received: from 8bytes.org ([81.169.241.247]:48990 "EHLO theia.8bytes.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728344AbeKIUr2 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 9 Nov 2018 15:47:28 -0500
+Received: by theia.8bytes.org (Postfix, from userid 1000)
+        id 46B98547; Fri,  9 Nov 2018 12:07:20 +0100 (CET)
+From: Joerg Roedel <joro@8bytes.org>
+To: Alex Williamson <alex.williamson@redhat.com>,
+        Joerg Roedel <joro@8bytes.org>
+Cc: iommu@lists.linux-foundation.org, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jroedel@suse.de
+Subject: [PATCH 7/7] vfio/type1: Remove map_try_harder() code path
+Date: Fri,  9 Nov 2018 12:07:12 +0100
+Message-Id: <20181109110712.12469-8-joro@8bytes.org>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20181109110712.12469-1-joro@8bytes.org>
+References: <20181109110712.12469-1-joro@8bytes.org>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Joerg Roedel <jroedel@suse.de>
+
+The AMD IOMMU driver can now map a huge-page where smaller
+mappings existed before, so this code-path is no longer
+triggered.
+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+Acked-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ drivers/vfio/vfio_iommu_type1.c | 33 ++-------------------------------
+ 1 file changed, 2 insertions(+), 31 deletions(-)
+
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index d9fd3188615d..7651cfb14836 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -978,32 +978,6 @@ static int vfio_dma_do_unmap(struct vfio_iommu *iommu,
+ 	return ret;
+ }
+ 
+-/*
+- * Turns out AMD IOMMU has a page table bug where it won't map large pages
+- * to a region that previously mapped smaller pages.  This should be fixed
+- * soon, so this is just a temporary workaround to break mappings down into
+- * PAGE_SIZE.  Better to map smaller pages than nothing.
+- */
+-static int map_try_harder(struct vfio_domain *domain, dma_addr_t iova,
+-			  unsigned long pfn, long npage, int prot)
+-{
+-	long i;
+-	int ret = 0;
+-
+-	for (i = 0; i < npage; i++, pfn++, iova += PAGE_SIZE) {
+-		ret = iommu_map(domain->domain, iova,
+-				(phys_addr_t)pfn << PAGE_SHIFT,
+-				PAGE_SIZE, prot | domain->prot);
+-		if (ret)
+-			break;
+-	}
+-
+-	for (; i < npage && i > 0; i--, iova -= PAGE_SIZE)
+-		iommu_unmap(domain->domain, iova, PAGE_SIZE);
+-
+-	return ret;
+-}
+-
+ static int vfio_iommu_map(struct vfio_iommu *iommu, dma_addr_t iova,
+ 			  unsigned long pfn, long npage, int prot)
+ {
+@@ -1013,11 +987,8 @@ static int vfio_iommu_map(struct vfio_iommu *iommu, dma_addr_t iova,
+ 	list_for_each_entry(d, &iommu->domain_list, next) {
+ 		ret = iommu_map(d->domain, iova, (phys_addr_t)pfn << PAGE_SHIFT,
+ 				npage << PAGE_SHIFT, prot | d->prot);
+-		if (ret) {
+-			if (ret != -EBUSY ||
+-			    map_try_harder(d, iova, pfn, npage, prot))
+-				goto unwind;
+-		}
++		if (ret)
++			goto unwind;
+ 
+ 		cond_resched();
+ 	}

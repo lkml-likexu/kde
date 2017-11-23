@@ -1,0 +1,115 @@
+From patchwork Fri Nov  2 12:24:58 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Jean-Philippe Brucker <Jean-Philippe.Brucker@arm.com>
+X-Patchwork-Id: 10665369
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id EC49513BF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  2 Nov 2018 12:27:43 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D5B8C2B37D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  2 Nov 2018 12:27:43 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C9C6E2B399; Fri,  2 Nov 2018 12:27:43 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 57CE62B37D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  2 Nov 2018 12:27:43 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726290AbeKBVen (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 2 Nov 2018 17:34:43 -0400
+Received: from usa-sjc-mx-foss1.foss.arm.com ([217.140.101.70]:40928 "EHLO
+        foss.arm.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726008AbeKBVen (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 2 Nov 2018 17:34:43 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 84351A78;
+        Fri,  2 Nov 2018 05:27:41 -0700 (PDT)
+Received: from ostrya.cambridge.arm.com (ostrya.cambridge.arm.com
+ [10.1.196.78])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ B35D83F71E;
+        Fri,  2 Nov 2018 05:27:40 -0700 (PDT)
+From: Jean-Philippe Brucker <jean-philippe.brucker@arm.com>
+To: will.deacon@arm.com
+Cc: kvm@vger.kernel.org, steven.price@arm.com
+Subject: [PATCH kvmtool] virtio: Fix ordering of virt_queue__available()
+Date: Fri,  2 Nov 2018 12:24:58 +0000
+Message-Id: <20181102122458.14877-1-jean-philippe.brucker@arm.com>
+X-Mailer: git-send-email 2.19.1
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+After adding buffers to the virtio queue, the guest increments the avail
+index. It then reads the event index to check if it needs to notify the
+guest. If the event index corresponds to the previous avail value, then
+the guest notifies the host. Otherwise it means that the guest is still
+processing the queue and hasn't had a chance to increment the event
+index yet. Once it gets there, the host will see the new avail index and
+process the descriptors, so there is no need for a notification.
+
+This is only guaranteed to work if both threads write and read the
+indices in the right order. Currently a barrier is missing from
+virt_queue__available(), and the host may not see an up-to-date value of
+event index after writing avail.
+
+             HOST            |           GUEST
+                             |
+                             |    write avail = 1
+                             |    mb()
+                             |    read event -> 0
+        write event = 0      |      == prev_avail -> notify
+        read avail -> 1      |
+                             |
+        write event = 1      |
+        read avail -> 1      |
+        wait()               |    write avail = 2
+                             |    mb()
+                             |    read event -> 0
+                             |      != prev_avail -> no notification
+
+By adding a memory barrier on the host side, we ensure that it doesn't
+miss any notification.
+
+Reviewed-By: Steven Price <steven.price@arm.com>
+Signed-off-by: Jean-Philippe Brucker <jean-philippe.brucker@arm.com>
+---
+ include/kvm/virtio.h | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/include/kvm/virtio.h b/include/kvm/virtio.h
+index db758b125..72290fc58 100644
+--- a/include/kvm/virtio.h
++++ b/include/kvm/virtio.h
+@@ -124,8 +124,15 @@ static inline bool virt_queue__available(struct virt_queue *vq)
+ 	if (!vq->vring.avail)
+ 		return 0;
+ 
+-	if (vq->use_event_idx)
++	if (vq->use_event_idx) {
+ 		vring_avail_event(&vq->vring) = last_avail_idx;
++		/*
++		 * After the driver writes a new avail index, it reads the event
++		 * index to see if we need any notification. Ensure that it
++		 * reads the updated index, or else we'll miss the notification.
++		 */
++		mb();
++	}
+ 
+ 	return vq->vring.avail->idx != last_avail_idx;
+ }

@@ -1,0 +1,1634 @@
+From patchwork Fri Oct 12 05:16:25 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Lu Baolu <baolu.lu@linux.intel.com>
+X-Patchwork-Id: 10637869
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3608015E2
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:41 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2514A2BB13
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:41 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 1936B2BB2B; Fri, 12 Oct 2018 05:19:41 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 74D832BB13
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:40 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727281AbeJLMtY (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 12 Oct 2018 08:49:24 -0400
+Received: from mga11.intel.com ([192.55.52.93]:62493 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726969AbeJLMtX (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 12 Oct 2018 08:49:23 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 11 Oct 2018 22:18:44 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.54,371,1534834800";
+   d="scan'208";a="80842215"
+Received: from allen-box.sh.intel.com ([10.239.161.122])
+  by orsmga008.jf.intel.com with ESMTP; 11 Oct 2018 22:18:41 -0700
+From: Lu Baolu <baolu.lu@linux.intel.com>
+To: Joerg Roedel <joro@8bytes.org>,
+        David Woodhouse <dwmw2@infradead.org>,
+        Alex Williamson <alex.williamson@redhat.com>,
+        Kirti Wankhede <kwankhede@nvidia.com>
+Cc: ashok.raj@intel.com, sanjay.k.kumar@intel.com,
+        jacob.jun.pan@intel.com, kevin.tian@intel.com,
+        Jean-Philippe Brucker <jean-philippe.brucker@arm.com>,
+        yi.l.liu@intel.com, yi.y.sun@intel.com, peterx@redhat.com,
+        tiwei.bie@intel.com, iommu@lists.linux-foundation.org,
+        kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Lu Baolu <baolu.lu@linux.intel.com>,
+        Jacob Pan <jacob.jun.pan@linux.intel.com>
+Subject: [PATCH v3 1/8] iommu: Add APIs for multiple domains per device
+Date: Fri, 12 Oct 2018 13:16:25 +0800
+Message-Id: <20181012051632.26064-2-baolu.lu@linux.intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20181012051632.26064-1-baolu.lu@linux.intel.com>
+References: <20181012051632.26064-1-baolu.lu@linux.intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Sharing a physical PCI device in a finer-granularity way
+is becoming a consensus in the industry. IOMMU vendors
+are also engaging efforts to support such sharing as well
+as possible. Among the efforts, the capability of support
+finer-granularity DMA isolation is a common requirement
+due to the security consideration. With finer-granularity
+DMA isolation, all DMA requests out of or to a subset of
+a physical PCI device can be protected by the IOMMU. As a
+result, there is a request in software to attach multiple
+domains to a physical PCI device. One example of such use
+model is the Intel Scalable IOV [1] [2]. The Intel vt-d
+3.0 spec [3] introduces the scalable mode which enables
+PASID granularity DMA isolation.
+
+This adds the APIs to support multiple domains per device.
+In order to ease the discussions, we call it 'a domain in
+auxiliary mode' or simply 'auxiliary domain' when multiple
+domains are attached to a physical device.
+
+The APIs includes:
+
+* iommu_get_dev_attr(dev, IOMMU_DEV_ATTR_AUXD_CAPABILITY)
+  - Represents the ability of supporting multiple domains
+    per device.
+
+* iommu_set_dev_attr(dev, IOMMU_DEV_ATTR_AUXD_ENABLE)
+  - Enable the multiple domains capability for the device
+    referenced by @dev.
+
+* iommu_set_dev_attr(dev, IOMMU_DEV_ATTR_AUXD_DISABLE)
+  - Disable the multiple domains capability for the device
+    referenced by @dev.
+
+* iommu_domain_get_attr(domain, DOMAIN_ATTR_AUXD_ID)
+  - Return ID used for finer-granularity DMA translation.
+    For the Intel Scalable IOV usage model, this will be
+    a PASID. The device which supports Scalalbe IOV needs
+    to writes this ID to the device register so that DMA
+    requests could be tagged with a right PASID prefix.
+
+Many people involved in discussions of this design.
+
+Kevin Tian <kevin.tian@intel.com>
+Liu Yi L <yi.l.liu@intel.com>
+Ashok Raj <ashok.raj@intel.com>
+Sanjay Kumar <sanjay.k.kumar@intel.com>
+Jacob Pan <jacob.jun.pan@linux.intel.com>
+Alex Williamson <alex.williamson@redhat.com>
+Jean-Philippe Brucker <jean-philippe.brucker@arm.com>
+
+and some discussions can be found here [4].
+
+[1] https://software.intel.com/en-us/download/intel-scalable-io-virtualization-technical-specification
+[2] https://schd.ws/hosted_files/lc32018/00/LC3-SIOV-final.pdf
+[3] https://software.intel.com/en-us/download/intel-virtualization-technology-for-directed-io-architecture-specification
+[4] https://lkml.org/lkml/2018/7/26/4
+
+Cc: Ashok Raj <ashok.raj@intel.com>
+Cc: Jacob Pan <jacob.jun.pan@linux.intel.com>
+Cc: Kevin Tian <kevin.tian@intel.com>
+Cc: Liu Yi L <yi.l.liu@intel.com>
+Suggested-by: Kevin Tian <kevin.tian@intel.com>
+Suggested-by: Jean-Philippe Brucker <jean-philippe.brucker@arm.com>
+Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+---
+ drivers/iommu/iommu.c | 25 +++++++++++++++++++++++++
+ include/linux/iommu.h | 33 +++++++++++++++++++++++++++++++++
+ 2 files changed, 58 insertions(+)
+
+diff --git a/drivers/iommu/iommu.c b/drivers/iommu/iommu.c
+index 8c15c5980299..d06cfdcf38a7 100644
+--- a/drivers/iommu/iommu.c
++++ b/drivers/iommu/iommu.c
+@@ -2014,3 +2014,28 @@ int iommu_fwspec_add_ids(struct device *dev, u32 *ids, int num_ids)
+ 	return 0;
+ }
+ EXPORT_SYMBOL_GPL(iommu_fwspec_add_ids);
++
++/*
++ * Generic interfaces to get or set per device IOMMU attributions.
++ */
++int iommu_get_dev_attr(struct device *dev, enum iommu_dev_attr attr, void *data)
++{
++	const struct iommu_ops *ops = dev->bus->iommu_ops;
++
++	if (ops && ops->get_dev_attr)
++		return ops->get_dev_attr(dev, attr, data);
++
++	return -EINVAL;
++}
++EXPORT_SYMBOL_GPL(iommu_get_dev_attr);
++
++int iommu_set_dev_attr(struct device *dev, enum iommu_dev_attr attr, void *data)
++{
++	const struct iommu_ops *ops = dev->bus->iommu_ops;
++
++	if (ops && ops->set_dev_attr)
++		return ops->set_dev_attr(dev, attr, data);
++
++	return -EINVAL;
++}
++EXPORT_SYMBOL_GPL(iommu_set_dev_attr);
+diff --git a/include/linux/iommu.h b/include/linux/iommu.h
+index 87994c265bf5..0230b64cc6e9 100644
+--- a/include/linux/iommu.h
++++ b/include/linux/iommu.h
+@@ -125,6 +125,7 @@ enum iommu_attr {
+ 	DOMAIN_ATTR_FSL_PAMUV1,
+ 	DOMAIN_ATTR_NESTING,	/* two stages of translation */
+ 	DOMAIN_ATTR_MAX,
++	DOMAIN_ATTR_AUXD_ID,
+ };
+ 
+ /* These are the possible reserved region types */
+@@ -155,6 +156,13 @@ struct iommu_resv_region {
+ 	enum iommu_resv_type	type;
+ };
+ 
++/* Per device IOMMU attributions */
++enum iommu_dev_attr {
++	IOMMU_DEV_ATTR_AUXD_CAPABILITY,
++	IOMMU_DEV_ATTR_AUXD_ENABLE,
++	IOMMU_DEV_ATTR_AUXD_DISABLE,
++};
++
+ #ifdef CONFIG_IOMMU_API
+ 
+ /**
+@@ -184,6 +192,8 @@ struct iommu_resv_region {
+  * @domain_set_windows: Set the number of windows for a domain
+  * @domain_get_windows: Return the number of windows for a domain
+  * @of_xlate: add OF master IDs to iommu grouping
++ * @get_dev_attr: get per device IOMMU attributions
++ * @set_dev_attr: set per device IOMMU attributions
+  * @pgsize_bitmap: bitmap of all possible supported page sizes
+  */
+ struct iommu_ops {
+@@ -231,6 +241,12 @@ struct iommu_ops {
+ 	int (*of_xlate)(struct device *dev, struct of_phandle_args *args);
+ 	bool (*is_attach_deferred)(struct iommu_domain *domain, struct device *dev);
+ 
++	/* Get/set per device IOMMU attributions */
++	int (*get_dev_attr)(struct device *dev,
++			    enum iommu_dev_attr attr, void *data);
++	int (*set_dev_attr)(struct device *dev,
++			    enum iommu_dev_attr attr, void *data);
++
+ 	unsigned long pgsize_bitmap;
+ };
+ 
+@@ -400,6 +416,11 @@ void iommu_fwspec_free(struct device *dev);
+ int iommu_fwspec_add_ids(struct device *dev, u32 *ids, int num_ids);
+ const struct iommu_ops *iommu_ops_from_fwnode(struct fwnode_handle *fwnode);
+ 
++int iommu_get_dev_attr(struct device *dev,
++		       enum iommu_dev_attr attr, void *data);
++int iommu_set_dev_attr(struct device *dev,
++		       enum iommu_dev_attr attr, void *data);
++
+ #else /* CONFIG_IOMMU_API */
+ 
+ struct iommu_ops {};
+@@ -684,6 +705,18 @@ const struct iommu_ops *iommu_ops_from_fwnode(struct fwnode_handle *fwnode)
+ 	return NULL;
+ }
+ 
++static inline int
++iommu_get_dev_attr(struct device *dev, enum iommu_dev_attr attr, void *data)
++{
++	return -EINVAL;
++}
++
++static inline int
++iommu_set_dev_attr(struct device *dev, enum iommu_dev_attr attr, void *data)
++{
++	return -EINVAL;
++}
++
+ #endif /* CONFIG_IOMMU_API */
+ 
+ #ifdef CONFIG_IOMMU_DEBUGFS
+
+From patchwork Fri Oct 12 05:16:26 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Lu Baolu <baolu.lu@linux.intel.com>
+X-Patchwork-Id: 10637867
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E54DB13AD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:39 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D4E212BB13
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:39 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C94092BB2B; Fri, 12 Oct 2018 05:19:39 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2F6082BB13
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:39 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727401AbeJLMt1 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 12 Oct 2018 08:49:27 -0400
+Received: from mga11.intel.com ([192.55.52.93]:62493 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726969AbeJLMt1 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 12 Oct 2018 08:49:27 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 11 Oct 2018 22:18:48 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.54,371,1534834800";
+   d="scan'208";a="80842220"
+Received: from allen-box.sh.intel.com ([10.239.161.122])
+  by orsmga008.jf.intel.com with ESMTP; 11 Oct 2018 22:18:44 -0700
+From: Lu Baolu <baolu.lu@linux.intel.com>
+To: Joerg Roedel <joro@8bytes.org>,
+        David Woodhouse <dwmw2@infradead.org>,
+        Alex Williamson <alex.williamson@redhat.com>,
+        Kirti Wankhede <kwankhede@nvidia.com>
+Cc: ashok.raj@intel.com, sanjay.k.kumar@intel.com,
+        jacob.jun.pan@intel.com, kevin.tian@intel.com,
+        Jean-Philippe Brucker <jean-philippe.brucker@arm.com>,
+        yi.l.liu@intel.com, yi.y.sun@intel.com, peterx@redhat.com,
+        tiwei.bie@intel.com, iommu@lists.linux-foundation.org,
+        kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Lu Baolu <baolu.lu@linux.intel.com>,
+        Jacob Pan <jacob.jun.pan@linux.intel.com>
+Subject: [PATCH v3 2/8] iommu/vt-d: Add multiple domains per device query
+Date: Fri, 12 Oct 2018 13:16:26 +0800
+Message-Id: <20181012051632.26064-3-baolu.lu@linux.intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20181012051632.26064-1-baolu.lu@linux.intel.com>
+References: <20181012051632.26064-1-baolu.lu@linux.intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Add the response to IOMMU_DEV_ATTR_AUXD_CAPABILITY capability query
+through iommu_get_dev_attr().
+
+Cc: Ashok Raj <ashok.raj@intel.com>
+Cc: Jacob Pan <jacob.jun.pan@linux.intel.com>
+Cc: Kevin Tian <kevin.tian@intel.com>
+Cc: Liu Yi L <yi.l.liu@intel.com>
+Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+---
+ drivers/iommu/intel-iommu.c | 38 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 38 insertions(+)
+
+diff --git a/drivers/iommu/intel-iommu.c b/drivers/iommu/intel-iommu.c
+index 4b1f7426acea..3133216e5733 100644
+--- a/drivers/iommu/intel-iommu.c
++++ b/drivers/iommu/intel-iommu.c
+@@ -5170,6 +5170,24 @@ static phys_addr_t intel_iommu_iova_to_phys(struct iommu_domain *domain,
+ 	return phys;
+ }
+ 
++static inline bool scalable_mode_support(void)
++{
++	struct dmar_drhd_unit *drhd;
++	struct intel_iommu *iommu;
++	bool ret = true;
++
++	rcu_read_lock();
++	for_each_active_iommu(iommu, drhd) {
++		if (!sm_supported(iommu)) {
++			ret = false;
++			break;
++		}
++	}
++	rcu_read_unlock();
++
++	return ret;
++}
++
+ static bool intel_iommu_capable(enum iommu_cap cap)
+ {
+ 	if (cap == IOMMU_CAP_CACHE_COHERENCY)
+@@ -5334,6 +5352,25 @@ struct intel_iommu *intel_svm_device_to_iommu(struct device *dev)
+ }
+ #endif /* CONFIG_INTEL_IOMMU_SVM */
+ 
++static int intel_iommu_get_dev_attr(struct device *dev,
++				    enum iommu_dev_attr attr, void *data)
++{
++	int ret = 0;
++	bool *auxd_capable;
++
++	switch (attr) {
++	case IOMMU_DEV_ATTR_AUXD_CAPABILITY:
++		auxd_capable = data;
++		*auxd_capable = scalable_mode_support();
++		break;
++	default:
++		ret = -EINVAL;
++		break;
++	}
++
++	return ret;
++}
++
+ const struct iommu_ops intel_iommu_ops = {
+ 	.capable		= intel_iommu_capable,
+ 	.domain_alloc		= intel_iommu_domain_alloc,
+@@ -5348,6 +5385,7 @@ const struct iommu_ops intel_iommu_ops = {
+ 	.get_resv_regions	= intel_iommu_get_resv_regions,
+ 	.put_resv_regions	= intel_iommu_put_resv_regions,
+ 	.device_group		= pci_device_group,
++	.get_dev_attr		= intel_iommu_get_dev_attr,
+ 	.pgsize_bitmap		= INTEL_IOMMU_PGSIZES,
+ };
+ 
+
+From patchwork Fri Oct 12 05:16:27 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Lu Baolu <baolu.lu@linux.intel.com>
+X-Patchwork-Id: 10637853
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1B18413AD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:01 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 0AAE32BB13
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:01 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id F263B2BB3D; Fri, 12 Oct 2018 05:19:00 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7DDD42BB13
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:00 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727481AbeJLMtb (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 12 Oct 2018 08:49:31 -0400
+Received: from mga11.intel.com ([192.55.52.93]:62493 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726969AbeJLMtb (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 12 Oct 2018 08:49:31 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 11 Oct 2018 22:18:51 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.54,371,1534834800";
+   d="scan'208";a="80842227"
+Received: from allen-box.sh.intel.com ([10.239.161.122])
+  by orsmga008.jf.intel.com with ESMTP; 11 Oct 2018 22:18:48 -0700
+From: Lu Baolu <baolu.lu@linux.intel.com>
+To: Joerg Roedel <joro@8bytes.org>,
+        David Woodhouse <dwmw2@infradead.org>,
+        Alex Williamson <alex.williamson@redhat.com>,
+        Kirti Wankhede <kwankhede@nvidia.com>
+Cc: ashok.raj@intel.com, sanjay.k.kumar@intel.com,
+        jacob.jun.pan@intel.com, kevin.tian@intel.com,
+        Jean-Philippe Brucker <jean-philippe.brucker@arm.com>,
+        yi.l.liu@intel.com, yi.y.sun@intel.com, peterx@redhat.com,
+        tiwei.bie@intel.com, iommu@lists.linux-foundation.org,
+        kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Lu Baolu <baolu.lu@linux.intel.com>,
+        Jacob Pan <jacob.jun.pan@linux.intel.com>
+Subject: [PATCH v3 3/8] iommu/vt-d: Enable/disable multiple domains per device
+Date: Fri, 12 Oct 2018 13:16:27 +0800
+Message-Id: <20181012051632.26064-4-baolu.lu@linux.intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20181012051632.26064-1-baolu.lu@linux.intel.com>
+References: <20181012051632.26064-1-baolu.lu@linux.intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Add iommu ops for enabling and disabling multiple domains per
+device.
+
+Cc: Ashok Raj <ashok.raj@intel.com>
+Cc: Jacob Pan <jacob.jun.pan@linux.intel.com>
+Cc: Kevin Tian <kevin.tian@intel.com>
+Cc: Liu Yi L <yi.l.liu@intel.com>
+Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+---
+ drivers/iommu/intel-iommu.c | 57 +++++++++++++++++++++++++++++++++++++
+ include/linux/intel-iommu.h |  1 +
+ 2 files changed, 58 insertions(+)
+
+diff --git a/drivers/iommu/intel-iommu.c b/drivers/iommu/intel-iommu.c
+index 3133216e5733..27beda7f9d88 100644
+--- a/drivers/iommu/intel-iommu.c
++++ b/drivers/iommu/intel-iommu.c
+@@ -2476,6 +2476,7 @@ static struct dmar_domain *dmar_insert_one_dev_info(struct intel_iommu *iommu,
+ 	info->domain = domain;
+ 	info->iommu = iommu;
+ 	info->pasid_table = NULL;
++	info->auxd_enabled = 0;
+ 
+ 	if (dev && dev_is_pci(dev)) {
+ 		struct pci_dev *pdev = to_pci_dev(info->dev);
+@@ -5371,6 +5372,61 @@ static int intel_iommu_get_dev_attr(struct device *dev,
+ 	return ret;
+ }
+ 
++static int intel_iommu_enable_auxd(struct device *dev)
++{
++	struct device_domain_info *info;
++	struct dmar_domain *domain;
++	unsigned long flags;
++
++	if (!scalable_mode_support())
++		return -ENODEV;
++
++	domain = get_valid_domain_for_dev(dev);
++	if (!domain)
++		return -ENODEV;
++
++	spin_lock_irqsave(&device_domain_lock, flags);
++	info = dev->archdata.iommu;
++	info->auxd_enabled = 1;
++	spin_unlock_irqrestore(&device_domain_lock, flags);
++
++	return 0;
++}
++
++static int intel_iommu_disable_auxd(struct device *dev)
++{
++	struct device_domain_info *info;
++	unsigned long flags;
++
++	spin_lock_irqsave(&device_domain_lock, flags);
++	info = dev->archdata.iommu;
++	if (!WARN_ON(!info))
++		info->auxd_enabled = 0;
++	spin_unlock_irqrestore(&device_domain_lock, flags);
++
++	return 0;
++}
++
++static int intel_iommu_set_dev_attr(struct device *dev,
++				    enum iommu_dev_attr attr, void *data)
++{
++	int ret = 0;
++
++	switch (attr) {
++	case IOMMU_DEV_ATTR_AUXD_ENABLE:
++		ret = intel_iommu_enable_auxd(dev);
++		break;
++	case IOMMU_DEV_ATTR_AUXD_DISABLE:
++		ret = intel_iommu_disable_auxd(dev);
++		break;
++	default:
++		ret = -EINVAL;
++		break;
++	}
++
++	return ret;
++}
++
+ const struct iommu_ops intel_iommu_ops = {
+ 	.capable		= intel_iommu_capable,
+ 	.domain_alloc		= intel_iommu_domain_alloc,
+@@ -5386,6 +5442,7 @@ const struct iommu_ops intel_iommu_ops = {
+ 	.put_resv_regions	= intel_iommu_put_resv_regions,
+ 	.device_group		= pci_device_group,
+ 	.get_dev_attr		= intel_iommu_get_dev_attr,
++	.set_dev_attr		= intel_iommu_set_dev_attr,
+ 	.pgsize_bitmap		= INTEL_IOMMU_PGSIZES,
+ };
+ 
+diff --git a/include/linux/intel-iommu.h b/include/linux/intel-iommu.h
+index d174724e131f..6b198e13e75e 100644
+--- a/include/linux/intel-iommu.h
++++ b/include/linux/intel-iommu.h
+@@ -552,6 +552,7 @@ struct device_domain_info {
+ 	u8 pri_enabled:1;
+ 	u8 ats_supported:1;
+ 	u8 ats_enabled:1;
++	u8 auxd_enabled:1;	/* Multiple domains per device */
+ 	u8 ats_qdep;
+ 	struct device *dev; /* it's NULL for PCIe-to-PCI bridge */
+ 	struct intel_iommu *iommu; /* IOMMU used by this device */
+
+From patchwork Fri Oct 12 05:16:28 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Lu Baolu <baolu.lu@linux.intel.com>
+X-Patchwork-Id: 10637855
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 602315CAF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:01 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4AB212BB13
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:01 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 3EDB82BB2B; Fri, 12 Oct 2018 05:19:01 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 9F6092BB1B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:00 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727536AbeJLMtf (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 12 Oct 2018 08:49:35 -0400
+Received: from mga11.intel.com ([192.55.52.93]:62493 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726969AbeJLMte (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 12 Oct 2018 08:49:34 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 11 Oct 2018 22:18:55 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.54,371,1534834800";
+   d="scan'208";a="80842237"
+Received: from allen-box.sh.intel.com ([10.239.161.122])
+  by orsmga008.jf.intel.com with ESMTP; 11 Oct 2018 22:18:51 -0700
+From: Lu Baolu <baolu.lu@linux.intel.com>
+To: Joerg Roedel <joro@8bytes.org>,
+        David Woodhouse <dwmw2@infradead.org>,
+        Alex Williamson <alex.williamson@redhat.com>,
+        Kirti Wankhede <kwankhede@nvidia.com>
+Cc: ashok.raj@intel.com, sanjay.k.kumar@intel.com,
+        jacob.jun.pan@intel.com, kevin.tian@intel.com,
+        Jean-Philippe Brucker <jean-philippe.brucker@arm.com>,
+        yi.l.liu@intel.com, yi.y.sun@intel.com, peterx@redhat.com,
+        tiwei.bie@intel.com, iommu@lists.linux-foundation.org,
+        kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Lu Baolu <baolu.lu@linux.intel.com>,
+        Jacob Pan <jacob.jun.pan@linux.intel.com>
+Subject: [PATCH v3 4/8] iommu/vt-d: Attach/detach domains in auxiliary mode
+Date: Fri, 12 Oct 2018 13:16:28 +0800
+Message-Id: <20181012051632.26064-5-baolu.lu@linux.intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20181012051632.26064-1-baolu.lu@linux.intel.com>
+References: <20181012051632.26064-1-baolu.lu@linux.intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+When multiple domains per device has been enabled by the
+device driver, the device will tag the default PASID for
+the domain to all DMA traffics out of the subset of this
+device; and the IOMMU should translate the DMA requests
+in PASID granularity.
+
+This extends the intel_iommu_attach/detach_device() ops
+to support managing PASID granular translation structures
+when the device driver has enabled multiple domains per
+device.
+
+Cc: Ashok Raj <ashok.raj@intel.com>
+Cc: Jacob Pan <jacob.jun.pan@linux.intel.com>
+Cc: Kevin Tian <kevin.tian@intel.com>
+Cc: Liu Yi L <yi.l.liu@intel.com>
+Signed-off-by: Sanjay Kumar <sanjay.k.kumar@intel.com>
+Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+---
+ drivers/iommu/intel-iommu.c | 132 +++++++++++++++++++++++++++++++++++-
+ include/linux/intel-iommu.h |  10 +++
+ 2 files changed, 139 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/iommu/intel-iommu.c b/drivers/iommu/intel-iommu.c
+index 27beda7f9d88..3ca42b0e80df 100644
+--- a/drivers/iommu/intel-iommu.c
++++ b/drivers/iommu/intel-iommu.c
+@@ -2477,6 +2477,7 @@ static struct dmar_domain *dmar_insert_one_dev_info(struct intel_iommu *iommu,
+ 	info->iommu = iommu;
+ 	info->pasid_table = NULL;
+ 	info->auxd_enabled = 0;
++	INIT_LIST_HEAD(&info->auxiliary_domains);
+ 
+ 	if (dev && dev_is_pci(dev)) {
+ 		struct pci_dev *pdev = to_pci_dev(info->dev);
+@@ -5013,6 +5014,124 @@ static void intel_iommu_domain_free(struct iommu_domain *domain)
+ 	domain_exit(to_dmar_domain(domain));
+ }
+ 
++/*
++ * Check whether a @domain will be attached to the @dev in the
++ * auxiliary mode.
++ */
++static inline bool
++is_device_attach_aux_domain(struct device *dev, struct iommu_domain *domain)
++{
++	struct device_domain_info *info = dev->archdata.iommu;
++
++	return info && info->auxd_enabled &&
++			domain->type == IOMMU_DOMAIN_UNMANAGED;
++}
++
++static void auxiliary_link_device(struct dmar_domain *domain,
++				  struct device *dev)
++{
++	struct device_domain_info *info = dev->archdata.iommu;
++
++	assert_spin_locked(&device_domain_lock);
++	if (WARN_ON(!info))
++		return;
++
++	domain->auxd_refcnt++;
++	list_add(&domain->auxd, &info->auxiliary_domains);
++}
++
++static void auxiliary_unlink_device(struct dmar_domain *domain,
++				    struct device *dev)
++{
++	struct device_domain_info *info = dev->archdata.iommu;
++
++	assert_spin_locked(&device_domain_lock);
++	if (WARN_ON(!info))
++		return;
++
++	list_del(&domain->auxd);
++	domain->auxd_refcnt--;
++
++	if (!domain->auxd_refcnt && domain->default_pasid > 0)
++		intel_pasid_free_id(domain->default_pasid);
++}
++
++static int domain_add_dev_auxd(struct dmar_domain *domain,
++			       struct device *dev)
++{
++	int ret;
++	u8 bus, devfn;
++	unsigned long flags;
++	struct intel_iommu *iommu;
++
++	iommu = device_to_iommu(dev, &bus, &devfn);
++	if (!iommu)
++		return -ENODEV;
++
++	spin_lock_irqsave(&device_domain_lock, flags);
++	if (domain->default_pasid <= 0) {
++		domain->default_pasid = intel_pasid_alloc_id(domain, PASID_MIN,
++				intel_pasid_get_dev_max_id(dev), GFP_ATOMIC);
++		if (domain->default_pasid < 0) {
++			pr_err("Can't allocate default pasid\n");
++			ret = -ENODEV;
++			goto pasid_failed;
++		}
++	}
++
++	spin_lock(&iommu->lock);
++	ret = domain_attach_iommu(domain, iommu);
++	if (ret)
++		goto attach_failed;
++
++	/* Setup the PASID entry for mediated devices: */
++	ret = intel_pasid_setup_second_level(iommu, domain, dev,
++					     domain->default_pasid, false);
++	if (ret)
++		goto table_failed;
++	spin_unlock(&iommu->lock);
++
++	auxiliary_link_device(domain, dev);
++
++	spin_unlock_irqrestore(&device_domain_lock, flags);
++
++	return 0;
++
++table_failed:
++	domain_detach_iommu(domain, iommu);
++attach_failed:
++	spin_unlock(&iommu->lock);
++	if (!domain->auxd_refcnt && domain->default_pasid > 0)
++		intel_pasid_free_id(domain->default_pasid);
++pasid_failed:
++	spin_unlock_irqrestore(&device_domain_lock, flags);
++
++	return ret;
++}
++
++static void domain_remove_dev_aux(struct dmar_domain *domain,
++				  struct device *dev)
++{
++	struct device_domain_info *info;
++	struct intel_iommu *iommu;
++	unsigned long flags;
++
++	spin_lock_irqsave(&device_domain_lock, flags);
++	info = dev->archdata.iommu;
++	iommu = info->iommu;
++
++	intel_pasid_tear_down_second_level(iommu, domain,
++					   dev, domain->default_pasid);
++
++	auxiliary_unlink_device(domain, dev);
++
++	spin_lock(&iommu->lock);
++	domain_detach_iommu(domain, iommu);
++	spin_unlock(&iommu->lock);
++
++	spin_unlock_irqrestore(&device_domain_lock, flags);
++}
++
+ static int intel_iommu_attach_device(struct iommu_domain *domain,
+ 				     struct device *dev)
+ {
+@@ -5027,7 +5146,8 @@ static int intel_iommu_attach_device(struct iommu_domain *domain,
+ 	}
+ 
+ 	/* normally dev is not mapped */
+-	if (unlikely(domain_context_mapped(dev))) {
++	if (unlikely(domain_context_mapped(dev) &&
++		     !is_device_attach_aux_domain(dev, domain))) {
+ 		struct dmar_domain *old_domain;
+ 
+ 		old_domain = find_domain(dev);
+@@ -5074,13 +5194,19 @@ static int intel_iommu_attach_device(struct iommu_domain *domain,
+ 		dmar_domain->agaw--;
+ 	}
+ 
+-	return domain_add_dev_info(dmar_domain, dev);
++	if (is_device_attach_aux_domain(dev, domain))
++		return domain_add_dev_auxd(dmar_domain, dev);
++	else
++		return domain_add_dev_info(dmar_domain, dev);
+ }
+ 
+ static void intel_iommu_detach_device(struct iommu_domain *domain,
+ 				      struct device *dev)
+ {
+-	dmar_remove_one_dev_info(to_dmar_domain(domain), dev);
++	if (is_device_attach_aux_domain(dev, domain))
++		domain_remove_dev_aux(to_dmar_domain(domain), dev);
++	else
++		dmar_remove_one_dev_info(to_dmar_domain(domain), dev);
+ }
+ 
+ static int intel_iommu_map(struct iommu_domain *domain,
+diff --git a/include/linux/intel-iommu.h b/include/linux/intel-iommu.h
+index 6b198e13e75e..678c7fb05e74 100644
+--- a/include/linux/intel-iommu.h
++++ b/include/linux/intel-iommu.h
+@@ -473,9 +473,11 @@ struct dmar_domain {
+ 					/* Domain ids per IOMMU. Use u16 since
+ 					 * domain ids are 16 bit wide according
+ 					 * to VT-d spec, section 9.3 */
++	unsigned int	auxd_refcnt;	/* Refcount of auxiliary attaching */
+ 
+ 	bool has_iotlb_device;
+ 	struct list_head devices;	/* all devices' list */
++	struct list_head auxd;		/* link to device's auxiliary list */
+ 	struct iova_domain iovad;	/* iova's that belong to this domain */
+ 
+ 	struct dma_pte	*pgd;		/* virtual address */
+@@ -494,6 +496,11 @@ struct dmar_domain {
+ 					   2 == 1GiB, 3 == 512GiB, 4 == 1TiB */
+ 	u64		max_addr;	/* maximum mapped address */
+ 
++	int		default_pasid;	/*
++					 * The default pasid used for non-SVM
++					 * traffic on mediated devices.
++					 */
++
+ 	struct iommu_domain domain;	/* generic domain data structure for
+ 					   iommu core */
+ };
+@@ -543,6 +550,9 @@ struct device_domain_info {
+ 	struct list_head link;	/* link to domain siblings */
+ 	struct list_head global; /* link to global list */
+ 	struct list_head table;	/* link to pasid table */
++	struct list_head auxiliary_domains; /* auxiliary domains
++					     * attached to this device
++					     */
+ 	u8 bus;			/* PCI bus number */
+ 	u8 devfn;		/* PCI devfn number */
+ 	u16 pfsid;		/* SRIOV physical function source ID */
+
+From patchwork Fri Oct 12 05:16:29 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Lu Baolu <baolu.lu@linux.intel.com>
+X-Patchwork-Id: 10637857
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 5410713AD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:02 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 435EF2BB13
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:02 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 377F22BB2B; Fri, 12 Oct 2018 05:19:02 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D37522BB13
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:01 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727567AbeJLMtj (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 12 Oct 2018 08:49:39 -0400
+Received: from mga11.intel.com ([192.55.52.93]:62493 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726969AbeJLMti (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 12 Oct 2018 08:49:38 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 11 Oct 2018 22:18:59 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.54,371,1534834800";
+   d="scan'208";a="80842247"
+Received: from allen-box.sh.intel.com ([10.239.161.122])
+  by orsmga008.jf.intel.com with ESMTP; 11 Oct 2018 22:18:55 -0700
+From: Lu Baolu <baolu.lu@linux.intel.com>
+To: Joerg Roedel <joro@8bytes.org>,
+        David Woodhouse <dwmw2@infradead.org>,
+        Alex Williamson <alex.williamson@redhat.com>,
+        Kirti Wankhede <kwankhede@nvidia.com>
+Cc: ashok.raj@intel.com, sanjay.k.kumar@intel.com,
+        jacob.jun.pan@intel.com, kevin.tian@intel.com,
+        Jean-Philippe Brucker <jean-philippe.brucker@arm.com>,
+        yi.l.liu@intel.com, yi.y.sun@intel.com, peterx@redhat.com,
+        tiwei.bie@intel.com, iommu@lists.linux-foundation.org,
+        kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Lu Baolu <baolu.lu@linux.intel.com>,
+        Jacob Pan <jacob.jun.pan@linux.intel.com>
+Subject: [PATCH v3 5/8] iommu/vt-d: Return ID associated with an auxiliary
+ domain
+Date: Fri, 12 Oct 2018 13:16:29 +0800
+Message-Id: <20181012051632.26064-6-baolu.lu@linux.intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20181012051632.26064-1-baolu.lu@linux.intel.com>
+References: <20181012051632.26064-1-baolu.lu@linux.intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+This adds support to return the default pasid associated with
+an auxiliary domain. The PCI device which is bound with this
+domain should use this value as the pasid for all DMA requests
+of the subset of device which is isolated and protected with
+this domain.
+
+Cc: Ashok Raj <ashok.raj@intel.com>
+Cc: Jacob Pan <jacob.jun.pan@linux.intel.com>
+Cc: Kevin Tian <kevin.tian@intel.com>
+Cc: Liu Yi L <yi.l.liu@intel.com>
+Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+---
+ drivers/iommu/intel-iommu.c | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/drivers/iommu/intel-iommu.c b/drivers/iommu/intel-iommu.c
+index 3ca42b0e80df..4dc41232a0d6 100644
+--- a/drivers/iommu/intel-iommu.c
++++ b/drivers/iommu/intel-iommu.c
+@@ -5553,6 +5553,27 @@ static int intel_iommu_set_dev_attr(struct device *dev,
+ 	return ret;
+ }
+ 
++static int intel_iommu_domain_get_attr(struct iommu_domain *domain,
++				       enum iommu_attr attr, void *data)
++{
++	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
++	int ret = -EINVAL, *id;
++
++	switch (attr) {
++	case DOMAIN_ATTR_AUXD_ID:
++		if (dmar_domain->default_pasid > 0) {
++			ret = 0;
++			id = data;
++			*id = dmar_domain->default_pasid;
++		}
++		break;
++	default:
++		break;
++	}
++
++	return ret;
++}
++
+ const struct iommu_ops intel_iommu_ops = {
+ 	.capable		= intel_iommu_capable,
+ 	.domain_alloc		= intel_iommu_domain_alloc,
+@@ -5567,6 +5588,7 @@ const struct iommu_ops intel_iommu_ops = {
+ 	.get_resv_regions	= intel_iommu_get_resv_regions,
+ 	.put_resv_regions	= intel_iommu_put_resv_regions,
+ 	.device_group		= pci_device_group,
++	.domain_get_attr	= intel_iommu_domain_get_attr,
+ 	.get_dev_attr		= intel_iommu_get_dev_attr,
+ 	.set_dev_attr		= intel_iommu_set_dev_attr,
+ 	.pgsize_bitmap		= INTEL_IOMMU_PGSIZES,
+
+From patchwork Fri Oct 12 05:16:30 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Lu Baolu <baolu.lu@linux.intel.com>
+X-Patchwork-Id: 10637863
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9322813AD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:24 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 82D852BB13
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:24 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 771E52BB2B; Fri, 12 Oct 2018 05:19:24 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 010B42BB13
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:23 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727616AbeJLMtm (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 12 Oct 2018 08:49:42 -0400
+Received: from mga11.intel.com ([192.55.52.93]:62493 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726969AbeJLMtl (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 12 Oct 2018 08:49:41 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 11 Oct 2018 22:19:02 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.54,371,1534834800";
+   d="scan'208";a="80842257"
+Received: from allen-box.sh.intel.com ([10.239.161.122])
+  by orsmga008.jf.intel.com with ESMTP; 11 Oct 2018 22:18:59 -0700
+From: Lu Baolu <baolu.lu@linux.intel.com>
+To: Joerg Roedel <joro@8bytes.org>,
+        David Woodhouse <dwmw2@infradead.org>,
+        Alex Williamson <alex.williamson@redhat.com>,
+        Kirti Wankhede <kwankhede@nvidia.com>
+Cc: ashok.raj@intel.com, sanjay.k.kumar@intel.com,
+        jacob.jun.pan@intel.com, kevin.tian@intel.com,
+        Jean-Philippe Brucker <jean-philippe.brucker@arm.com>,
+        yi.l.liu@intel.com, yi.y.sun@intel.com, peterx@redhat.com,
+        tiwei.bie@intel.com, iommu@lists.linux-foundation.org,
+        kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Lu Baolu <baolu.lu@linux.intel.com>,
+        Jacob Pan <jacob.jun.pan@linux.intel.com>
+Subject: [PATCH v3 6/8] vfio/mdev: Add iommu place holders in mdev_device
+Date: Fri, 12 Oct 2018 13:16:30 +0800
+Message-Id: <20181012051632.26064-7-baolu.lu@linux.intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20181012051632.26064-1-baolu.lu@linux.intel.com>
+References: <20181012051632.26064-1-baolu.lu@linux.intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+A parent device might create different types of mediated
+devices. For example, a mediated device could be created
+by the parent device with full isolation and protection
+provided by the IOMMU. One usage case could be found on
+Intel platforms where a mediated device is an assignable
+subset of a PCI, the DMA requests on behalf of it are all
+tagged with a PASID. Since IOMMU supports PASID-granular
+translations (scalable mode in vt-d 3.0), this mediated
+device could be individually protected and isolated by an
+IOMMU.
+
+This patch adds two new members in struct mdev_device:
+* iommu_device
+  - This, if set, indicates that the mediated device could
+    be fully isolated and protected by IOMMU via attaching
+    an iommu domain to this device. If empty, it indicates
+    using vendor defined isolation.
+
+* iommu_domain
+  - This is a place holder for an iommu domain. A domain
+    could be store here for later use once it has been
+    attached to the iommu_device of this mdev.
+
+Below helpers are added to set and get above iommu device
+and iommu domain pointers.
+
+* mdev_set/get_iommu_device(dev, iommu_device)
+  - Set or get the iommu device which represents this mdev
+    in IOMMU's device scope. Drivers don't need to set the
+    iommu device if it uses vendor defined isolation.
+
+* mdev_set/get_iommu_domain(domain)
+  - A iommu domain which has been attached to the iommu
+    device in order to protect and isolate the mediated
+    device will be kept in the mdev data structure and
+    could be retrieved later.
+
+Cc: Ashok Raj <ashok.raj@intel.com>
+Cc: Jacob Pan <jacob.jun.pan@linux.intel.com>
+Cc: Kevin Tian <kevin.tian@intel.com>
+Cc: Liu Yi L <yi.l.liu@intel.com>
+Suggested-by: Kevin Tian <kevin.tian@intel.com>
+Suggested-by: Alex Williamson <alex.williamson@redhat.com>
+Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+---
+ drivers/vfio/mdev/mdev_core.c    | 36 ++++++++++++++++++++++++++++++++
+ drivers/vfio/mdev/mdev_private.h |  2 ++
+ include/linux/mdev.h             | 23 ++++++++++++++++++++
+ 3 files changed, 61 insertions(+)
+
+diff --git a/drivers/vfio/mdev/mdev_core.c b/drivers/vfio/mdev/mdev_core.c
+index 0212f0ee8aea..5119809225c5 100644
+--- a/drivers/vfio/mdev/mdev_core.c
++++ b/drivers/vfio/mdev/mdev_core.c
+@@ -390,6 +390,42 @@ int mdev_device_remove(struct device *dev, bool force_remove)
+ 	return 0;
+ }
+ 
++int mdev_set_iommu_device(struct device *dev, struct device *iommu_device)
++{
++	struct mdev_device *mdev = to_mdev_device(dev);
++
++	mdev->iommu_device = iommu_device;
++
++	return 0;
++}
++EXPORT_SYMBOL(mdev_set_iommu_device);
++
++struct device *mdev_get_iommu_device(struct device *dev)
++{
++	struct mdev_device *mdev = to_mdev_device(dev);
++
++	return mdev->iommu_device;
++}
++EXPORT_SYMBOL(mdev_get_iommu_device);
++
++int mdev_set_iommu_domain(struct device *dev, void *domain)
++{
++	struct mdev_device *mdev = to_mdev_device(dev);
++
++	mdev->iommu_domain = domain;
++
++	return 0;
++}
++EXPORT_SYMBOL(mdev_set_iommu_domain);
++
++void *mdev_get_iommu_domain(struct device *dev)
++{
++	struct mdev_device *mdev = to_mdev_device(dev);
++
++	return mdev->iommu_domain;
++}
++EXPORT_SYMBOL(mdev_get_iommu_domain);
++
+ static int __init mdev_init(void)
+ {
+ 	return mdev_bus_register();
+diff --git a/drivers/vfio/mdev/mdev_private.h b/drivers/vfio/mdev/mdev_private.h
+index b5819b7d7ef7..c01518068e84 100644
+--- a/drivers/vfio/mdev/mdev_private.h
++++ b/drivers/vfio/mdev/mdev_private.h
+@@ -34,6 +34,8 @@ struct mdev_device {
+ 	struct list_head next;
+ 	struct kobject *type_kobj;
+ 	bool active;
++	struct device *iommu_device;
++	void *iommu_domain;
+ };
+ 
+ #define to_mdev_device(dev)	container_of(dev, struct mdev_device, dev)
+diff --git a/include/linux/mdev.h b/include/linux/mdev.h
+index b6e048e1045f..c46777d3e568 100644
+--- a/include/linux/mdev.h
++++ b/include/linux/mdev.h
+@@ -14,6 +14,29 @@
+ #define MDEV_H
+ 
+ struct mdev_device;
++struct iommu_domain;
++
++/*
++ * Called by the parent device driver to set the PCI device which represents
++ * this mdev in iommu protection scope. By default, the iommu device is NULL,
++ * that indicates using vendor defined isolation.
++ *
++ * @dev: the mediated device that iommu will isolate.
++ * @iommu_device: a pci device which represents the iommu for @dev.
++ *
++ * Return 0 for success, otherwise negative error value.
++ */
++int mdev_set_iommu_device(struct device *dev, struct device *iommu_device);
++
++struct device *mdev_get_iommu_device(struct device *dev);
++
++/*
++ * Called by vfio iommu modules to save the iommu domain after a domain being
++ * attached to the mediated device.
++ */
++int mdev_set_iommu_domain(struct device *dev, void *domain);
++
++void *mdev_get_iommu_domain(struct device *dev);
+ 
+ /**
+  * struct mdev_parent_ops - Structure to be registered for each parent device to
+
+From patchwork Fri Oct 12 05:16:31 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Lu Baolu <baolu.lu@linux.intel.com>
+X-Patchwork-Id: 10637859
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C926613AD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:12 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B88AE2BB13
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:12 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id AC7C62BB2B; Fri, 12 Oct 2018 05:19:12 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2E5822BB13
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727668AbeJLMtq (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 12 Oct 2018 08:49:46 -0400
+Received: from mga11.intel.com ([192.55.52.93]:62493 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727610AbeJLMtp (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 12 Oct 2018 08:49:45 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 11 Oct 2018 22:19:06 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.54,371,1534834800";
+   d="scan'208";a="80842263"
+Received: from allen-box.sh.intel.com ([10.239.161.122])
+  by orsmga008.jf.intel.com with ESMTP; 11 Oct 2018 22:19:02 -0700
+From: Lu Baolu <baolu.lu@linux.intel.com>
+To: Joerg Roedel <joro@8bytes.org>,
+        David Woodhouse <dwmw2@infradead.org>,
+        Alex Williamson <alex.williamson@redhat.com>,
+        Kirti Wankhede <kwankhede@nvidia.com>
+Cc: ashok.raj@intel.com, sanjay.k.kumar@intel.com,
+        jacob.jun.pan@intel.com, kevin.tian@intel.com,
+        Jean-Philippe Brucker <jean-philippe.brucker@arm.com>,
+        yi.l.liu@intel.com, yi.y.sun@intel.com, peterx@redhat.com,
+        tiwei.bie@intel.com, iommu@lists.linux-foundation.org,
+        kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Lu Baolu <baolu.lu@linux.intel.com>,
+        Jacob Pan <jacob.jun.pan@linux.intel.com>
+Subject: [PATCH v3 7/8] vfio/type1: Add domain at(de)taching group helpers
+Date: Fri, 12 Oct 2018 13:16:31 +0800
+Message-Id: <20181012051632.26064-8-baolu.lu@linux.intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20181012051632.26064-1-baolu.lu@linux.intel.com>
+References: <20181012051632.26064-1-baolu.lu@linux.intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+This adds helpers to attach or detach a domain to a
+group. This will replace iommu_attach_group() which
+only works for pci devices.
+
+If a domain is attaching to a group which includes the
+mediated devices, it should attach to the iommu device
+(a pci device which represents the mdev in iommu scope)
+instead. The added helper supports attaching domain to
+groups for both pci and mdev devices.
+
+Cc: Ashok Raj <ashok.raj@intel.com>
+Cc: Jacob Pan <jacob.jun.pan@linux.intel.com>
+Cc: Kevin Tian <kevin.tian@intel.com>
+Cc: Liu Yi L <yi.l.liu@intel.com>
+Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+---
+ drivers/vfio/vfio_iommu_type1.c | 98 ++++++++++++++++++++++++++++++---
+ 1 file changed, 91 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index d9fd3188615d..3617499c95c9 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -91,6 +91,7 @@ struct vfio_dma {
+ struct vfio_group {
+ 	struct iommu_group	*iommu_group;
+ 	struct list_head	next;
++	bool			mdev_group;	/* An mdev group */
+ };
+ 
+ /*
+@@ -1327,6 +1328,89 @@ static bool vfio_iommu_has_sw_msi(struct iommu_group *group, phys_addr_t *base)
+ 	return ret;
+ }
+ 
++static struct device *vfio_mdev_get_iommu_device(struct device *dev)
++{
++	struct device *(*fn)(struct device *dev);
++	struct device *iommu_parent;
++
++	fn = symbol_get(mdev_get_iommu_device);
++	if (fn) {
++		iommu_parent = fn(dev);
++		symbol_put(mdev_get_iommu_device);
++
++		return iommu_parent;
++	}
++
++	return NULL;
++}
++
++static int vfio_mdev_set_domain(struct device *dev, struct iommu_domain *domain)
++{
++	int (*fn)(struct device *dev, void *domain);
++	int ret;
++
++	fn = symbol_get(mdev_set_iommu_domain);
++	if (fn) {
++		ret = fn(dev, domain);
++		symbol_put(mdev_set_iommu_domain);
++
++		return ret;
++	}
++
++	return -EINVAL;
++}
++
++static int vfio_mdev_attach_domain(struct device *dev, void *data)
++{
++	struct iommu_domain *domain = data;
++	struct device *iommu_device;
++	int ret;
++
++	ret = vfio_mdev_set_domain(dev, domain);
++	if (ret)
++		return ret;
++
++	iommu_device = vfio_mdev_get_iommu_device(dev);
++	if (iommu_device)
++		return iommu_attach_device(domain, iommu_device);
++
++	return -EINVAL;
++}
++
++static int vfio_mdev_detach_domain(struct device *dev, void *data)
++{
++	struct iommu_domain *domain = data;
++	struct device *iommu_device;
++
++	vfio_mdev_set_domain(dev, NULL);
++	iommu_device = vfio_mdev_get_iommu_device(dev);
++	if (iommu_device)
++		iommu_detach_device(domain, iommu_device);
++
++	return 0;
++}
++
++static int vfio_iommu_attach_group(struct vfio_domain *domain,
++				   struct vfio_group *group)
++{
++	if (group->mdev_group)
++		return iommu_group_for_each_dev(group->iommu_group,
++						domain->domain,
++						vfio_mdev_attach_domain);
++	else
++		return iommu_attach_group(domain->domain, group->iommu_group);
++}
++
++static void vfio_iommu_detach_group(struct vfio_domain *domain,
++				    struct vfio_group *group)
++{
++	if (group->mdev_group)
++		iommu_group_for_each_dev(group->iommu_group, domain->domain,
++					 vfio_mdev_detach_domain);
++	else
++		iommu_detach_group(domain->domain, group->iommu_group);
++}
++
+ static int vfio_iommu_type1_attach_group(void *iommu_data,
+ 					 struct iommu_group *iommu_group)
+ {
+@@ -1402,7 +1486,7 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
+ 			goto out_domain;
+ 	}
+ 
+-	ret = iommu_attach_group(domain->domain, iommu_group);
++	ret = vfio_iommu_attach_group(domain, group);
+ 	if (ret)
+ 		goto out_domain;
+ 
+@@ -1434,8 +1518,8 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
+ 	list_for_each_entry(d, &iommu->domain_list, next) {
+ 		if (d->domain->ops == domain->domain->ops &&
+ 		    d->prot == domain->prot) {
+-			iommu_detach_group(domain->domain, iommu_group);
+-			if (!iommu_attach_group(d->domain, iommu_group)) {
++			vfio_iommu_detach_group(domain, group);
++			if (!vfio_iommu_attach_group(d, group)) {
+ 				list_add(&group->next, &d->group_list);
+ 				iommu_domain_free(domain->domain);
+ 				kfree(domain);
+@@ -1443,7 +1527,7 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
+ 				return 0;
+ 			}
+ 
+-			ret = iommu_attach_group(domain->domain, iommu_group);
++			ret = vfio_iommu_attach_group(domain, group);
+ 			if (ret)
+ 				goto out_domain;
+ 		}
+@@ -1469,7 +1553,7 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
+ 	return 0;
+ 
+ out_detach:
+-	iommu_detach_group(domain->domain, iommu_group);
++	vfio_iommu_detach_group(domain, group);
+ out_domain:
+ 	iommu_domain_free(domain->domain);
+ out_free:
+@@ -1560,7 +1644,7 @@ static void vfio_iommu_type1_detach_group(void *iommu_data,
+ 		if (!group)
+ 			continue;
+ 
+-		iommu_detach_group(domain->domain, iommu_group);
++		vfio_iommu_detach_group(domain, group);
+ 		list_del(&group->next);
+ 		kfree(group);
+ 		/*
+@@ -1625,7 +1709,7 @@ static void vfio_release_domain(struct vfio_domain *domain, bool external)
+ 	list_for_each_entry_safe(group, group_tmp,
+ 				 &domain->group_list, next) {
+ 		if (!external)
+-			iommu_detach_group(domain->domain, group->iommu_group);
++			vfio_iommu_detach_group(domain, group);
+ 		list_del(&group->next);
+ 		kfree(group);
+ 	}
+
+From patchwork Fri Oct 12 05:16:32 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Lu Baolu <baolu.lu@linux.intel.com>
+X-Patchwork-Id: 10637865
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9FA5C13AD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:37 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 8E9192BB13
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:37 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 82BA12BB2B; Fri, 12 Oct 2018 05:19:37 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 241612BB13
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Oct 2018 05:19:37 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727727AbeJLMuK (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 12 Oct 2018 08:50:10 -0400
+Received: from mga11.intel.com ([192.55.52.93]:62564 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727227AbeJLMuK (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 12 Oct 2018 08:50:10 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 11 Oct 2018 22:19:30 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.54,371,1534834800";
+   d="scan'208";a="80842274"
+Received: from allen-box.sh.intel.com ([10.239.161.122])
+  by orsmga008.jf.intel.com with ESMTP; 11 Oct 2018 22:19:05 -0700
+From: Lu Baolu <baolu.lu@linux.intel.com>
+To: Joerg Roedel <joro@8bytes.org>,
+        David Woodhouse <dwmw2@infradead.org>,
+        Alex Williamson <alex.williamson@redhat.com>,
+        Kirti Wankhede <kwankhede@nvidia.com>
+Cc: ashok.raj@intel.com, sanjay.k.kumar@intel.com,
+        jacob.jun.pan@intel.com, kevin.tian@intel.com,
+        Jean-Philippe Brucker <jean-philippe.brucker@arm.com>,
+        yi.l.liu@intel.com, yi.y.sun@intel.com, peterx@redhat.com,
+        tiwei.bie@intel.com, iommu@lists.linux-foundation.org,
+        kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Lu Baolu <baolu.lu@linux.intel.com>,
+        Jacob Pan <jacob.jun.pan@linux.intel.com>
+Subject: [PATCH v3 8/8] vfio/type1: Handle different mdev isolation type
+Date: Fri, 12 Oct 2018 13:16:32 +0800
+Message-Id: <20181012051632.26064-9-baolu.lu@linux.intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20181012051632.26064-1-baolu.lu@linux.intel.com>
+References: <20181012051632.26064-1-baolu.lu@linux.intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+This adds the support to determine the isolation type
+of a mediated device group by checking whether it has
+an iommu device. If an iommu device exists, an iommu
+domain will be allocated and then attached to the iommu
+device. Otherwise, keep the same behavior as it is.
+
+Cc: Ashok Raj <ashok.raj@intel.com>
+Cc: Jacob Pan <jacob.jun.pan@linux.intel.com>
+Cc: Kevin Tian <kevin.tian@intel.com>
+Cc: Liu Yi L <yi.l.liu@intel.com>
+Signed-off-by: Sanjay Kumar <sanjay.k.kumar@intel.com>
+Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+---
+ drivers/vfio/vfio_iommu_type1.c | 48 ++++++++++++++++++++++++++++-----
+ 1 file changed, 42 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index 3617499c95c9..471a95e6da66 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -1411,13 +1411,40 @@ static void vfio_iommu_detach_group(struct vfio_domain *domain,
+ 		iommu_detach_group(domain->domain, group->iommu_group);
+ }
+ 
++static bool vfio_bus_is_mdev(struct bus_type *bus)
++{
++	struct bus_type *mdev_bus;
++	bool ret = false;
++
++	mdev_bus = symbol_get(mdev_bus_type);
++	if (mdev_bus) {
++		ret = (bus == mdev_bus);
++		symbol_put(mdev_bus_type);
++	}
++
++	return ret;
++}
++
++static int vfio_mdev_iommu_device(struct device *dev, void *data)
++{
++	struct device **old = data, *new;
++
++	new = vfio_mdev_get_iommu_device(dev);
++	if (*old && *old != new)
++		return -EINVAL;
++
++	*old = new;
++
++	return 0;
++}
++
+ static int vfio_iommu_type1_attach_group(void *iommu_data,
+ 					 struct iommu_group *iommu_group)
+ {
+ 	struct vfio_iommu *iommu = iommu_data;
+ 	struct vfio_group *group;
+ 	struct vfio_domain *domain, *d;
+-	struct bus_type *bus = NULL, *mdev_bus;
++	struct bus_type *bus = NULL;
+ 	int ret;
+ 	bool resv_msi, msi_remap;
+ 	phys_addr_t resv_msi_base;
+@@ -1452,11 +1479,18 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
+ 	if (ret)
+ 		goto out_free;
+ 
+-	mdev_bus = symbol_get(mdev_bus_type);
++	if (vfio_bus_is_mdev(bus)) {
++		struct device *iommu_device = NULL;
+ 
+-	if (mdev_bus) {
+-		if ((bus == mdev_bus) && !iommu_present(bus)) {
+-			symbol_put(mdev_bus_type);
++		group->mdev_group = true;
++
++		/* Determine the isolation type */
++		ret = iommu_group_for_each_dev(iommu_group, &iommu_device,
++					       vfio_mdev_iommu_device);
++		if (ret)
++			goto out_free;
++
++		if (!iommu_device) {
+ 			if (!iommu->external_domain) {
+ 				INIT_LIST_HEAD(&domain->group_list);
+ 				iommu->external_domain = domain;
+@@ -1466,9 +1500,11 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
+ 			list_add(&group->next,
+ 				 &iommu->external_domain->group_list);
+ 			mutex_unlock(&iommu->lock);
++
+ 			return 0;
+ 		}
+-		symbol_put(mdev_bus_type);
++
++		bus = iommu_device->bus;
+ 	}
+ 
+ 	domain->domain = iommu_domain_alloc(bus);

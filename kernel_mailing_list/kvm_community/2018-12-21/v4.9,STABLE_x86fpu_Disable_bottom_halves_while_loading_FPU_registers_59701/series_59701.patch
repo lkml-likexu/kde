@@ -1,0 +1,142 @@
+From patchwork Fri Dec 21 16:23:38 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: 'Sebastian Andrzej Siewior' <bigeasy@linutronix.de>
+X-Patchwork-Id: 10740683
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id EAD7C924
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 21 Dec 2018 16:24:01 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D617327FB7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 21 Dec 2018 16:24:01 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C6DDE28047; Fri, 21 Dec 2018 16:24:01 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4FDAD27FB7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 21 Dec 2018 16:24:00 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2388673AbeLUQXz convert rfc822-to-8bit (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 21 Dec 2018 11:23:55 -0500
+Received: from Galois.linutronix.de ([146.0.238.70]:35027 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S2388202AbeLUQXy (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 21 Dec 2018 11:23:54 -0500
+Received: from bigeasy by Galois.linutronix.de with local (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1gaNaM-0004aJ-UV; Fri, 21 Dec 2018 17:23:39 +0100
+Date: Fri, 21 Dec 2018 17:23:38 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Cc: Borislav Petkov <bp@alien8.de>,
+ Jari Ruusu <jariruusu@users.sourceforge.net>, linux-kernel@vger.kernel.org,
+ stable@vger.kernel.org, Ingo Molnar <mingo@kernel.org>,
+ Thomas Gleixner <tglx@linutronix.de>, Andy Lutomirski <luto@kernel.org>,
+ Dave Hansen <dave.hansen@linux.intel.com>, "H. Peter Anvin" <hpa@zytor.com>,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, kvm ML <kvm@vger.kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ Radim =?utf-8?b?S3I/bcOhPw==?= <rkrcmar@redhat.com>,
+ Rik van Riel <riel@surriel.com>, x86-ml <x86@kernel.org>
+Subject: [PATCH v4.9 STABLE] x86/fpu: Disable bottom halves while loading FPU
+ registers
+Message-ID: <20181221162338.dir7z3c76kucm6uh@linutronix.de>
+References: <20181204103726.750894136@linuxfoundation.org>
+ <20181204103731.697870447@linuxfoundation.org>
+ <5C07FC30.43601034@users.sourceforge.net>
+ <20181205190020.GO29510@zn.tnic>
+ <20181206105407.GH19891@kroah.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: inline
+In-Reply-To: <20181206105407.GH19891@kroah.com>
+User-Agent: NeoMutt/20180716
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+The sequence
+
+  fpu->initialized = 1;		/* step A */
+  preempt_disable();		/* step B */
+  fpu__restore(fpu);
+  preempt_enable();
+
+in __fpu__restore_sig() is racy in regard to a context switch.
+
+For 32bit frames, __fpu__restore_sig() prepares the FPU state within
+fpu->state. To ensure that a context switch (switch_fpu_prepare() in
+particular) does not modify fpu->state it uses fpu__drop() which sets
+fpu->initialized to 0.
+
+After fpu->initialized is cleared, the CPU's FPU state is not saved
+to fpu->state during a context switch. The new state is loaded via
+fpu__restore(). It gets loaded into fpu->state from userland and
+ensured it is sane. fpu->initialized is then set to 1 in order to avoid
+fpu__initialize() doing anything (overwrite the new state) which is part
+of fpu__restore().
+
+A context switch between step A and B above would save CPU's current FPU
+registers to fpu->state and overwrite the newly prepared state. This
+looks like a tiny race window but the Kernel Test Robot reported this
+back in 2016 while we had lazy FPU support. Borislav Petkov made the
+link between that report and another patch that has been posted. Since
+the removal of the lazy FPU support, this race goes unnoticed because
+the warning has been removed.
+
+Disable bottom halves around the restore sequence to avoid the race. BH
+need to be disabled because BH is allowed to run (even with preemption
+disabled) and might invoke kernel_fpu_begin() by doing IPsec.
+
+ [ bp: massage commit message a bit. ]
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Signed-off-by: Borislav Petkov <bp@suse.de>
+Acked-by: Ingo Molnar <mingo@kernel.org>
+Acked-by: Thomas Gleixner <tglx@linutronix.de>
+Cc: Andy Lutomirski <luto@kernel.org>
+Cc: Dave Hansen <dave.hansen@linux.intel.com>
+Cc: "H. Peter Anvin" <hpa@zytor.com>
+Cc: "Jason A. Donenfeld" <Jason@zx2c4.com>
+Cc: kvm ML <kvm@vger.kernel.org>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Radim Krčmář <rkrcmar@redhat.com>
+Cc: Rik van Riel <riel@surriel.com>
+Cc: stable@vger.kernel.org
+Cc: x86-ml <x86@kernel.org>
+Link: http://lkml.kernel.org/r/20181120102635.ddv3fvavxajjlfqk@linutronix.de
+Link: https://lkml.kernel.org/r/20160226074940.GA28911@pd.tnic
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/kernel/fpu/signal.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/kernel/fpu/signal.c b/arch/x86/kernel/fpu/signal.c
+index ae52ef05d0981..769831d9fd114 100644
+--- a/arch/x86/kernel/fpu/signal.c
++++ b/arch/x86/kernel/fpu/signal.c
+@@ -342,10 +342,10 @@ static int __fpu__restore_sig(void __user *buf, void __user *buf_fx, int size)
+ 			sanitize_restored_xstate(tsk, &env, xfeatures, fx_only);
+ 		}
+ 
++		local_bh_disable();
+ 		fpu->fpstate_active = 1;
+-		preempt_disable();
+ 		fpu__restore(fpu);
+-		preempt_enable();
++		local_bh_enable();
+ 
+ 		return err;
+ 	} else {

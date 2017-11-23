@@ -1,0 +1,108 @@
+From patchwork Tue Oct  2 04:54:52 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexey Kardashevskiy <aik@ozlabs.ru>
+X-Patchwork-Id: 10623031
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 897E9174E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  2 Oct 2018 05:00:49 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 6039E28688
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  2 Oct 2018 05:00:49 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 51E51286D3; Tue,  2 Oct 2018 05:00:49 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D556528688
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  2 Oct 2018 05:00:48 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726625AbeJBLls (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 2 Oct 2018 07:41:48 -0400
+Received: from 107-173-13-209-host.colocrossing.com ([107.173.13.209]:41498
+        "EHLO ozlabs.ru" rhost-flags-OK-FAIL-OK-OK) by vger.kernel.org
+        with ESMTP id S1726303AbeJBLls (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 2 Oct 2018 07:41:48 -0400
+X-Greylist: delayed 335 seconds by postgrey-1.27 at vger.kernel.org;
+ Tue, 02 Oct 2018 07:41:48 EDT
+Received: from vpl1.ozlabs.ibm.com (localhost [IPv6:::1])
+        by ozlabs.ru (Postfix) with ESMTP id 4B68AAE807CE;
+        Tue,  2 Oct 2018 00:53:12 -0400 (EDT)
+From: Alexey Kardashevskiy <aik@ozlabs.ru>
+To: kvm@vger.kernel.org
+Cc: Alexey Kardashevskiy <aik@ozlabs.ru>,
+        Alex Williamson <alex.williamson@redhat.com>
+Subject: [PATCH kernel] vfio_pci: Allow mapping extra regions
+Date: Tue,  2 Oct 2018 14:54:52 +1000
+Message-Id: <20181002045452.8415-1-aik@ozlabs.ru>
+X-Mailer: git-send-email 2.11.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+So far we only allowed mapping of MMIO BARs to the userspace. However
+there there are GPUs with on-board coherent RAM accessible via side
+channels which we also want to map to the userspace. The first client
+for this is NVIDIA V100 GPU with NVLink2 direct links to a POWER9
+NPU-enabled CPU; such GPUs have 16GB RAM which is coherently mapped
+to the system address space, we are going to export these as an extra
+PCI region.
+
+We already support extra PCI regions and this adds support for mapping
+them to the userspace.
+
+Signed-off-by: Alexey Kardashevskiy <aik@ozlabs.ru>
+---
+ drivers/vfio/pci/vfio_pci_private.h |  3 +++
+ drivers/vfio/pci/vfio_pci.c         | 10 ++++++++--
+ 2 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/vfio/pci/vfio_pci_private.h b/drivers/vfio/pci/vfio_pci_private.h
+index cde3b5d..86aab05 100644
+--- a/drivers/vfio/pci/vfio_pci_private.h
++++ b/drivers/vfio/pci/vfio_pci_private.h
+@@ -59,6 +59,9 @@ struct vfio_pci_regops {
+ 		      size_t count, loff_t *ppos, bool iswrite);
+ 	void	(*release)(struct vfio_pci_device *vdev,
+ 			   struct vfio_pci_region *region);
++	int	(*mmap)(struct vfio_pci_device *vdev,
++			struct vfio_pci_region *region,
++			struct vm_area_struct *vma);
+ };
+ 
+ struct vfio_pci_region {
+diff --git a/drivers/vfio/pci/vfio_pci.c b/drivers/vfio/pci/vfio_pci.c
+index d9af440..92ad9499 100644
+--- a/drivers/vfio/pci/vfio_pci.c
++++ b/drivers/vfio/pci/vfio_pci.c
+@@ -1126,10 +1126,16 @@ static int vfio_pci_mmap(void *device_data, struct vm_area_struct *vma)
+ 		return -EINVAL;
+ 	if ((vma->vm_flags & VM_SHARED) == 0)
+ 		return -EINVAL;
++	if (index >= VFIO_PCI_NUM_REGIONS) {
++		int regnum = index - VFIO_PCI_NUM_REGIONS;
++		struct vfio_pci_region *region = vdev->region + regnum;
++
++		if (region && region->ops && region->ops->mmap)
++			return region->ops->mmap(vdev, region, vma);
++		return -EINVAL;
++	}
+ 	if (index >= VFIO_PCI_ROM_REGION_INDEX)
+ 		return -EINVAL;
+-	if (!vdev->bar_mmap_supported[index])
+-		return -EINVAL;
+ 
+ 	phys_len = PAGE_ALIGN(pci_resource_len(pdev, index));
+ 	req_len = vma->vm_end - vma->vm_start;

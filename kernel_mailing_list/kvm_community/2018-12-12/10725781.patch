@@ -1,0 +1,132 @@
+From patchwork Wed Dec 12 09:25:50 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: jiangyiwen <jiangyiwen@huawei.com>
+X-Patchwork-Id: 10725781
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1975513AF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 12 Dec 2018 09:25:58 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 05A15283C7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 12 Dec 2018 09:25:58 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id EDE0129F10; Wed, 12 Dec 2018 09:25:57 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 70FBB283C7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 12 Dec 2018 09:25:57 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726973AbeLLJZ4 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 12 Dec 2018 04:25:56 -0500
+Received: from szxga04-in.huawei.com ([45.249.212.190]:16558 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1726680AbeLLJZz (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 12 Dec 2018 04:25:55 -0500
+Received: from DGGEMS408-HUB.china.huawei.com (unknown [172.30.72.60])
+        by Forcepoint Email with ESMTP id 32003145B42E0;
+        Wed, 12 Dec 2018 17:25:52 +0800 (CST)
+Received: from [127.0.0.1] (10.177.16.168) by DGGEMS408-HUB.china.huawei.com
+ (10.3.19.208) with Microsoft SMTP Server id 14.3.408.0; Wed, 12 Dec 2018
+ 17:25:52 +0800
+From: jiangyiwen <jiangyiwen@huawei.com>
+To: Stefan Hajnoczi <stefanha@redhat.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>,
+        Jason Wang <jasowang@redhat.com>
+CC: <netdev@vger.kernel.org>, <kvm@vger.kernel.org>,
+        <virtualization@lists.linux-foundation.org>
+Subject: [PATCH v2 0/5] VSOCK: support mergeable rx buffer in vhost-vsock
+Message-ID: <5C10D41E.9050002@huawei.com>
+Date: Wed, 12 Dec 2018 17:25:50 +0800
+User-Agent: Mozilla/5.0 (Windows NT 6.1; WOW64; rv:38.0) Gecko/20100101
+ Thunderbird/38.5.1
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+X-Originating-IP: [10.177.16.168]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Now vsock only support send/receive small packet, it can't achieve
+high performance. As previous discussed with Jason Wang, I revisit the
+idea of vhost-net about mergeable rx buffer and implement the mergeable
+rx buffer in vhost-vsock, it can allow big packet to be scattered in
+into different buffers and improve performance obviously.
+
+This series of patches mainly did three things：
+- mergeable buffer implementation
+- increase the max send pkt size
+- add used and signal guest in a batch
+
+And I write a tool to test the vhost-vsock performance, mainly send big
+packet(64K) included guest->Host and Host->Guest. I test performance
+independently and the result as follows:
+
+Before performance:
+              Single socket            Multiple sockets(Max Bandwidth)
+Guest->Host   ~400MB/s                 ~480MB/s
+Host->Guest   ~1450MB/s                ~1600MB/s
+
+After performance only use implement mergeable rx buffer:
+              Single socket            Multiple sockets(Max Bandwidth)
+Guest->Host   ~400MB/s                 ~480MB/s
+Host->Guest   ~1280MB/s                ~1350MB/s
+
+In this case, max send pkt size is still limited to 4K, so Host->Guest
+performance will worse than before.
+
+After performance increase the max send pkt size to 64K:
+              Single socket            Multiple sockets(Max Bandwidth)
+Guest->Host   ~1700MB/s                ~2900MB/s
+Host->Guest   ~1500MB/s                ~2440MB/s
+
+After performance all patches are used:
+              Single socket            Multiple sockets(Max Bandwidth)
+Guest->Host   ~1700MB/s                ~2900MB/s
+Host->Guest   ~1700MB/s                ~2900MB/s
+
+From the test results, the performance is improved obviously, and guest
+memory will not be wasted.
+
+In addition, in order to support mergeable rx buffer in virtio-vsock,
+we need to add a qemu patch to support parse feature.
+---
+v1 -> v2:
+ * Addressed comments from Jason Wang.
+ * Add performance test result independently.
+ * Use Skb_page_frag_refill() which can use high order page and reduce
+   the stress of page allocator.
+ * Still use fixed size(PAGE_SIZE) to fill rx buffer, because too small
+   size can't fill one full packet, we only 128 vq num now.
+ * Use iovec to replace buf in struct virtio_vsock_pkt, keep tx and rx
+   consistency.
+ * Add virtio_transport ops to get max pkt len, in order to be compatible
+   with old version.
+---
+
+Yiwen Jiang (5):
+  VSOCK: support fill mergeable rx buffer in guest
+  VSOCK: support fill data to mergeable rx buffer in host
+  VSOCK: support receive mergeable rx buffer in guest
+  VSOCK: increase send pkt len in mergeable mode to improve performance
+  VSOCK: batch sending rx buffer to increase bandwidth
+
+ drivers/vhost/vsock.c                   | 183 ++++++++++++++++++++-----
+ include/linux/virtio_vsock.h            |  13 +-
+ include/uapi/linux/virtio_vsock.h       |   5 +
+ net/vmw_vsock/virtio_transport.c        | 229 +++++++++++++++++++++++++++-----
+ net/vmw_vsock/virtio_transport_common.c |  66 ++++++---
+ 5 files changed, 411 insertions(+), 85 deletions(-)

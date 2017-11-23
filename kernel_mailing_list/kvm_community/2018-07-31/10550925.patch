@@ -1,0 +1,126 @@
+From patchwork Tue Jul 31 15:31:59 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10550925
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6B9A496FA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 31 Jul 2018 15:32:37 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5CDAC2B181
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 31 Jul 2018 15:32:37 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 512AD2B19A; Tue, 31 Jul 2018 15:32:37 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E56892B19E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 31 Jul 2018 15:32:36 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732430AbeGaRN0 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 31 Jul 2018 13:13:26 -0400
+Received: from mga03.intel.com ([134.134.136.65]:23683 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1732308AbeGaRNZ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 31 Jul 2018 13:13:25 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga002.jf.intel.com ([10.7.209.21])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 31 Jul 2018 08:32:34 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.51,427,1526367600";
+   d="scan'208";a="79342621"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.132])
+  by orsmga002.jf.intel.com with ESMTP; 31 Jul 2018 08:32:20 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: kvm@vger.kernel.org, pbonzini@redhat.com, rkrcmar@redhat.com
+Cc: jmattson@google.com,
+        Sean Christopherson <sean.j.christopherson@intel.com>
+Subject: [PATCH 00/16] KVM: nVMX: add option to perform early consistency
+ checks via H/W
+Date: Tue, 31 Jul 2018 08:31:59 -0700
+Message-Id: <20180731153215.31794-1-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.18.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+For performance reasons, KVM defers many consistency checks to the
+CPU, including checks that result in VMFail (as opposed to VMExit).
+This behavior may be undesirable for some users since KVM detects
+certain classes of VMFail only after it has processed guest state,
+e.g. emulated MSR load-on-entry.  Because there is a strict ordering
+between checks that cause VMFail and those that cause VMExit, i.e.
+all VMFail checks are performed before any checks that cause VMExit,
+we can detect all VMFail conditions via an early VMEnter that will
+trigger a consistency check VMExit in the "success" path.
+
+Inserting a pre-check VMEnter into the nested VMEnter code is not
+a complex process in an of itself, but it requires a fair amount
+of refactoring to split prepare_vmcs02() so that there is a point
+where vmcs02 can pass the VMFail checks without requiring KVM to
+process guest state.
+
+During the refactoring and testing, a number of pre-existing bugs
+(patches 1-4) and easy optimization points (patches 5-6 and 14)
+were encountered.
+
+Ideally, these patches would be split into 3-4 separate series,
+especially the bug fix patches.  I smushed everything into a single
+series because the early VMEnter code breaks without the bug fixes,
+and the refactoring shuffles the same code.  For example, I thought
+patch 14 "KVM: vmx: write HOST_IA32_EFER in vmx_set_constant_host_state()"
+was a standalone patch and sent it as such before belatedly realizing
+the early VMEnter was relying on the new behavior to set HOST_EFER.
+
+Patch Synopsis:
+  1-4:   bug fixes
+  5-6:   optimizations
+  7:     function rename
+  8:     bug fix and refactoring
+  9-12:  refactoring
+  13:    bug fix
+  14:    optimization and prereq for early consistency checks
+  15-16: early consistency checks
+  
+
+Sean Christopherson (16):
+  KVM: nVMX: move host EFER consistency checks to VMFail path
+  KVM: nVMX: move vmcs12 EPTP consistency check to
+    check_vmentry_prereqs()
+  KVM: nVMX: use vm_exit_controls_init() to write exit controls for
+    vmcs02
+  KVM: nVMX: reset cache/shadows on nested consistency check VMExit
+  KVM: vmx: do not unconditionally clear EFER switching
+  KVM: nVMX: try to set EFER bits correctly when init'ing entry controls
+  KVM: nVMX: rename enter_vmx_non_root_mode to
+    nested_vmx_enter_non_root_mode
+  KVM: nVMX: move check_vmentry_postreqs() call to
+    nested_vmx_enter_non_root_mode()
+  KVM: nVMX: assimilate nested_vmx_entry_failure() into
+    nested_vmx_enter_non_root_mode()
+  KVM: nVMX: split pieces of prepare_vmcs02() to prepare_vmcs02_early()
+  KVM: nVMX: do early preparation of vmcs02 before
+    check_vmentry_postreqs()
+  KVM: nVMX: refactor inner section of nested_vmx_enter_non_root_mode()
+  KVM: nVMX: do not skip VMEnter instruction that succeeds
+  KVM: vmx: write HOST_IA32_EFER in vmx_set_constant_host_state()
+  KVM: nVMX: add option to perform early consistency checks via H/W
+  KVM: nVMX: WARN if nested run hits VMFail with early consistency
+    checks enabled
+
+ arch/x86/kvm/vmx.c | 780 ++++++++++++++++++++++++++++-----------------
+ 1 file changed, 481 insertions(+), 299 deletions(-)

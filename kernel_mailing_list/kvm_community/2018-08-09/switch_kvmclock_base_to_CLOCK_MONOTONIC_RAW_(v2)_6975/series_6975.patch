@@ -1,0 +1,366 @@
+From patchwork Thu Aug  9 14:52:46 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marcelo Tosatti <mtosatti@redhat.com>
+X-Patchwork-Id: 10561519
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id BEB0D15A6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  9 Aug 2018 14:54:25 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id ACDEB2B55F
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  9 Aug 2018 14:54:25 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id AB0692B547; Thu,  9 Aug 2018 14:54:25 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 30FD52B5CD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  9 Aug 2018 14:54:25 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732500AbeHIRTj (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 9 Aug 2018 13:19:39 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:53846 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1732382AbeHIRTj (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 9 Aug 2018 13:19:39 -0400
+Received: from smtp.corp.redhat.com (int-mx01.intmail.prod.int.phx2.redhat.com
+ [10.5.11.11])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id B6354369C8
+        for <kvm@vger.kernel.org>; Thu,  9 Aug 2018 14:54:23 +0000 (UTC)
+Received: from amt.cnet (ovpn-112-4.gru2.redhat.com [10.97.112.4])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 0EA0F6F812;
+        Thu,  9 Aug 2018 14:54:22 +0000 (UTC)
+Received: from amt.cnet (localhost [127.0.0.1])
+        by amt.cnet (Postfix) with ESMTP id 7C67F10514D;
+        Thu,  9 Aug 2018 11:54:02 -0300 (BRT)
+Received: (from marcelo@localhost)
+        by amt.cnet (8.14.7/8.14.7/Submit) id w79Erwm0002752;
+        Thu, 9 Aug 2018 11:53:58 -0300
+Message-Id: <20180809145307.066923033@amt.cnet>
+User-Agent: quilt/0.60-1
+Date: Thu, 09 Aug 2018 11:52:46 -0300
+From: Marcelo Tosatti <mtosatti@redhat.com>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Radim Krcmar <rkrcmar@redhat.com>,
+        Marcelo Tosatti <mtosatti@redhat.com>
+Subject: [patch 1/2] KVM: x86: switch KVMCLOCK base to CLOCK_MONOTONIC_RAW
+References: <20180809145245.722399627@amt.cnet>
+Content-Disposition: inline; filename=kvmclock-use-clock-monotonic-raw
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.11
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.30]);
+ Thu, 09 Aug 2018 14:54:23 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Commit 0bc48bea36d1 ("KVM: x86: update master clock before computing kvmclock_offset")
+switches the order of operations to avoid the conversion 
+
+TSC (without frequency correction) ->
+system_timestamp (with frequency correction), 
+
+which might cause a time jump.
+
+However, it leaves any other masterclock update unsafe, which includes, 
+at the moment:
+
+        * HV_X64_MSR_REFERENCE_TSC MSR write.
+        * TSC writes.
+        * Host suspend/resume.
+
+Avoid the time jump issue by using frequency uncorrected
+CLOCK_MONOTONIC_RAW clock. 
+
+Its the guests time keeping software responsability
+to track and correct a reference clock such as UTC.
+
+Signed-off-by: Marcelo Tosatti <mtosatti@redhat.com>
+---
+ arch/x86/kvm/x86.c |   68 +++++++++++++++++++++++++++++++++++------------------
+ 1 file changed, 46 insertions(+), 22 deletions(-)
+
+Index: linux-2.6.git/arch/x86/kvm/x86.c
+===================================================================
+--- linux-2.6.git.orig/arch/x86/kvm/x86.c	2018-08-09 10:32:51.151942374 -0300
++++ linux-2.6.git/arch/x86/kvm/x86.c	2018-08-09 11:49:47.111293686 -0300
+@@ -1240,20 +1240,25 @@
+ }
+ 
+ #ifdef CONFIG_X86_64
++struct pvclock_clock {
++	int vclock_mode;
++	u64 cycle_last;
++	u64 mask;
++	u32 mult;
++	u32 shift;
++};
++
+ struct pvclock_gtod_data {
+ 	seqcount_t	seq;
+ 
+-	struct { /* extract of a clocksource struct */
+-		int vclock_mode;
+-		u64	cycle_last;
+-		u64	mask;
+-		u32	mult;
+-		u32	shift;
+-	} clock;
++	struct pvclock_clock clock; /* extract of a clocksource struct */
++	struct pvclock_clock raw_clock; /* extract of a clocksource struct */
+ 
++	u64		boot_ns_raw;
+ 	u64		boot_ns;
+ 	u64		nsec_base;
+ 	u64		wall_time_sec;
++	u64		monotonic_raw_nsec;
+ };
+ 
+ static struct pvclock_gtod_data pvclock_gtod_data;
+@@ -1261,10 +1266,20 @@
+ static void update_pvclock_gtod(struct timekeeper *tk)
+ {
+ 	struct pvclock_gtod_data *vdata = &pvclock_gtod_data;
+-	u64 boot_ns;
++	u64 boot_ns, boot_ns_raw;
+ 
+ 	boot_ns = ktime_to_ns(ktime_add(tk->tkr_mono.base, tk->offs_boot));
+ 
++	/*
++	 * FIXME: tk->offs_boot should be converted to CLOCK_MONOTONIC_RAW
++	 * interval (that is, without frequency adjustment for that interval).
++	 *
++	 * Lack of this fix can cause system_timestamp to not be equal to
++	 * CLOCK_MONOTONIC_RAW (which happen if the host uses
++	 * suspend/resume).
++	 */
++	boot_ns_raw = ktime_to_ns(ktime_add(tk->tkr_raw.base, tk->offs_boot));
++
+ 	write_seqcount_begin(&vdata->seq);
+ 
+ 	/* copy pvclock gtod data */
+@@ -1274,11 +1289,20 @@
+ 	vdata->clock.mult		= tk->tkr_mono.mult;
+ 	vdata->clock.shift		= tk->tkr_mono.shift;
+ 
++	vdata->raw_clock.vclock_mode	= tk->tkr_raw.clock->archdata.vclock_mode;
++	vdata->raw_clock.cycle_last	= tk->tkr_raw.cycle_last;
++	vdata->raw_clock.mask		= tk->tkr_raw.mask;
++	vdata->raw_clock.mult		= tk->tkr_raw.mult;
++	vdata->raw_clock.shift		= tk->tkr_raw.shift;
++
+ 	vdata->boot_ns			= boot_ns;
+ 	vdata->nsec_base		= tk->tkr_mono.xtime_nsec;
+ 
+ 	vdata->wall_time_sec            = tk->xtime_sec;
+ 
++	vdata->boot_ns_raw		= boot_ns_raw;
++	vdata->monotonic_raw_nsec	= tk->tkr_raw.xtime_nsec;
++
+ 	write_seqcount_end(&vdata->seq);
+ }
+ #endif
+@@ -1713,21 +1737,21 @@
+ 	return last;
+ }
+ 
+-static inline u64 vgettsc(u64 *tsc_timestamp, int *mode)
++static inline u64 vgettsc(struct pvclock_clock *clock, u64 *tsc_timestamp,
++			  int *mode)
+ {
+ 	long v;
+-	struct pvclock_gtod_data *gtod = &pvclock_gtod_data;
+ 	u64 tsc_pg_val;
+ 
+-	switch (gtod->clock.vclock_mode) {
++	switch (clock->vclock_mode) {
+ 	case VCLOCK_HVCLOCK:
+ 		tsc_pg_val = hv_read_tsc_page_tsc(hv_get_tsc_page(),
+ 						  tsc_timestamp);
+ 		if (tsc_pg_val != U64_MAX) {
+ 			/* TSC page valid */
+ 			*mode = VCLOCK_HVCLOCK;
+-			v = (tsc_pg_val - gtod->clock.cycle_last) &
+-				gtod->clock.mask;
++			v = (tsc_pg_val - clock->cycle_last) &
++				clock->mask;
+ 		} else {
+ 			/* TSC page invalid */
+ 			*mode = VCLOCK_NONE;
+@@ -1736,8 +1760,8 @@
+ 	case VCLOCK_TSC:
+ 		*mode = VCLOCK_TSC;
+ 		*tsc_timestamp = read_tsc();
+-		v = (*tsc_timestamp - gtod->clock.cycle_last) &
+-			gtod->clock.mask;
++		v = (*tsc_timestamp - clock->cycle_last) &
++			clock->mask;
+ 		break;
+ 	default:
+ 		*mode = VCLOCK_NONE;
+@@ -1746,10 +1770,10 @@
+ 	if (*mode == VCLOCK_NONE)
+ 		*tsc_timestamp = v = 0;
+ 
+-	return v * gtod->clock.mult;
++	return v * clock->mult;
+ }
+ 
+-static int do_monotonic_boot(s64 *t, u64 *tsc_timestamp)
++static int do_monotonic_raw(s64 *t, u64 *tsc_timestamp)
+ {
+ 	struct pvclock_gtod_data *gtod = &pvclock_gtod_data;
+ 	unsigned long seq;
+@@ -1758,10 +1782,10 @@
+ 
+ 	do {
+ 		seq = read_seqcount_begin(&gtod->seq);
+-		ns = gtod->nsec_base;
+-		ns += vgettsc(tsc_timestamp, &mode);
++		ns = gtod->monotonic_raw_nsec;
++		ns += vgettsc(&gtod->raw_clock, tsc_timestamp, &mode);
+ 		ns >>= gtod->clock.shift;
+-		ns += gtod->boot_ns;
++		ns += gtod->boot_ns_raw;
+ 	} while (unlikely(read_seqcount_retry(&gtod->seq, seq)));
+ 	*t = ns;
+ 
+@@ -1779,7 +1803,7 @@
+ 		seq = read_seqcount_begin(&gtod->seq);
+ 		ts->tv_sec = gtod->wall_time_sec;
+ 		ns = gtod->nsec_base;
+-		ns += vgettsc(tsc_timestamp, &mode);
++		ns += vgettsc(&gtod->clock, tsc_timestamp, &mode);
+ 		ns >>= gtod->clock.shift;
+ 	} while (unlikely(read_seqcount_retry(&gtod->seq, seq)));
+ 
+@@ -1796,7 +1820,7 @@
+ 	if (!gtod_is_based_on_tsc(pvclock_gtod_data.clock.vclock_mode))
+ 		return false;
+ 
+-	return gtod_is_based_on_tsc(do_monotonic_boot(kernel_ns,
++	return gtod_is_based_on_tsc(do_monotonic_raw(kernel_ns,
+ 						      tsc_timestamp));
+ }
+ 
+
+From patchwork Thu Aug  9 14:52:47 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marcelo Tosatti <mtosatti@redhat.com>
+X-Patchwork-Id: 10561517
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 4325B1057
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  9 Aug 2018 14:54:25 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 32B872B355
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  9 Aug 2018 14:54:25 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 30EA92B547; Thu,  9 Aug 2018 14:54:25 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E1C362B568
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  9 Aug 2018 14:54:24 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732484AbeHIRTi (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 9 Aug 2018 13:19:38 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:58990 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1732399AbeHIRTi (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 9 Aug 2018 13:19:38 -0400
+Received: from smtp.corp.redhat.com (int-mx02.intmail.prod.int.phx2.redhat.com
+ [10.5.11.12])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 3412C3082A47
+        for <kvm@vger.kernel.org>; Thu,  9 Aug 2018 14:54:23 +0000 (UTC)
+Received: from amt.cnet (ovpn-112-4.gru2.redhat.com [10.97.112.4])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id CB42E69547;
+        Thu,  9 Aug 2018 14:54:22 +0000 (UTC)
+Received: from amt.cnet (localhost [127.0.0.1])
+        by amt.cnet (Postfix) with ESMTP id AC9D6105151;
+        Thu,  9 Aug 2018 11:54:06 -0300 (BRT)
+Received: (from marcelo@localhost)
+        by amt.cnet (8.14.7/8.14.7/Submit) id w79Es3TX002753;
+        Thu, 9 Aug 2018 11:54:03 -0300
+Message-Id: <20180809145307.147922149@amt.cnet>
+User-Agent: quilt/0.60-1
+Date: Thu, 09 Aug 2018 11:52:47 -0300
+From: Marcelo Tosatti <mtosatti@redhat.com>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Radim Krcmar <rkrcmar@redhat.com>,
+        Marcelo Tosatti <mtosatti@redhat.com>
+Subject: [patch 2/2] KVM: x86: revert "update master clock before computing
+ kvmclock_offset"
+References: <20180809145245.722399627@amt.cnet>
+Content-Disposition: inline; filename=kvmclock-revert-genupdate-order
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.12
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.45]);
+ Thu, 09 Aug 2018 14:54:23 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Revert 0bc48bea36d178aea9d7f83f66a1b397cec9db5c,
+now that using CLOCK_MONOTONIC_RAW as the clock base 
+does not require the guest to be stopped.
+
+This is good for testing CLOCK_MONOTONIC_RAW updates 
+for the other cases. 
+
+Signed-off-by: Marcelo Tosatti <mtosatti@redhat.com>
+---
+ arch/x86/kvm/x86.c |    8 +-------
+ 1 file changed, 1 insertion(+), 7 deletions(-)
+
+Index: linux-2.6.git/arch/x86/kvm/x86.c
+===================================================================
+--- linux-2.6.git.orig/arch/x86/kvm/x86.c	2018-08-09 11:49:47.111293686 -0300
++++ linux-2.6.git/arch/x86/kvm/x86.c	2018-08-09 11:51:26.888509017 -0300
+@@ -4525,15 +4525,9 @@
+ 			goto out;
+ 
+ 		r = 0;
+-		/*
+-		 * TODO: userspace has to take care of races with VCPU_RUN, so
+-		 * kvm_gen_update_masterclock() can be cut down to locked
+-		 * pvclock_update_vm_gtod_copy().
+-		 */
+-		kvm_gen_update_masterclock(kvm);
+ 		now_ns = get_kvmclock_ns(kvm);
+ 		kvm->arch.kvmclock_offset += user_ns.clock - now_ns;
+-		kvm_make_all_cpus_request(kvm, KVM_REQ_CLOCK_UPDATE);
++		kvm_gen_update_masterclock(kvm);
+ 		break;
+ 	}
+ 	case KVM_GET_CLOCK: {

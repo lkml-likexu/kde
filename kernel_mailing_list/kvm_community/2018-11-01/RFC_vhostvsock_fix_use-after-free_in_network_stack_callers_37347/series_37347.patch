@@ -1,0 +1,182 @@
+From patchwork Thu Nov  1 16:43:28 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefan Hajnoczi <stefanha@redhat.com>
+X-Patchwork-Id: 10664243
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id AD0EA1751
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  1 Nov 2018 16:43:48 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 9A4F128787
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  1 Nov 2018 16:43:48 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 8E21B287BB; Thu,  1 Nov 2018 16:43:48 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2379B28787
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  1 Nov 2018 16:43:48 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726420AbeKBBra (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 1 Nov 2018 21:47:30 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:37172 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725959AbeKBBra (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 1 Nov 2018 21:47:30 -0400
+Received: from smtp.corp.redhat.com (int-mx02.intmail.prod.int.phx2.redhat.com
+ [10.5.11.12])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 4BFBA83F45
+        for <kvm@vger.kernel.org>; Thu,  1 Nov 2018 16:43:46 +0000 (UTC)
+Received: from localhost (ovpn-116-62.ams2.redhat.com [10.36.116.62])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id CE5C060BE0;
+        Thu,  1 Nov 2018 16:43:29 +0000 (UTC)
+From: Stefan Hajnoczi <stefanha@redhat.com>
+To: kvm@vger.kernel.org
+Cc: "Michael S. Tsirkin" <mst@redhat.com>, jasowang@redhat.com,
+        Stefan Hajnoczi <stefanha@redhat.com>
+Subject: [RFC] vhost/vsock: fix use-after-free in network stack callers
+Date: Thu,  1 Nov 2018 16:43:28 +0000
+Message-Id: <20181101164328.7577-1-stefanha@redhat.com>
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.12
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.27]);
+ Thu, 01 Nov 2018 16:43:46 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+If the network stack calls .send_pkt()/.cancel_pkt() during .release(),
+a struct vhost_vsock use-after-free is possible.  This occurs because
+.release() does not wait for other CPUs to stop using struct
+vhost_vsock.
+
+Introduce a refcount for network stack callers in struct vhost_vsock and
+wake up .release() when the refcount reaches zero.
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+---
+Hi Michael & Jason,
+Here's the refcount approach to avoiding struct vhost_vsock
+use-after-free.  On the plus side it allows multiple CPUs to run
+.send_pkt()/.cancel_pkt() instead of the previous locking solution.  On
+the other hand, it results in a useless waitqueue wake_up() on most
+.send_pkt()/.cancel_pkt() calls (which involves a waitqueue spinlock).
+
+Any strong feelings either way?  I will benchmark them if you both
+approaches are the same to you.
+
+I'm currently running this through syzkaller to confirm it solves the
+crashes that have been reported.
+
+ drivers/vhost/vsock.c | 30 ++++++++++++++++++++++++++++--
+ 1 file changed, 28 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/vhost/vsock.c b/drivers/vhost/vsock.c
+index 34bc3ab40c6d..e1b142cc4e9a 100644
+--- a/drivers/vhost/vsock.c
++++ b/drivers/vhost/vsock.c
+@@ -9,6 +9,7 @@
+  */
+ #include <linux/miscdevice.h>
+ #include <linux/atomic.h>
++#include <linux/refcount.h>
+ #include <linux/module.h>
+ #include <linux/mutex.h>
+ #include <linux/vmalloc.h>
+@@ -42,6 +43,12 @@ struct vhost_vsock {
+ 
+ 	atomic_t queued_replies;
+ 
++	/* For staying alive while there are network stack
++	 * .send_pkt()/.cancel_pkt() callers.
++	 */
++	refcount_t net_users;
++	wait_queue_head_t net_users_wq;
++
+ 	u32 guest_cid;
+ };
+ 
+@@ -75,6 +82,7 @@ static struct vhost_vsock *vhost_vsock_get(u32 guest_cid)
+ 
+ 	spin_lock_bh(&vhost_vsock_lock);
+ 	vsock = __vhost_vsock_get(guest_cid);
++	refcount_inc(&vsock->net_users);
+ 	spin_unlock_bh(&vhost_vsock_lock);
+ 
+ 	return vsock;
+@@ -225,6 +233,10 @@ vhost_transport_send_pkt(struct virtio_vsock_pkt *pkt)
+ 	spin_unlock_bh(&vsock->send_pkt_list_lock);
+ 
+ 	vhost_work_queue(&vsock->dev, &vsock->send_pkt_work);
++
++	if (refcount_dec_and_test(&vsock->net_users))
++		wake_up(&vsock->net_users_wq);
++
+ 	return len;
+ }
+ 
+@@ -265,6 +277,9 @@ vhost_transport_cancel_pkt(struct vsock_sock *vsk)
+ 			vhost_poll_queue(&tx_vq->poll);
+ 	}
+ 
++	if (refcount_dec_and_test(&vsock->net_users))
++		wake_up(&vsock->net_users_wq);
++
+ 	return 0;
+ }
+ 
+@@ -521,6 +536,8 @@ static int vhost_vsock_dev_open(struct inode *inode, struct file *file)
+ 	vsock->guest_cid = 0; /* no CID assigned yet */
+ 
+ 	atomic_set(&vsock->queued_replies, 0);
++	refcount_set(&vsock->net_users, 0);
++	init_waitqueue_head(&vsock->net_users_wq);
+ 
+ 	vqs[VSOCK_VQ_TX] = &vsock->vqs[VSOCK_VQ_TX];
+ 	vqs[VSOCK_VQ_RX] = &vsock->vqs[VSOCK_VQ_RX];
+@@ -557,13 +574,17 @@ static void vhost_vsock_flush(struct vhost_vsock *vsock)
+ static void vhost_vsock_reset_orphans(struct sock *sk)
+ {
+ 	struct vsock_sock *vsk = vsock_sk(sk);
++	bool orphan;
++
++	spin_lock_bh(&vhost_vsock_lock);
++	orphan = __vhost_vsock_get(vsk->remote_addr.svm_cid) == NULL;
++	spin_unlock_bh(&vhost_vsock_lock);
+ 
+ 	/* vmci_transport.c doesn't take sk_lock here either.  At least we're
+ 	 * under vsock_table_lock so the sock cannot disappear while we're
+ 	 * executing.
+ 	 */
+-
+-	if (!vhost_vsock_get(vsk->remote_addr.svm_cid)) {
++	if (orphan) {
+ 		sock_set_flag(sk, SOCK_DONE);
+ 		vsk->peer_shutdown = SHUTDOWN_MASK;
+ 		sk->sk_state = SS_UNCONNECTED;
+@@ -580,6 +601,11 @@ static int vhost_vsock_dev_release(struct inode *inode, struct file *file)
+ 	list_del(&vsock->list);
+ 	spin_unlock_bh(&vhost_vsock_lock);
+ 
++	/* Now that the vsock instance is no longer visible, wait for other
++	 * CPUs to drop their references.
++	 */
++	wait_event(vsock->net_users_wq, refcount_read(&vsock->net_users));
++
+ 	/* Iterating over all connections for all CIDs to find orphans is
+ 	 * inefficient.  Room for improvement here. */
+ 	vsock_for_each_connected_socket(vhost_vsock_reset_orphans);

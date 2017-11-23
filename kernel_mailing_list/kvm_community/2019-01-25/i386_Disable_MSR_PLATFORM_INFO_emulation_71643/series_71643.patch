@@ -1,0 +1,105 @@
+From patchwork Fri Jan 25 19:01:34 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Eduardo Habkost <ehabkost@redhat.com>
+X-Patchwork-Id: 10781919
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 50F94746
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 25 Jan 2019 19:01:42 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3DE6A304A3
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 25 Jan 2019 19:01:42 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 30FE8304A5; Fri, 25 Jan 2019 19:01:42 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C9DE1304A3
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 25 Jan 2019 19:01:41 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726326AbfAYTBk (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 25 Jan 2019 14:01:40 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:44076 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726044AbfAYTBk (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 25 Jan 2019 14:01:40 -0500
+Received: from smtp.corp.redhat.com (int-mx02.intmail.prod.int.phx2.redhat.com
+ [10.5.11.12])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 42D437AEAB;
+        Fri, 25 Jan 2019 19:01:40 +0000 (UTC)
+Received: from localhost (ovpn-116-63.gru2.redhat.com [10.97.116.63])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 0678484ED;
+        Fri, 25 Jan 2019 19:01:36 +0000 (UTC)
+From: Eduardo Habkost <ehabkost@redhat.com>
+To: qemu-devel@nongnu.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Maxime Coquelin <maxime.coquelin@redhat.com>,
+        kvm@vger.kernel.org, Eduardo Habkost <ehabkost@redhat.com>,
+        Richard Henderson <rth@twiddle.net>,
+        Marcelo Tosatti <mtosatti@redhat.com>
+Subject: [PATCH] i386: Disable MSR_PLATFORM_INFO emulation
+Date: Fri, 25 Jan 2019 17:01:34 -0200
+Message-Id: <20190125190134.25492-1-ehabkost@redhat.com>
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.12
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.25]);
+ Fri, 25 Jan 2019 19:01:40 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Linux v4.12 introduced[1] emulation of MSR_PLATFORM_INFO and
+MSR_MISC_FEATURES_ENABLES, and enabled the
+MSR_PLATFORM_INFO_CPUID_FAULT bit unconditionally.  This made
+guests incorrectly believe the VM emulates
+MSR_MISC_FEATURES_ENABLES properly (which is not true because
+QEMU has no migration code to handle the MSR).
+
+The KVM_CAP_MSR_PLATFORM_INFO capability was added[2] to Linux
+v4.19 to address the issue.  Use it to disable emulation of
+MSR_PLATFORM_INFO and stop incorrectly exposing cpuid_fault to
+guests.
+
+References:
+[1] commit db2336a80489 ("KVM: x86: virtualize cpuid faulting")
+[2] commit 6fbbde9a1969 ("KVM: x86: Control guest reads of MSR_PLATFORM_INFO")
+
+Reported-by: Maxime Coquelin <maxime.coquelin@redhat.com>
+Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+---
+ target/i386/kvm.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/target/i386/kvm.c b/target/i386/kvm.c
+index 9af4542fb8..9629f25c90 100644
+--- a/target/i386/kvm.c
++++ b/target/i386/kvm.c
+@@ -1647,6 +1647,14 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
+         }
+     }
+ 
++    /*
++     * QEMU doesn't initialize MSR_PLATFORM_INFO yet, so disable the MSR
++     * unconditionally until support for the MSR is properly implemented
++     */
++    if (kvm_check_extension(s, KVM_CAP_MSR_PLATFORM_INFO)) {
++        kvm_vm_enable_cap(s, KVM_CAP_MSR_PLATFORM_INFO, 0);
++    }
++
+     return 0;
+ }
+ 

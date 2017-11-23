@@ -1,0 +1,106 @@
+From patchwork Thu Jan 24 11:02:23 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Zhuangyanying <ann.zhuangyanying@huawei.com>
+X-Patchwork-Id: 10778729
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 7E4E091E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 11:07:23 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 57A9B2E9F4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 11:07:23 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4B7782EA6B; Thu, 24 Jan 2019 11:07:23 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C489B2E9F4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 11:07:22 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727628AbfAXLHU (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 06:07:20 -0500
+Received: from szxga05-in.huawei.com ([45.249.212.191]:2743 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1726014AbfAXLHU (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 06:07:20 -0500
+Received: from DGGEMS406-HUB.china.huawei.com (unknown [172.30.72.59])
+        by Forcepoint Email with ESMTP id E2EEFFB87B24D7674BFA;
+        Thu, 24 Jan 2019 19:07:17 +0800 (CST)
+Received: from localhost (10.177.21.2) by DGGEMS406-HUB.china.huawei.com
+ (10.3.19.206) with Microsoft SMTP Server id 14.3.408.0; Thu, 24 Jan 2019
+ 19:07:09 +0800
+From: Zhuangyanying <ann.zhuangyanying@huawei.com>
+To: <xiaoguangrong@tencent.com>, <sean.j.christopherson@intel.com>,
+        <arei.gonglei@huawei.com>, <liu.jinsong@huawei.com>
+CC: <pbonzini@redhat.com>, <qemu-devel@nongnu.org>,
+        <kvm@vger.kernel.org>, <wangxinxin.wang@huawei.com>,
+        <jianjay.zhou@huawei.com>,
+        Zhuang yanying <ann.zhuangyanying@huawei.com>
+Subject: [PATCH v2 0/3] KVM: MMU: fast cleanup D bit based on fast write
+ protect
+Date: Thu, 24 Jan 2019 11:02:23 +0000
+Message-ID: <1548327746-20484-1-git-send-email-ann.zhuangyanying@huawei.com>
+X-Mailer: git-send-email 2.6.4.windows.1
+MIME-Version: 1.0
+Content-Type: text/plain; charset="UTF-8"
+X-Originating-IP: [10.177.21.2]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Zhuang yanying <ann.zhuangyanying@huawei.com>
+
+When live-migration with large-memory guests, vcpu may hang for a long
+time while starting migration, such as 9s for 2T
+(linux-5.0.0-rc2+qemu-3.1.0).
+The reason is memory_global_dirty_log_start() taking too long, and the
+vcpu is waiting for BQL. The page-by-page D bit clearup is the main time
+consumption. I think that the idea of "KVM: MMU: fast write protect" by
+xiaoguangrong, especially the function kvm_mmu_write_protect_all_pages(),
+is very helpful. After a little modifcation, on his patch, can solve
+this problem, 9s to 0.5s.
+
+At the beginning of live migration, write protection is only applied to the
+top-level SPTE. Then the write from vm trigger the EPT violation, with
+for_each_shadow_entry write protection is performed at dirct_map.
+Finally the Dirty bit of the target page(at level 1 page table) is cleared,
+and the dirty page tracking is started. The page where GPA is located is
+marked dirty when mmu_set_spte.
+A similar implementation on xen, just emt instead of write protection.
+
+Xiao Guangrong (2):
+  KVM: MMU: introduce possible_writable_spte_bitmap
+  KVM: MMU: introduce kvm_mmu_write_protect_all_pages
+
+Zhuang Yanying (1):
+  KVM: MMU: fast cleanup D bit based on fast write protect
+
+ arch/x86/include/asm/kvm_host.h |  24 ++++-
+ arch/x86/kvm/mmu.c              | 229 ++++++++++++++++++++++++++++++++++++++--
+ arch/x86/kvm/mmu.h              |   1 +
+ arch/x86/kvm/paging_tmpl.h      |  13 ++-
+ arch/x86/kvm/vmx/vmx.c          |   5 +-
+ 5 files changed, 257 insertions(+), 15 deletions(-)
+---
+v1 -> v2:
+
+  - drop "KVM: MMU: correct the behavior of mmu_spte_update_no_track"
+  - mmu_write_protect_all_indicator is no longer an atomic variable,
+    protected by mmu_lock
+  - Implement kvm_mmu_slot_set_dirty with kvm_mmu_write_protect_all_pages
+  - some modification on the commit messages
+--
+1.8.3.1

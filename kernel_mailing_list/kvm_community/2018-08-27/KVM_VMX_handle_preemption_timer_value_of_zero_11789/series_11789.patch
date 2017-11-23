@@ -1,0 +1,502 @@
+From patchwork Mon Aug 27 22:21:10 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10577615
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 214B9139B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 27 Aug 2018 22:21:44 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3231B29DEF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 27 Aug 2018 22:21:44 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 26CCD29DF6; Mon, 27 Aug 2018 22:21:44 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id BCA9E29DEF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 27 Aug 2018 22:21:43 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727101AbeH1CKP (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 27 Aug 2018 22:10:15 -0400
+Received: from mga12.intel.com ([192.55.52.136]:21743 "EHLO mga12.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727013AbeH1CKO (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 27 Aug 2018 22:10:14 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by fmsmga106.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 27 Aug 2018 15:21:40 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.53,296,1531810800";
+   d="scan'208";a="84965169"
+Received: from unknown (HELO sjchrist-coffee.jf.intel.com) ([10.54.74.9])
+  by fmsmga001.fm.intel.com with ESMTP; 27 Aug 2018 15:21:40 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org,
+        Sean Christopherson <sean.j.christopherson@intel.com>
+Subject: [PATCH 1/3] KVM: VMX: immediately mark preemption timer expired only
+ for zero value
+Date: Mon, 27 Aug 2018 15:21:10 -0700
+Message-Id: <20180827222112.6640-2-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.18.0
+In-Reply-To: <20180827222112.6640-1-sean.j.christopherson@intel.com>
+References: <20180827222112.6640-1-sean.j.christopherson@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+A VMX preemption timer value of '0' at the time of VMEnter is
+architecturally guaranteed to cause a VMExit prior to the CPU
+executing any instructions in the guest.  This architectural
+definition is in place to ensure that a previously expired timer
+is correctly recognized by the CPU as it is possible for the timer
+to reach zero and not trigger a VMexit due to a higher priority
+VMExit being signalled instead, e.g. a pending #DB that morphs into
+a VMExit.
+
+Whether by design or coincidence, commit f4124500c2c1 ("KVM: nVMX:
+Fully emulate preemption timer") special cased timer values of '0'
+and '1' to ensure prompt delivery of the VMExit.  Unlike '0', a
+timer value of '1' has no has no architectural guarantees regarding
+when it is delivered.
+
+Modify the timer emulation to trigger immediate VMExit if and only
+if the timer value is '0', and document precisely why '0' is special.
+Do this even if calibration of the virtual TSC failed, i.e. VMExit
+will occur immediately regardless of the frequency of the timer.
+Making only '0' a special case gives KVM leeway to be more aggressive
+in ensuring the VMExit is injected prior to executing instructions in
+the nested guest, and also eliminates any ambiguity as to why '1' is
+a special case, e.g. why wasn't the threshold for a "short timeout"
+set to 10, 100, 1000, etc...
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx.c | 14 ++++++++------
+ 1 file changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx.c b/arch/x86/kvm/vmx.c
+index 8dae47e7267a..04afaaeb27a7 100644
+--- a/arch/x86/kvm/vmx.c
++++ b/arch/x86/kvm/vmx.c
+@@ -11430,16 +11430,18 @@ static void vmx_start_preemption_timer(struct kvm_vcpu *vcpu)
+ 	u64 preemption_timeout = get_vmcs12(vcpu)->vmx_preemption_timer_value;
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+ 
+-	if (vcpu->arch.virtual_tsc_khz == 0)
+-		return;
+-
+-	/* Make sure short timeouts reliably trigger an immediate vmexit.
+-	 * hrtimer_start does not guarantee this. */
+-	if (preemption_timeout <= 1) {
++	/*
++	 * A timer value of zero is architecturally guaranteed to cause
++	 * a VMExit prior to executing any instructions in the guest.
++	 */
++	if (preemption_timeout == 0) {
+ 		vmx_preemption_timer_fn(&vmx->nested.preemption_timer);
+ 		return;
+ 	}
+ 
++	if (vcpu->arch.virtual_tsc_khz == 0)
++		return;
++
+ 	preemption_timeout <<= VMX_MISC_EMULATED_PREEMPTION_TIMER_RATE;
+ 	preemption_timeout *= 1000000;
+ 	do_div(preemption_timeout, vcpu->arch.virtual_tsc_khz);
+
+From patchwork Mon Aug 27 22:21:11 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10577613
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 78ABB17DE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 27 Aug 2018 22:21:43 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 888C229DEF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 27 Aug 2018 22:21:43 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 7B23129DF6; Mon, 27 Aug 2018 22:21:43 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 07CBD29DEF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 27 Aug 2018 22:21:43 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727110AbeH1CKP (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 27 Aug 2018 22:10:15 -0400
+Received: from mga12.intel.com ([192.55.52.136]:21743 "EHLO mga12.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726994AbeH1CKO (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 27 Aug 2018 22:10:14 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by fmsmga106.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 27 Aug 2018 15:21:40 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.53,296,1531810800";
+   d="scan'208";a="84965173"
+Received: from unknown (HELO sjchrist-coffee.jf.intel.com) ([10.54.74.9])
+  by fmsmga001.fm.intel.com with ESMTP; 27 Aug 2018 15:21:40 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org,
+        Sean Christopherson <sean.j.christopherson@intel.com>
+Subject: [PATCH 2/3] KVM: VMX: modify preemption timer bit only when arming
+ timer
+Date: Mon, 27 Aug 2018 15:21:11 -0700
+Message-Id: <20180827222112.6640-3-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.18.0
+In-Reply-To: <20180827222112.6640-1-sean.j.christopherson@intel.com>
+References: <20180827222112.6640-1-sean.j.christopherson@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Provide a singular location where the VMX preemption timer bit is
+set/cleared so that future usages of the preemption timer can ensure
+the VMCS bit is up-to-date without having to modify unrelated code
+paths.  For example, the preemption timer can be used to force an
+immediate VMExit.  Cache the status of the timer to avoid redundant
+VMREAD and VMWRITE, e.g. if the timer stays armed across multiple
+VMEnters/VMExits.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx.c | 45 ++++++++++++++++++++++-----------------------
+ 1 file changed, 22 insertions(+), 23 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx.c b/arch/x86/kvm/vmx.c
+index 04afaaeb27a7..5ae46af2077d 100644
+--- a/arch/x86/kvm/vmx.c
++++ b/arch/x86/kvm/vmx.c
+@@ -1025,6 +1025,7 @@ struct vcpu_vmx {
+ 
+ 	/* apic deadline value in host tsc */
+ 	u64 hv_deadline_tsc;
++	bool hv_timer_armed;
+ 
+ 	u64 current_tsc_ratio;
+ 
+@@ -10601,21 +10602,30 @@ static void atomic_switch_perf_msrs(struct vcpu_vmx *vmx)
+ static void vmx_arm_hv_timer(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
++	bool arm_timer;
+ 	u64 tscl;
+ 	u32 delta_tsc;
+ 
+-	if (vmx->hv_deadline_tsc == -1)
+-		return;
++	if (vmx->hv_deadline_tsc != -1) {
++		tscl = rdtsc();
++		if (vmx->hv_deadline_tsc > tscl)
++			/* set_hv_timer ensures the delta fits in 32-bits */
++			delta_tsc = (u32)((vmx->hv_deadline_tsc - tscl) >>
++				cpu_preemption_timer_multi);
++		else
++			delta_tsc = 0;
+ 
+-	tscl = rdtsc();
+-	if (vmx->hv_deadline_tsc > tscl)
+-		/* sure to be 32 bit only because checked on set_hv_timer */
+-		delta_tsc = (u32)((vmx->hv_deadline_tsc - tscl) >>
+-			cpu_preemption_timer_multi);
+-	else
+-		delta_tsc = 0;
++		vmcs_write32(VMX_PREEMPTION_TIMER_VALUE, delta_tsc);
++	}
+ 
+-	vmcs_write32(VMX_PREEMPTION_TIMER_VALUE, delta_tsc);
++	arm_timer = (vmx->hv_deadline_tsc != -1);
++	if (arm_timer && !vmx->hv_timer_armed)
++		vmcs_set_bits(PIN_BASED_VM_EXEC_CONTROL,
++			PIN_BASED_VMX_PREEMPTION_TIMER);
++	else if (!arm_timer && vmx->hv_timer_armed)
++		vmcs_clear_bits(PIN_BASED_VM_EXEC_CONTROL,
++			PIN_BASED_VMX_PREEMPTION_TIMER);
++	vmx->hv_timer_armed = arm_timer;
+ }
+ 
+ static void __noclone vmx_vcpu_run(struct kvm_vcpu *vcpu)
+@@ -13236,12 +13246,7 @@ static void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,
+ 	vmcs_write32(VM_EXIT_MSR_LOAD_COUNT, vmx->msr_autoload.host.nr);
+ 	vmcs_write32(VM_ENTRY_MSR_LOAD_COUNT, vmx->msr_autoload.guest.nr);
+ 	vmcs_write64(TSC_OFFSET, vcpu->arch.tsc_offset);
+-	if (vmx->hv_deadline_tsc == -1)
+-		vmcs_clear_bits(PIN_BASED_VM_EXEC_CONTROL,
+-				PIN_BASED_VMX_PREEMPTION_TIMER);
+-	else
+-		vmcs_set_bits(PIN_BASED_VM_EXEC_CONTROL,
+-			      PIN_BASED_VMX_PREEMPTION_TIMER);
++
+ 	if (kvm_has_tsc_control)
+ 		decache_tsc_multiplier(vmx);
+ 
+@@ -13445,18 +13450,12 @@ static int vmx_set_hv_timer(struct kvm_vcpu *vcpu, u64 guest_deadline_tsc)
+ 		return -ERANGE;
+ 
+ 	vmx->hv_deadline_tsc = tscl + delta_tsc;
+-	vmcs_set_bits(PIN_BASED_VM_EXEC_CONTROL,
+-			PIN_BASED_VMX_PREEMPTION_TIMER);
+-
+ 	return delta_tsc == 0;
+ }
+ 
+ static void vmx_cancel_hv_timer(struct kvm_vcpu *vcpu)
+ {
+-	struct vcpu_vmx *vmx = to_vmx(vcpu);
+-	vmx->hv_deadline_tsc = -1;
+-	vmcs_clear_bits(PIN_BASED_VM_EXEC_CONTROL,
+-			PIN_BASED_VMX_PREEMPTION_TIMER);
++	to_vmx(vcpu)->hv_deadline_tsc = -1;
+ }
+ #endif
+ 
+
+From patchwork Mon Aug 27 22:21:12 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10577617
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C1D8A139B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 27 Aug 2018 22:21:44 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D238529DEF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 27 Aug 2018 22:21:44 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C685029DF6; Mon, 27 Aug 2018 22:21:44 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4A1F829DEF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 27 Aug 2018 22:21:44 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727125AbeH1CKQ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 27 Aug 2018 22:10:16 -0400
+Received: from mga12.intel.com ([192.55.52.136]:21743 "EHLO mga12.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727062AbeH1CKP (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 27 Aug 2018 22:10:15 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by fmsmga106.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 27 Aug 2018 15:21:40 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.53,296,1531810800";
+   d="scan'208";a="84965177"
+Received: from unknown (HELO sjchrist-coffee.jf.intel.com) ([10.54.74.9])
+  by fmsmga001.fm.intel.com with ESMTP; 27 Aug 2018 15:21:40 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org,
+        Sean Christopherson <sean.j.christopherson@intel.com>
+Subject: [PATCH 3/3] KVM: VMX: use preemption timer to force immediate VMExit
+Date: Mon, 27 Aug 2018 15:21:12 -0700
+Message-Id: <20180827222112.6640-4-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.18.0
+In-Reply-To: <20180827222112.6640-1-sean.j.christopherson@intel.com>
+References: <20180827222112.6640-1-sean.j.christopherson@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+A VMX preemption timer value of '0' is guaranteed to cause a VMExit
+prior to the CPU executing any instructions in the guest.  Use the
+preemption timer (if it's supported) to trigger immediate VMExit
+in place of the current method of sending a self-IPI.  This ensures
+that pending VMExit injection to L1 occurs prior to executing any
+instructions in the guest (regardless of nesting level).
+
+When deferring VMExit injection, KVM generates an immediate VMExit
+from the (possibly nested) guest by sending itself an IPI.  Because
+hardware interrupts are blocked prior to VMEnter and are unblocked
+(in hardware) after VMEnter, this results in taking a VMExit(INTR)
+before any guest instruction is executed.  But, as this approach
+relies on the IPI being received before VMEnter executes, it only
+works as intended when KVM is running as L0.  Because there are no
+architectural guarantees regarding when IPIs are delivered, when
+running nested the INTR may "arrive" long after L2 is running e.g.
+L0 KVM doesn't force an immediate switch to L1 to deliver an INTR.
+
+For the most part, this unintended delay is not an issue since the
+events being injected to L1 also do not have architectural guarantees
+regarding their timing.  The notable exception is the VMX preemption
+timer[1], which is architecturally guaranteed to cause a VMExit prior
+to executing any instructions in the guest if the timer value is '0'
+at VMEnter.  Specifically, the delay in injecting the VMExit causes
+the preemption timer KVM unit test to fail when run in a nested guest.
+
+Note: this approach is viable even on CPUs with a broken preemption
+timer, as broken in this context only means the timer counts at the
+wrong rate.  There are no known errata affecting timer value of '0'.
+
+[1] I/O SMIs also have guarantees on when they arrive, but I have
+    no idea if/how those are emulated in KVM.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  1 +
+ arch/x86/kvm/vmx.c              | 22 ++++++++++++++++++----
+ arch/x86/kvm/x86.c              |  5 ++++-
+ 3 files changed, 23 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 00ddb0c9e612..6ae0d3f18ee3 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1055,6 +1055,7 @@ struct kvm_x86_ops {
+ 	bool (*umip_emulated)(void);
+ 
+ 	int (*check_nested_events)(struct kvm_vcpu *vcpu, bool external_intr);
++	void (*request_immediate_exit)(struct kvm_vcpu *vcpu);
+ 
+ 	void (*sched_in)(struct kvm_vcpu *kvm, int cpu);
+ 
+diff --git a/arch/x86/kvm/vmx.c b/arch/x86/kvm/vmx.c
+index 5ae46af2077d..2f497fbc62dc 100644
+--- a/arch/x86/kvm/vmx.c
++++ b/arch/x86/kvm/vmx.c
+@@ -1026,6 +1026,7 @@ struct vcpu_vmx {
+ 	/* apic deadline value in host tsc */
+ 	u64 hv_deadline_tsc;
+ 	bool hv_timer_armed;
++	bool req_immediate_exit;
+ 
+ 	u64 current_tsc_ratio;
+ 
+@@ -2865,6 +2866,8 @@ static void vmx_prepare_switch_to_guest(struct kvm_vcpu *vcpu)
+ 	u16 fs_sel, gs_sel;
+ 	int i;
+ 
++	vmx->req_immediate_exit = false;
++
+ 	if (vmx->loaded_cpu_state)
+ 		return;
+ 
+@@ -7967,6 +7970,9 @@ static __init int hardware_setup(void)
+ 		kvm_x86_ops->enable_log_dirty_pt_masked = NULL;
+ 	}
+ 
++	if (!cpu_has_vmx_preemption_timer())
++		kvm_x86_ops->request_immediate_exit = NULL;
++
+ 	if (cpu_has_vmx_preemption_timer() && enable_preemption_timer) {
+ 		u64 vmx_msr;
+ 
+@@ -9209,7 +9215,8 @@ static int handle_pml_full(struct kvm_vcpu *vcpu)
+ 
+ static int handle_preemption_timer(struct kvm_vcpu *vcpu)
+ {
+-	kvm_lapic_expired_hv_timer(vcpu);
++	if (!to_vmx(vcpu)->req_immediate_exit)
++		kvm_lapic_expired_hv_timer(vcpu);
+ 	return 1;
+ }
+ 
+@@ -10606,7 +10613,9 @@ static void vmx_arm_hv_timer(struct kvm_vcpu *vcpu)
+ 	u64 tscl;
+ 	u32 delta_tsc;
+ 
+-	if (vmx->hv_deadline_tsc != -1) {
++	if (vmx->req_immediate_exit) {
++		vmcs_write32(VMX_PREEMPTION_TIMER_VALUE, 0);
++	} else if (vmx->hv_deadline_tsc != -1) {
+ 		tscl = rdtsc();
+ 		if (vmx->hv_deadline_tsc > tscl)
+ 			/* set_hv_timer ensures the delta fits in 32-bits */
+@@ -10614,11 +10623,10 @@ static void vmx_arm_hv_timer(struct kvm_vcpu *vcpu)
+ 				cpu_preemption_timer_multi);
+ 		else
+ 			delta_tsc = 0;
+-
+ 		vmcs_write32(VMX_PREEMPTION_TIMER_VALUE, delta_tsc);
+ 	}
+ 
+-	arm_timer = (vmx->hv_deadline_tsc != -1);
++	arm_timer = (vmx->hv_deadline_tsc != -1) || vmx->req_immediate_exit;
+ 	if (arm_timer && !vmx->hv_timer_armed)
+ 		vmcs_set_bits(PIN_BASED_VM_EXEC_CONTROL,
+ 			PIN_BASED_VMX_PREEMPTION_TIMER);
+@@ -12856,6 +12864,11 @@ static int vmx_check_nested_events(struct kvm_vcpu *vcpu, bool external_intr)
+ 	return 0;
+ }
+ 
++static void vmx_request_immediate_exit(struct kvm_vcpu *vcpu)
++{
++	to_vmx(vcpu)->req_immediate_exit = true;
++}
++
+ static u32 vmx_get_preemption_timer_value(struct kvm_vcpu *vcpu)
+ {
+ 	ktime_t remaining =
+@@ -14115,6 +14128,7 @@ static struct kvm_x86_ops vmx_x86_ops __ro_after_init = {
+ 	.umip_emulated = vmx_umip_emulated,
+ 
+ 	.check_nested_events = vmx_check_nested_events,
++	.request_immediate_exit = vmx_request_immediate_exit,
+ 
+ 	.sched_in = vmx_sched_in,
+ 
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 14ee9a814888..e2906ec45cb6 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7544,7 +7544,10 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+ 
+ 	if (req_immediate_exit) {
+ 		kvm_make_request(KVM_REQ_EVENT, vcpu);
+-		smp_send_reschedule(vcpu->cpu);
++		if (kvm_x86_ops->request_immediate_exit)
++			kvm_x86_ops->request_immediate_exit(vcpu);
++		else
++			smp_send_reschedule(vcpu->cpu);
+ 	}
+ 
+ 	trace_kvm_entry(vcpu->vcpu_id);

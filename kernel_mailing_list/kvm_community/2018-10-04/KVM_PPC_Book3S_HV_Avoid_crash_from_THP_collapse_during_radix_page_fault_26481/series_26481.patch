@@ -1,0 +1,112 @@
+From patchwork Thu Oct  4 04:53:51 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paul Mackerras <paulus@ozlabs.org>
+X-Patchwork-Id: 10625591
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 649EE14BD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Oct 2018 04:54:05 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5400F28F37
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Oct 2018 04:54:05 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 48A3B28FF4; Thu,  4 Oct 2018 04:54:05 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-8.0 required=2.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,MAILING_LIST_MULTI,RCVD_IN_DNSWL_HI autolearn=ham
+	version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id F052A28FA8
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Oct 2018 04:54:02 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727058AbeJDLpZ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 4 Oct 2018 07:45:25 -0400
+Received: from ozlabs.org ([203.11.71.1]:44255 "EHLO ozlabs.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726852AbeJDLpZ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 4 Oct 2018 07:45:25 -0400
+Received: by ozlabs.org (Postfix, from userid 1003)
+        id 42QgX55htXz9s5c; Thu,  4 Oct 2018 14:53:57 +1000 (AEST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=ozlabs.org; s=201707;
+        t=1538628837; bh=5tg6CwHx9nTVGOjW7qjPwxnr1OEM6xssUkDYllE+OZ0=;
+        h=Date:From:To:Cc:Subject:From;
+        b=eEsA8ureSDz73teOB4FKm2XNZsdV0LMT7TRLZEmOcnQKIKR0XZnBRM84YCIQowDq5
+         G3jB7YJfd+wMBwWWuzwO7sFouSdrjTs9SN92ksjhzgmYBPFnZJ2HfDYn8+HKh13N0e
+         n+yuRLYTNIl0CSTjpil5HJGCk+dm/Dc2F2k9WT5WjOiYycJy/evFg+aYPrqyigN4LP
+         EVL7JChqCZQr2qBtDuj7WAfZMQ1uO3ZUzVMCdz6XxCv0cNTDg9lfDgF00X0PNeOaqa
+         QbjbKGKOQWw9Qcc9IYai+G/iehfNx3qxeihlS4xRX9cnYq3PKMrOO90pefGivo2bvK
+         wAGgog2Fgu8lg==
+Date: Thu, 4 Oct 2018 14:53:51 +1000
+From: Paul Mackerras <paulus@ozlabs.org>
+To: kvm-ppc@vger.kernel.org, kvm@vger.kernel.org
+Cc: Nick Piggin <npiggin@au1.ibm.com>,
+        David Gibson <david@gibson.dropbear.id.au>,
+        "Aneesh Kumar K.V" <aneesh.kumar@linux.vnet.ibm.com>
+Subject: [PATCH] KVM: PPC: Book3S HV: Avoid crash from THP collapse during
+ radix page fault
+Message-ID: <20181004045351.GC16300@fergus>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.5.24 (2015-08-30)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Commit 71d29f43b633 ("KVM: PPC: Book3S HV: Don't use compound_order to
+determine host mapping size", 2018-09-11) added a call to
+__find_linux_pte() and a dereference of the returned PTE pointer to the
+radix page fault path in the common case where the page is normal
+system memory.  Previously, __find_linux_pte() was only called for
+mappings to physical addresses which don't have a page struct (e.g.
+memory-mapped I/O) or where the page struct is marked as reserved
+memory.
+
+This exposes us to the possibility that the returned PTE pointer
+could be NULL, for example in the case of a concurrent THP collapse
+operation.  Dereferencing the returned NULL pointer causes a host
+crash.
+
+To fix this, we check for NULL, and if it is NULL, we retry the
+operation by returning to the guest, with the expectation that it
+will generate the same page fault again (unless of course it has
+been fixed up by another CPU in the meantime).
+
+Fixes: 71d29f43b633 ("KVM: PPC: Book3S HV: Don't use compound_order to determine host mapping size")
+Signed-off-by: Paul Mackerras <paulus@ozlabs.org>
+---
+ arch/powerpc/kvm/book3s_64_mmu_radix.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/arch/powerpc/kvm/book3s_64_mmu_radix.c b/arch/powerpc/kvm/book3s_64_mmu_radix.c
+index 933c574e1cf7..998f8d089ac7 100644
+--- a/arch/powerpc/kvm/book3s_64_mmu_radix.c
++++ b/arch/powerpc/kvm/book3s_64_mmu_radix.c
+@@ -646,6 +646,16 @@ int kvmppc_book3s_radix_page_fault(struct kvm_run *run, struct kvm_vcpu *vcpu,
+ 	 */
+ 	local_irq_disable();
+ 	ptep = __find_linux_pte(vcpu->arch.pgdir, hva, NULL, &shift);
++	/*
++	 * If the PTE disappeared temporarily due to a THP
++	 * collapse, just return and let the guest try again.
++	 */
++	if (!ptep) {
++		local_irq_enable();
++		if (page)
++			put_page(page);
++		return RESUME_GUEST;
++	}
+ 	pte = *ptep;
+ 	local_irq_enable();
+ 

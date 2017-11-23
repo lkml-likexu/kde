@@ -1,0 +1,106 @@
+From patchwork Tue Jan  8 08:07:03 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Zha Bin <zhabin@linux.alibaba.com>
+X-Patchwork-Id: 10751527
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 059AA13B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  8 Jan 2019 08:08:39 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id EAFE428A62
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  8 Jan 2019 08:08:38 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id DF4AE28B70; Tue,  8 Jan 2019 08:08:38 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI,UNPARSEABLE_RELAY autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 278C828A62
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  8 Jan 2019 08:08:38 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728053AbfAHIIb (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 8 Jan 2019 03:08:31 -0500
+Received: from out30-133.freemail.mail.aliyun.com ([115.124.30.133]:56113
+ "EHLO
+        out30-133.freemail.mail.aliyun.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S1727368AbfAHIIb (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Tue, 8 Jan 2019 03:08:31 -0500
+X-Alimail-AntiSpam: 
+ AC=PASS;BC=-1|-1;BR=01201311R131e4;CH=green;FP=0|-1|-1|-1|0|-1|-1|-1;HT=e01e01406;MF=zhabin@linux.alibaba.com;NM=1;PH=DS;RN=9;SR=0;TI=SMTPD_---0THn6-NU_1546934829;
+Received: from localhost(mailfrom:zhabin@linux.alibaba.com
+ fp:SMTPD_---0THn6-NU_1546934829)
+          by smtp.aliyun-inc.com(127.0.0.1);
+          Tue, 08 Jan 2019 16:07:10 +0800
+From: Zha Bin <zhabin@linux.alibaba.com>
+To: stefanha@redhat.com
+Cc: mst@redhat.com, jasowang@redhat.com, kvm@vger.kernel.org,
+        virtualization@lists.linux-foundation.org, netdev@vger.kernel.org,
+        linux-kernel@vger.kernel.org, gerry@linux.alibaba.com,
+        kata-dev@lists.katacontainers.io
+Subject: [PATCH] vhost/vsock: fix vhost vsock cid hashing inconsistent
+Date: Tue,  8 Jan 2019 16:07:03 +0800
+Message-Id: <20190108080703.70050-1-zhabin@linux.alibaba.com>
+X-Mailer: git-send-email 2.19.1.856.g8858448bb
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+The vsock core only supports 32bit CID, but the Virtio-vsock spec define
+CID (dst_cid and src_cid) as u64 and the upper 32bits is reserved as
+zero. This inconsistency causes one bug in vhost vsock driver. The
+scenarios is:
+
+  0. A hash table (vhost_vsock_hash) is used to map an CID to a vsock
+  object. And hash_min() is used to compute the hash key. hash_min() is
+  defined as:
+  (sizeof(val) <= 4 ? hash_32(val, bits) : hash_long(val, bits)).
+  That means the hash algorithm has dependency on the size of macro
+  argument 'val'.
+  0. In function vhost_vsock_set_cid(), a 64bit CID is passed to
+  hash_min() to compute the hash key when inserting a vsock object into
+  the hash table.
+  0. In function vhost_vsock_get(), a 32bit CID is passed to hash_min()
+  to compute the hash key when looking up a vsock for an CID.
+
+Because the different size of the CID, hash_min() returns different hash
+key, thus fails to look up the vsock object for an CID.
+
+To fix this bug, we keep CID as u64 in the IOCTLs and virtio message
+headers, but explicitly convert u64 to u32 when deal with the hash table
+and vsock core.
+
+Fixes: 834e772c8db0 ("vhost/vsock: fix use-after-free in network stack callers")
+Link: https://github.com/stefanha/virtio/blob/vsock/trunk/content.tex
+Signed-off-by: Zha Bin <zhabin@linux.alibaba.com>
+Reviewed-by: Liu Jiang <gerry@linux.alibaba.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Acked-by: Jason Wang <jasowang@redhat.com>
+---
+ drivers/vhost/vsock.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/vhost/vsock.c b/drivers/vhost/vsock.c
+index bc42d38ae031..3fbc068eaa9b 100644
+--- a/drivers/vhost/vsock.c
++++ b/drivers/vhost/vsock.c
+@@ -642,7 +642,7 @@ static int vhost_vsock_set_cid(struct vhost_vsock *vsock, u64 guest_cid)
+ 		hash_del_rcu(&vsock->hash);
+ 
+ 	vsock->guest_cid = guest_cid;
+-	hash_add_rcu(vhost_vsock_hash, &vsock->hash, guest_cid);
++	hash_add_rcu(vhost_vsock_hash, &vsock->hash, vsock->guest_cid);
+ 	mutex_unlock(&vhost_vsock_mutex);
+ 
+ 	return 0;

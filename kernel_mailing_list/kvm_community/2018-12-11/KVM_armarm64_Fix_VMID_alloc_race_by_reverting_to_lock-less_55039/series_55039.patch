@@ -1,0 +1,168 @@
+From patchwork Tue Dec 11 12:23:57 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Christoffer Dall <christoffer.dall@arm.com>
+X-Patchwork-Id: 10723729
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1B2521751
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Dec 2018 12:24:07 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 0A13F289F8
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Dec 2018 12:24:07 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id F10C72A66F; Tue, 11 Dec 2018 12:24:06 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7F8E5289F8
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Dec 2018 12:24:06 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726465AbeLKMYF (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 11 Dec 2018 07:24:05 -0500
+Received: from usa-sjc-mx-foss1.foss.arm.com ([217.140.101.70]:46206 "EHLO
+        foss.arm.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726250AbeLKMYF (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 11 Dec 2018 07:24:05 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 59B9CEBD;
+        Tue, 11 Dec 2018 04:24:04 -0800 (PST)
+Received: from localhost (e113682-lin.copenhagen.arm.com [10.32.144.41])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ BE0373F6A8;
+        Tue, 11 Dec 2018 04:24:03 -0800 (PST)
+From: Christoffer Dall <christoffer.dall@arm.com>
+To: linux-arm-kernel@lists.infradead.org
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        Marc Zyngier <marc.zyngier@arm.com>, julien.thierry@arm.com,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        stable@vger.kernel.org
+Subject: [PATCH] KVM: arm/arm64: Fix VMID alloc race by reverting to lock-less
+Date: Tue, 11 Dec 2018 13:23:57 +0100
+Message-Id: <20181211122357.15320-1-christoffer.dall@arm.com>
+X-Mailer: git-send-email 2.18.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+We recently addressed a VMID generation race by introducing a read/write
+lock around accesses and updates to the vmid generation values.
+
+However, kvm_arch_vcpu_ioctl_run() also calls need_new_vmid_gen() but
+does so without taking the read lock.
+
+As far as I can tell, this can lead to the same kind of race:
+
+  VM 0, VCPU 0			VM 0, VCPU 1
+  ------------			------------
+  update_vttbr (vmid 254)
+  				update_vttbr (vmid 1) // roll over
+				read_lock(kvm_vmid_lock);
+				force_vm_exit()
+  local_irq_disable
+  need_new_vmid_gen == false //because vmid gen matches
+
+  enter_guest (vmid 254)
+  				kvm_arch.vttbr = <PGD>:<VMID 1>
+				read_unlock(kvm_vmid_lock);
+
+  				enter_guest (vmid 1)
+
+Which results in running two VCPUs in the same VM with different VMIDs
+and (even worse) other VCPUs from other VMs could now allocate clashing
+VMID 254 from the new generation as long as VCPU 0 is not exiting.
+
+Attempt to solve this by making sure vttbr is updated before another CPU
+can observe the updated VMID generation.
+
+Cc: stable@vger.kernel.org
+Fixes: f0cf47d939d0 "KVM: arm/arm64: Close VMID generation race"
+Reviewed-by: Julien Thierry <julien.thierry@arm.com>
+Signed-off-by: Christoffer Dall <christoffer.dall@arm.com>
+---
+ virt/kvm/arm/arm.c | 23 +++++++++++------------
+ 1 file changed, 11 insertions(+), 12 deletions(-)
+
+diff --git a/virt/kvm/arm/arm.c b/virt/kvm/arm/arm.c
+index 23774970c9df..abcd29db2d7a 100644
+--- a/virt/kvm/arm/arm.c
++++ b/virt/kvm/arm/arm.c
+@@ -66,7 +66,7 @@ static DEFINE_PER_CPU(struct kvm_vcpu *, kvm_arm_running_vcpu);
+ static atomic64_t kvm_vmid_gen = ATOMIC64_INIT(1);
+ static u32 kvm_next_vmid;
+ static unsigned int kvm_vmid_bits __read_mostly;
+-static DEFINE_RWLOCK(kvm_vmid_lock);
++static DEFINE_SPINLOCK(kvm_vmid_lock);
+ 
+ static bool vgic_present;
+ 
+@@ -484,7 +484,9 @@ void force_vm_exit(const cpumask_t *mask)
+  */
+ static bool need_new_vmid_gen(struct kvm *kvm)
+ {
+-	return unlikely(kvm->arch.vmid_gen != atomic64_read(&kvm_vmid_gen));
++	u64 current_vmid_gen = atomic64_read(&kvm_vmid_gen);
++	smp_rmb(); /* Orders read of kvm_vmid_gen and kvm->arch.vmid */
++	return unlikely(READ_ONCE(kvm->arch.vmid_gen) != current_vmid_gen);
+ }
+ 
+ /**
+@@ -499,16 +501,11 @@ static void update_vttbr(struct kvm *kvm)
+ {
+ 	phys_addr_t pgd_phys;
+ 	u64 vmid, cnp = kvm_cpu_has_cnp() ? VTTBR_CNP_BIT : 0;
+-	bool new_gen;
+ 
+-	read_lock(&kvm_vmid_lock);
+-	new_gen = need_new_vmid_gen(kvm);
+-	read_unlock(&kvm_vmid_lock);
+-
+-	if (!new_gen)
++	if (!need_new_vmid_gen(kvm))
+ 		return;
+ 
+-	write_lock(&kvm_vmid_lock);
++	spin_lock(&kvm_vmid_lock);
+ 
+ 	/*
+ 	 * We need to re-check the vmid_gen here to ensure that if another vcpu
+@@ -516,7 +513,7 @@ static void update_vttbr(struct kvm *kvm)
+ 	 * use the same vmid.
+ 	 */
+ 	if (!need_new_vmid_gen(kvm)) {
+-		write_unlock(&kvm_vmid_lock);
++		spin_unlock(&kvm_vmid_lock);
+ 		return;
+ 	}
+ 
+@@ -539,7 +536,6 @@ static void update_vttbr(struct kvm *kvm)
+ 		kvm_call_hyp(__kvm_flush_vm_context);
+ 	}
+ 
+-	kvm->arch.vmid_gen = atomic64_read(&kvm_vmid_gen);
+ 	kvm->arch.vmid = kvm_next_vmid;
+ 	kvm_next_vmid++;
+ 	kvm_next_vmid &= (1 << kvm_vmid_bits) - 1;
+@@ -550,7 +546,10 @@ static void update_vttbr(struct kvm *kvm)
+ 	vmid = ((u64)(kvm->arch.vmid) << VTTBR_VMID_SHIFT) & VTTBR_VMID_MASK(kvm_vmid_bits);
+ 	kvm->arch.vttbr = kvm_phys_to_vttbr(pgd_phys) | vmid | cnp;
+ 
+-	write_unlock(&kvm_vmid_lock);
++	smp_wmb();
++	WRITE_ONCE(kvm->arch.vmid_gen, atomic64_read(&kvm_vmid_gen));
++
++	spin_unlock(&kvm_vmid_lock);
+ }
+ 
+ static int kvm_vcpu_first_run_init(struct kvm_vcpu *vcpu)

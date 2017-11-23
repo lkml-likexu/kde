@@ -1,5 +1,7 @@
 #!/bin/bash
 
+rm daily-news.txt
+rm details.txt
 path="/Volumes/hardcore/intel/commit-changes-today"
 cd $HUB
 

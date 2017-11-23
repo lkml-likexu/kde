@@ -1,0 +1,147 @@
+From patchwork Thu Feb 21 01:22:26 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Jerome Glisse <jglisse@redhat.com>
+X-Patchwork-Id: 10823055
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9E14A1399
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Feb 2019 01:23:03 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 8E72B2FE2D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Feb 2019 01:23:03 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 7F8DE2FE3A; Thu, 21 Feb 2019 01:23:03 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 03DDB2FE2D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Feb 2019 01:23:03 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726920AbfBUBWv (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 20 Feb 2019 20:22:51 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:54402 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726137AbfBUBWu (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 20 Feb 2019 20:22:50 -0500
+Received: from smtp.corp.redhat.com (int-mx02.intmail.prod.int.phx2.redhat.com
+ [10.5.11.12])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 8002A81DE9;
+        Thu, 21 Feb 2019 01:22:50 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-120-249.rdu2.redhat.com
+ [10.10.120.249])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 3889360BF2;
+        Thu, 21 Feb 2019 01:22:46 +0000 (UTC)
+From: jglisse@redhat.com
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org
+Cc: linux-mm@kvack.org, linux-kernel@vger.kernel.org, =?utf-8?b?SsOpcsO0bWUg?=
+	=?utf-8?b?R2xpc3Nl?= <jglisse@redhat.com>,
+ Andrea Arcangeli <aarcange@redhat.com>, Peter Xu <peterx@redhat.com>,
+ Andrew Morton <akpm@linux-foundation.org>
+Subject: [PATCH v2 0/1]  Restore change_pte optimization
+Date: Wed, 20 Feb 2019 20:22:26 -0500
+Message-Id: <20190221012227.13236-1-jglisse@redhat.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.12
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.25]);
+ Thu, 21 Feb 2019 01:22:50 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Jérôme Glisse <jglisse@redhat.com>
+
+This patch is on top of my patchset to add context information to
+mmu notifier [1] you can find a branch with everything [2]. It has
+been tested with qemu/KVM building kernel within the guest and also
+running a benchmark which the result are given below.
+
+The change_pte() callback is impaired by the range invalidation call-
+back within KVM as the range invalidation callback as those do fully
+invalidate the secondary mmu. This means that there is a window between
+the range_start callback and the change_pte callback where the secondary
+mmu for the address is empty. Guest can fault on that address during
+that window.
+
+That window can last for some times if the kernel code which is
+doing the invalidation is interrupted or if they are other mmu
+listener for the process that might sleep within their range_start
+callback.
+
+With this patch KVM will ignore the range_start and range_end call-
+back and will rely solely on the change_pte callback to update the
+secondary mmu. This means that the secondary mmu never have an empty
+entry for the address between range_start and range_end and hence
+the guest will not have a chance to fault.
+
+This optimization is not valid for all the mmu notifier cases and
+thanks to the patchset that add context informations to the mmu
+notifier [1] we can now identify within KVM when it is safe to rely
+on this optimization.
+
+Roughly it is safe when:
+    - going from read only to read and write (same or different pfn)
+    - going from read and write to read only same pfn
+    - going from read only to read only different pfn
+
+Longer explaination in [1] and [3].
+
+Running ksm02 from ltp gives the following results:
+
+before  mean  {real: 675.460632, user: 857.771423, sys: 215.929657, npages: 4773.066895}
+before  stdev {real:  37.035435, user:   4.395942, sys:   3.976172, npages:  675.352783}
+after   mean  {real: 672.515503, user: 855.817322, sys: 200.902710, npages: 4899.000000}
+after   stdev {real:  37.340954, user:   4.051633, sys:   3.894153, npages:  742.413452}
+
+Roughly 7%-8% less time spent in the kernel. So we are saving few
+cycles (this is with KSM enabled on the host and ksm sleep set to
+0). Dunno how this translate to real workload.
+
+
+Note that with the context information further optimization are now
+possible within KVM. For instance you can find out if a range is
+updated to read only (ie no pfn change just protection change) and
+update the secondary mmu accordingly.
+
+You can also identify munmap()/mremap() syscall and only free up the
+resources you have allocated for the range (like freeing up secondary
+page table for the range or data structure) when it is an munmap or
+a mremap. Today my understanding is that kvm_unmap_hva_range() will
+free up resources always assuming it is an munmap of some sort. So
+for mundane invalidation (like migration, reclaim, mprotect, fork,
+...) KVM is freeing up potential mega bytes of structure that it will
+have to re-allocate shortly there after (see [4] for WIP example).
+
+Cheers,
+Jérôme
+
+[1] https://lkml.org/lkml/2019/2/19/752
+[2] https://cgit.freedesktop.org/~glisse/linux/log/?h=mmu-notifier-v05
+[3] https://lkml.org/lkml/2019/2/19/754
+[4] https://cgit.freedesktop.org/~glisse/linux/log/?h=wip-kvm-mmu-notifier-opti
+
+Cc: Andrea Arcangeli <aarcange@redhat.com>
+Cc: Peter Xu <peterx@redhat.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+
+Jérôme Glisse (1):
+  kvm/mmu_notifier: re-enable the change_pte() optimization.
+
+ virt/kvm/kvm_main.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)

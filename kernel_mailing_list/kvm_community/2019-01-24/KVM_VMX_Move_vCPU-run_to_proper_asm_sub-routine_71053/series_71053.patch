@@ -1,0 +1,4160 @@
+From patchwork Thu Jan 24 17:58:18 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779723
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id EF19D139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:03 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E0C6331B9D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:03 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id D0B5A31BBB; Thu, 24 Jan 2019 17:59:03 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4587A31B9D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:03 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729096AbfAXR7C (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:02 -0500
+Received: from mga17.intel.com ([192.55.52.151]:56928 "EHLO mga17.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727765AbfAXR7C (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:02 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga107.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:01 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775876"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 01/29] KVM: VMX: Compare only a single byte for VMCS'
+ "launched" in vCPU-run
+Date: Thu, 24 Jan 2019 09:58:18 -0800
+Message-Id: <20190124175845.15926-2-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+The vCPU-run asm blob does a manual comparison of a VMCS' launched
+status to execute the correct VM-Enter instruction, i.e. VMLAUNCH vs.
+VMRESUME.  The launched flag is a bool, which is a typedef of _Bool.
+C99 does not define an exact size for _Bool, stating only that is must
+be large enough to hold '0' and '1'.  Most, if not all, compilers use
+a single byte for _Bool, including gcc[1].
+
+Originally, 'launched' was of type 'int' and so the asm blob used 'cmpl'
+to check the launch status.  When 'launched' was moved to be stored on a
+per-VMCS basis, struct vcpu_vmx's "temporary" __launched flag was added
+in order to avoid having to pass the current VMCS into the asm blob.
+The new  '__launched' was defined as a 'bool' and not an 'int', but the
+'cmp' instruction was not updated.
+
+This has not caused any known problems, likely due to compilers aligning
+variables to 4-byte or 8-byte boundaries and KVM zeroing out struct
+vcpu_vmx during allocation.  I.e. vCPU-run accesses "junk" data, it just
+happens to always be zero and so doesn't affect the result.
+
+[1] https://gcc.gnu.org/ml/gcc-patches/2000-10/msg01127.html
+
+Fixes: d462b8192368 ("KVM: VMX: Keep list of loaded VMCSs, instead of vcpus")
+Cc: <stable@vger.kernel.org>
+Reviewed-by: Jim Mattson <jmattson@google.com>
+Reviewed-by: Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 85683b0d9ad3..57735ef11179 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6401,7 +6401,7 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"mov %%" _ASM_AX", %%cr2 \n\t"
+ 		"3: \n\t"
+ 		/* Check if vmlaunch or vmresume is needed */
+-		"cmpl $0, %c[launched](%%" _ASM_CX ") \n\t"
++		"cmpb $0, %c[launched](%%" _ASM_CX ") \n\t"
+ 		/* Load guest registers.  Don't clobber flags. */
+ 		"mov %c[rax](%%" _ASM_CX "), %%" _ASM_AX " \n\t"
+ 		"mov %c[rbx](%%" _ASM_CX "), %%" _ASM_BX " \n\t"
+
+From patchwork Thu Jan 24 17:58:19 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779779
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8E79313B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:49 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 81E6532456
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:49 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 747A532460; Thu, 24 Jan 2019 17:59:49 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1975C32456
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:49 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729297AbfAXR7r (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:47 -0500
+Received: from mga17.intel.com ([192.55.52.151]:56928 "EHLO mga17.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726252AbfAXR7C (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:02 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga107.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:01 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775877"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 02/29] KVM: nVMX: Check a single byte for VMCS "launched"
+ in nested early checks
+Date: Thu, 24 Jan 2019 09:58:19 -0800
+Message-Id: <20190124175845.15926-3-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Nested early checks does a manual comparison of a VMCS' launched status
+in its asm blob to execute the correct VM-Enter instruction, i.e.
+VMLAUNCH vs. VMRESUME.  The launched flag is a bool, which is a typedef
+of _Bool.  C99 does not define an exact size for _Bool, stating only
+that is must be large enough to hold '0' and '1'.  Most, if not all,
+compilers use a single byte for _Bool, including gcc[1].
+
+The use of 'cmpl' instead of 'cmpb' was not deliberate, but rather the
+result of a copy-paste as the asm blob was directly derived from the asm
+blob for vCPU-run.
+
+This has not caused any known problems, likely due to compilers aligning
+variables to 4-byte or 8-byte boundaries and KVM zeroing out struct
+vcpu_vmx during allocation.  I.e. vCPU-run accesses "junk" data, it just
+happens to always be zero and so doesn't affect the result.
+
+[1] https://gcc.gnu.org/ml/gcc-patches/2000-10/msg01127.html
+
+Fixes: 52017608da33 ("KVM: nVMX: add option to perform early consistency checks via H/W")
+Cc: <stable@vger.kernel.org>
+Reviewed-by: Jim Mattson <jmattson@google.com>
+Reviewed-by: Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 2616bd2c7f2c..cfcf67e548fa 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -2760,7 +2760,7 @@ static int nested_vmx_check_vmentry_hw(struct kvm_vcpu *vcpu)
+ 		"add $%c[wordsize], %%" _ASM_SP "\n\t" /* un-adjust RSP */
+ 
+ 		/* Check if vmlaunch or vmresume is needed */
+-		"cmpl $0, %c[launched](%% " _ASM_CX")\n\t"
++		"cmpb $0, %c[launched](%% " _ASM_CX")\n\t"
+ 
+ 		"call vmx_vmenter\n\t"
+ 
+
+From patchwork Thu Jan 24 17:58:20 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779773
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9F62E13B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:43 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 92BF831BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:43 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 871A232457; Thu, 24 Jan 2019 17:59:43 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1E17031BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:43 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729187AbfAXR7C (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:02 -0500
+Received: from mga17.intel.com ([192.55.52.151]:56928 "EHLO mga17.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727765AbfAXR7C (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:02 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga107.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:01 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775878"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 03/29] KVM: VMX: Modify only RSP when creating a
+ placeholder for guest's RCX
+Date: Thu, 24 Jan 2019 09:58:20 -0800
+Message-Id: <20190124175845.15926-4-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+In the vCPU-run asm blob, the guest's RCX is temporarily saved onto the
+stack after VM-Exit as the exit flow must first load a register with a
+pointer to the vCPU's save area in order to save the guest's registers.
+RCX is arbitrarily designated as the scratch register.
+
+Since the stack usage is to (1)save host, (2)save guest, (3)load host
+and (4)load guest, the code can't conform to the stack's natural FIFO
+semantics, i.e. it can't simply do PUSH/POP.  Regardless of whether it
+is done for the host's value or guest's value, at some point the code
+needs to access the stack using a non-traditional method, e.g. MOV
+instead of POP.  vCPU-run opts to create a placeholder on the stack for
+guest's RCX (by adjusting RSP) and saves RCX to its place immediately
+after VM-Exit (via MOV).
+
+In other words, the purpose of the first 'PUSH RCX' at the start of
+the vCPU-run asm blob  is to adjust RSP down, i.e. there's no need to
+actually access memory.  Use 'SUB $wordsize, RSP' instead of 'PUSH RCX'
+to make it more obvious that the intent is simply to create a gap on
+the stack for the guest's RCX.
+
+Reviewed-by: Jim Mattson <jmattson@google.com>
+Reviewed-by: Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 57735ef11179..0f8da2e6f207 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6377,7 +6377,7 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 	asm(
+ 		/* Store host registers */
+ 		"push %%" _ASM_DX "; push %%" _ASM_BP ";"
+-		"push %%" _ASM_CX " \n\t" /* placeholder for guest rcx */
++		"sub $%c[wordsize], %%" _ASM_SP "\n\t" /* placeholder for guest RCX */
+ 		"push %%" _ASM_CX " \n\t"
+ 		"sub $%c[wordsize], %%" _ASM_SP "\n\t" /* temporarily adjust RSP for CALL */
+ 		"cmp %%" _ASM_SP ", %c[host_rsp](%%" _ASM_CX ") \n\t"
+
+From patchwork Thu Jan 24 17:58:21 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779777
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 69E6A13B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:46 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5DBD332456
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:46 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 521A132460; Thu, 24 Jan 2019 17:59:46 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 07B3F32456
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:46 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729304AbfAXR7o (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:44 -0500
+Received: from mga17.intel.com ([192.55.52.151]:56928 "EHLO mga17.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729104AbfAXR7C (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:02 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga107.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:01 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775880"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 04/29] KVM: VMX: Save RSI to an unused output in the
+ vCPU-run asm blob
+Date: Thu, 24 Jan 2019 09:58:21 -0800
+Message-Id: <20190124175845.15926-5-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+RSI is clobbered by the vCPU-run asm blob, but it's not marked as such,
+probably because GCC doesn't let you mark inputs as clobbered.  "Save"
+RSI to a dummy output so that GCC recognizes it as being clobbered.
+
+Fixes: 773e8a0425c9 ("x86/kvm: use Enlightened VMCS when running on Hyper-V")
+Reviewed-by: Jim Mattson <jmattson@google.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 0f8da2e6f207..b7cd24dbd01d 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6472,7 +6472,7 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"xor %%esi, %%esi \n\t"
+ 		"xor %%edi, %%edi \n\t"
+ 		"pop  %%" _ASM_BP "; pop  %%" _ASM_DX " \n\t"
+-	      : ASM_CALL_CONSTRAINT
++	      : ASM_CALL_CONSTRAINT, "=S"((int){0})
+ 	      : "c"(vmx), "d"((unsigned long)HOST_RSP), "S"(evmcs_rsp),
+ 		[launched]"i"(offsetof(struct vcpu_vmx, __launched)),
+ 		[fail]"i"(offsetof(struct vcpu_vmx, fail)),
+
+From patchwork Thu Jan 24 17:58:22 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779775
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 56D60139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:44 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4A73D31BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:44 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 3EBD232457; Thu, 24 Jan 2019 17:59:44 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id DCD8B31BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:43 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729254AbfAXR7m (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:42 -0500
+Received: from mga17.intel.com ([192.55.52.151]:56928 "EHLO mga17.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729122AbfAXR7C (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:02 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga107.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775881"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 05/29] KVM: VMX: Manually load RDX in vCPU-run asm blob
+Date: Thu, 24 Jan 2019 09:58:22 -0800
+Message-Id: <20190124175845.15926-6-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Load RDX with the VMCS.HOST_RSP field encoding on-demand instead of
+delegating to the compiler via an input constraint.  In addition to
+saving one whole MOV instruction, this allows RDX to be properly
+clobbered (in a future patch) instead of being saved/loaded to/from
+the stack.
+
+Despite nested_vmx_check_vmentry_hw() having similar code, leave it
+alone, for now.  In that case, RDX is unconditionally used and isn't
+clobbered, i.e. sending in HOST_RSP as an input is simpler.
+
+Note that because HOST_RSP is an enum and not a define, it must be
+redefined as an immediate instead of using __stringify(HOST_RSP).  The
+naming "conflict" between host_rsp and HOST_RSP is slightly confusing,
+but the former will be removed in a future patch, at which point
+HOST_RSP is absolutely what is desired.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Reviewed-by: Jim Mattson <jmattson@google.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index b7cd24dbd01d..f0084726d0c3 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6389,6 +6389,7 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"mov %%" _ASM_SP ", (%%" _ASM_SI ") \n\t"
+ 		"jmp 1f \n\t"
+ 		"2: \n\t"
++		"mov $%c[HOST_RSP], %%" _ASM_DX " \n\t"
+ 		__ex("vmwrite %%" _ASM_SP ", %%" _ASM_DX) "\n\t"
+ 		"1: \n\t"
+ 		"add $%c[wordsize], %%" _ASM_SP "\n\t" /* un-adjust RSP */
+@@ -6473,10 +6474,11 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"xor %%edi, %%edi \n\t"
+ 		"pop  %%" _ASM_BP "; pop  %%" _ASM_DX " \n\t"
+ 	      : ASM_CALL_CONSTRAINT, "=S"((int){0})
+-	      : "c"(vmx), "d"((unsigned long)HOST_RSP), "S"(evmcs_rsp),
++	      : "c"(vmx), "S"(evmcs_rsp),
+ 		[launched]"i"(offsetof(struct vcpu_vmx, __launched)),
+ 		[fail]"i"(offsetof(struct vcpu_vmx, fail)),
+ 		[host_rsp]"i"(offsetof(struct vcpu_vmx, host_rsp)),
++		[HOST_RSP]"i"(HOST_RSP),
+ 		[rax]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RAX])),
+ 		[rbx]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RBX])),
+ 		[rcx]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RCX])),
+
+From patchwork Thu Jan 24 17:58:23 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779765
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 7145413B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:39 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 649BB32456
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:39 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 592BF32460; Thu, 24 Jan 2019 17:59:39 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 0307932456
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:39 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729204AbfAXR7D (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:03 -0500
+Received: from mga17.intel.com ([192.55.52.151]:56935 "EHLO mga17.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729193AbfAXR7D (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:03 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga107.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775882"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 06/29] KVM: VMX: Let the compiler save/load RDX during
+ vCPU-run
+Date: Thu, 24 Jan 2019 09:58:23 -0800
+Message-Id: <20190124175845.15926-7-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Per commit c20363006af6 ("KVM: VMX: Let gcc to choose which registers
+to save (x86_64)"), the only reason RDX is saved/loaded to/from the
+stack is because it was specified as an input, i.e. couldn't be marked
+as clobbered (ignoring the fact that "saving" it to a dummy output
+would indirectly mark it as clobbered).
+
+Now that RDX is no longer an input, mark it as clobbered and zero it
+out to prevent speculative use.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Reviewed-by: Jim Mattson <jmattson@google.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index f0084726d0c3..b509e22dbcbe 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6376,7 +6376,7 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 
+ 	asm(
+ 		/* Store host registers */
+-		"push %%" _ASM_DX "; push %%" _ASM_BP ";"
++		"push %%" _ASM_BP " \n\t"
+ 		"sub $%c[wordsize], %%" _ASM_SP "\n\t" /* placeholder for guest RCX */
+ 		"push %%" _ASM_CX " \n\t"
+ 		"sub $%c[wordsize], %%" _ASM_SP "\n\t" /* temporarily adjust RSP for CALL */
+@@ -6470,9 +6470,10 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 
+ 		"xor %%eax, %%eax \n\t"
+ 		"xor %%ebx, %%ebx \n\t"
++		"xor %%edx, %%edx \n\t"
+ 		"xor %%esi, %%esi \n\t"
+ 		"xor %%edi, %%edi \n\t"
+-		"pop  %%" _ASM_BP "; pop  %%" _ASM_DX " \n\t"
++		"pop  %%" _ASM_BP " \n\t"
+ 	      : ASM_CALL_CONSTRAINT, "=S"((int){0})
+ 	      : "c"(vmx), "S"(evmcs_rsp),
+ 		[launched]"i"(offsetof(struct vcpu_vmx, __launched)),
+@@ -6500,10 +6501,10 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		[wordsize]"i"(sizeof(ulong))
+ 	      : "cc", "memory"
+ #ifdef CONFIG_X86_64
+-		, "rax", "rbx", "rdi"
++		, "rax", "rbx", "rdx", "rdi"
+ 		, "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
+ #else
+-		, "eax", "ebx", "edi"
++		, "eax", "ebx", "edx", "edi"
+ #endif
+ 	      );
+ }
+
+From patchwork Thu Jan 24 17:58:24 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779725
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8C685139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:06 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7F45931B9D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:06 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 730B331BBC; Thu, 24 Jan 2019 17:59:06 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 0D6EC31B9D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:06 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729210AbfAXR7E (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:04 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19102 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729188AbfAXR7D (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:03 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775883"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 07/29] KVM: nVMX: Remove a rogue "rax" clobber from
+ nested_vmx_check_vmentry_hw()
+Date: Thu, 24 Jan 2019 09:58:24 -0800
+Message-Id: <20190124175845.15926-8-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+RAX is not touched by nested_vmx_check_vmentry_hw(), directly or
+indirectly via e.g. VMX_UPDATE_VMCS_HOST_RSP, vmx_vmenter or fixup.
+Remove it from the clobber list.
+
+Fixes: 52017608da33 ("KVM: nVMX: add option to perform early consistency checks via H/W")
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Reviewed-by: Jim Mattson <jmattson@google.com>
+---
+ arch/x86/kvm/vmx/nested.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index cfcf67e548fa..7b4c45b2361e 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -2772,7 +2772,7 @@ static int nested_vmx_check_vmentry_hw(struct kvm_vcpu *vcpu)
+ 		[fail]"i"(offsetof(struct vcpu_vmx, fail)),
+ 		[host_rsp]"i"(offsetof(struct vcpu_vmx, host_rsp)),
+ 		[wordsize]"i"(sizeof(ulong))
+-	      : "rax", "cc", "memory"
++	      : "cc", "memory"
+ 	);
+ 
+ 	preempt_enable();
+
+From patchwork Thu Jan 24 17:58:25 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779763
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B222913B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:37 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A508032456
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:37 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 998FB32460; Thu, 24 Jan 2019 17:59:37 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 421C332456
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:37 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729284AbfAXR7c (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:32 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19102 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729230AbfAXR7H (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:07 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775884"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 08/29] KVM: nVMX: Drop STACK_FRAME_NON_STANDARD from
+ nested_vmx_check_vmentry_hw()
+Date: Thu, 24 Jan 2019 09:58:25 -0800
+Message-Id: <20190124175845.15926-9-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+...as it doesn't technically actually do anything non-standard with the
+stack even though it modifies RSP in a weird way.  E.g. RSP is loaded
+with VMCS.HOST_RSP if the VM-Enter gets far enough to trigger VM-Exit,
+but it's simply reloaded with the current value.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Reviewed-by: Jim Mattson <jmattson@google.com>
+---
+ arch/x86/kvm/vmx/nested.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 7b4c45b2361e..671887f7d8c7 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -2808,8 +2808,6 @@ static int nested_vmx_check_vmentry_hw(struct kvm_vcpu *vcpu)
+ 
+ 	return 0;
+ }
+-STACK_FRAME_NON_STANDARD(nested_vmx_check_vmentry_hw);
+-
+ 
+ static inline bool nested_vmx_prepare_msr_bitmap(struct kvm_vcpu *vcpu,
+ 						 struct vmcs12 *vmcs12);
+
+From patchwork Thu Jan 24 17:58:26 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779767
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 24E70139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:40 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1876731BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:40 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 0D03732457; Thu, 24 Jan 2019 17:59:40 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B13F931BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:29 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729296AbfAXR72 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:28 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19102 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729224AbfAXR7H (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:07 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775885"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 09/29] KVM: nVMX: Explicitly reference the scratch reg in
+ nested early checks
+Date: Thu, 24 Jan 2019 09:58:26 -0800
+Message-Id: <20190124175845.15926-10-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Using %1 to reference RCX, i.e. the 'vmx' pointer', is obtuse and
+fragile, e.g. it results in cryptic and infurating compile errors if the
+output constraints touched by anything more than a gentle breeze.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Reviewed-by: Jim Mattson <jmattson@google.com>
+---
+ arch/x86/kvm/vmx/nested.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 671887f7d8c7..b92291b8e54b 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -2756,7 +2756,7 @@ static int nested_vmx_check_vmentry_hw(struct kvm_vcpu *vcpu)
+ 		/* Set HOST_RSP */
+ 		"sub $%c[wordsize], %%" _ASM_SP "\n\t" /* temporarily adjust RSP for CALL */
+ 		__ex("vmwrite %%" _ASM_SP ", %%" _ASM_DX) "\n\t"
+-		"mov %%" _ASM_SP ", %c[host_rsp](%1)\n\t"
++		"mov %%" _ASM_SP ", %c[host_rsp](%% " _ASM_CX ")\n\t"
+ 		"add $%c[wordsize], %%" _ASM_SP "\n\t" /* un-adjust RSP */
+ 
+ 		/* Check if vmlaunch or vmresume is needed */
+
+From patchwork Thu Jan 24 17:58:27 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779753
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 61C6F13B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:27 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5478B31BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:27 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 48C8D32457; Thu, 24 Jan 2019 17:59:27 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id CE5A631BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:26 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729238AbfAXR7Z (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:25 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19102 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729254AbfAXR7I (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:08 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775886"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 10/29] KVM: nVMX: Capture VM-Fail to a local var in
+ nested_vmx_check_vmentry_hw()
+Date: Thu, 24 Jan 2019 09:58:27 -0800
+Message-Id: <20190124175845.15926-11-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Unlike the primary vCPU-run flow, the nested early checks code doesn't
+actually want to propagate VM-Fail back 'vmx'.  Yay copy+paste.
+
+In additional to eliminating the need to clear vmx->fail before
+returning, using a local boolean also drops a reference to 'vmx' in the
+asm blob.  Dropping the reference to 'vmx' will save a register in the
+long run as future patches will shift all pointer references from 'vmx'
+to 'vmx->loaded_vmcs'.
+
+Fixes: 52017608da33 ("KVM: nVMX: add option to perform early consistency checks via H/W")
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 16 ++++++++++------
+ 1 file changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index b92291b8e54b..495edb36b525 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -2717,6 +2717,7 @@ static int nested_vmx_check_vmentry_hw(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+ 	unsigned long cr3, cr4;
++	bool vm_fail;
+ 
+ 	if (!nested_early_check)
+ 		return 0;
+@@ -2762,14 +2763,18 @@ static int nested_vmx_check_vmentry_hw(struct kvm_vcpu *vcpu)
+ 		/* Check if vmlaunch or vmresume is needed */
+ 		"cmpb $0, %c[launched](%% " _ASM_CX")\n\t"
+ 
++		/*
++		 * VMLAUNCH and VMRESUME clear RFLAGS.{CF,ZF} on VM-Exit, set
++		 * RFLAGS.CF on VM-Fail Invalid and set RFLAGS.ZF on VM-Fail
++		 * Valid.  vmx_vmenter() directly "returns" RFLAGS, and so the
++		 * results of VM-Enter is captured via SETBE to vm_fail.
++		 */
+ 		"call vmx_vmenter\n\t"
+ 
+-		/* Set vmx->fail accordingly */
+-		"setbe %c[fail](%% " _ASM_CX")\n\t"
+-	      : ASM_CALL_CONSTRAINT
++		"setbe %%dl\n\t"
++	      : ASM_CALL_CONSTRAINT, "=dl"(vm_fail)
+ 	      : "c"(vmx), "d"((unsigned long)HOST_RSP),
+ 		[launched]"i"(offsetof(struct vcpu_vmx, __launched)),
+-		[fail]"i"(offsetof(struct vcpu_vmx, fail)),
+ 		[host_rsp]"i"(offsetof(struct vcpu_vmx, host_rsp)),
+ 		[wordsize]"i"(sizeof(ulong))
+ 	      : "cc", "memory"
+@@ -2782,10 +2787,9 @@ static int nested_vmx_check_vmentry_hw(struct kvm_vcpu *vcpu)
+ 	if (vmx->msr_autoload.guest.nr)
+ 		vmcs_write32(VM_ENTRY_MSR_LOAD_COUNT, vmx->msr_autoload.guest.nr);
+ 
+-	if (vmx->fail) {
++	if (vm_fail) {
+ 		WARN_ON_ONCE(vmcs_read32(VM_INSTRUCTION_ERROR) !=
+ 			     VMXERR_ENTRY_INVALID_CONTROL_FIELD);
+-		vmx->fail = 0;
+ 		return 1;
+ 	}
+ 
+
+From patchwork Thu Jan 24 17:58:28 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779759
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 22E64139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:35 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1674D32456
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:35 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 0B15632460; Thu, 24 Jan 2019 17:59:35 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id F15B532456
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:33 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729265AbfAXR7d (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:33 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19102 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729231AbfAXR7H (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:07 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775887"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 11/29] KVM: nVMX: Capture VM-Fail via CC_{SET,OUT} in
+ nested early checks
+Date: Thu, 24 Jan 2019 09:58:28 -0800
+Message-Id: <20190124175845.15926-12-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Take advantage of __GCC_ASM_FLAG_OUTPUTS__ when possible and also let
+the compiler choose the register in all cases.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Reviewed-by: Jim Mattson <jmattson@google.com>
+---
+ arch/x86/kvm/vmx/nested.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 495edb36b525..15a8ae7bb247 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -2767,12 +2767,12 @@ static int nested_vmx_check_vmentry_hw(struct kvm_vcpu *vcpu)
+ 		 * VMLAUNCH and VMRESUME clear RFLAGS.{CF,ZF} on VM-Exit, set
+ 		 * RFLAGS.CF on VM-Fail Invalid and set RFLAGS.ZF on VM-Fail
+ 		 * Valid.  vmx_vmenter() directly "returns" RFLAGS, and so the
+-		 * results of VM-Enter is captured via SETBE to vm_fail.
++		 * results of VM-Enter is captured via CC_{SET,OUT} to vm_fail.
+ 		 */
+ 		"call vmx_vmenter\n\t"
+ 
+-		"setbe %%dl\n\t"
+-	      : ASM_CALL_CONSTRAINT, "=dl"(vm_fail)
++		CC_SET(be)
++	      : ASM_CALL_CONSTRAINT, CC_OUT(be) (vm_fail)
+ 	      : "c"(vmx), "d"((unsigned long)HOST_RSP),
+ 		[launched]"i"(offsetof(struct vcpu_vmx, __launched)),
+ 		[host_rsp]"i"(offsetof(struct vcpu_vmx, host_rsp)),
+
+From patchwork Thu Jan 24 17:58:29 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779743
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3663713BF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:20 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 22EA632445
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:20 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 177EF3244C; Thu, 24 Jan 2019 17:59:20 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id AFAB932445
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729266AbfAXR7I (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:08 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19162 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729228AbfAXR7H (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:07 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775888"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 12/29] KVM: nVMX: Reference vmx->loaded_vmcs->launched
+ directly
+Date: Thu, 24 Jan 2019 09:58:29 -0800
+Message-Id: <20190124175845.15926-13-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Temporarily propagating vmx->loaded_vmcs->launched to vmx->__launched
+is not functionally necessary, but rather was done historically to
+avoid passing both 'vmx' and 'loaded_vmcs' to the vCPU-run asm blob.
+Nested early checks inherited this behavior by virtue of copy+paste.
+
+A future patch will move HOST_RSP caching to be per-VMCS, i.e. store
+'host_rsp' in loaded VMCS.  Now that the reference to 'vmx->fail' is
+also gone from nested early checks, referencing 'loaded_vmcs' directly
+means we can drop the 'vmx' reference when introducing per-VMCS RSP
+caching.  And it means __launched can be dropped from struct vcpu_vmx
+if/when vCPU-run receives similar treatment.
+
+Note the use of a named register constraint for 'loaded_vmcs'.  Using
+RCX to hold 'vmx' was inherited from vCPU-run.  In the vCPU-run case,
+the scratch register needs to be explicitly defined as it is crushed
+when loading guest state, i.e. deferring to the compiler would corrupt
+the pointer.  Since nested early checks never loads guests state, it's
+a-ok to let the compiler pick any register.  Naming the constraint
+avoids the fragility of referencing constraints via %1, %2, etc.., which
+breaks horribly when modifying constraints, and generally makes the asm
+blob more readable.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 15a8ae7bb247..d42134f836a6 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -2751,8 +2751,6 @@ static int nested_vmx_check_vmentry_hw(struct kvm_vcpu *vcpu)
+ 		vmx->loaded_vmcs->host_state.cr4 = cr4;
+ 	}
+ 
+-	vmx->__launched = vmx->loaded_vmcs->launched;
+-
+ 	asm(
+ 		/* Set HOST_RSP */
+ 		"sub $%c[wordsize], %%" _ASM_SP "\n\t" /* temporarily adjust RSP for CALL */
+@@ -2761,7 +2759,7 @@ static int nested_vmx_check_vmentry_hw(struct kvm_vcpu *vcpu)
+ 		"add $%c[wordsize], %%" _ASM_SP "\n\t" /* un-adjust RSP */
+ 
+ 		/* Check if vmlaunch or vmresume is needed */
+-		"cmpb $0, %c[launched](%% " _ASM_CX")\n\t"
++		"cmpb $0, %c[launched](%[loaded_vmcs])\n\t"
+ 
+ 		/*
+ 		 * VMLAUNCH and VMRESUME clear RFLAGS.{CF,ZF} on VM-Exit, set
+@@ -2774,7 +2772,8 @@ static int nested_vmx_check_vmentry_hw(struct kvm_vcpu *vcpu)
+ 		CC_SET(be)
+ 	      : ASM_CALL_CONSTRAINT, CC_OUT(be) (vm_fail)
+ 	      : "c"(vmx), "d"((unsigned long)HOST_RSP),
+-		[launched]"i"(offsetof(struct vcpu_vmx, __launched)),
++		[loaded_vmcs]"r"(vmx->loaded_vmcs),
++		[launched]"i"(offsetof(struct loaded_vmcs, launched)),
+ 		[host_rsp]"i"(offsetof(struct vcpu_vmx, host_rsp)),
+ 		[wordsize]"i"(sizeof(ulong))
+ 	      : "cc", "memory"
+
+From patchwork Thu Jan 24 17:58:30 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779731
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 0A9C9139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:10 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id F1F5331B9D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:09 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id E446B31BBB; Thu, 24 Jan 2019 17:59:09 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id CE28131B9D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:08 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729256AbfAXR7I (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:08 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19131 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729223AbfAXR7G (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:06 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775889"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 13/29] KVM: nVMX: Let the compiler select the reg for
+ holding HOST_RSP
+Date: Thu, 24 Jan 2019 09:58:30 -0800
+Message-Id: <20190124175845.15926-14-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+...and provide an explicit name for the constraint.  Naming the input
+constraint makes the code self-documenting and also avoids the fragility
+of numerically referring to constraints, e.g. %4 breaks badly whenever
+the constraints are modified.
+
+Explicitly using RDX was inherited from vCPU-run, i.e. completely
+arbitrary.  Even vCPU-run doesn't truly need to explicitly use RDX, but
+doing so is more robust as vCPU-run needs tight control over its
+register usage.
+
+Note that while the naming "conflict" between host_rsp and HOST_RSP
+is slightly confusing, the former will be renamed slightly in a
+future patch, at which point HOST_RSP is absolutely what is desired.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index d42134f836a6..48281b0684ca 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -2752,9 +2752,8 @@ static int nested_vmx_check_vmentry_hw(struct kvm_vcpu *vcpu)
+ 	}
+ 
+ 	asm(
+-		/* Set HOST_RSP */
+ 		"sub $%c[wordsize], %%" _ASM_SP "\n\t" /* temporarily adjust RSP for CALL */
+-		__ex("vmwrite %%" _ASM_SP ", %%" _ASM_DX) "\n\t"
++		__ex("vmwrite %%" _ASM_SP ", %[HOST_RSP]") "\n\t"
+ 		"mov %%" _ASM_SP ", %c[host_rsp](%% " _ASM_CX ")\n\t"
+ 		"add $%c[wordsize], %%" _ASM_SP "\n\t" /* un-adjust RSP */
+ 
+@@ -2771,7 +2770,8 @@ static int nested_vmx_check_vmentry_hw(struct kvm_vcpu *vcpu)
+ 
+ 		CC_SET(be)
+ 	      : ASM_CALL_CONSTRAINT, CC_OUT(be) (vm_fail)
+-	      : "c"(vmx), "d"((unsigned long)HOST_RSP),
++	      : "c"(vmx),
++		[HOST_RSP]"r"((unsigned long)HOST_RSP),
+ 		[loaded_vmcs]"r"(vmx->loaded_vmcs),
+ 		[launched]"i"(offsetof(struct loaded_vmcs, launched)),
+ 		[host_rsp]"i"(offsetof(struct vcpu_vmx, host_rsp)),
+
+From patchwork Thu Jan 24 17:58:31 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779747
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E632D139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:23 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D818231BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:23 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id CC4A132456; Thu, 24 Jan 2019 17:59:23 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3A32631BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:23 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729250AbfAXR7T (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:19 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19162 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729237AbfAXR7J (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:09 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775891"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 14/29] KVM: nVMX: Cache host_rsp on a per-VMCS basis
+Date: Thu, 24 Jan 2019 09:58:31 -0800
+Message-Id: <20190124175845.15926-15-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Currently, host_rsp is cached on a per-vCPU basis, i.e. it's stored in
+struct vcpu_vmx.  In non-nested usage the caching is for all intents
+and purposes 100% effective, e.g. only the first VMLAUNCH needs to
+synchronize VMCS.HOST_RSP since the call stack to vmx_vcpu_run() is
+identical each and every time.  But when running a nested guest, KVM
+must invalidate the cache when switching the current VMCS as it can't
+guarantee the new VMCS has the same HOST_RSP as the previous VMCS.  In
+other words, the cache loses almost all of its efficacy when running a
+nested VM.
+
+Move host_rsp to struct vmcs_host_state, which is per-VMCS, so that it
+is cached on a per-VMCS basis and restores its 100% hit rate when
+nested VMs are in play.
+
+Note that the host_rsp cache for vmcs02 essentially "breaks" when
+nested early checks are enabled as nested_vmx_check_vmentry_hw() will
+see a different RSP at the time of its VM-Enter.  While it's possible
+to avoid even that VMCS.HOST_RSP synchronization, e.g. by employing a
+dedicated VM-Exit stack, there is little motivation for doing so as
+the overhead of two VMWRITEs (~55 cycles) is dwarfed by the overhead
+of the extra VMX transition (600+ cycles) and is a proverbial drop in
+the ocean relative to the total cost of a nested transtion (10s of
+thousands of cycles).
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 24 ++++++------------------
+ arch/x86/kvm/vmx/vmcs.h   |  1 +
+ arch/x86/kvm/vmx/vmx.c    | 13 ++++++-------
+ arch/x86/kvm/vmx/vmx.h    |  1 -
+ 4 files changed, 13 insertions(+), 26 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 48281b0684ca..5d5218a14fb3 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -1978,17 +1978,6 @@ static void prepare_vmcs02_early(struct vcpu_vmx *vmx, struct vmcs12 *vmcs12)
+ 	if (vmx->nested.dirty_vmcs12 || vmx->nested.hv_evmcs)
+ 		prepare_vmcs02_early_full(vmx, vmcs12);
+ 
+-	/*
+-	 * HOST_RSP is normally set correctly in vmx_vcpu_run() just before
+-	 * entry, but only if the current (host) sp changed from the value
+-	 * we wrote last (vmx->host_rsp).  This cache is no longer relevant
+-	 * if we switch vmcs, and rather than hold a separate cache per vmcs,
+-	 * here we just force the write to happen on entry.  host_rsp will
+-	 * also be written unconditionally by nested_vmx_check_vmentry_hw()
+-	 * if we are doing early consistency checks via hardware.
+-	 */
+-	vmx->host_rsp = 0;
+-
+ 	/*
+ 	 * PIN CONTROLS
+ 	 */
+@@ -2753,8 +2742,11 @@ static int nested_vmx_check_vmentry_hw(struct kvm_vcpu *vcpu)
+ 
+ 	asm(
+ 		"sub $%c[wordsize], %%" _ASM_SP "\n\t" /* temporarily adjust RSP for CALL */
++		"cmp %%" _ASM_SP ", %c[host_state_rsp](%[loaded_vmcs]) \n\t"
++		"je 1f \n\t"
+ 		__ex("vmwrite %%" _ASM_SP ", %[HOST_RSP]") "\n\t"
+-		"mov %%" _ASM_SP ", %c[host_rsp](%% " _ASM_CX ")\n\t"
++		"mov %%" _ASM_SP ", %c[host_state_rsp](%[loaded_vmcs]) \n\t"
++		"1: \n\t"
+ 		"add $%c[wordsize], %%" _ASM_SP "\n\t" /* un-adjust RSP */
+ 
+ 		/* Check if vmlaunch or vmresume is needed */
+@@ -2770,11 +2762,10 @@ static int nested_vmx_check_vmentry_hw(struct kvm_vcpu *vcpu)
+ 
+ 		CC_SET(be)
+ 	      : ASM_CALL_CONSTRAINT, CC_OUT(be) (vm_fail)
+-	      : "c"(vmx),
+-		[HOST_RSP]"r"((unsigned long)HOST_RSP),
++	      :	[HOST_RSP]"r"((unsigned long)HOST_RSP),
+ 		[loaded_vmcs]"r"(vmx->loaded_vmcs),
+ 		[launched]"i"(offsetof(struct loaded_vmcs, launched)),
+-		[host_rsp]"i"(offsetof(struct vcpu_vmx, host_rsp)),
++		[host_state_rsp]"i"(offsetof(struct loaded_vmcs, host_state.rsp)),
+ 		[wordsize]"i"(sizeof(ulong))
+ 	      : "cc", "memory"
+ 	);
+@@ -3911,9 +3902,6 @@ void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,
+ 		vmx_flush_tlb(vcpu, true);
+ 	}
+ 
+-	/* This is needed for same reason as it was needed in prepare_vmcs02 */
+-	vmx->host_rsp = 0;
+-
+ 	/* Unpin physical memory we referred to in vmcs02 */
+ 	if (vmx->nested.apic_access_page) {
+ 		kvm_release_page_dirty(vmx->nested.apic_access_page);
+diff --git a/arch/x86/kvm/vmx/vmcs.h b/arch/x86/kvm/vmx/vmcs.h
+index 6def3ba88e3b..cb6079f8a227 100644
+--- a/arch/x86/kvm/vmx/vmcs.h
++++ b/arch/x86/kvm/vmx/vmcs.h
+@@ -34,6 +34,7 @@ struct vmcs_host_state {
+ 	unsigned long cr4;	/* May not match real cr4 */
+ 	unsigned long gs_base;
+ 	unsigned long fs_base;
++	unsigned long rsp;
+ 
+ 	u16           fs_sel, gs_sel, ldt_sel;
+ #ifdef CONFIG_X86_64
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index b509e22dbcbe..f851b8061c9d 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6380,9 +6380,9 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"sub $%c[wordsize], %%" _ASM_SP "\n\t" /* placeholder for guest RCX */
+ 		"push %%" _ASM_CX " \n\t"
+ 		"sub $%c[wordsize], %%" _ASM_SP "\n\t" /* temporarily adjust RSP for CALL */
+-		"cmp %%" _ASM_SP ", %c[host_rsp](%%" _ASM_CX ") \n\t"
++		"cmp %%" _ASM_SP ", (%%" _ASM_DI ") \n\t"
+ 		"je 1f \n\t"
+-		"mov %%" _ASM_SP ", %c[host_rsp](%%" _ASM_CX ") \n\t"
++		"mov %%" _ASM_SP ", (%%" _ASM_DI ") \n\t"
+ 		/* Avoid VMWRITE when Enlightened VMCS is in use */
+ 		"test %%" _ASM_SI ", %%" _ASM_SI " \n\t"
+ 		"jz 2f \n\t"
+@@ -6474,11 +6474,10 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"xor %%esi, %%esi \n\t"
+ 		"xor %%edi, %%edi \n\t"
+ 		"pop  %%" _ASM_BP " \n\t"
+-	      : ASM_CALL_CONSTRAINT, "=S"((int){0})
+-	      : "c"(vmx), "S"(evmcs_rsp),
++	      : ASM_CALL_CONSTRAINT, "=D"((int){0}), "=S"((int){0})
++	      : "c"(vmx), "D"(&vmx->loaded_vmcs->host_state.rsp), "S"(evmcs_rsp),
+ 		[launched]"i"(offsetof(struct vcpu_vmx, __launched)),
+ 		[fail]"i"(offsetof(struct vcpu_vmx, fail)),
+-		[host_rsp]"i"(offsetof(struct vcpu_vmx, host_rsp)),
+ 		[HOST_RSP]"i"(HOST_RSP),
+ 		[rax]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RAX])),
+ 		[rbx]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RBX])),
+@@ -6501,10 +6500,10 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		[wordsize]"i"(sizeof(ulong))
+ 	      : "cc", "memory"
+ #ifdef CONFIG_X86_64
+-		, "rax", "rbx", "rdx", "rdi"
++		, "rax", "rbx", "rdx"
+ 		, "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
+ #else
+-		, "eax", "ebx", "edx", "edi"
++		, "eax", "ebx", "edx"
+ #endif
+ 	      );
+ }
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index 99328954c2fc..8e203b725928 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -175,7 +175,6 @@ struct nested_vmx {
+ 
+ struct vcpu_vmx {
+ 	struct kvm_vcpu       vcpu;
+-	unsigned long         host_rsp;
+ 	u8                    fail;
+ 	u8		      msr_bitmap_mode;
+ 	u32                   exit_intr_info;
+
+From patchwork Thu Jan 24 17:58:32 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779755
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6865F13B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:29 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 595A231BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:29 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4DB5532457; Thu, 24 Jan 2019 17:59:29 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E0C2F31BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:28 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729300AbfAXR72 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:28 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19131 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729218AbfAXR7H (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:07 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775892"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 15/29] KVM: VMX: Load/save guest CR2 via C code in
+ __vmx_vcpu_run()
+Date: Thu, 24 Jan 2019 09:58:32 -0800
+Message-Id: <20190124175845.15926-16-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+...to eliminate its parameter and struct vcpu_vmx offset definition
+from the assembly blob.  Accessing CR2 from C versus assembly doesn't
+change the likelihood of taking a page fault (and modifying CR2) while
+it's loaded with the guest's value, so long as we don't do anything
+silly between accessing CR2 and VM-Enter/VM-Exit.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 16 +++++-----------
+ 1 file changed, 5 insertions(+), 11 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index f851b8061c9d..57c51c51adbf 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6374,6 +6374,9 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 	if (static_branch_unlikely(&vmx_l1d_should_flush))
+ 		vmx_l1d_flush(vcpu);
+ 
++	if (vcpu->arch.cr2 != read_cr2())
++		write_cr2(vcpu->arch.cr2);
++
+ 	asm(
+ 		/* Store host registers */
+ 		"push %%" _ASM_BP " \n\t"
+@@ -6394,13 +6397,6 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"1: \n\t"
+ 		"add $%c[wordsize], %%" _ASM_SP "\n\t" /* un-adjust RSP */
+ 
+-		/* Reload cr2 if changed */
+-		"mov %c[cr2](%%" _ASM_CX "), %%" _ASM_AX " \n\t"
+-		"mov %%cr2, %%" _ASM_DX " \n\t"
+-		"cmp %%" _ASM_AX ", %%" _ASM_DX " \n\t"
+-		"je 3f \n\t"
+-		"mov %%" _ASM_AX", %%cr2 \n\t"
+-		"3: \n\t"
+ 		/* Check if vmlaunch or vmresume is needed */
+ 		"cmpb $0, %c[launched](%%" _ASM_CX ") \n\t"
+ 		/* Load guest registers.  Don't clobber flags. */
+@@ -6465,9 +6461,6 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"xor %%r14d, %%r14d \n\t"
+ 		"xor %%r15d, %%r15d \n\t"
+ #endif
+-		"mov %%cr2, %%" _ASM_AX "   \n\t"
+-		"mov %%" _ASM_AX ", %c[cr2](%%" _ASM_CX ") \n\t"
+-
+ 		"xor %%eax, %%eax \n\t"
+ 		"xor %%ebx, %%ebx \n\t"
+ 		"xor %%edx, %%edx \n\t"
+@@ -6496,7 +6489,6 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		[r14]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_R14])),
+ 		[r15]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_R15])),
+ #endif
+-		[cr2]"i"(offsetof(struct vcpu_vmx, vcpu.arch.cr2)),
+ 		[wordsize]"i"(sizeof(ulong))
+ 	      : "cc", "memory"
+ #ifdef CONFIG_X86_64
+@@ -6506,6 +6498,8 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		, "eax", "ebx", "edx"
+ #endif
+ 	      );
++
++	vcpu->arch.cr2 = read_cr2();
+ }
+ STACK_FRAME_NON_STANDARD(__vmx_vcpu_run);
+ 
+
+From patchwork Thu Jan 24 17:58:33 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779749
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6559E139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:25 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 57A7131BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:25 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4BD6E32456; Thu, 24 Jan 2019 17:59:25 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B930031BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:24 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729246AbfAXR7X (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:23 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19131 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729253AbfAXR7I (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:08 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775893"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 16/29] KVM: VMX: Update VMCS.HOST_RSP via helper C function
+Date: Thu, 24 Jan 2019 09:58:33 -0800
+Message-Id: <20190124175845.15926-17-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Providing a helper function to update HOST_RSP is visibly easier to
+read, and more importantly (for the future) eliminates two arguments to
+the VM-Enter assembly blob.  Reducing the number of arguments to the asm
+blob is for all intents and purposes a prerequisite to moving the code
+to a proper assembly routine.  It's not truly mandatory, but it greatly
+simplifies the future code, and the cost of the extra CALL+RET is
+negligible in the grand scheme.
+
+Tweak the comment about clearing "clobbered" registers.  The trigger
+isn't actually whether a register is marked as clobbered, but whether
+it will hold a guest value at the end of the asm blob.  This matters now
+that RCX is clobbered but holds a host-defined value.
+
+Note that although _ASM_ARG[1-3] can be used in the inline asm itself,
+the intput/output constraints need to be manually defined.  gcc will
+actually compile with _ASM_ARG[1-3] specified as constraints, but what
+it actually ends up doing with the bogus constraint is unknown.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 55 +++++++++++++++++++++---------------------
+ 1 file changed, 28 insertions(+), 27 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 57c51c51adbf..ba22b59bb874 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6362,15 +6362,18 @@ static void vmx_update_hv_timer(struct kvm_vcpu *vcpu)
+ 	vmx->loaded_vmcs->hv_timer_armed = false;
+ }
+ 
++void vmx_update_host_rsp(struct vcpu_vmx *vmx, unsigned long host_rsp)
++{
++	if (unlikely(host_rsp != vmx->loaded_vmcs->host_state.rsp)) {
++		vmx->loaded_vmcs->host_state.rsp = host_rsp;
++		vmcs_writel(HOST_RSP, host_rsp);
++	}
++}
++
+ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ {
+-	unsigned long evmcs_rsp;
+-
+ 	vmx->__launched = vmx->loaded_vmcs->launched;
+ 
+-	evmcs_rsp = static_branch_unlikely(&enable_evmcs) ?
+-		(unsigned long)&current_evmcs->host_rsp : 0;
+-
+ 	if (static_branch_unlikely(&vmx_l1d_should_flush))
+ 		vmx_l1d_flush(vcpu);
+ 
+@@ -6381,21 +6384,14 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		/* Store host registers */
+ 		"push %%" _ASM_BP " \n\t"
+ 		"sub $%c[wordsize], %%" _ASM_SP "\n\t" /* placeholder for guest RCX */
+-		"push %%" _ASM_CX " \n\t"
+-		"sub $%c[wordsize], %%" _ASM_SP "\n\t" /* temporarily adjust RSP for CALL */
+-		"cmp %%" _ASM_SP ", (%%" _ASM_DI ") \n\t"
+-		"je 1f \n\t"
+-		"mov %%" _ASM_SP ", (%%" _ASM_DI ") \n\t"
+-		/* Avoid VMWRITE when Enlightened VMCS is in use */
+-		"test %%" _ASM_SI ", %%" _ASM_SI " \n\t"
+-		"jz 2f \n\t"
+-		"mov %%" _ASM_SP ", (%%" _ASM_SI ") \n\t"
+-		"jmp 1f \n\t"
+-		"2: \n\t"
+-		"mov $%c[HOST_RSP], %%" _ASM_DX " \n\t"
+-		__ex("vmwrite %%" _ASM_SP ", %%" _ASM_DX) "\n\t"
+-		"1: \n\t"
+-		"add $%c[wordsize], %%" _ASM_SP "\n\t" /* un-adjust RSP */
++		"push %%" _ASM_ARG1 " \n\t"
++
++		/* Adjust RSP to account for the CALL to vmx_vmenter(). */
++		"lea -%c[wordsize](%%" _ASM_SP "), %%" _ASM_ARG2 " \n\t"
++		"call vmx_update_host_rsp \n\t"
++
++		/* Load the vcpu_vmx pointer to RCX. */
++		"mov (%%" _ASM_SP "), %%" _ASM_CX " \n\t"
+ 
+ 		/* Check if vmlaunch or vmresume is needed */
+ 		"cmpb $0, %c[launched](%%" _ASM_CX ") \n\t"
+@@ -6449,8 +6445,8 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"mov %%r14, %c[r14](%%" _ASM_CX ") \n\t"
+ 		"mov %%r15, %c[r15](%%" _ASM_CX ") \n\t"
+ 		/*
+-		* Clear host registers marked as clobbered to prevent
+-		* speculative use.
++		* Clear registers that contain guest values and will not be
++		* restored to prevent speculative use of the guest's values.
+ 		*/
+ 		"xor %%r8d,  %%r8d \n\t"
+ 		"xor %%r9d,  %%r9d \n\t"
+@@ -6467,11 +6463,16 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"xor %%esi, %%esi \n\t"
+ 		"xor %%edi, %%edi \n\t"
+ 		"pop  %%" _ASM_BP " \n\t"
+-	      : ASM_CALL_CONSTRAINT, "=D"((int){0}), "=S"((int){0})
+-	      : "c"(vmx), "D"(&vmx->loaded_vmcs->host_state.rsp), "S"(evmcs_rsp),
++	      : ASM_CALL_CONSTRAINT,
++#ifdef CONFIG_X86_64
++		"=D"((int){0})
++	      : "D"(vmx),
++#else
++		"=a"((int){0})
++	      : "a"(vmx),
++#endif
+ 		[launched]"i"(offsetof(struct vcpu_vmx, __launched)),
+ 		[fail]"i"(offsetof(struct vcpu_vmx, fail)),
+-		[HOST_RSP]"i"(HOST_RSP),
+ 		[rax]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RAX])),
+ 		[rbx]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RBX])),
+ 		[rcx]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RCX])),
+@@ -6492,10 +6493,10 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		[wordsize]"i"(sizeof(ulong))
+ 	      : "cc", "memory"
+ #ifdef CONFIG_X86_64
+-		, "rax", "rbx", "rdx"
++		, "rax", "rbx", "rcx", "rdx", "rsi"
+ 		, "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
+ #else
+-		, "eax", "ebx", "edx"
++		, "ebx", "ecx", "edx", "edi", "esi"
+ #endif
+ 	      );
+ 
+
+From patchwork Thu Jan 24 17:58:34 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779757
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 4443813B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:32 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 36B1832456
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:32 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 2B14232460; Thu, 24 Jan 2019 17:59:32 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 9E26A32457
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:31 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729239AbfAXR7H (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:07 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19102 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729224AbfAXR7G (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:06 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775894"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 17/29] KVM: VMX: Pass "launched" directly to the vCPU-run
+ asm blob
+Date: Thu, 24 Jan 2019 09:58:34 -0800
+Message-Id: <20190124175845.15926-18-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+...and remove struct vcpu_vmx's temporary __launched variable.
+
+Eliminating __launched is a bonus, the real motivation is to get to the
+point where the only reference to struct vcpu_vmx in the asm code is
+to vcpu.arch.regs, which will simplify moving the blob to a proper asm
+file.  Note that also means this approach is deliberately different than
+what is used in nested_vmx_check_vmentry_hw().
+
+Use BL as it is a non-volatile register in both 32-bit and 64-bit ABIs,
+i.e. it can't be modified by vmx_update_host_rsp(), to avoid having to
+temporarily save/restore the launched flag.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 13 ++++++-------
+ arch/x86/kvm/vmx/vmx.h |  2 +-
+ 2 files changed, 7 insertions(+), 8 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index ba22b59bb874..4d98a81c03e6 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6372,8 +6372,6 @@ void vmx_update_host_rsp(struct vcpu_vmx *vmx, unsigned long host_rsp)
+ 
+ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ {
+-	vmx->__launched = vmx->loaded_vmcs->launched;
+-
+ 	if (static_branch_unlikely(&vmx_l1d_should_flush))
+ 		vmx_l1d_flush(vcpu);
+ 
+@@ -6394,7 +6392,8 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"mov (%%" _ASM_SP "), %%" _ASM_CX " \n\t"
+ 
+ 		/* Check if vmlaunch or vmresume is needed */
+-		"cmpb $0, %c[launched](%%" _ASM_CX ") \n\t"
++		"cmpb $0, %%bl \n\t"
++
+ 		/* Load guest registers.  Don't clobber flags. */
+ 		"mov %c[rax](%%" _ASM_CX "), %%" _ASM_AX " \n\t"
+ 		"mov %c[rbx](%%" _ASM_CX "), %%" _ASM_BX " \n\t"
+@@ -6463,7 +6462,7 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"xor %%esi, %%esi \n\t"
+ 		"xor %%edi, %%edi \n\t"
+ 		"pop  %%" _ASM_BP " \n\t"
+-	      : ASM_CALL_CONSTRAINT,
++	      : ASM_CALL_CONSTRAINT, "=b"((int){0}),
+ #ifdef CONFIG_X86_64
+ 		"=D"((int){0})
+ 	      : "D"(vmx),
+@@ -6471,7 +6470,7 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"=a"((int){0})
+ 	      : "a"(vmx),
+ #endif
+-		[launched]"i"(offsetof(struct vcpu_vmx, __launched)),
++		"b"(vmx->loaded_vmcs->launched),
+ 		[fail]"i"(offsetof(struct vcpu_vmx, fail)),
+ 		[rax]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RAX])),
+ 		[rbx]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RBX])),
+@@ -6493,10 +6492,10 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		[wordsize]"i"(sizeof(ulong))
+ 	      : "cc", "memory"
+ #ifdef CONFIG_X86_64
+-		, "rax", "rbx", "rcx", "rdx", "rsi"
++		, "rax", "rcx", "rdx", "rsi"
+ 		, "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
+ #else
+-		, "ebx", "ecx", "edx", "edi", "esi"
++		, "ecx", "edx", "edi", "esi"
+ #endif
+ 	      );
+ 
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index 8e203b725928..6ee6a492efaf 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -208,7 +208,7 @@ struct vcpu_vmx {
+ 	struct loaded_vmcs    vmcs01;
+ 	struct loaded_vmcs   *loaded_vmcs;
+ 	struct loaded_vmcs   *loaded_cpu_state;
+-	bool                  __launched; /* temporary, used in vmx_vcpu_run */
++
+ 	struct msr_autoload {
+ 		struct vmx_msrs guest;
+ 		struct vmx_msrs host;
+
+From patchwork Thu Jan 24 17:58:35 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779729
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 440E7139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:07 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3965931BBA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:07 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 2B9C031BBC; Thu, 24 Jan 2019 17:59:07 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C4E6A31BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:06 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729220AbfAXR7F (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:05 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19102 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729188AbfAXR7E (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:04 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775895"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 18/29] KVM: VMX: Invert the ordering of saving guest/host
+ scratch reg at VM-Enter
+Date: Thu, 24 Jan 2019 09:58:35 -0800
+Message-Id: <20190124175845.15926-19-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Switching the ordering allows for an out-of-line path for VM-Fail
+that elides saving guest state but still shares the register clearing
+with the VM-Exit path.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 4d98a81c03e6..bae30190d0e1 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6381,7 +6381,6 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 	asm(
+ 		/* Store host registers */
+ 		"push %%" _ASM_BP " \n\t"
+-		"sub $%c[wordsize], %%" _ASM_SP "\n\t" /* placeholder for guest RCX */
+ 		"push %%" _ASM_ARG1 " \n\t"
+ 
+ 		/* Adjust RSP to account for the CALL to vmx_vmenter(). */
+@@ -6417,11 +6416,11 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		/* Enter guest mode */
+ 		"call vmx_vmenter\n\t"
+ 
+-		/* Save guest's RCX to the stack placeholder (see above) */
+-		"mov %%" _ASM_CX ", %c[wordsize](%%" _ASM_SP ") \n\t"
++		/* Temporarily save guest's RCX. */
++		"push %%" _ASM_CX " \n\t"
+ 
+-		/* Load host's RCX, i.e. the vmx_vcpu pointer */
+-		"pop %%" _ASM_CX " \n\t"
++		/* Reload the vcpu_vmx pointer to RCX. */
++		"mov %c[wordsize](%%" _ASM_SP "), %%" _ASM_CX " \n\t"
+ 
+ 		/* Set vmx->fail based on EFLAGS.{CF,ZF} */
+ 		"setbe %c[fail](%%" _ASM_CX ")\n\t"
+@@ -6461,6 +6460,9 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"xor %%edx, %%edx \n\t"
+ 		"xor %%esi, %%esi \n\t"
+ 		"xor %%edi, %%edi \n\t"
++
++		/* "POP" the vcpu_vmx pointer. */
++		"add $%c[wordsize], %%" _ASM_SP " \n\t"
+ 		"pop  %%" _ASM_BP " \n\t"
+ 	      : ASM_CALL_CONSTRAINT, "=b"((int){0}),
+ #ifdef CONFIG_X86_64
+
+From patchwork Thu Jan 24 17:58:36 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779769
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id F08F2139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:40 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E3CCC31BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:40 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id D85D232457; Thu, 24 Jan 2019 17:59:40 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 6611531BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:40 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729200AbfAXR7D (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:03 -0500
+Received: from mga17.intel.com ([192.55.52.151]:56928 "EHLO mga17.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727765AbfAXR7D (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:03 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga107.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775896"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 19/29] KVM: VMX: Don't save guest registers after VM-Fail
+Date: Thu, 24 Jan 2019 09:58:36 -0800
+Message-Id: <20190124175845.15926-20-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+A failed VM-Enter (obviously) didn't succeed, meaning the CPU never
+executed an instrunction in guest mode and so can't have changed the
+general purpose registers.
+
+In addition to saving some instructions in the VM-Fail case, this also
+provides a separate path entirely and thus an opportunity to propagate
+the fail condition to vmx->fail via register without introducing undue
+pain.  Using a register, as opposed to directly referencing vmx->fail,
+eliminates the need to pass the offset of 'fail', which will simplify
+moving the code to proper assembly in future patches.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 34 +++++++++++++++++++++++++---------
+ 1 file changed, 25 insertions(+), 9 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index bae30190d0e1..d4f6a79a913a 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6415,6 +6415,7 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 
+ 		/* Enter guest mode */
+ 		"call vmx_vmenter\n\t"
++		"jbe 2f \n\t"
+ 
+ 		/* Temporarily save guest's RCX. */
+ 		"push %%" _ASM_CX " \n\t"
+@@ -6422,9 +6423,6 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		/* Reload the vcpu_vmx pointer to RCX. */
+ 		"mov %c[wordsize](%%" _ASM_SP "), %%" _ASM_CX " \n\t"
+ 
+-		/* Set vmx->fail based on EFLAGS.{CF,ZF} */
+-		"setbe %c[fail](%%" _ASM_CX ")\n\t"
+-
+ 		/* Save all guest registers, including RCX from the stack */
+ 		"mov %%" _ASM_AX ", %c[rax](%%" _ASM_CX ") \n\t"
+ 		"mov %%" _ASM_BX ", %c[rbx](%%" _ASM_CX ") \n\t"
+@@ -6442,10 +6440,17 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"mov %%r13, %c[r13](%%" _ASM_CX ") \n\t"
+ 		"mov %%r14, %c[r14](%%" _ASM_CX ") \n\t"
+ 		"mov %%r15, %c[r15](%%" _ASM_CX ") \n\t"
++#endif
++
++		/* Clear EBX to indicate VM-Exit (as opposed to VM-Fail). */
++		"xor %%ebx, %%ebx \n\t"
++
+ 		/*
+-		* Clear registers that contain guest values and will not be
+-		* restored to prevent speculative use of the guest's values.
+-		*/
++		 * Clear registers that contain guest values and will not be
++		 * restored to prevent speculative use of the guest's values.
++		 */
++		"1: \n\t"
++#ifdef CONFIG_X86_64
+ 		"xor %%r8d,  %%r8d \n\t"
+ 		"xor %%r9d,  %%r9d \n\t"
+ 		"xor %%r10d, %%r10d \n\t"
+@@ -6456,7 +6461,6 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"xor %%r15d, %%r15d \n\t"
+ #endif
+ 		"xor %%eax, %%eax \n\t"
+-		"xor %%ebx, %%ebx \n\t"
+ 		"xor %%edx, %%edx \n\t"
+ 		"xor %%esi, %%esi \n\t"
+ 		"xor %%edi, %%edi \n\t"
+@@ -6464,7 +6468,20 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		/* "POP" the vcpu_vmx pointer. */
+ 		"add $%c[wordsize], %%" _ASM_SP " \n\t"
+ 		"pop  %%" _ASM_BP " \n\t"
+-	      : ASM_CALL_CONSTRAINT, "=b"((int){0}),
++		"jmp 3f \n\t"
++
++		/* VM-Fail.  Out-of-line to avoid a taken Jcc after VM-Exit. */
++		"2: \n\t"
++		"mov $1, %%ebx \n\t"
++		/*
++		 * RCX holds a guest value and it's not cleared in the common
++		 * exit path as VM-Exit reloads it with the vcpu_vmx pointer.
++		 */
++		"xor %%ecx, %%ecx \n\t"
++		"jmp 1b \n\t"
++		"3: \n\t"
++
++	      : ASM_CALL_CONSTRAINT, "=b"(vmx->fail),
+ #ifdef CONFIG_X86_64
+ 		"=D"((int){0})
+ 	      : "D"(vmx),
+@@ -6473,7 +6490,6 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 	      : "a"(vmx),
+ #endif
+ 		"b"(vmx->loaded_vmcs->launched),
+-		[fail]"i"(offsetof(struct vcpu_vmx, fail)),
+ 		[rax]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RAX])),
+ 		[rbx]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RBX])),
+ 		[rcx]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RCX])),
+
+From patchwork Thu Jan 24 17:58:37 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779727
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id DEF3313BF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:06 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D332031BBA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:06 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C4F1D31BBC; Thu, 24 Jan 2019 17:59:06 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4A42231BBA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:06 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729217AbfAXR7F (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:05 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19102 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729203AbfAXR7E (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:04 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775897"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 20/29] KVM: VMX: Use vcpu->arch.regs directly when
+ saving/loading guest state
+Date: Thu, 24 Jan 2019 09:58:37 -0800
+Message-Id: <20190124175845.15926-21-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+...now that all other references to struct vcpu_vmx have been removed.
+
+Note that 'vmx' still needs to be passed into the asm blob in _ASM_ARG1
+as it is consumed by vmx_update_host_rsp().  And similar to that code,
+use _ASM_ARG2 in the assembly code to prepare for moving to proper asm,
+while explicitly referencing the exact registers in the clobber list for
+clarity in the short term and to avoid additional precompiler games.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 48 +++++++++++++++++++++---------------------
+ 1 file changed, 24 insertions(+), 24 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index d4f6a79a913a..7432dc8aa045 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6381,13 +6381,13 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 	asm(
+ 		/* Store host registers */
+ 		"push %%" _ASM_BP " \n\t"
+-		"push %%" _ASM_ARG1 " \n\t"
++		"push %%" _ASM_ARG2 " \n\t"
+ 
+ 		/* Adjust RSP to account for the CALL to vmx_vmenter(). */
+ 		"lea -%c[wordsize](%%" _ASM_SP "), %%" _ASM_ARG2 " \n\t"
+ 		"call vmx_update_host_rsp \n\t"
+ 
+-		/* Load the vcpu_vmx pointer to RCX. */
++		/* Load RCX with @regs. */
+ 		"mov (%%" _ASM_SP "), %%" _ASM_CX " \n\t"
+ 
+ 		/* Check if vmlaunch or vmresume is needed */
+@@ -6420,7 +6420,7 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		/* Temporarily save guest's RCX. */
+ 		"push %%" _ASM_CX " \n\t"
+ 
+-		/* Reload the vcpu_vmx pointer to RCX. */
++		/* Reload RCX with @regs. */
+ 		"mov %c[wordsize](%%" _ASM_SP "), %%" _ASM_CX " \n\t"
+ 
+ 		/* Save all guest registers, including RCX from the stack */
+@@ -6483,37 +6483,37 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 
+ 	      : ASM_CALL_CONSTRAINT, "=b"(vmx->fail),
+ #ifdef CONFIG_X86_64
+-		"=D"((int){0})
+-	      : "D"(vmx),
++		"=D"((int){0}), "=S"((int){0})
++	      : "D"(vmx), "S"(&vcpu->arch.regs),
+ #else
+-		"=a"((int){0})
+-	      : "a"(vmx),
++		"=a"((int){0}), "=d"((int){0})
++	      : "a"(vmx), "d"(&vcpu->arch.regs),
+ #endif
+ 		"b"(vmx->loaded_vmcs->launched),
+-		[rax]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RAX])),
+-		[rbx]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RBX])),
+-		[rcx]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RCX])),
+-		[rdx]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RDX])),
+-		[rsi]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RSI])),
+-		[rdi]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RDI])),
+-		[rbp]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_RBP])),
++		[rax]"i"(VCPU_REGS_RAX * sizeof(ulong)),
++		[rbx]"i"(VCPU_REGS_RBX * sizeof(ulong)),
++		[rcx]"i"(VCPU_REGS_RCX * sizeof(ulong)),
++		[rdx]"i"(VCPU_REGS_RDX * sizeof(ulong)),
++		[rsi]"i"(VCPU_REGS_RSI * sizeof(ulong)),
++		[rdi]"i"(VCPU_REGS_RDI * sizeof(ulong)),
++		[rbp]"i"(VCPU_REGS_RBP * sizeof(ulong)),
+ #ifdef CONFIG_X86_64
+-		[r8]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_R8])),
+-		[r9]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_R9])),
+-		[r10]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_R10])),
+-		[r11]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_R11])),
+-		[r12]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_R12])),
+-		[r13]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_R13])),
+-		[r14]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_R14])),
+-		[r15]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_R15])),
++		[r8]"i"(VCPU_REGS_R8 * sizeof(ulong)),
++		[r9]"i"(VCPU_REGS_R9 * sizeof(ulong)),
++		[r10]"i"(VCPU_REGS_R10 * sizeof(ulong)),
++		[r11]"i"(VCPU_REGS_R11 * sizeof(ulong)),
++		[r12]"i"(VCPU_REGS_R12 * sizeof(ulong)),
++		[r13]"i"(VCPU_REGS_R13 * sizeof(ulong)),
++		[r14]"i"(VCPU_REGS_R14 * sizeof(ulong)),
++		[r15]"i"(VCPU_REGS_R15 * sizeof(ulong)),
+ #endif
+ 		[wordsize]"i"(sizeof(ulong))
+ 	      : "cc", "memory"
+ #ifdef CONFIG_X86_64
+-		, "rax", "rcx", "rdx", "rsi"
++		, "rax", "rcx", "rdx"
+ 		, "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
+ #else
+-		, "ecx", "edx", "edi", "esi"
++		, "ecx", "edi", "esi"
+ #endif
+ 	      );
+ 
+
+From patchwork Thu Jan 24 17:58:38 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779771
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 5B8DD13B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:42 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4F6BD31BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:42 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4389E32457; Thu, 24 Jan 2019 17:59:42 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id CEF8531BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:41 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729293AbfAXR7j (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:39 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19102 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729198AbfAXR7D (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:03 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775898"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 21/29] KVM: x86: Explicitly #define the VCPU_REGS_* indices
+Date: Thu, 24 Jan 2019 09:58:38 -0800
+Message-Id: <20190124175845.15926-22-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Declaring the VCPU_REGS_* as enums allows for more robust C code, but it
+prevents using the values in assembly files.  Expliciting #define the
+indices in an asm-friendly file to prepare for VMX moving its transition
+code to a proper assembly file, but keep the enums for general usage.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h      | 33 ++++++++++++++--------------
+ arch/x86/include/asm/kvm_vcpu_regs.h | 25 +++++++++++++++++++++
+ 2 files changed, 42 insertions(+), 16 deletions(-)
+ create mode 100644 arch/x86/include/asm/kvm_vcpu_regs.h
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 49f449f56434..b157d87b105b 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -35,6 +35,7 @@
+ #include <asm/msr-index.h>
+ #include <asm/asm.h>
+ #include <asm/kvm_page_track.h>
++#include <asm/kvm_vcpu_regs.h>
+ #include <asm/hyperv-tlfs.h>
+ 
+ #define KVM_MAX_VCPUS 288
+@@ -138,23 +139,23 @@ static inline gfn_t gfn_to_index(gfn_t gfn, gfn_t base_gfn, int level)
+ #define ASYNC_PF_PER_VCPU (1 << ASYNC_PF_PER_VCPU_ORDER)
+ 
+ enum kvm_reg {
+-	VCPU_REGS_RAX = 0,
+-	VCPU_REGS_RCX = 1,
+-	VCPU_REGS_RDX = 2,
+-	VCPU_REGS_RBX = 3,
+-	VCPU_REGS_RSP = 4,
+-	VCPU_REGS_RBP = 5,
+-	VCPU_REGS_RSI = 6,
+-	VCPU_REGS_RDI = 7,
++	VCPU_REGS_RAX = __VCPU_REGS_RAX,
++	VCPU_REGS_RCX = __VCPU_REGS_RCX,
++	VCPU_REGS_RDX = __VCPU_REGS_RDX,
++	VCPU_REGS_RBX = __VCPU_REGS_RBX,
++	VCPU_REGS_RSP = __VCPU_REGS_RSP,
++	VCPU_REGS_RBP = __VCPU_REGS_RBP,
++	VCPU_REGS_RSI = __VCPU_REGS_RSI,
++	VCPU_REGS_RDI = __VCPU_REGS_RDI,
+ #ifdef CONFIG_X86_64
+-	VCPU_REGS_R8 = 8,
+-	VCPU_REGS_R9 = 9,
+-	VCPU_REGS_R10 = 10,
+-	VCPU_REGS_R11 = 11,
+-	VCPU_REGS_R12 = 12,
+-	VCPU_REGS_R13 = 13,
+-	VCPU_REGS_R14 = 14,
+-	VCPU_REGS_R15 = 15,
++	VCPU_REGS_R8  = __VCPU_REGS_R8,
++	VCPU_REGS_R9  = __VCPU_REGS_R9,
++	VCPU_REGS_R10 = __VCPU_REGS_R10,
++	VCPU_REGS_R11 = __VCPU_REGS_R11,
++	VCPU_REGS_R12 = __VCPU_REGS_R12,
++	VCPU_REGS_R13 = __VCPU_REGS_R13,
++	VCPU_REGS_R14 = __VCPU_REGS_R14,
++	VCPU_REGS_R15 = __VCPU_REGS_R15,
+ #endif
+ 	VCPU_REGS_RIP,
+ 	NR_VCPU_REGS
+diff --git a/arch/x86/include/asm/kvm_vcpu_regs.h b/arch/x86/include/asm/kvm_vcpu_regs.h
+new file mode 100644
+index 000000000000..1af2cb59233b
+--- /dev/null
++++ b/arch/x86/include/asm/kvm_vcpu_regs.h
+@@ -0,0 +1,25 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef _ASM_X86_KVM_VCPU_REGS_H
++#define _ASM_X86_KVM_VCPU_REGS_H
++
++#define __VCPU_REGS_RAX  0
++#define __VCPU_REGS_RCX  1
++#define __VCPU_REGS_RDX  2
++#define __VCPU_REGS_RBX  3
++#define __VCPU_REGS_RSP  4
++#define __VCPU_REGS_RBP  5
++#define __VCPU_REGS_RSI  6
++#define __VCPU_REGS_RDI  7
++
++#ifdef CONFIG_X86_64
++#define __VCPU_REGS_R8   8
++#define __VCPU_REGS_R9   9
++#define __VCPU_REGS_R10 10
++#define __VCPU_REGS_R11 11
++#define __VCPU_REGS_R12 12
++#define __VCPU_REGS_R13 13
++#define __VCPU_REGS_R14 14
++#define __VCPU_REGS_R15 15
++#endif
++
++#endif /* _ASM_X86_KVM_VCPU_REGS_H */
+
+From patchwork Thu Jan 24 17:58:39 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779761
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B3EF8139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:36 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A7FF232456
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:36 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 9BE2A32460; Thu, 24 Jan 2019 17:59:36 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4B8AD32456
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:35 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729312AbfAXR7e (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:34 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19131 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729207AbfAXR7G (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:06 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775899"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 22/29] KVM: VMX: Use #defines in place of immediates in
+ VM-Enter inline asm
+Date: Thu, 24 Jan 2019 09:58:39 -0800
+Message-Id: <20190124175845.15926-23-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Using #defines is the last step moving the inline asm to a proper asm
+sub-routine.  Eliminating the immediates allows a nearly verbatim move,
+e.g. quotes, newlines, tabs and __stringify need to be dropped, but
+other than those cosmetic changes the only function change is to replace
+the final "jmp" with a "ret".
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 113 ++++++++++++++++++++++-------------------
+ 1 file changed, 61 insertions(+), 52 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 7432dc8aa045..2c9a596bca74 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6370,6 +6370,33 @@ void vmx_update_host_rsp(struct vcpu_vmx *vmx, unsigned long host_rsp)
+ 	}
+ }
+ 
++#ifdef CONFIG_X86_64
++#define WORD_SIZE	8
++#else
++#define WORD_SIZE	4
++#endif
++
++#define _WORD_SIZE	__stringify(WORD_SIZE)
++
++#define VCPU_RAX	__stringify(__VCPU_REGS_RAX * WORD_SIZE)
++#define VCPU_RCX	__stringify(__VCPU_REGS_RCX * WORD_SIZE)
++#define VCPU_RDX	__stringify(__VCPU_REGS_RDX * WORD_SIZE)
++#define VCPU_RBX	__stringify(__VCPU_REGS_RBX * WORD_SIZE)
++/* Intentionally omit %RSP as it's context switched by hardware */
++#define VCPU_RBP	__stringify(__VCPU_REGS_RBP * WORD_SIZE)
++#define VCPU_RSI	__stringify(__VCPU_REGS_RSI * WORD_SIZE)
++#define VCPU_RDI	__stringify(__VCPU_REGS_RDI * WORD_SIZE)
++#ifdef CONFIG_X86_64
++#define VCPU_R8		__stringify(__VCPU_REGS_R8  * WORD_SIZE)
++#define VCPU_R9		__stringify(__VCPU_REGS_R9  * WORD_SIZE)
++#define VCPU_R10	__stringify(__VCPU_REGS_R10 * WORD_SIZE)
++#define VCPU_R11	__stringify(__VCPU_REGS_R11 * WORD_SIZE)
++#define VCPU_R12	__stringify(__VCPU_REGS_R12 * WORD_SIZE)
++#define VCPU_R13	__stringify(__VCPU_REGS_R13 * WORD_SIZE)
++#define VCPU_R14	__stringify(__VCPU_REGS_R14 * WORD_SIZE)
++#define VCPU_R15	__stringify(__VCPU_REGS_R15 * WORD_SIZE)
++#endif
++
+ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ {
+ 	if (static_branch_unlikely(&vmx_l1d_should_flush))
+@@ -6384,7 +6411,7 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"push %%" _ASM_ARG2 " \n\t"
+ 
+ 		/* Adjust RSP to account for the CALL to vmx_vmenter(). */
+-		"lea -%c[wordsize](%%" _ASM_SP "), %%" _ASM_ARG2 " \n\t"
++		"lea -" _WORD_SIZE "(%%" _ASM_SP "), %%" _ASM_ARG2 " \n\t"
+ 		"call vmx_update_host_rsp \n\t"
+ 
+ 		/* Load RCX with @regs. */
+@@ -6394,24 +6421,24 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"cmpb $0, %%bl \n\t"
+ 
+ 		/* Load guest registers.  Don't clobber flags. */
+-		"mov %c[rax](%%" _ASM_CX "), %%" _ASM_AX " \n\t"
+-		"mov %c[rbx](%%" _ASM_CX "), %%" _ASM_BX " \n\t"
+-		"mov %c[rdx](%%" _ASM_CX "), %%" _ASM_DX " \n\t"
+-		"mov %c[rsi](%%" _ASM_CX "), %%" _ASM_SI " \n\t"
+-		"mov %c[rdi](%%" _ASM_CX "), %%" _ASM_DI " \n\t"
+-		"mov %c[rbp](%%" _ASM_CX "), %%" _ASM_BP " \n\t"
++		"mov " VCPU_RAX "(%%" _ASM_CX "), %%" _ASM_AX " \n\t"
++		"mov " VCPU_RBX "(%%" _ASM_CX "), %%" _ASM_BX " \n\t"
++		"mov " VCPU_RDX "(%%" _ASM_CX "), %%" _ASM_DX " \n\t"
++		"mov " VCPU_RSI "(%%" _ASM_CX "), %%" _ASM_SI " \n\t"
++		"mov " VCPU_RDI "(%%" _ASM_CX "), %%" _ASM_DI " \n\t"
++		"mov " VCPU_RBP "(%%" _ASM_CX "), %%" _ASM_BP " \n\t"
+ #ifdef CONFIG_X86_64
+-		"mov %c[r8](%%" _ASM_CX "),  %%r8  \n\t"
+-		"mov %c[r9](%%" _ASM_CX "),  %%r9  \n\t"
+-		"mov %c[r10](%%" _ASM_CX "), %%r10 \n\t"
+-		"mov %c[r11](%%" _ASM_CX "), %%r11 \n\t"
+-		"mov %c[r12](%%" _ASM_CX "), %%r12 \n\t"
+-		"mov %c[r13](%%" _ASM_CX "), %%r13 \n\t"
+-		"mov %c[r14](%%" _ASM_CX "), %%r14 \n\t"
+-		"mov %c[r15](%%" _ASM_CX "), %%r15 \n\t"
++		"mov " VCPU_R8  "(%%" _ASM_CX "),  %%r8  \n\t"
++		"mov " VCPU_R9  "(%%" _ASM_CX "),  %%r9  \n\t"
++		"mov " VCPU_R10 "(%%" _ASM_CX "), %%r10 \n\t"
++		"mov " VCPU_R11 "(%%" _ASM_CX "), %%r11 \n\t"
++		"mov " VCPU_R12 "(%%" _ASM_CX "), %%r12 \n\t"
++		"mov " VCPU_R13 "(%%" _ASM_CX "), %%r13 \n\t"
++		"mov " VCPU_R14 "(%%" _ASM_CX "), %%r14 \n\t"
++		"mov " VCPU_R15 "(%%" _ASM_CX "), %%r15 \n\t"
+ #endif
+ 		/* Load guest RCX.  This kills the vmx_vcpu pointer! */
+-		"mov %c[rcx](%%" _ASM_CX "), %%" _ASM_CX " \n\t"
++		"mov " VCPU_RCX"(%%" _ASM_CX "), %%" _ASM_CX " \n\t"
+ 
+ 		/* Enter guest mode */
+ 		"call vmx_vmenter\n\t"
+@@ -6421,25 +6448,25 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"push %%" _ASM_CX " \n\t"
+ 
+ 		/* Reload RCX with @regs. */
+-		"mov %c[wordsize](%%" _ASM_SP "), %%" _ASM_CX " \n\t"
++		"mov " _WORD_SIZE "(%%" _ASM_SP "), %%" _ASM_CX " \n\t"
+ 
+ 		/* Save all guest registers, including RCX from the stack */
+-		"mov %%" _ASM_AX ", %c[rax](%%" _ASM_CX ") \n\t"
+-		"mov %%" _ASM_BX ", %c[rbx](%%" _ASM_CX ") \n\t"
+-		__ASM_SIZE(pop) " %c[rcx](%%" _ASM_CX ") \n\t"
+-		"mov %%" _ASM_DX ", %c[rdx](%%" _ASM_CX ") \n\t"
+-		"mov %%" _ASM_SI ", %c[rsi](%%" _ASM_CX ") \n\t"
+-		"mov %%" _ASM_DI ", %c[rdi](%%" _ASM_CX ") \n\t"
+-		"mov %%" _ASM_BP ", %c[rbp](%%" _ASM_CX ") \n\t"
++		"mov %%" _ASM_AX ", " VCPU_RAX "(%%" _ASM_CX ") \n\t"
++		"mov %%" _ASM_BX ", " VCPU_RBX "(%%" _ASM_CX ") \n\t"
++		__ASM_SIZE(pop) "   " VCPU_RCX "(%%" _ASM_CX ") \n\t"
++		"mov %%" _ASM_DX ", " VCPU_RDX "(%%" _ASM_CX ") \n\t"
++		"mov %%" _ASM_SI ", " VCPU_RSI "(%%" _ASM_CX ") \n\t"
++		"mov %%" _ASM_DI ", " VCPU_RDI "(%%" _ASM_CX ") \n\t"
++		"mov %%" _ASM_BP ", " VCPU_RBP "(%%" _ASM_CX ") \n\t"
+ #ifdef CONFIG_X86_64
+-		"mov %%r8,  %c[r8](%%" _ASM_CX ") \n\t"
+-		"mov %%r9,  %c[r9](%%" _ASM_CX ") \n\t"
+-		"mov %%r10, %c[r10](%%" _ASM_CX ") \n\t"
+-		"mov %%r11, %c[r11](%%" _ASM_CX ") \n\t"
+-		"mov %%r12, %c[r12](%%" _ASM_CX ") \n\t"
+-		"mov %%r13, %c[r13](%%" _ASM_CX ") \n\t"
+-		"mov %%r14, %c[r14](%%" _ASM_CX ") \n\t"
+-		"mov %%r15, %c[r15](%%" _ASM_CX ") \n\t"
++		"mov %%r8,  " VCPU_R8  "(%%" _ASM_CX ") \n\t"
++		"mov %%r9,  " VCPU_R9  "(%%" _ASM_CX ") \n\t"
++		"mov %%r10, " VCPU_R10 "(%%" _ASM_CX ") \n\t"
++		"mov %%r11, " VCPU_R11 "(%%" _ASM_CX ") \n\t"
++		"mov %%r12, " VCPU_R12 "(%%" _ASM_CX ") \n\t"
++		"mov %%r13, " VCPU_R13 "(%%" _ASM_CX ") \n\t"
++		"mov %%r14, " VCPU_R14 "(%%" _ASM_CX ") \n\t"
++		"mov %%r15, " VCPU_R15 "(%%" _ASM_CX ") \n\t"
+ #endif
+ 
+ 		/* Clear EBX to indicate VM-Exit (as opposed to VM-Fail). */
+@@ -6466,7 +6493,7 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"xor %%edi, %%edi \n\t"
+ 
+ 		/* "POP" the vcpu_vmx pointer. */
+-		"add $%c[wordsize], %%" _ASM_SP " \n\t"
++		"add $" _WORD_SIZE ", %%" _ASM_SP " \n\t"
+ 		"pop  %%" _ASM_BP " \n\t"
+ 		"jmp 3f \n\t"
+ 
+@@ -6489,25 +6516,7 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		"=a"((int){0}), "=d"((int){0})
+ 	      : "a"(vmx), "d"(&vcpu->arch.regs),
+ #endif
+-		"b"(vmx->loaded_vmcs->launched),
+-		[rax]"i"(VCPU_REGS_RAX * sizeof(ulong)),
+-		[rbx]"i"(VCPU_REGS_RBX * sizeof(ulong)),
+-		[rcx]"i"(VCPU_REGS_RCX * sizeof(ulong)),
+-		[rdx]"i"(VCPU_REGS_RDX * sizeof(ulong)),
+-		[rsi]"i"(VCPU_REGS_RSI * sizeof(ulong)),
+-		[rdi]"i"(VCPU_REGS_RDI * sizeof(ulong)),
+-		[rbp]"i"(VCPU_REGS_RBP * sizeof(ulong)),
+-#ifdef CONFIG_X86_64
+-		[r8]"i"(VCPU_REGS_R8 * sizeof(ulong)),
+-		[r9]"i"(VCPU_REGS_R9 * sizeof(ulong)),
+-		[r10]"i"(VCPU_REGS_R10 * sizeof(ulong)),
+-		[r11]"i"(VCPU_REGS_R11 * sizeof(ulong)),
+-		[r12]"i"(VCPU_REGS_R12 * sizeof(ulong)),
+-		[r13]"i"(VCPU_REGS_R13 * sizeof(ulong)),
+-		[r14]"i"(VCPU_REGS_R14 * sizeof(ulong)),
+-		[r15]"i"(VCPU_REGS_R15 * sizeof(ulong)),
+-#endif
+-		[wordsize]"i"(sizeof(ulong))
++		"b"(vmx->loaded_vmcs->launched)
+ 	      : "cc", "memory"
+ #ifdef CONFIG_X86_64
+ 		, "rax", "rcx", "rdx"
+
+From patchwork Thu Jan 24 17:58:40 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779751
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 86E35139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:26 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7AB2531BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:26 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 6F63132456; Thu, 24 Jan 2019 17:59:26 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2531931BBB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:26 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728859AbfAXR7X (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:23 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19102 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729263AbfAXR7I (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:08 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775901"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 23/29] KVM: VMX: Create a stack frame in vCPU-run
+Date: Thu, 24 Jan 2019 09:58:40 -0800
+Message-Id: <20190124175845.15926-24-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+...in preparation for moving to a proper assembly sub-routnine.
+vCPU-run isn't a leaf function since it calls vmx_update_host_rsp()
+and vmx_vmenter().  And since we need to save/restore RBP anyways,
+unconditionally creating the frame costs a single MOV, i.e. don't
+bother keying off CONFIG_FRAME_POINTER or using FRAME_BEGIN, etc...
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 2c9a596bca74..49fe2ca548be 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6406,8 +6406,8 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		write_cr2(vcpu->arch.cr2);
+ 
+ 	asm(
+-		/* Store host registers */
+ 		"push %%" _ASM_BP " \n\t"
++		"mov %%" _ASM_SP ", %%" _ASM_BP " \n\t"
+ 		"push %%" _ASM_ARG2 " \n\t"
+ 
+ 		/* Adjust RSP to account for the CALL to vmx_vmenter(). */
+
+From patchwork Thu Jan 24 17:58:41 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779745
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 50A49139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:21 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3DC3132445
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:21 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 31A8532457; Thu, 24 Jan 2019 17:59:21 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4CF7132445
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:20 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729090AbfAXR7T (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:19 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19131 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729265AbfAXR7J (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:09 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775902"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 24/29] KVM: VMX: Move vCPU-run code to a proper assembly
+ routine
+Date: Thu, 24 Jan 2019 09:58:41 -0800
+Message-Id: <20190124175845.15926-25-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+As evidenced by the myriad patches leading up to this moment, using
+an inline asm blob for vCPU-run is nothing short of horrific.  It's also
+been called "unholy", "an abomination" and likely a whole host of other
+names that would violate the Code of Conduct if recorded here and now.
+
+The code is relocated nearly verbatim, e.g. quotes, newlines, tabs and
+__stringify need to be dropped, but other than those cosmetic changes
+the only functional changees are to add the "call" and replace the final
+"jmp" with a "ret".
+
+Note that STACK_FRAME_NON_STANDARD is also dropped from __vmx_vcpu_run().
+
+Suggested-by: Andi Kleen <ak@linux.intel.com>
+Suggested-by: Josh Poimboeuf <jpoimboe@redhat.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmenter.S | 141 +++++++++++++++++++++++++++++++++++++
+ arch/x86/kvm/vmx/vmx.c     | 131 +---------------------------------
+ 2 files changed, 142 insertions(+), 130 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmenter.S b/arch/x86/kvm/vmx/vmenter.S
+index bcef2c7e9bc4..daeba6dc3722 100644
+--- a/arch/x86/kvm/vmx/vmenter.S
++++ b/arch/x86/kvm/vmx/vmenter.S
+@@ -1,6 +1,33 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+ #include <linux/linkage.h>
+ #include <asm/asm.h>
++#include <asm/kvm_vcpu_regs.h>
++
++#ifdef CONFIG_X86_64
++#define WORD_SIZE 8
++#else
++#define WORD_SIZE 4
++#endif
++
++#define VCPU_RAX	__VCPU_REGS_RAX * WORD_SIZE
++#define VCPU_RCX	__VCPU_REGS_RCX * WORD_SIZE
++#define VCPU_RDX	__VCPU_REGS_RDX * WORD_SIZE
++#define VCPU_RBX	__VCPU_REGS_RBX * WORD_SIZE
++/* Intentionally omit RSP as it's context switched by hardware */
++#define VCPU_RBP	__VCPU_REGS_RBP * WORD_SIZE
++#define VCPU_RSI	__VCPU_REGS_RSI * WORD_SIZE
++#define VCPU_RDI	__VCPU_REGS_RDI * WORD_SIZE
++
++#ifdef CONFIG_X86_64
++#define VCPU_R8		__VCPU_REGS_R8  * WORD_SIZE
++#define VCPU_R9		__VCPU_REGS_R9  * WORD_SIZE
++#define VCPU_R10	__VCPU_REGS_R10 * WORD_SIZE
++#define VCPU_R11	__VCPU_REGS_R11 * WORD_SIZE
++#define VCPU_R12	__VCPU_REGS_R12 * WORD_SIZE
++#define VCPU_R13	__VCPU_REGS_R13 * WORD_SIZE
++#define VCPU_R14	__VCPU_REGS_R14 * WORD_SIZE
++#define VCPU_R15	__VCPU_REGS_R15 * WORD_SIZE
++#endif
+ 
+ 	.text
+ 
+@@ -55,3 +82,117 @@ ENDPROC(vmx_vmenter)
+ ENTRY(vmx_vmexit)
+ 	ret
+ ENDPROC(vmx_vmexit)
++
++/**
++ * ____vmx_vcpu_run - Run a vCPU via a transition to VMX guest mode
++ * @vmx:	struct vcpu_vmx *
++ * @regs:	unsigned long * (to guest registers)
++ * %RBX:	VMCS launched status (non-zero indicates already launched)
++ *
++ * Returns:
++ *	%RBX is 0 on VM-Exit, 1 on VM-Fail
++ */
++ENTRY(____vmx_vcpu_run)
++	/* Create a stack frame and save @regs. */
++	push %_ASM_BP
++	mov %_ASM_SP, %_ASM_BP
++	push %_ASM_ARG2
++
++	/* Adjust RSP to account for the CALL to vmx_vmenter(). */
++	lea -WORD_SIZE(%_ASM_SP), %_ASM_ARG2
++	call vmx_update_host_rsp
++
++	/* Load @regs to RCX. */
++	mov (%_ASM_SP), %_ASM_CX
++
++	/* Check if vmlaunch or vmresume is needed */
++	cmpb $0, %bl
++
++	/* Load guest registers.  Don't clobber flags. */
++	mov VCPU_RAX(%_ASM_CX), %_ASM_AX
++	mov VCPU_RBX(%_ASM_CX), %_ASM_BX
++	mov VCPU_RDX(%_ASM_CX), %_ASM_DX
++	mov VCPU_RSI(%_ASM_CX), %_ASM_SI
++	mov VCPU_RDI(%_ASM_CX), %_ASM_DI
++	mov VCPU_RBP(%_ASM_CX), %_ASM_BP
++#ifdef CONFIG_X86_64
++	mov VCPU_R8 (%_ASM_CX),  %r8
++	mov VCPU_R9 (%_ASM_CX),  %r9
++	mov VCPU_R10(%_ASM_CX), %r10
++	mov VCPU_R11(%_ASM_CX), %r11
++	mov VCPU_R12(%_ASM_CX), %r12
++	mov VCPU_R13(%_ASM_CX), %r13
++	mov VCPU_R14(%_ASM_CX), %r14
++	mov VCPU_R15(%_ASM_CX), %r15
++#endif
++	/* Load guest RCX.  This kills the vmx_vcpu pointer! */
++	mov VCPU_RCX(%_ASM_CX), %_ASM_CX
++
++	/* Enter guest mode */
++	call vmx_vmenter
++
++	/* Jump on VM-Fail. */
++	jbe 2f
++
++	/* Temporarily save guest's RCX. */
++	push %_ASM_CX
++
++	/* Reload @regs to RCX. */
++	mov WORD_SIZE(%_ASM_SP), %_ASM_CX
++
++	/* Save all guest registers, including RCX from the stack */
++	mov %_ASM_AX,   VCPU_RAX(%_ASM_CX)
++	mov %_ASM_BX,   VCPU_RBX(%_ASM_CX)
++	__ASM_SIZE(pop) VCPU_RCX(%_ASM_CX)
++	mov %_ASM_DX,   VCPU_RDX(%_ASM_CX)
++	mov %_ASM_SI,   VCPU_RSI(%_ASM_CX)
++	mov %_ASM_DI,   VCPU_RDI(%_ASM_CX)
++	mov %_ASM_BP,   VCPU_RBP(%_ASM_CX)
++#ifdef CONFIG_X86_64
++	mov %r8,  VCPU_R8 (%_ASM_CX)
++	mov %r9,  VCPU_R9 (%_ASM_CX)
++	mov %r10, VCPU_R10(%_ASM_CX)
++	mov %r11, VCPU_R11(%_ASM_CX)
++	mov %r12, VCPU_R12(%_ASM_CX)
++	mov %r13, VCPU_R13(%_ASM_CX)
++	mov %r14, VCPU_R14(%_ASM_CX)
++	mov %r15, VCPU_R15(%_ASM_CX)
++#endif
++
++	/* Clear EBX to indicate VM-Exit (as opposed to VM-Fail). */
++	xor %ebx, %ebx
++
++	/*
++	 * Clear registers that contain guest values and will not be
++	 * restored to prevent speculative use of the guest's values.
++	 */
++1:
++#ifdef CONFIG_X86_64
++	xor %r8d,  %r8d
++	xor %r9d,  %r9d
++	xor %r10d, %r10d
++	xor %r11d, %r11d
++	xor %r12d, %r12d
++	xor %r13d, %r13d
++	xor %r14d, %r14d
++	xor %r15d, %r15d
++#endif
++	xor %eax, %eax
++	xor %edx, %edx
++	xor %esi, %esi
++	xor %edi, %edi
++
++	/* "POP" @regs. */
++	add $WORD_SIZE, %_ASM_SP
++	pop  %_ASM_BP
++	ret
++
++	/* VM-Fail.  Out-of-line to avoid a taken Jcc after VM-Exit. */
++2:	mov $1, %ebx
++	/*
++	 * RCX holds a guest value and it's not cleared in the common
++	 * exit path as VM-Exit reloads it with the vcpu_vmx pointer.
++	 */
++	xor %ecx, %ecx
++	jmp 1b
++ENDPROC(____vmx_vcpu_run)
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 49fe2ca548be..76b68492e077 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6370,33 +6370,6 @@ void vmx_update_host_rsp(struct vcpu_vmx *vmx, unsigned long host_rsp)
+ 	}
+ }
+ 
+-#ifdef CONFIG_X86_64
+-#define WORD_SIZE	8
+-#else
+-#define WORD_SIZE	4
+-#endif
+-
+-#define _WORD_SIZE	__stringify(WORD_SIZE)
+-
+-#define VCPU_RAX	__stringify(__VCPU_REGS_RAX * WORD_SIZE)
+-#define VCPU_RCX	__stringify(__VCPU_REGS_RCX * WORD_SIZE)
+-#define VCPU_RDX	__stringify(__VCPU_REGS_RDX * WORD_SIZE)
+-#define VCPU_RBX	__stringify(__VCPU_REGS_RBX * WORD_SIZE)
+-/* Intentionally omit %RSP as it's context switched by hardware */
+-#define VCPU_RBP	__stringify(__VCPU_REGS_RBP * WORD_SIZE)
+-#define VCPU_RSI	__stringify(__VCPU_REGS_RSI * WORD_SIZE)
+-#define VCPU_RDI	__stringify(__VCPU_REGS_RDI * WORD_SIZE)
+-#ifdef CONFIG_X86_64
+-#define VCPU_R8		__stringify(__VCPU_REGS_R8  * WORD_SIZE)
+-#define VCPU_R9		__stringify(__VCPU_REGS_R9  * WORD_SIZE)
+-#define VCPU_R10	__stringify(__VCPU_REGS_R10 * WORD_SIZE)
+-#define VCPU_R11	__stringify(__VCPU_REGS_R11 * WORD_SIZE)
+-#define VCPU_R12	__stringify(__VCPU_REGS_R12 * WORD_SIZE)
+-#define VCPU_R13	__stringify(__VCPU_REGS_R13 * WORD_SIZE)
+-#define VCPU_R14	__stringify(__VCPU_REGS_R14 * WORD_SIZE)
+-#define VCPU_R15	__stringify(__VCPU_REGS_R15 * WORD_SIZE)
+-#endif
+-
+ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ {
+ 	if (static_branch_unlikely(&vmx_l1d_should_flush))
+@@ -6406,108 +6379,7 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 		write_cr2(vcpu->arch.cr2);
+ 
+ 	asm(
+-		"push %%" _ASM_BP " \n\t"
+-		"mov %%" _ASM_SP ", %%" _ASM_BP " \n\t"
+-		"push %%" _ASM_ARG2 " \n\t"
+-
+-		/* Adjust RSP to account for the CALL to vmx_vmenter(). */
+-		"lea -" _WORD_SIZE "(%%" _ASM_SP "), %%" _ASM_ARG2 " \n\t"
+-		"call vmx_update_host_rsp \n\t"
+-
+-		/* Load RCX with @regs. */
+-		"mov (%%" _ASM_SP "), %%" _ASM_CX " \n\t"
+-
+-		/* Check if vmlaunch or vmresume is needed */
+-		"cmpb $0, %%bl \n\t"
+-
+-		/* Load guest registers.  Don't clobber flags. */
+-		"mov " VCPU_RAX "(%%" _ASM_CX "), %%" _ASM_AX " \n\t"
+-		"mov " VCPU_RBX "(%%" _ASM_CX "), %%" _ASM_BX " \n\t"
+-		"mov " VCPU_RDX "(%%" _ASM_CX "), %%" _ASM_DX " \n\t"
+-		"mov " VCPU_RSI "(%%" _ASM_CX "), %%" _ASM_SI " \n\t"
+-		"mov " VCPU_RDI "(%%" _ASM_CX "), %%" _ASM_DI " \n\t"
+-		"mov " VCPU_RBP "(%%" _ASM_CX "), %%" _ASM_BP " \n\t"
+-#ifdef CONFIG_X86_64
+-		"mov " VCPU_R8  "(%%" _ASM_CX "),  %%r8  \n\t"
+-		"mov " VCPU_R9  "(%%" _ASM_CX "),  %%r9  \n\t"
+-		"mov " VCPU_R10 "(%%" _ASM_CX "), %%r10 \n\t"
+-		"mov " VCPU_R11 "(%%" _ASM_CX "), %%r11 \n\t"
+-		"mov " VCPU_R12 "(%%" _ASM_CX "), %%r12 \n\t"
+-		"mov " VCPU_R13 "(%%" _ASM_CX "), %%r13 \n\t"
+-		"mov " VCPU_R14 "(%%" _ASM_CX "), %%r14 \n\t"
+-		"mov " VCPU_R15 "(%%" _ASM_CX "), %%r15 \n\t"
+-#endif
+-		/* Load guest RCX.  This kills the vmx_vcpu pointer! */
+-		"mov " VCPU_RCX"(%%" _ASM_CX "), %%" _ASM_CX " \n\t"
+-
+-		/* Enter guest mode */
+-		"call vmx_vmenter\n\t"
+-		"jbe 2f \n\t"
+-
+-		/* Temporarily save guest's RCX. */
+-		"push %%" _ASM_CX " \n\t"
+-
+-		/* Reload RCX with @regs. */
+-		"mov " _WORD_SIZE "(%%" _ASM_SP "), %%" _ASM_CX " \n\t"
+-
+-		/* Save all guest registers, including RCX from the stack */
+-		"mov %%" _ASM_AX ", " VCPU_RAX "(%%" _ASM_CX ") \n\t"
+-		"mov %%" _ASM_BX ", " VCPU_RBX "(%%" _ASM_CX ") \n\t"
+-		__ASM_SIZE(pop) "   " VCPU_RCX "(%%" _ASM_CX ") \n\t"
+-		"mov %%" _ASM_DX ", " VCPU_RDX "(%%" _ASM_CX ") \n\t"
+-		"mov %%" _ASM_SI ", " VCPU_RSI "(%%" _ASM_CX ") \n\t"
+-		"mov %%" _ASM_DI ", " VCPU_RDI "(%%" _ASM_CX ") \n\t"
+-		"mov %%" _ASM_BP ", " VCPU_RBP "(%%" _ASM_CX ") \n\t"
+-#ifdef CONFIG_X86_64
+-		"mov %%r8,  " VCPU_R8  "(%%" _ASM_CX ") \n\t"
+-		"mov %%r9,  " VCPU_R9  "(%%" _ASM_CX ") \n\t"
+-		"mov %%r10, " VCPU_R10 "(%%" _ASM_CX ") \n\t"
+-		"mov %%r11, " VCPU_R11 "(%%" _ASM_CX ") \n\t"
+-		"mov %%r12, " VCPU_R12 "(%%" _ASM_CX ") \n\t"
+-		"mov %%r13, " VCPU_R13 "(%%" _ASM_CX ") \n\t"
+-		"mov %%r14, " VCPU_R14 "(%%" _ASM_CX ") \n\t"
+-		"mov %%r15, " VCPU_R15 "(%%" _ASM_CX ") \n\t"
+-#endif
+-
+-		/* Clear EBX to indicate VM-Exit (as opposed to VM-Fail). */
+-		"xor %%ebx, %%ebx \n\t"
+-
+-		/*
+-		 * Clear registers that contain guest values and will not be
+-		 * restored to prevent speculative use of the guest's values.
+-		 */
+-		"1: \n\t"
+-#ifdef CONFIG_X86_64
+-		"xor %%r8d,  %%r8d \n\t"
+-		"xor %%r9d,  %%r9d \n\t"
+-		"xor %%r10d, %%r10d \n\t"
+-		"xor %%r11d, %%r11d \n\t"
+-		"xor %%r12d, %%r12d \n\t"
+-		"xor %%r13d, %%r13d \n\t"
+-		"xor %%r14d, %%r14d \n\t"
+-		"xor %%r15d, %%r15d \n\t"
+-#endif
+-		"xor %%eax, %%eax \n\t"
+-		"xor %%edx, %%edx \n\t"
+-		"xor %%esi, %%esi \n\t"
+-		"xor %%edi, %%edi \n\t"
+-
+-		/* "POP" the vcpu_vmx pointer. */
+-		"add $" _WORD_SIZE ", %%" _ASM_SP " \n\t"
+-		"pop  %%" _ASM_BP " \n\t"
+-		"jmp 3f \n\t"
+-
+-		/* VM-Fail.  Out-of-line to avoid a taken Jcc after VM-Exit. */
+-		"2: \n\t"
+-		"mov $1, %%ebx \n\t"
+-		/*
+-		 * RCX holds a guest value and it's not cleared in the common
+-		 * exit path as VM-Exit reloads it with the vcpu_vmx pointer.
+-		 */
+-		"xor %%ecx, %%ecx \n\t"
+-		"jmp 1b \n\t"
+-		"3: \n\t"
+-
++		"call ____vmx_vcpu_run \n\t"
+ 	      : ASM_CALL_CONSTRAINT, "=b"(vmx->fail),
+ #ifdef CONFIG_X86_64
+ 		"=D"((int){0}), "=S"((int){0})
+@@ -6528,7 +6400,6 @@ static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+ 
+ 	vcpu->arch.cr2 = read_cr2();
+ }
+-STACK_FRAME_NON_STANDARD(__vmx_vcpu_run);
+ 
+ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ {
+
+From patchwork Thu Jan 24 17:58:42 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779735
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 98AD013B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:12 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 8B28B30AB0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:12 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 7F49831BBB; Thu, 24 Jan 2019 17:59:12 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 24BA331B9D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729283AbfAXR7K (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:10 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19102 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729272AbfAXR7J (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:09 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775903"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 25/29] KVM: VMX: Fold __vmx_vcpu_run() back into
+ vmx_vcpu_run()
+Date: Thu, 24 Jan 2019 09:58:42 -0800
+Message-Id: <20190124175845.15926-26-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+...now that the code is no longer tagged with STACK_FRAME_NON_STANDARD.
+Arguably, providing __vmx_vcpu_run() to break up vmx_vcpu_run() is
+valuable on its own, but the previous split was purposely made as small
+as possible to limit the effects STACK_FRAME_NON_STANDARD.  In other
+words, the current split is now completely arbitrary and likely not the
+most logical.
+
+This also allows renaming ____vmx_vcpu_run() to __vmx_vcpu_run() in a
+future patch.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 59 +++++++++++++++++++-----------------------
+ 1 file changed, 27 insertions(+), 32 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 76b68492e077..3adfe7ab7438 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6370,37 +6370,6 @@ void vmx_update_host_rsp(struct vcpu_vmx *vmx, unsigned long host_rsp)
+ 	}
+ }
+ 
+-static void __vmx_vcpu_run(struct kvm_vcpu *vcpu, struct vcpu_vmx *vmx)
+-{
+-	if (static_branch_unlikely(&vmx_l1d_should_flush))
+-		vmx_l1d_flush(vcpu);
+-
+-	if (vcpu->arch.cr2 != read_cr2())
+-		write_cr2(vcpu->arch.cr2);
+-
+-	asm(
+-		"call ____vmx_vcpu_run \n\t"
+-	      : ASM_CALL_CONSTRAINT, "=b"(vmx->fail),
+-#ifdef CONFIG_X86_64
+-		"=D"((int){0}), "=S"((int){0})
+-	      : "D"(vmx), "S"(&vcpu->arch.regs),
+-#else
+-		"=a"((int){0}), "=d"((int){0})
+-	      : "a"(vmx), "d"(&vcpu->arch.regs),
+-#endif
+-		"b"(vmx->loaded_vmcs->launched)
+-	      : "cc", "memory"
+-#ifdef CONFIG_X86_64
+-		, "rax", "rcx", "rdx"
+-		, "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
+-#else
+-		, "ecx", "edi", "esi"
+-#endif
+-	      );
+-
+-	vcpu->arch.cr2 = read_cr2();
+-}
+-
+ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+@@ -6468,7 +6437,33 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ 	 */
+ 	x86_spec_ctrl_set_guest(vmx->spec_ctrl, 0);
+ 
+-	__vmx_vcpu_run(vcpu, vmx);
++	if (static_branch_unlikely(&vmx_l1d_should_flush))
++		vmx_l1d_flush(vcpu);
++
++	if (vcpu->arch.cr2 != read_cr2())
++		write_cr2(vcpu->arch.cr2);
++
++	asm(
++		"call ____vmx_vcpu_run \n\t"
++	      : ASM_CALL_CONSTRAINT, "=b"(vmx->fail),
++#ifdef CONFIG_X86_64
++		"=D"((int){0}), "=S"((int){0})
++	      : "D"(vmx), "S"(&vcpu->arch.regs),
++#else
++		"=a"((int){0}), "=d"((int){0})
++	      : "a"(vmx), "d"(&vcpu->arch.regs),
++#endif
++		"b"(vmx->loaded_vmcs->launched)
++	      : "cc", "memory"
++#ifdef CONFIG_X86_64
++		, "rax", "rcx", "rdx"
++		, "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
++#else
++		, "ecx", "edi", "esi"
++#endif
++	      );
++
++	vcpu->arch.cr2 = read_cr2();
+ 
+ 	/*
+ 	 * We do not use IBRS in the kernel. If this vCPU has used the
+
+From patchwork Thu Jan 24 17:58:43 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779733
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 515F613B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:11 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4425A31B9D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:11 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 387BC31BBB; Thu, 24 Jan 2019 17:59:11 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id CD6BB31B9D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729278AbfAXR7J (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:09 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19131 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729273AbfAXR7J (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:09 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775904"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 26/29] KVM: VMX: Rename ____vmx_vcpu_run() to
+ __vmx_vcpu_run()
+Date: Thu, 24 Jan 2019 09:58:43 -0800
+Message-Id: <20190124175845.15926-27-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+...now that the name is no longer usurped by a defunct helper function.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmenter.S | 6 +++---
+ arch/x86/kvm/vmx/vmx.c     | 2 +-
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmenter.S b/arch/x86/kvm/vmx/vmenter.S
+index daeba6dc3722..07e2cd0da9f9 100644
+--- a/arch/x86/kvm/vmx/vmenter.S
++++ b/arch/x86/kvm/vmx/vmenter.S
+@@ -84,7 +84,7 @@ ENTRY(vmx_vmexit)
+ ENDPROC(vmx_vmexit)
+ 
+ /**
+- * ____vmx_vcpu_run - Run a vCPU via a transition to VMX guest mode
++ * __vmx_vcpu_run - Run a vCPU via a transition to VMX guest mode
+  * @vmx:	struct vcpu_vmx *
+  * @regs:	unsigned long * (to guest registers)
+  * %RBX:	VMCS launched status (non-zero indicates already launched)
+@@ -92,7 +92,7 @@ ENDPROC(vmx_vmexit)
+  * Returns:
+  *	%RBX is 0 on VM-Exit, 1 on VM-Fail
+  */
+-ENTRY(____vmx_vcpu_run)
++ENTRY(__vmx_vcpu_run)
+ 	/* Create a stack frame and save @regs. */
+ 	push %_ASM_BP
+ 	mov %_ASM_SP, %_ASM_BP
+@@ -195,4 +195,4 @@ ENTRY(____vmx_vcpu_run)
+ 	 */
+ 	xor %ecx, %ecx
+ 	jmp 1b
+-ENDPROC(____vmx_vcpu_run)
++ENDPROC(__vmx_vcpu_run)
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 3adfe7ab7438..0ddd08f9337c 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6444,7 +6444,7 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ 		write_cr2(vcpu->arch.cr2);
+ 
+ 	asm(
+-		"call ____vmx_vcpu_run \n\t"
++		"call __vmx_vcpu_run \n\t"
+ 	      : ASM_CALL_CONSTRAINT, "=b"(vmx->fail),
+ #ifdef CONFIG_X86_64
+ 		"=D"((int){0}), "=S"((int){0})
+
+From patchwork Thu Jan 24 17:58:44 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779739
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id CA5FE13B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:16 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id BCF9C3120E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:16 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id B181D31BBC; Thu, 24 Jan 2019 17:59:16 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3F1153120E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:16 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729280AbfAXR7P (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:15 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19131 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729275AbfAXR7J (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:09 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775905"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 27/29] KVM: VMX: Use RAX as the scratch register during
+ vCPU-run
+Date: Thu, 24 Jan 2019 09:58:44 -0800
+Message-Id: <20190124175845.15926-28-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Prepare for making __vmx_vcpu_run() callable from C code.  That means
+returning the result in RAX.  Since RAX will be used to return the
+result, use it as the scratch register as well to make the code readable
+and to document that the scratch register is more more less arbitrary.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmenter.S | 82 +++++++++++++++++++-------------------
+ 1 file changed, 41 insertions(+), 41 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmenter.S b/arch/x86/kvm/vmx/vmenter.S
+index 07e2cd0da9f9..ba53409382ce 100644
+--- a/arch/x86/kvm/vmx/vmenter.S
++++ b/arch/x86/kvm/vmx/vmenter.S
+@@ -102,31 +102,31 @@ ENTRY(__vmx_vcpu_run)
+ 	lea -WORD_SIZE(%_ASM_SP), %_ASM_ARG2
+ 	call vmx_update_host_rsp
+ 
+-	/* Load @regs to RCX. */
+-	mov (%_ASM_SP), %_ASM_CX
++	/* Load @regs to RAX. */
++	mov (%_ASM_SP), %_ASM_AX
+ 
+ 	/* Check if vmlaunch or vmresume is needed */
+ 	cmpb $0, %bl
+ 
+ 	/* Load guest registers.  Don't clobber flags. */
+-	mov VCPU_RAX(%_ASM_CX), %_ASM_AX
+-	mov VCPU_RBX(%_ASM_CX), %_ASM_BX
+-	mov VCPU_RDX(%_ASM_CX), %_ASM_DX
+-	mov VCPU_RSI(%_ASM_CX), %_ASM_SI
+-	mov VCPU_RDI(%_ASM_CX), %_ASM_DI
+-	mov VCPU_RBP(%_ASM_CX), %_ASM_BP
++	mov VCPU_RBX(%_ASM_AX), %_ASM_BX
++	mov VCPU_RCX(%_ASM_AX), %_ASM_CX
++	mov VCPU_RDX(%_ASM_AX), %_ASM_DX
++	mov VCPU_RSI(%_ASM_AX), %_ASM_SI
++	mov VCPU_RDI(%_ASM_AX), %_ASM_DI
++	mov VCPU_RBP(%_ASM_AX), %_ASM_BP
+ #ifdef CONFIG_X86_64
+-	mov VCPU_R8 (%_ASM_CX),  %r8
+-	mov VCPU_R9 (%_ASM_CX),  %r9
+-	mov VCPU_R10(%_ASM_CX), %r10
+-	mov VCPU_R11(%_ASM_CX), %r11
+-	mov VCPU_R12(%_ASM_CX), %r12
+-	mov VCPU_R13(%_ASM_CX), %r13
+-	mov VCPU_R14(%_ASM_CX), %r14
+-	mov VCPU_R15(%_ASM_CX), %r15
++	mov VCPU_R8 (%_ASM_AX),  %r8
++	mov VCPU_R9 (%_ASM_AX),  %r9
++	mov VCPU_R10(%_ASM_AX), %r10
++	mov VCPU_R11(%_ASM_AX), %r11
++	mov VCPU_R12(%_ASM_AX), %r12
++	mov VCPU_R13(%_ASM_AX), %r13
++	mov VCPU_R14(%_ASM_AX), %r14
++	mov VCPU_R15(%_ASM_AX), %r15
+ #endif
+-	/* Load guest RCX.  This kills the vmx_vcpu pointer! */
+-	mov VCPU_RCX(%_ASM_CX), %_ASM_CX
++	/* Load guest RAX.  This kills the vmx_vcpu pointer! */
++	mov VCPU_RAX(%_ASM_AX), %_ASM_AX
+ 
+ 	/* Enter guest mode */
+ 	call vmx_vmenter
+@@ -134,29 +134,29 @@ ENTRY(__vmx_vcpu_run)
+ 	/* Jump on VM-Fail. */
+ 	jbe 2f
+ 
+-	/* Temporarily save guest's RCX. */
+-	push %_ASM_CX
++	/* Temporarily save guest's RAX. */
++	push %_ASM_AX
+ 
+-	/* Reload @regs to RCX. */
+-	mov WORD_SIZE(%_ASM_SP), %_ASM_CX
++	/* Reload @regs to RAX. */
++	mov WORD_SIZE(%_ASM_SP), %_ASM_AX
+ 
+-	/* Save all guest registers, including RCX from the stack */
+-	mov %_ASM_AX,   VCPU_RAX(%_ASM_CX)
+-	mov %_ASM_BX,   VCPU_RBX(%_ASM_CX)
+-	__ASM_SIZE(pop) VCPU_RCX(%_ASM_CX)
+-	mov %_ASM_DX,   VCPU_RDX(%_ASM_CX)
+-	mov %_ASM_SI,   VCPU_RSI(%_ASM_CX)
+-	mov %_ASM_DI,   VCPU_RDI(%_ASM_CX)
+-	mov %_ASM_BP,   VCPU_RBP(%_ASM_CX)
++	/* Save all guest registers, including RAX from the stack */
++	__ASM_SIZE(pop) VCPU_RAX(%_ASM_AX)
++	mov %_ASM_BX,   VCPU_RBX(%_ASM_AX)
++	mov %_ASM_CX,   VCPU_RCX(%_ASM_AX)
++	mov %_ASM_DX,   VCPU_RDX(%_ASM_AX)
++	mov %_ASM_SI,   VCPU_RSI(%_ASM_AX)
++	mov %_ASM_DI,   VCPU_RDI(%_ASM_AX)
++	mov %_ASM_BP,   VCPU_RBP(%_ASM_AX)
+ #ifdef CONFIG_X86_64
+-	mov %r8,  VCPU_R8 (%_ASM_CX)
+-	mov %r9,  VCPU_R9 (%_ASM_CX)
+-	mov %r10, VCPU_R10(%_ASM_CX)
+-	mov %r11, VCPU_R11(%_ASM_CX)
+-	mov %r12, VCPU_R12(%_ASM_CX)
+-	mov %r13, VCPU_R13(%_ASM_CX)
+-	mov %r14, VCPU_R14(%_ASM_CX)
+-	mov %r15, VCPU_R15(%_ASM_CX)
++	mov %r8,  VCPU_R8 (%_ASM_AX)
++	mov %r9,  VCPU_R9 (%_ASM_AX)
++	mov %r10, VCPU_R10(%_ASM_AX)
++	mov %r11, VCPU_R11(%_ASM_AX)
++	mov %r12, VCPU_R12(%_ASM_AX)
++	mov %r13, VCPU_R13(%_ASM_AX)
++	mov %r14, VCPU_R14(%_ASM_AX)
++	mov %r15, VCPU_R15(%_ASM_AX)
+ #endif
+ 
+ 	/* Clear EBX to indicate VM-Exit (as opposed to VM-Fail). */
+@@ -177,7 +177,7 @@ ENTRY(__vmx_vcpu_run)
+ 	xor %r14d, %r14d
+ 	xor %r15d, %r15d
+ #endif
+-	xor %eax, %eax
++	xor %ecx, %ecx
+ 	xor %edx, %edx
+ 	xor %esi, %esi
+ 	xor %edi, %edi
+@@ -190,9 +190,9 @@ ENTRY(__vmx_vcpu_run)
+ 	/* VM-Fail.  Out-of-line to avoid a taken Jcc after VM-Exit. */
+ 2:	mov $1, %ebx
+ 	/*
+-	 * RCX holds a guest value and it's not cleared in the common
++	 * RAX holds a guest value and it's not cleared in the common
+ 	 * exit path as VM-Exit reloads it with the vcpu_vmx pointer.
+ 	 */
+-	xor %ecx, %ecx
++	xor %eax, %eax
+ 	jmp 1b
+ ENDPROC(__vmx_vcpu_run)
+
+From patchwork Thu Jan 24 17:58:45 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779737
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6636B139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:14 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5A73431BBA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:14 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4EBC131BBC; Thu, 24 Jan 2019 17:59:14 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id CFB9831BBA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:13 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729279AbfAXR7M (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:12 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19102 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729264AbfAXR7K (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:10 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775907"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 28/29] KVM: VMX: Make the vCPU-run asm routine callable
+ from C
+Date: Thu, 24 Jan 2019 09:58:45 -0800
+Message-Id: <20190124175845.15926-29-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+...and of course actually call it from C now that the assembly code is
+in a dedicated sub-routine and has been cleansed of any quirks that
+would break compliance with the kernel's x86 calling conventions.
+
+Aside from saving/restoring registers instead of clobbering them, the
+only real function difference is that VM-Fail is propagated to EAX
+instead of EBX.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmenter.S | 53 ++++++++++++++++++++++++++------------
+ arch/x86/kvm/vmx/vmx.c     | 23 +++--------------
+ 2 files changed, 40 insertions(+), 36 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmenter.S b/arch/x86/kvm/vmx/vmenter.S
+index ba53409382ce..66dfbe618c9a 100644
+--- a/arch/x86/kvm/vmx/vmenter.S
++++ b/arch/x86/kvm/vmx/vmenter.S
+@@ -87,17 +87,34 @@ ENDPROC(vmx_vmexit)
+  * __vmx_vcpu_run - Run a vCPU via a transition to VMX guest mode
+  * @vmx:	struct vcpu_vmx *
+  * @regs:	unsigned long * (to guest registers)
+- * %RBX:	VMCS launched status (non-zero indicates already launched)
++ * @launched:	%true if the VMCS has been launched
+  *
+  * Returns:
+- *	%RBX is 0 on VM-Exit, 1 on VM-Fail
++ *	0 on VM-Exit, 1 on VM-Fail
+  */
+ ENTRY(__vmx_vcpu_run)
+-	/* Create a stack frame and save @regs. */
+ 	push %_ASM_BP
+-	mov %_ASM_SP, %_ASM_BP
++	mov  %_ASM_SP, %_ASM_BP
++#ifdef CONFIG_X86_64
++	push %r15
++	push %r14
++	push %r13
++	push %r12
++#else
++	push %edi
++	push %esi
++#endif
++	push %_ASM_BX
++
++	/*
++	 * Save @regs, its register may be modified by vmx_update_host_rsp()
++	 * and it's also needed after VM-Exit.
++	 */
+ 	push %_ASM_ARG2
+ 
++	/* Copy @launched to BL, _ASM_ARG3 is volatile. */
++	mov %_ASM_ARG3B, %bl
++
+ 	/* Adjust RSP to account for the CALL to vmx_vmenter(). */
+ 	lea -WORD_SIZE(%_ASM_SP), %_ASM_ARG2
+ 	call vmx_update_host_rsp
+@@ -159,8 +176,8 @@ ENTRY(__vmx_vcpu_run)
+ 	mov %r15, VCPU_R15(%_ASM_AX)
+ #endif
+ 
+-	/* Clear EBX to indicate VM-Exit (as opposed to VM-Fail). */
+-	xor %ebx, %ebx
++	/* Clear RAX to indicate VM-Exit (as opposed to VM-Fail). */
++	xor %eax, %eax
+ 
+ 	/*
+ 	 * Clear registers that contain guest values and will not be
+@@ -172,10 +189,6 @@ ENTRY(__vmx_vcpu_run)
+ 	xor %r9d,  %r9d
+ 	xor %r10d, %r10d
+ 	xor %r11d, %r11d
+-	xor %r12d, %r12d
+-	xor %r13d, %r13d
+-	xor %r14d, %r14d
+-	xor %r15d, %r15d
+ #endif
+ 	xor %ecx, %ecx
+ 	xor %edx, %edx
+@@ -184,15 +197,21 @@ ENTRY(__vmx_vcpu_run)
+ 
+ 	/* "POP" @regs. */
+ 	add $WORD_SIZE, %_ASM_SP
+-	pop  %_ASM_BP
++	pop %_ASM_BX
++
++#ifdef CONFIG_X86_64
++	pop %r12
++	pop %r13
++	pop %r14
++	pop %r15
++#else
++	pop %esi
++	pop %edi
++#endif
++	pop %_ASM_BP
+ 	ret
+ 
+ 	/* VM-Fail.  Out-of-line to avoid a taken Jcc after VM-Exit. */
+-2:	mov $1, %ebx
+-	/*
+-	 * RAX holds a guest value and it's not cleared in the common
+-	 * exit path as VM-Exit reloads it with the vcpu_vmx pointer.
+-	 */
+-	xor %eax, %eax
++2:	mov $1, %eax
+ 	jmp 1b
+ ENDPROC(__vmx_vcpu_run)
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 0ddd08f9337c..fa75fb8bdaa0 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6370,6 +6370,8 @@ void vmx_update_host_rsp(struct vcpu_vmx *vmx, unsigned long host_rsp)
+ 	}
+ }
+ 
++bool __vmx_vcpu_run(struct vcpu_vmx *vmx, unsigned long *regs, bool launched);
++
+ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+@@ -6443,25 +6445,8 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ 	if (vcpu->arch.cr2 != read_cr2())
+ 		write_cr2(vcpu->arch.cr2);
+ 
+-	asm(
+-		"call __vmx_vcpu_run \n\t"
+-	      : ASM_CALL_CONSTRAINT, "=b"(vmx->fail),
+-#ifdef CONFIG_X86_64
+-		"=D"((int){0}), "=S"((int){0})
+-	      : "D"(vmx), "S"(&vcpu->arch.regs),
+-#else
+-		"=a"((int){0}), "=d"((int){0})
+-	      : "a"(vmx), "d"(&vcpu->arch.regs),
+-#endif
+-		"b"(vmx->loaded_vmcs->launched)
+-	      : "cc", "memory"
+-#ifdef CONFIG_X86_64
+-		, "rax", "rcx", "rdx"
+-		, "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
+-#else
+-		, "ecx", "edi", "esi"
+-#endif
+-	      );
++	vmx->fail = __vmx_vcpu_run(vmx, (unsigned long *)&vcpu->arch.regs,
++				   vmx->loaded_vmcs->launched);
+ 
+ 	vcpu->arch.cr2 = read_cr2();
+ 
+
+From patchwork Thu Jan 24 17:58:46 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10779741
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D68AD13B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:17 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C96D331BBC
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:17 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id BD6D131BE0; Thu, 24 Jan 2019 17:59:17 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 6CABE31BBC
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Jan 2019 17:59:17 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729294AbfAXR7O (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Jan 2019 12:59:14 -0500
+Received: from mga02.intel.com ([134.134.136.20]:19162 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729223AbfAXR7J (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Jan 2019 12:59:09 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 24 Jan 2019 09:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.56,517,1539673200";
+   d="scan'208";a="110775908"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.14])
+  by orsmga006.jf.intel.com with ESMTP; 24 Jan 2019 09:59:01 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>,
+        Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
+Subject: [PATCH v2 29/29] KVM: VMX: Reorder clearing of registers in the
+ vCPU-run assembly flow
+Date: Thu, 24 Jan 2019 09:58:46 -0800
+Message-Id: <20190124175845.15926-30-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+References: <20190124175845.15926-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Move the clearing of the common registers (not 64-bit-only) to the start
+of the flow that clears volatile registers holding guest state.  This is
+purely a cosmetic change so that the label doesn't point at a blank line
+and a #define.
+
+No functioncal change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmenter.S | 9 ++++-----
+ 1 file changed, 4 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmenter.S b/arch/x86/kvm/vmx/vmenter.S
+index 66dfbe618c9a..038c65bd5d95 100644
+--- a/arch/x86/kvm/vmx/vmenter.S
++++ b/arch/x86/kvm/vmx/vmenter.S
+@@ -183,17 +183,16 @@ ENTRY(__vmx_vcpu_run)
+ 	 * Clear registers that contain guest values and will not be
+ 	 * restored to prevent speculative use of the guest's values.
+ 	 */
+-1:
++1:	xor %ecx, %ecx
++	xor %edx, %edx
++	xor %esi, %esi
++	xor %edi, %edi
+ #ifdef CONFIG_X86_64
+ 	xor %r8d,  %r8d
+ 	xor %r9d,  %r9d
+ 	xor %r10d, %r10d
+ 	xor %r11d, %r11d
+ #endif
+-	xor %ecx, %ecx
+-	xor %edx, %edx
+-	xor %esi, %esi
+-	xor %edi, %edi
+ 
+ 	/* "POP" @regs. */
+ 	add $WORD_SIZE, %_ASM_SP

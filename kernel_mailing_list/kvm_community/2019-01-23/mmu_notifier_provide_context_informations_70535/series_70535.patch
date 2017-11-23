@@ -1,0 +1,2044 @@
+From patchwork Wed Jan 23 22:23:07 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Jerome Glisse <jglisse@redhat.com>
+X-Patchwork-Id: 10777967
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id AD4061390
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:23:35 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 9A3402D368
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:23:35 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 8E6172D3BE; Wed, 23 Jan 2019 22:23:35 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 10FD12D368
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:23:35 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727074AbfAWWXd (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 23 Jan 2019 17:23:33 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:57834 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726249AbfAWWXc (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 23 Jan 2019 17:23:32 -0500
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 20E67461FF;
+        Wed, 23 Jan 2019 22:23:32 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-120-127.rdu2.redhat.com
+ [10.10.120.127])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 7FF865D964;
+        Wed, 23 Jan 2019 22:23:29 +0000 (UTC)
+From: jglisse@redhat.com
+To: linux-mm@kvack.org
+Cc: Andrew Morton <akpm@linux-foundation.org>, linux-kernel@vger.kernel.org,
+	=?utf-8?b?SsOpcsO0bWUgR2xpc3Nl?= <jglisse@redhat.com>, =?utf-8?q?Christian_?=
+	=?utf-8?q?K=C3=B6nig?= <christian.koenig@amd.com>, Jan Kara <jack@suse.cz>,
+ Felix Kuehling <Felix.Kuehling@amd.com>, Jason Gunthorpe <jgg@mellanox.com>,
+ Matthew Wilcox <mawilcox@microsoft.com>, Ross Zwisler <zwisler@kernel.org>,
+ Dan Williams <dan.j.williams@intel.com>, Paolo Bonzini <pbonzini@redhat.com>,
+	=?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Michal Hocko <mhocko@kernel.org>, Ralph Campbell <rcampbell@nvidia.com>,
+ John Hubbard <jhubbard@nvidia.com>, kvm@vger.kernel.org,
+ dri-devel@lists.freedesktop.org, linux-rdma@vger.kernel.org,
+ linux-fsdevel@vger.kernel.org, Arnd Bergmann <arnd@arndb.de>
+Subject: [PATCH v4 1/9] mm/mmu_notifier: contextual information for event
+ enums
+Date: Wed, 23 Jan 2019 17:23:07 -0500
+Message-Id: <20190123222315.1122-2-jglisse@redhat.com>
+In-Reply-To: <20190123222315.1122-1-jglisse@redhat.com>
+References: <20190123222315.1122-1-jglisse@redhat.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.29]);
+ Wed, 23 Jan 2019 22:23:32 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Jérôme Glisse <jglisse@redhat.com>
+
+CPU page table update can happens for many reasons, not only as a result
+of a syscall (munmap(), mprotect(), mremap(), madvise(), ...) but also
+as a result of kernel activities (memory compression, reclaim, migration,
+...).
+
+This patch introduce a set of enums that can be associated with each of
+the events triggering a mmu notifier. Latter patches take advantages of
+those enum values.
+
+    - UNMAP: munmap() or mremap()
+    - CLEAR: page table is cleared (migration, compaction, reclaim, ...)
+    - PROTECTION_VMA: change in access protections for the range
+    - PROTECTION_PAGE: change in access protections for page in the range
+    - SOFT_DIRTY: soft dirtyness tracking
+
+Being able to identify munmap() and mremap() from other reasons why the
+page table is cleared is important to allow user of mmu notifier to
+update their own internal tracking structure accordingly (on munmap or
+mremap it is not longer needed to track range of virtual address as it
+becomes invalid).
+
+Signed-off-by: Jérôme Glisse <jglisse@redhat.com>
+Cc: Christian König <christian.koenig@amd.com>
+Cc: Jan Kara <jack@suse.cz>
+Cc: Felix Kuehling <Felix.Kuehling@amd.com>
+Cc: Jason Gunthorpe <jgg@mellanox.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: Matthew Wilcox <mawilcox@microsoft.com>
+Cc: Ross Zwisler <zwisler@kernel.org>
+Cc: Dan Williams <dan.j.williams@intel.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Radim Krčmář <rkrcmar@redhat.com>
+Cc: Michal Hocko <mhocko@kernel.org>
+Cc: Ralph Campbell <rcampbell@nvidia.com>
+Cc: John Hubbard <jhubbard@nvidia.com>
+Cc: kvm@vger.kernel.org
+Cc: dri-devel@lists.freedesktop.org
+Cc: linux-rdma@vger.kernel.org
+Cc: linux-fsdevel@vger.kernel.org
+Cc: Arnd Bergmann <arnd@arndb.de>
+---
+ include/linux/mmu_notifier.h | 30 ++++++++++++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/include/linux/mmu_notifier.h b/include/linux/mmu_notifier.h
+index 4050ec1c3b45..abc9dbb7bcb6 100644
+--- a/include/linux/mmu_notifier.h
++++ b/include/linux/mmu_notifier.h
+@@ -10,6 +10,36 @@
+ struct mmu_notifier;
+ struct mmu_notifier_ops;
+ 
++/**
++ * enum mmu_notifier_event - reason for the mmu notifier callback
++ * @MMU_NOTIFY_UNMAP: either munmap() that unmap the range or a mremap() that
++ * move the range
++ *
++ * @MMU_NOTIFY_CLEAR: clear page table entry (many reasons for this like
++ * madvise() or replacing a page by another one, ...).
++ *
++ * @MMU_NOTIFY_PROTECTION_VMA: update is due to protection change for the range
++ * ie using the vma access permission (vm_page_prot) to update the whole range
++ * is enough no need to inspect changes to the CPU page table (mprotect()
++ * syscall)
++ *
++ * @MMU_NOTIFY_PROTECTION_PAGE: update is due to change in read/write flag for
++ * pages in the range so to mirror those changes the user must inspect the CPU
++ * page table (from the end callback).
++ *
++ * @MMU_NOTIFY_SOFT_DIRTY: soft dirty accounting (still same page and same
++ * access flags). User should soft dirty the page in the end callback to make
++ * sure that anyone relying on soft dirtyness catch pages that might be written
++ * through non CPU mappings.
++ */
++enum mmu_notifier_event {
++	MMU_NOTIFY_UNMAP = 0,
++	MMU_NOTIFY_CLEAR,
++	MMU_NOTIFY_PROTECTION_VMA,
++	MMU_NOTIFY_PROTECTION_PAGE,
++	MMU_NOTIFY_SOFT_DIRTY,
++};
++
+ #ifdef CONFIG_MMU_NOTIFIER
+ 
+ /*
+
+From patchwork Wed Jan 23 22:23:08 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Jerome Glisse <jglisse@redhat.com>
+X-Patchwork-Id: 10777975
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E000A1399
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:23:40 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id CD9412D368
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:23:40 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id BF46A2D3D7; Wed, 23 Jan 2019 22:23:40 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 845982D368
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:23:38 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727128AbfAWWXg (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 23 Jan 2019 17:23:36 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:54388 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727101AbfAWWXf (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 23 Jan 2019 17:23:35 -0500
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 19010A7880;
+        Wed, 23 Jan 2019 22:23:35 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-120-127.rdu2.redhat.com
+ [10.10.120.127])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 4DD495D965;
+        Wed, 23 Jan 2019 22:23:32 +0000 (UTC)
+From: jglisse@redhat.com
+To: linux-mm@kvack.org
+Cc: Andrew Morton <akpm@linux-foundation.org>, linux-kernel@vger.kernel.org,
+	=?utf-8?b?SsOpcsO0bWUgR2xpc3Nl?= <jglisse@redhat.com>, =?utf-8?q?Christian_?=
+	=?utf-8?q?K=C3=B6nig?= <christian.koenig@amd.com>, Jan Kara <jack@suse.cz>,
+ Felix Kuehling <Felix.Kuehling@amd.com>, Jason Gunthorpe <jgg@mellanox.com>,
+ Matthew Wilcox <mawilcox@microsoft.com>, Ross Zwisler <zwisler@kernel.org>,
+ Dan Williams <dan.j.williams@intel.com>, Paolo Bonzini <pbonzini@redhat.com>,
+	=?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Michal Hocko <mhocko@kernel.org>, Ralph Campbell <rcampbell@nvidia.com>,
+ John Hubbard <jhubbard@nvidia.com>, kvm@vger.kernel.org,
+ dri-devel@lists.freedesktop.org, linux-rdma@vger.kernel.org,
+ linux-fsdevel@vger.kernel.org, Arnd Bergmann <arnd@arndb.de>
+Subject: [PATCH v4 2/9] mm/mmu_notifier: contextual information for event
+ triggering invalidation
+Date: Wed, 23 Jan 2019 17:23:08 -0500
+Message-Id: <20190123222315.1122-3-jglisse@redhat.com>
+In-Reply-To: <20190123222315.1122-1-jglisse@redhat.com>
+References: <20190123222315.1122-1-jglisse@redhat.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.30]);
+ Wed, 23 Jan 2019 22:23:35 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Jérôme Glisse <jglisse@redhat.com>
+
+CPU page table update can happens for many reasons, not only as a result
+of a syscall (munmap(), mprotect(), mremap(), madvise(), ...) but also
+as a result of kernel activities (memory compression, reclaim, migration,
+...).
+
+Users of mmu notifier API track changes to the CPU page table and take
+specific action for them. While current API only provide range of virtual
+address affected by the change, not why the changes is happening.
+
+This patchset do the initial mechanical convertion of all the places that
+calls mmu_notifier_range_init to also provide the default MMU_NOTIFY_UNMAP
+event as well as the vma if it is know (most invalidation happens against
+a given vma). Passing down the vma allows the users of mmu notifier to
+inspect the new vma page protection.
+
+The MMU_NOTIFY_UNMAP is always the safe default as users of mmu notifier
+should assume that every for the range is going away when that event
+happens. A latter patch do convert mm call path to use a more appropriate
+events for each call.
+
+This is done as 2 patches so that no call site is forgotten especialy
+as it uses this following coccinelle patch:
+
+%<----------------------------------------------------------------------
+@@
+identifier I1, I2, I3, I4;
+@@
+static inline void mmu_notifier_range_init(struct mmu_notifier_range *I1,
++enum mmu_notifier_event event,
++struct vm_area_struct *vma,
+struct mm_struct *I2, unsigned long I3, unsigned long I4) { ... }
+
+@@
+@@
+-#define mmu_notifier_range_init(range, mm, start, end)
++#define mmu_notifier_range_init(range, event, vma, mm, start, end)
+
+@@
+expression E1, E3, E4;
+identifier I1;
+@@
+<...
+mmu_notifier_range_init(E1,
++MMU_NOTIFY_UNMAP, I1,
+I1->vm_mm, E3, E4)
+...>
+
+@@
+expression E1, E2, E3, E4;
+identifier FN, VMA;
+@@
+FN(..., struct vm_area_struct *VMA, ...) {
+<...
+mmu_notifier_range_init(E1,
++MMU_NOTIFY_UNMAP, VMA,
+E2, E3, E4)
+...> }
+
+@@
+expression E1, E2, E3, E4;
+identifier FN, VMA;
+@@
+FN(...) {
+struct vm_area_struct *VMA;
+<...
+mmu_notifier_range_init(E1,
++MMU_NOTIFY_UNMAP, VMA,
+E2, E3, E4)
+...> }
+
+@@
+expression E1, E2, E3, E4;
+identifier FN;
+@@
+FN(...) {
+<...
+mmu_notifier_range_init(E1,
++MMU_NOTIFY_UNMAP, NULL,
+E2, E3, E4)
+...> }
+---------------------------------------------------------------------->%
+
+Applied with:
+spatch --all-includes --sp-file mmu-notifier.spatch fs/proc/task_mmu.c --in-place
+spatch --sp-file mmu-notifier.spatch --dir kernel/events/ --in-place
+spatch --sp-file mmu-notifier.spatch --dir mm --in-place
+
+Signed-off-by: Jérôme Glisse <jglisse@redhat.com>
+Cc: Christian König <christian.koenig@amd.com>
+Cc: Jan Kara <jack@suse.cz>
+Cc: Felix Kuehling <Felix.Kuehling@amd.com>
+Cc: Jason Gunthorpe <jgg@mellanox.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: Matthew Wilcox <mawilcox@microsoft.com>
+Cc: Ross Zwisler <zwisler@kernel.org>
+Cc: Dan Williams <dan.j.williams@intel.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Radim Krčmář <rkrcmar@redhat.com>
+Cc: Michal Hocko <mhocko@kernel.org>
+Cc: Ralph Campbell <rcampbell@nvidia.com>
+Cc: John Hubbard <jhubbard@nvidia.com>
+Cc: kvm@vger.kernel.org
+Cc: dri-devel@lists.freedesktop.org
+Cc: linux-rdma@vger.kernel.org
+Cc: linux-fsdevel@vger.kernel.org
+Cc: Arnd Bergmann <arnd@arndb.de>
+---
+ fs/proc/task_mmu.c           |  3 ++-
+ include/linux/mmu_notifier.h |  4 +++-
+ kernel/events/uprobes.c      |  3 ++-
+ mm/huge_memory.c             | 12 ++++++++----
+ mm/hugetlb.c                 | 10 ++++++----
+ mm/khugepaged.c              |  3 ++-
+ mm/ksm.c                     |  6 ++++--
+ mm/madvise.c                 |  3 ++-
+ mm/memory.c                  | 25 ++++++++++++++++---------
+ mm/migrate.c                 |  5 ++++-
+ mm/mprotect.c                |  3 ++-
+ mm/mremap.c                  |  3 ++-
+ mm/oom_kill.c                |  3 ++-
+ mm/rmap.c                    |  6 ++++--
+ 14 files changed, 59 insertions(+), 30 deletions(-)
+
+diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
+index f0ec9edab2f3..57e7f98647d3 100644
+--- a/fs/proc/task_mmu.c
++++ b/fs/proc/task_mmu.c
+@@ -1143,7 +1143,8 @@ static ssize_t clear_refs_write(struct file *file, const char __user *buf,
+ 				break;
+ 			}
+ 
+-			mmu_notifier_range_init(&range, mm, 0, -1UL);
++			mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP,
++						NULL, mm, 0, -1UL);
+ 			mmu_notifier_invalidate_range_start(&range);
+ 		}
+ 		walk_page_range(0, mm->highest_vm_end, &clear_refs_walk);
+diff --git a/include/linux/mmu_notifier.h b/include/linux/mmu_notifier.h
+index abc9dbb7bcb6..a9808add4070 100644
+--- a/include/linux/mmu_notifier.h
++++ b/include/linux/mmu_notifier.h
+@@ -348,6 +348,8 @@ static inline void mmu_notifier_mm_destroy(struct mm_struct *mm)
+ 
+ 
+ static inline void mmu_notifier_range_init(struct mmu_notifier_range *range,
++					   enum mmu_notifier_event event,
++					   struct vm_area_struct *vma,
+ 					   struct mm_struct *mm,
+ 					   unsigned long start,
+ 					   unsigned long end)
+@@ -482,7 +484,7 @@ static inline void _mmu_notifier_range_init(struct mmu_notifier_range *range,
+ 	range->end = end;
+ }
+ 
+-#define mmu_notifier_range_init(range, mm, start, end) \
++#define mmu_notifier_range_init(range,event,vma,mm,start,end)  \
+ 	_mmu_notifier_range_init(range, start, end)
+ 
+ 
+diff --git a/kernel/events/uprobes.c b/kernel/events/uprobes.c
+index 8aef47ee7bfa..b67fe7e59621 100644
+--- a/kernel/events/uprobes.c
++++ b/kernel/events/uprobes.c
+@@ -174,7 +174,8 @@ static int __replace_page(struct vm_area_struct *vma, unsigned long addr,
+ 	struct mmu_notifier_range range;
+ 	struct mem_cgroup *memcg;
+ 
+-	mmu_notifier_range_init(&range, mm, addr, addr + PAGE_SIZE);
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, mm, addr,
++				addr + PAGE_SIZE);
+ 
+ 	VM_BUG_ON_PAGE(PageTransHuge(old_page), old_page);
+ 
+diff --git a/mm/huge_memory.c b/mm/huge_memory.c
+index faf357eaf0ce..b353e8b7876f 100644
+--- a/mm/huge_memory.c
++++ b/mm/huge_memory.c
+@@ -1182,7 +1182,8 @@ static vm_fault_t do_huge_pmd_wp_page_fallback(struct vm_fault *vmf,
+ 		cond_resched();
+ 	}
+ 
+-	mmu_notifier_range_init(&range, vma->vm_mm, haddr,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
++				haddr,
+ 				haddr + HPAGE_PMD_SIZE);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 
+@@ -1345,7 +1346,8 @@ vm_fault_t do_huge_pmd_wp_page(struct vm_fault *vmf, pmd_t orig_pmd)
+ 				    vma, HPAGE_PMD_NR);
+ 	__SetPageUptodate(new_page);
+ 
+-	mmu_notifier_range_init(&range, vma->vm_mm, haddr,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
++				haddr,
+ 				haddr + HPAGE_PMD_SIZE);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 
+@@ -2023,7 +2025,8 @@ void __split_huge_pud(struct vm_area_struct *vma, pud_t *pud,
+ 	spinlock_t *ptl;
+ 	struct mmu_notifier_range range;
+ 
+-	mmu_notifier_range_init(&range, vma->vm_mm, address & HPAGE_PUD_MASK,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
++				address & HPAGE_PUD_MASK,
+ 				(address & HPAGE_PUD_MASK) + HPAGE_PUD_SIZE);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 	ptl = pud_lock(vma->vm_mm, pud);
+@@ -2241,7 +2244,8 @@ void __split_huge_pmd(struct vm_area_struct *vma, pmd_t *pmd,
+ 	spinlock_t *ptl;
+ 	struct mmu_notifier_range range;
+ 
+-	mmu_notifier_range_init(&range, vma->vm_mm, address & HPAGE_PMD_MASK,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
++				address & HPAGE_PMD_MASK,
+ 				(address & HPAGE_PMD_MASK) + HPAGE_PMD_SIZE);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 	ptl = pmd_lock(vma->vm_mm, pmd);
+diff --git a/mm/hugetlb.c b/mm/hugetlb.c
+index df2e7dd5ff17..cbda46ad6a30 100644
+--- a/mm/hugetlb.c
++++ b/mm/hugetlb.c
+@@ -3246,7 +3246,8 @@ int copy_hugetlb_page_range(struct mm_struct *dst, struct mm_struct *src,
+ 	cow = (vma->vm_flags & (VM_SHARED | VM_MAYWRITE)) == VM_MAYWRITE;
+ 
+ 	if (cow) {
+-		mmu_notifier_range_init(&range, src, vma->vm_start,
++		mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, src,
++					vma->vm_start,
+ 					vma->vm_end);
+ 		mmu_notifier_invalidate_range_start(&range);
+ 	}
+@@ -3358,7 +3359,7 @@ void __unmap_hugepage_range(struct mmu_gather *tlb, struct vm_area_struct *vma,
+ 	/*
+ 	 * If sharing possible, alert mmu notifiers of worst case.
+ 	 */
+-	mmu_notifier_range_init(&range, mm, start, end);
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, mm, start, end);
+ 	adjust_range_if_pmd_sharing_possible(vma, &range.start, &range.end);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 	address = start;
+@@ -3626,7 +3627,8 @@ static vm_fault_t hugetlb_cow(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	__SetPageUptodate(new_page);
+ 	set_page_huge_active(new_page);
+ 
+-	mmu_notifier_range_init(&range, mm, haddr, haddr + huge_page_size(h));
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, mm, haddr,
++				haddr + huge_page_size(h));
+ 	mmu_notifier_invalidate_range_start(&range);
+ 
+ 	/*
+@@ -4346,7 +4348,7 @@ unsigned long hugetlb_change_protection(struct vm_area_struct *vma,
+ 	 * start/end.  Set range.start/range.end to cover the maximum possible
+ 	 * range if PMD sharing is possible.
+ 	 */
+-	mmu_notifier_range_init(&range, mm, start, end);
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, mm, start, end);
+ 	adjust_range_if_pmd_sharing_possible(vma, &range.start, &range.end);
+ 
+ 	BUG_ON(address >= end);
+diff --git a/mm/khugepaged.c b/mm/khugepaged.c
+index 4f017339ddb2..f903acb1b0a6 100644
+--- a/mm/khugepaged.c
++++ b/mm/khugepaged.c
+@@ -1016,7 +1016,8 @@ static void collapse_huge_page(struct mm_struct *mm,
+ 	pte = pte_offset_map(pmd, address);
+ 	pte_ptl = pte_lockptr(mm, pmd);
+ 
+-	mmu_notifier_range_init(&range, mm, address, address + HPAGE_PMD_SIZE);
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, NULL, mm, address,
++				address + HPAGE_PMD_SIZE);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 	pmd_ptl = pmd_lock(mm, pmd); /* probably unnecessary */
+ 	/*
+diff --git a/mm/ksm.c b/mm/ksm.c
+index 6c48ad13b4c9..6b27c4f0fb1f 100644
+--- a/mm/ksm.c
++++ b/mm/ksm.c
+@@ -1051,7 +1051,8 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
+ 
+ 	BUG_ON(PageTransCompound(page));
+ 
+-	mmu_notifier_range_init(&range, mm, pvmw.address,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, mm,
++				pvmw.address,
+ 				pvmw.address + PAGE_SIZE);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 
+@@ -1139,7 +1140,8 @@ static int replace_page(struct vm_area_struct *vma, struct page *page,
+ 	if (!pmd)
+ 		goto out;
+ 
+-	mmu_notifier_range_init(&range, mm, addr, addr + PAGE_SIZE);
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, mm, addr,
++				addr + PAGE_SIZE);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 
+ 	ptep = pte_offset_map_lock(mm, pmd, addr, &ptl);
+diff --git a/mm/madvise.c b/mm/madvise.c
+index 21a7881a2db4..04446dabba56 100644
+--- a/mm/madvise.c
++++ b/mm/madvise.c
+@@ -472,7 +472,8 @@ static int madvise_free_single_vma(struct vm_area_struct *vma,
+ 	range.end = min(vma->vm_end, end_addr);
+ 	if (range.end <= vma->vm_start)
+ 		return -EINVAL;
+-	mmu_notifier_range_init(&range, mm, range.start, range.end);
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, mm,
++				range.start, range.end);
+ 
+ 	lru_add_drain();
+ 	tlb_gather_mmu(&tlb, mm, range.start, range.end);
+diff --git a/mm/memory.c b/mm/memory.c
+index e11ca9dd823f..d9b7c935e812 100644
+--- a/mm/memory.c
++++ b/mm/memory.c
+@@ -1009,7 +1009,8 @@ int copy_page_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
+ 	is_cow = is_cow_mapping(vma->vm_flags);
+ 
+ 	if (is_cow) {
+-		mmu_notifier_range_init(&range, src_mm, addr, end);
++		mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, src_mm,
++					addr, end);
+ 		mmu_notifier_invalidate_range_start(&range);
+ 	}
+ 
+@@ -1333,7 +1334,8 @@ void unmap_vmas(struct mmu_gather *tlb,
+ {
+ 	struct mmu_notifier_range range;
+ 
+-	mmu_notifier_range_init(&range, vma->vm_mm, start_addr, end_addr);
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
++				start_addr, end_addr);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 	for ( ; vma && vma->vm_start < end_addr; vma = vma->vm_next)
+ 		unmap_single_vma(tlb, vma, start_addr, end_addr, NULL);
+@@ -1355,7 +1357,8 @@ void zap_page_range(struct vm_area_struct *vma, unsigned long start,
+ 	struct mmu_gather tlb;
+ 
+ 	lru_add_drain();
+-	mmu_notifier_range_init(&range, vma->vm_mm, start, start + size);
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
++				start, start + size);
+ 	tlb_gather_mmu(&tlb, vma->vm_mm, start, range.end);
+ 	update_hiwater_rss(vma->vm_mm);
+ 	mmu_notifier_invalidate_range_start(&range);
+@@ -1381,7 +1384,8 @@ static void zap_page_range_single(struct vm_area_struct *vma, unsigned long addr
+ 	struct mmu_gather tlb;
+ 
+ 	lru_add_drain();
+-	mmu_notifier_range_init(&range, vma->vm_mm, address, address + size);
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
++				address, address + size);
+ 	tlb_gather_mmu(&tlb, vma->vm_mm, address, range.end);
+ 	update_hiwater_rss(vma->vm_mm);
+ 	mmu_notifier_invalidate_range_start(&range);
+@@ -2271,7 +2275,8 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
+ 
+ 	__SetPageUptodate(new_page);
+ 
+-	mmu_notifier_range_init(&range, mm, vmf->address & PAGE_MASK,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, mm,
++				vmf->address & PAGE_MASK,
+ 				(vmf->address & PAGE_MASK) + PAGE_SIZE);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 
+@@ -4081,8 +4086,9 @@ static int __follow_pte_pmd(struct mm_struct *mm, unsigned long address,
+ 			goto out;
+ 
+ 		if (range) {
+-			mmu_notifier_range_init(range, mm, address & PMD_MASK,
+-					     (address & PMD_MASK) + PMD_SIZE);
++			mmu_notifier_range_init(range, MMU_NOTIFY_UNMAP, NULL,
++						mm, address & PMD_MASK,
++						(address & PMD_MASK) + PMD_SIZE);
+ 			mmu_notifier_invalidate_range_start(range);
+ 		}
+ 		*ptlp = pmd_lock(mm, pmd);
+@@ -4099,8 +4105,9 @@ static int __follow_pte_pmd(struct mm_struct *mm, unsigned long address,
+ 		goto out;
+ 
+ 	if (range) {
+-		mmu_notifier_range_init(range, mm, address & PAGE_MASK,
+-				     (address & PAGE_MASK) + PAGE_SIZE);
++		mmu_notifier_range_init(range, MMU_NOTIFY_UNMAP, NULL, mm,
++					address & PAGE_MASK,
++					(address & PAGE_MASK) + PAGE_SIZE);
+ 		mmu_notifier_invalidate_range_start(range);
+ 	}
+ 	ptep = pte_offset_map_lock(mm, pmd, address, ptlp);
+diff --git a/mm/migrate.c b/mm/migrate.c
+index a16b15090df3..385c59d5c28d 100644
+--- a/mm/migrate.c
++++ b/mm/migrate.c
+@@ -2342,7 +2342,8 @@ static void migrate_vma_collect(struct migrate_vma *migrate)
+ 	mm_walk.mm = migrate->vma->vm_mm;
+ 	mm_walk.private = migrate;
+ 
+-	mmu_notifier_range_init(&range, mm_walk.mm, migrate->start,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, NULL, mm_walk.mm,
++				migrate->start,
+ 				migrate->end);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 	walk_page_range(migrate->start, migrate->end, &mm_walk);
+@@ -2750,6 +2751,8 @@ static void migrate_vma_pages(struct migrate_vma *migrate)
+ 				notified = true;
+ 
+ 				mmu_notifier_range_init(&range,
++							MMU_NOTIFY_UNMAP,
++							NULL,
+ 							migrate->vma->vm_mm,
+ 							addr, migrate->end);
+ 				mmu_notifier_invalidate_range_start(&range);
+diff --git a/mm/mprotect.c b/mm/mprotect.c
+index 36cb358db170..b22e660701f1 100644
+--- a/mm/mprotect.c
++++ b/mm/mprotect.c
+@@ -185,7 +185,8 @@ static inline unsigned long change_pmd_range(struct vm_area_struct *vma,
+ 
+ 		/* invoke the mmu notifier if the pmd is populated */
+ 		if (!range.start) {
+-			mmu_notifier_range_init(&range, vma->vm_mm, addr, end);
++			mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma,
++						vma->vm_mm, addr, end);
+ 			mmu_notifier_invalidate_range_start(&range);
+ 		}
+ 
+diff --git a/mm/mremap.c b/mm/mremap.c
+index 3320616ed93f..cac19c1e0af4 100644
+--- a/mm/mremap.c
++++ b/mm/mremap.c
+@@ -249,7 +249,8 @@ unsigned long move_page_tables(struct vm_area_struct *vma,
+ 	old_end = old_addr + len;
+ 	flush_cache_range(vma, old_addr, old_end);
+ 
+-	mmu_notifier_range_init(&range, vma->vm_mm, old_addr, old_end);
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
++				old_addr, old_end);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 
+ 	for (; old_addr < old_end; old_addr += extent, new_addr += extent) {
+diff --git a/mm/oom_kill.c b/mm/oom_kill.c
+index f0e8cd9edb1a..77289bc6a943 100644
+--- a/mm/oom_kill.c
++++ b/mm/oom_kill.c
+@@ -531,7 +531,8 @@ bool __oom_reap_task_mm(struct mm_struct *mm)
+ 			struct mmu_notifier_range range;
+ 			struct mmu_gather tlb;
+ 
+-			mmu_notifier_range_init(&range, mm, vma->vm_start,
++			mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma,
++						mm, vma->vm_start,
+ 						vma->vm_end);
+ 			tlb_gather_mmu(&tlb, mm, range.start, range.end);
+ 			if (mmu_notifier_invalidate_range_start_nonblock(&range)) {
+diff --git a/mm/rmap.c b/mm/rmap.c
+index 0454ecc29537..49c75f0c6c33 100644
+--- a/mm/rmap.c
++++ b/mm/rmap.c
+@@ -896,7 +896,8 @@ static bool page_mkclean_one(struct page *page, struct vm_area_struct *vma,
+ 	 * We have to assume the worse case ie pmd for invalidation. Note that
+ 	 * the page can not be free from this function.
+ 	 */
+-	mmu_notifier_range_init(&range, vma->vm_mm, address,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
++				address,
+ 				min(vma->vm_end, address +
+ 				    (PAGE_SIZE << compound_order(page))));
+ 	mmu_notifier_invalidate_range_start(&range);
+@@ -1371,7 +1372,8 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
+ 	 * Note that the page can not be free in this function as call of
+ 	 * try_to_unmap() must hold a reference on the page.
+ 	 */
+-	mmu_notifier_range_init(&range, vma->vm_mm, address,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
++				address,
+ 				min(vma->vm_end, address +
+ 				    (PAGE_SIZE << compound_order(page))));
+ 	if (PageHuge(page)) {
+
+From patchwork Wed Jan 23 22:23:09 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Jerome Glisse <jglisse@redhat.com>
+X-Patchwork-Id: 10777979
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 75C5B1390
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:23:41 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 664F52D368
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:23:41 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 599132D396; Wed, 23 Jan 2019 22:23:41 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 54F752D37E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:23:40 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727175AbfAWWXj (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 23 Jan 2019 17:23:39 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:56286 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727142AbfAWWXi (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 23 Jan 2019 17:23:38 -0500
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id E81CFC0A1AE9;
+        Wed, 23 Jan 2019 22:23:37 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-120-127.rdu2.redhat.com
+ [10.10.120.127])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 47C655D964;
+        Wed, 23 Jan 2019 22:23:35 +0000 (UTC)
+From: jglisse@redhat.com
+To: linux-mm@kvack.org
+Cc: Andrew Morton <akpm@linux-foundation.org>, linux-kernel@vger.kernel.org,
+	=?utf-8?b?SsOpcsO0bWUgR2xpc3Nl?= <jglisse@redhat.com>, =?utf-8?q?Christian_?=
+	=?utf-8?q?K=C3=B6nig?= <christian.koenig@amd.com>, Jan Kara <jack@suse.cz>,
+ Felix Kuehling <Felix.Kuehling@amd.com>, Jason Gunthorpe <jgg@mellanox.com>,
+ Matthew Wilcox <mawilcox@microsoft.com>, Ross Zwisler <zwisler@kernel.org>,
+ Dan Williams <dan.j.williams@intel.com>, Paolo Bonzini <pbonzini@redhat.com>,
+	=?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Michal Hocko <mhocko@kernel.org>, Ralph Campbell <rcampbell@nvidia.com>,
+ John Hubbard <jhubbard@nvidia.com>, kvm@vger.kernel.org,
+ dri-devel@lists.freedesktop.org, linux-rdma@vger.kernel.org,
+ linux-fsdevel@vger.kernel.org, Arnd Bergmann <arnd@arndb.de>
+Subject: [PATCH v4 3/9] mm/mmu_notifier: use correct mmu_notifier events for
+ each invalidation
+Date: Wed, 23 Jan 2019 17:23:09 -0500
+Message-Id: <20190123222315.1122-4-jglisse@redhat.com>
+In-Reply-To: <20190123222315.1122-1-jglisse@redhat.com>
+References: <20190123222315.1122-1-jglisse@redhat.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.31]);
+ Wed, 23 Jan 2019 22:23:38 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Jérôme Glisse <jglisse@redhat.com>
+
+This update each existing invalidation to use the correct mmu notifier
+event that represent what is happening to the CPU page table. See the
+patch which introduced the events to see the rational behind this.
+
+Signed-off-by: Jérôme Glisse <jglisse@redhat.com>
+Cc: Christian König <christian.koenig@amd.com>
+Cc: Jan Kara <jack@suse.cz>
+Cc: Felix Kuehling <Felix.Kuehling@amd.com>
+Cc: Jason Gunthorpe <jgg@mellanox.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: Matthew Wilcox <mawilcox@microsoft.com>
+Cc: Ross Zwisler <zwisler@kernel.org>
+Cc: Dan Williams <dan.j.williams@intel.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Radim Krčmář <rkrcmar@redhat.com>
+Cc: Michal Hocko <mhocko@kernel.org>
+Cc: Ralph Campbell <rcampbell@nvidia.com>
+Cc: John Hubbard <jhubbard@nvidia.com>
+Cc: kvm@vger.kernel.org
+Cc: dri-devel@lists.freedesktop.org
+Cc: linux-rdma@vger.kernel.org
+Cc: linux-fsdevel@vger.kernel.org
+Cc: Arnd Bergmann <arnd@arndb.de>
+---
+ fs/proc/task_mmu.c      |  2 +-
+ kernel/events/uprobes.c |  2 +-
+ mm/huge_memory.c        | 14 ++++++--------
+ mm/hugetlb.c            |  7 ++++---
+ mm/khugepaged.c         |  2 +-
+ mm/ksm.c                |  4 ++--
+ mm/madvise.c            |  2 +-
+ mm/memory.c             | 16 ++++++++--------
+ mm/migrate.c            |  4 ++--
+ mm/mprotect.c           |  5 +++--
+ mm/rmap.c               |  6 +++---
+ 11 files changed, 32 insertions(+), 32 deletions(-)
+
+diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
+index 57e7f98647d3..cce226f3305f 100644
+--- a/fs/proc/task_mmu.c
++++ b/fs/proc/task_mmu.c
+@@ -1143,7 +1143,7 @@ static ssize_t clear_refs_write(struct file *file, const char __user *buf,
+ 				break;
+ 			}
+ 
+-			mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP,
++			mmu_notifier_range_init(&range, MMU_NOTIFY_SOFT_DIRTY,
+ 						NULL, mm, 0, -1UL);
+ 			mmu_notifier_invalidate_range_start(&range);
+ 		}
+diff --git a/kernel/events/uprobes.c b/kernel/events/uprobes.c
+index b67fe7e59621..87e76a1dc758 100644
+--- a/kernel/events/uprobes.c
++++ b/kernel/events/uprobes.c
+@@ -174,7 +174,7 @@ static int __replace_page(struct vm_area_struct *vma, unsigned long addr,
+ 	struct mmu_notifier_range range;
+ 	struct mem_cgroup *memcg;
+ 
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, mm, addr,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, vma, mm, addr,
+ 				addr + PAGE_SIZE);
+ 
+ 	VM_BUG_ON_PAGE(PageTransHuge(old_page), old_page);
+diff --git a/mm/huge_memory.c b/mm/huge_memory.c
+index b353e8b7876f..957d23754217 100644
+--- a/mm/huge_memory.c
++++ b/mm/huge_memory.c
+@@ -1182,9 +1182,8 @@ static vm_fault_t do_huge_pmd_wp_page_fallback(struct vm_fault *vmf,
+ 		cond_resched();
+ 	}
+ 
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
+-				haddr,
+-				haddr + HPAGE_PMD_SIZE);
++	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, vma, vma->vm_mm,
++				haddr, haddr + HPAGE_PMD_SIZE);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 
+ 	vmf->ptl = pmd_lock(vma->vm_mm, vmf->pmd);
+@@ -1346,9 +1345,8 @@ vm_fault_t do_huge_pmd_wp_page(struct vm_fault *vmf, pmd_t orig_pmd)
+ 				    vma, HPAGE_PMD_NR);
+ 	__SetPageUptodate(new_page);
+ 
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
+-				haddr,
+-				haddr + HPAGE_PMD_SIZE);
++	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, vma, vma->vm_mm,
++				haddr, haddr + HPAGE_PMD_SIZE);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 
+ 	spin_lock(vmf->ptl);
+@@ -2025,7 +2023,7 @@ void __split_huge_pud(struct vm_area_struct *vma, pud_t *pud,
+ 	spinlock_t *ptl;
+ 	struct mmu_notifier_range range;
+ 
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, vma, vma->vm_mm,
+ 				address & HPAGE_PUD_MASK,
+ 				(address & HPAGE_PUD_MASK) + HPAGE_PUD_SIZE);
+ 	mmu_notifier_invalidate_range_start(&range);
+@@ -2244,7 +2242,7 @@ void __split_huge_pmd(struct vm_area_struct *vma, pmd_t *pmd,
+ 	spinlock_t *ptl;
+ 	struct mmu_notifier_range range;
+ 
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, vma, vma->vm_mm,
+ 				address & HPAGE_PMD_MASK,
+ 				(address & HPAGE_PMD_MASK) + HPAGE_PMD_SIZE);
+ 	mmu_notifier_invalidate_range_start(&range);
+diff --git a/mm/hugetlb.c b/mm/hugetlb.c
+index cbda46ad6a30..f691398ac6b6 100644
+--- a/mm/hugetlb.c
++++ b/mm/hugetlb.c
+@@ -3246,7 +3246,7 @@ int copy_hugetlb_page_range(struct mm_struct *dst, struct mm_struct *src,
+ 	cow = (vma->vm_flags & (VM_SHARED | VM_MAYWRITE)) == VM_MAYWRITE;
+ 
+ 	if (cow) {
+-		mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, src,
++		mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, vma, src,
+ 					vma->vm_start,
+ 					vma->vm_end);
+ 		mmu_notifier_invalidate_range_start(&range);
+@@ -3627,7 +3627,7 @@ static vm_fault_t hugetlb_cow(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	__SetPageUptodate(new_page);
+ 	set_page_huge_active(new_page);
+ 
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, mm, haddr,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, vma, mm, haddr,
+ 				haddr + huge_page_size(h));
+ 	mmu_notifier_invalidate_range_start(&range);
+ 
+@@ -4348,7 +4348,8 @@ unsigned long hugetlb_change_protection(struct vm_area_struct *vma,
+ 	 * start/end.  Set range.start/range.end to cover the maximum possible
+ 	 * range if PMD sharing is possible.
+ 	 */
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, mm, start, end);
++	mmu_notifier_range_init(&range, MMU_NOTIFY_PROTECTION_VMA,
++				vma, mm, start, end);
+ 	adjust_range_if_pmd_sharing_possible(vma, &range.start, &range.end);
+ 
+ 	BUG_ON(address >= end);
+diff --git a/mm/khugepaged.c b/mm/khugepaged.c
+index f903acb1b0a6..d09d71f10f0f 100644
+--- a/mm/khugepaged.c
++++ b/mm/khugepaged.c
+@@ -1016,7 +1016,7 @@ static void collapse_huge_page(struct mm_struct *mm,
+ 	pte = pte_offset_map(pmd, address);
+ 	pte_ptl = pte_lockptr(mm, pmd);
+ 
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, NULL, mm, address,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, NULL, mm, address,
+ 				address + HPAGE_PMD_SIZE);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 	pmd_ptl = pmd_lock(mm, pmd); /* probably unnecessary */
+diff --git a/mm/ksm.c b/mm/ksm.c
+index 6b27c4f0fb1f..97757c5fa15f 100644
+--- a/mm/ksm.c
++++ b/mm/ksm.c
+@@ -1051,7 +1051,7 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
+ 
+ 	BUG_ON(PageTransCompound(page));
+ 
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, mm,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, vma, mm,
+ 				pvmw.address,
+ 				pvmw.address + PAGE_SIZE);
+ 	mmu_notifier_invalidate_range_start(&range);
+@@ -1140,7 +1140,7 @@ static int replace_page(struct vm_area_struct *vma, struct page *page,
+ 	if (!pmd)
+ 		goto out;
+ 
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, mm, addr,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, vma, mm, addr,
+ 				addr + PAGE_SIZE);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 
+diff --git a/mm/madvise.c b/mm/madvise.c
+index 04446dabba56..a2f91bd286d9 100644
+--- a/mm/madvise.c
++++ b/mm/madvise.c
+@@ -472,7 +472,7 @@ static int madvise_free_single_vma(struct vm_area_struct *vma,
+ 	range.end = min(vma->vm_end, end_addr);
+ 	if (range.end <= vma->vm_start)
+ 		return -EINVAL;
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, mm,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, vma, mm,
+ 				range.start, range.end);
+ 
+ 	lru_add_drain();
+diff --git a/mm/memory.c b/mm/memory.c
+index d9b7c935e812..a8c6922526f6 100644
+--- a/mm/memory.c
++++ b/mm/memory.c
+@@ -1009,8 +1009,8 @@ int copy_page_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
+ 	is_cow = is_cow_mapping(vma->vm_flags);
+ 
+ 	if (is_cow) {
+-		mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, src_mm,
+-					addr, end);
++		mmu_notifier_range_init(&range, MMU_NOTIFY_PROTECTION_PAGE,
++					vma, src_mm, addr, end);
+ 		mmu_notifier_invalidate_range_start(&range);
+ 	}
+ 
+@@ -1334,7 +1334,7 @@ void unmap_vmas(struct mmu_gather *tlb,
+ {
+ 	struct mmu_notifier_range range;
+ 
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, NULL, vma->vm_mm,
+ 				start_addr, end_addr);
+ 	mmu_notifier_invalidate_range_start(&range);
+ 	for ( ; vma && vma->vm_start < end_addr; vma = vma->vm_next)
+@@ -1357,7 +1357,7 @@ void zap_page_range(struct vm_area_struct *vma, unsigned long start,
+ 	struct mmu_gather tlb;
+ 
+ 	lru_add_drain();
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, vma, vma->vm_mm,
+ 				start, start + size);
+ 	tlb_gather_mmu(&tlb, vma->vm_mm, start, range.end);
+ 	update_hiwater_rss(vma->vm_mm);
+@@ -1384,7 +1384,7 @@ static void zap_page_range_single(struct vm_area_struct *vma, unsigned long addr
+ 	struct mmu_gather tlb;
+ 
+ 	lru_add_drain();
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, vma, vma->vm_mm,
+ 				address, address + size);
+ 	tlb_gather_mmu(&tlb, vma->vm_mm, address, range.end);
+ 	update_hiwater_rss(vma->vm_mm);
+@@ -2275,7 +2275,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
+ 
+ 	__SetPageUptodate(new_page);
+ 
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, mm,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, vma, mm,
+ 				vmf->address & PAGE_MASK,
+ 				(vmf->address & PAGE_MASK) + PAGE_SIZE);
+ 	mmu_notifier_invalidate_range_start(&range);
+@@ -4086,7 +4086,7 @@ static int __follow_pte_pmd(struct mm_struct *mm, unsigned long address,
+ 			goto out;
+ 
+ 		if (range) {
+-			mmu_notifier_range_init(range, MMU_NOTIFY_UNMAP, NULL,
++			mmu_notifier_range_init(range, MMU_NOTIFY_CLEAR, NULL,
+ 						mm, address & PMD_MASK,
+ 						(address & PMD_MASK) + PMD_SIZE);
+ 			mmu_notifier_invalidate_range_start(range);
+@@ -4105,7 +4105,7 @@ static int __follow_pte_pmd(struct mm_struct *mm, unsigned long address,
+ 		goto out;
+ 
+ 	if (range) {
+-		mmu_notifier_range_init(range, MMU_NOTIFY_UNMAP, NULL, mm,
++		mmu_notifier_range_init(range, MMU_NOTIFY_CLEAR, NULL, mm,
+ 					address & PAGE_MASK,
+ 					(address & PAGE_MASK) + PAGE_SIZE);
+ 		mmu_notifier_invalidate_range_start(range);
+diff --git a/mm/migrate.c b/mm/migrate.c
+index 385c59d5c28d..384cde91d886 100644
+--- a/mm/migrate.c
++++ b/mm/migrate.c
+@@ -2342,7 +2342,7 @@ static void migrate_vma_collect(struct migrate_vma *migrate)
+ 	mm_walk.mm = migrate->vma->vm_mm;
+ 	mm_walk.private = migrate;
+ 
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, NULL, mm_walk.mm,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, NULL, mm_walk.mm,
+ 				migrate->start,
+ 				migrate->end);
+ 	mmu_notifier_invalidate_range_start(&range);
+@@ -2751,7 +2751,7 @@ static void migrate_vma_pages(struct migrate_vma *migrate)
+ 				notified = true;
+ 
+ 				mmu_notifier_range_init(&range,
+-							MMU_NOTIFY_UNMAP,
++							MMU_NOTIFY_CLEAR,
+ 							NULL,
+ 							migrate->vma->vm_mm,
+ 							addr, migrate->end);
+diff --git a/mm/mprotect.c b/mm/mprotect.c
+index b22e660701f1..c19e8bdc2648 100644
+--- a/mm/mprotect.c
++++ b/mm/mprotect.c
+@@ -185,8 +185,9 @@ static inline unsigned long change_pmd_range(struct vm_area_struct *vma,
+ 
+ 		/* invoke the mmu notifier if the pmd is populated */
+ 		if (!range.start) {
+-			mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma,
+-						vma->vm_mm, addr, end);
++			mmu_notifier_range_init(&range,
++						MMU_NOTIFY_PROTECTION_VMA,
++						vma, vma->vm_mm, addr, end);
+ 			mmu_notifier_invalidate_range_start(&range);
+ 		}
+ 
+diff --git a/mm/rmap.c b/mm/rmap.c
+index 49c75f0c6c33..81ea84ab511a 100644
+--- a/mm/rmap.c
++++ b/mm/rmap.c
+@@ -896,8 +896,8 @@ static bool page_mkclean_one(struct page *page, struct vm_area_struct *vma,
+ 	 * We have to assume the worse case ie pmd for invalidation. Note that
+ 	 * the page can not be free from this function.
+ 	 */
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
+-				address,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_PROTECTION_PAGE, vma,
++				vma->vm_mm, address,
+ 				min(vma->vm_end, address +
+ 				    (PAGE_SIZE << compound_order(page))));
+ 	mmu_notifier_invalidate_range_start(&range);
+@@ -1372,7 +1372,7 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
+ 	 * Note that the page can not be free in this function as call of
+ 	 * try_to_unmap() must hold a reference on the page.
+ 	 */
+-	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, vma, vma->vm_mm,
++	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, vma, vma->vm_mm,
+ 				address,
+ 				min(vma->vm_end, address +
+ 				    (PAGE_SIZE << compound_order(page))));
+
+From patchwork Wed Jan 23 22:23:10 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Jerome Glisse <jglisse@redhat.com>
+X-Patchwork-Id: 10777985
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id CF6841390
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:23:44 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C137B2D368
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:23:44 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id B4F972D3E2; Wed, 23 Jan 2019 22:23:44 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3B48B2D368
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:23:44 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727219AbfAWWXm (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 23 Jan 2019 17:23:42 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:46712 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727200AbfAWWXl (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 23 Jan 2019 17:23:41 -0500
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id C9341D7D58;
+        Wed, 23 Jan 2019 22:23:40 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-120-127.rdu2.redhat.com
+ [10.10.120.127])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 21DE26A685;
+        Wed, 23 Jan 2019 22:23:38 +0000 (UTC)
+From: jglisse@redhat.com
+To: linux-mm@kvack.org
+Cc: Andrew Morton <akpm@linux-foundation.org>, linux-kernel@vger.kernel.org,
+	=?utf-8?b?SsOpcsO0bWUgR2xpc3Nl?= <jglisse@redhat.com>, =?utf-8?q?Christian_?=
+	=?utf-8?q?K=C3=B6nig?= <christian.koenig@amd.com>, Jan Kara <jack@suse.cz>,
+ Felix Kuehling <Felix.Kuehling@amd.com>, Jason Gunthorpe <jgg@mellanox.com>,
+ Matthew Wilcox <mawilcox@microsoft.com>, Ross Zwisler <zwisler@kernel.org>,
+ Dan Williams <dan.j.williams@intel.com>, Paolo Bonzini <pbonzini@redhat.com>,
+	=?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Michal Hocko <mhocko@kernel.org>, Ralph Campbell <rcampbell@nvidia.com>,
+ John Hubbard <jhubbard@nvidia.com>, kvm@vger.kernel.org,
+ dri-devel@lists.freedesktop.org, linux-rdma@vger.kernel.org,
+ linux-fsdevel@vger.kernel.org, Arnd Bergmann <arnd@arndb.de>
+Subject: [PATCH v4 4/9] mm/mmu_notifier: pass down vma and reasons why mmu
+ notifier is happening
+Date: Wed, 23 Jan 2019 17:23:10 -0500
+Message-Id: <20190123222315.1122-5-jglisse@redhat.com>
+In-Reply-To: <20190123222315.1122-1-jglisse@redhat.com>
+References: <20190123222315.1122-1-jglisse@redhat.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.39]);
+ Wed, 23 Jan 2019 22:23:41 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Jérôme Glisse <jglisse@redhat.com>
+
+CPU page table update can happens for many reasons, not only as a result
+of a syscall (munmap(), mprotect(), mremap(), madvise(), ...) but also
+as a result of kernel activities (memory compression, reclaim, migration,
+...).
+
+Users of mmu notifier API track changes to the CPU page table and take
+specific action for them. While current API only provide range of virtual
+address affected by the change, not why the changes is happening
+
+This patch is just passing down the new informations by adding it to the
+mmu_notifier_range structure.
+
+Signed-off-by: Jérôme Glisse <jglisse@redhat.com>
+Cc: Christian König <christian.koenig@amd.com>
+Cc: Jan Kara <jack@suse.cz>
+Cc: Felix Kuehling <Felix.Kuehling@amd.com>
+Cc: Jason Gunthorpe <jgg@mellanox.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: Matthew Wilcox <mawilcox@microsoft.com>
+Cc: Ross Zwisler <zwisler@kernel.org>
+Cc: Dan Williams <dan.j.williams@intel.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Radim Krčmář <rkrcmar@redhat.com>
+Cc: Michal Hocko <mhocko@kernel.org>
+Cc: Ralph Campbell <rcampbell@nvidia.com>
+Cc: John Hubbard <jhubbard@nvidia.com>
+Cc: kvm@vger.kernel.org
+Cc: dri-devel@lists.freedesktop.org
+Cc: linux-rdma@vger.kernel.org
+Cc: linux-fsdevel@vger.kernel.org
+Cc: Arnd Bergmann <arnd@arndb.de>
+---
+ include/linux/mmu_notifier.h | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/include/linux/mmu_notifier.h b/include/linux/mmu_notifier.h
+index a9808add4070..7514775817de 100644
+--- a/include/linux/mmu_notifier.h
++++ b/include/linux/mmu_notifier.h
+@@ -56,9 +56,11 @@ struct mmu_notifier_mm {
+ };
+ 
+ struct mmu_notifier_range {
++	struct vm_area_struct *vma;
+ 	struct mm_struct *mm;
+ 	unsigned long start;
+ 	unsigned long end;
++	enum mmu_notifier_event event;
+ 	bool blockable;
+ };
+ 
+@@ -354,6 +356,8 @@ static inline void mmu_notifier_range_init(struct mmu_notifier_range *range,
+ 					   unsigned long start,
+ 					   unsigned long end)
+ {
++	range->vma = vma;
++	range->event = event;
+ 	range->mm = mm;
+ 	range->start = start;
+ 	range->end = end;
+
+From patchwork Wed Jan 23 22:23:11 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Jerome Glisse <jglisse@redhat.com>
+X-Patchwork-Id: 10777993
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id EB1811390
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:23:46 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id DAFD82D368
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:23:46 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id CE9992D396; Wed, 23 Jan 2019 22:23:46 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5C2492D368
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:23:46 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727254AbfAWWXp (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 23 Jan 2019 17:23:45 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:46752 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727228AbfAWWXo (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 23 Jan 2019 17:23:44 -0500
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 86234CC0A8;
+        Wed, 23 Jan 2019 22:23:43 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-120-127.rdu2.redhat.com
+ [10.10.120.127])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id E90475D964;
+        Wed, 23 Jan 2019 22:23:40 +0000 (UTC)
+From: jglisse@redhat.com
+To: linux-mm@kvack.org
+Cc: Andrew Morton <akpm@linux-foundation.org>, linux-kernel@vger.kernel.org,
+	=?utf-8?b?SsOpcsO0bWUgR2xpc3Nl?= <jglisse@redhat.com>, =?utf-8?q?Christian_?=
+	=?utf-8?q?K=C3=B6nig?= <christian.koenig@amd.com>, Jan Kara <jack@suse.cz>,
+ Felix Kuehling <Felix.Kuehling@amd.com>, Jason Gunthorpe <jgg@mellanox.com>,
+ Matthew Wilcox <mawilcox@microsoft.com>, Ross Zwisler <zwisler@kernel.org>,
+ Dan Williams <dan.j.williams@intel.com>, Paolo Bonzini <pbonzini@redhat.com>,
+	=?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Michal Hocko <mhocko@kernel.org>, Ralph Campbell <rcampbell@nvidia.com>,
+ John Hubbard <jhubbard@nvidia.com>, kvm@vger.kernel.org,
+ dri-devel@lists.freedesktop.org, linux-rdma@vger.kernel.org,
+ linux-fsdevel@vger.kernel.org, Arnd Bergmann <arnd@arndb.de>
+Subject: [PATCH v4 5/9] mm/mmu_notifier:
+ mmu_notifier_range_update_to_read_only() helper
+Date: Wed, 23 Jan 2019 17:23:11 -0500
+Message-Id: <20190123222315.1122-6-jglisse@redhat.com>
+In-Reply-To: <20190123222315.1122-1-jglisse@redhat.com>
+References: <20190123222315.1122-1-jglisse@redhat.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.39]);
+ Wed, 23 Jan 2019 22:23:43 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Jérôme Glisse <jglisse@redhat.com>
+
+Helper to test if a range is updated to read only (it is still valid
+to read from the range). This is useful for device driver or anyone
+who wish to optimize out update when they know that they already have
+the range map read only.
+
+Signed-off-by: Jérôme Glisse <jglisse@redhat.com>
+Cc: Christian König <christian.koenig@amd.com>
+Cc: Jan Kara <jack@suse.cz>
+Cc: Felix Kuehling <Felix.Kuehling@amd.com>
+Cc: Jason Gunthorpe <jgg@mellanox.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: Matthew Wilcox <mawilcox@microsoft.com>
+Cc: Ross Zwisler <zwisler@kernel.org>
+Cc: Dan Williams <dan.j.williams@intel.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Radim Krčmář <rkrcmar@redhat.com>
+Cc: Michal Hocko <mhocko@kernel.org>
+Cc: Ralph Campbell <rcampbell@nvidia.com>
+Cc: John Hubbard <jhubbard@nvidia.com>
+Cc: kvm@vger.kernel.org
+Cc: dri-devel@lists.freedesktop.org
+Cc: linux-rdma@vger.kernel.org
+Cc: linux-fsdevel@vger.kernel.org
+Cc: Arnd Bergmann <arnd@arndb.de>
+---
+ include/linux/mmu_notifier.h |  4 ++++
+ mm/mmu_notifier.c            | 10 ++++++++++
+ 2 files changed, 14 insertions(+)
+
+diff --git a/include/linux/mmu_notifier.h b/include/linux/mmu_notifier.h
+index 7514775817de..be873c431886 100644
+--- a/include/linux/mmu_notifier.h
++++ b/include/linux/mmu_notifier.h
+@@ -257,6 +257,8 @@ extern void __mmu_notifier_invalidate_range_end(struct mmu_notifier_range *r,
+ 				  bool only_end);
+ extern void __mmu_notifier_invalidate_range(struct mm_struct *mm,
+ 				  unsigned long start, unsigned long end);
++extern bool
++mmu_notifier_range_update_to_read_only(const struct mmu_notifier_range *range);
+ 
+ static inline void mmu_notifier_release(struct mm_struct *mm)
+ {
+@@ -553,6 +555,8 @@ static inline void mmu_notifier_mm_destroy(struct mm_struct *mm)
+ {
+ }
+ 
++#define mmu_notifier_range_update_to_read_only(r) false
++
+ #define ptep_clear_flush_young_notify ptep_clear_flush_young
+ #define pmdp_clear_flush_young_notify pmdp_clear_flush_young
+ #define ptep_clear_young_notify ptep_test_and_clear_young
+diff --git a/mm/mmu_notifier.c b/mm/mmu_notifier.c
+index 9c884abc7850..0b2f77715a08 100644
+--- a/mm/mmu_notifier.c
++++ b/mm/mmu_notifier.c
+@@ -395,3 +395,13 @@ void mmu_notifier_unregister_no_release(struct mmu_notifier *mn,
+ 	mmdrop(mm);
+ }
+ EXPORT_SYMBOL_GPL(mmu_notifier_unregister_no_release);
++
++bool
++mmu_notifier_range_update_to_read_only(const struct mmu_notifier_range *range)
++{
++	if (!range->vma || range->event != MMU_NOTIFY_PROTECTION_VMA)
++		return false;
++	/* Return true if the vma still have the read flag set. */
++	return range->vma->vm_flags & VM_READ;
++}
++EXPORT_SYMBOL_GPL(mmu_notifier_range_update_to_read_only);
+
+From patchwork Wed Jan 23 22:23:12 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Jerome Glisse <jglisse@redhat.com>
+X-Patchwork-Id: 10778027
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B3E9F1390
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:24:12 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A5B892C4E4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:24:12 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 99E852C4FF; Wed, 23 Jan 2019 22:24:12 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3745F2C4E4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:24:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727309AbfAWWXv (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 23 Jan 2019 17:23:51 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:57982 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727271AbfAWWXr (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 23 Jan 2019 17:23:47 -0500
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 61CC618DF61;
+        Wed, 23 Jan 2019 22:23:46 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-120-127.rdu2.redhat.com
+ [10.10.120.127])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id B5EAC5D965;
+        Wed, 23 Jan 2019 22:23:43 +0000 (UTC)
+From: jglisse@redhat.com
+To: linux-mm@kvack.org
+Cc: Andrew Morton <akpm@linux-foundation.org>, linux-kernel@vger.kernel.org,
+	=?utf-8?b?SsOpcsO0bWUgR2xpc3Nl?= <jglisse@redhat.com>, =?utf-8?q?Christian_?=
+	=?utf-8?q?K=C3=B6nig?= <christian.koenig@amd.com>, Jan Kara <jack@suse.cz>,
+ Felix Kuehling <Felix.Kuehling@amd.com>, Jason Gunthorpe <jgg@mellanox.com>,
+ Matthew Wilcox <mawilcox@microsoft.com>, Ross Zwisler <zwisler@kernel.org>,
+ Dan Williams <dan.j.williams@intel.com>, Paolo Bonzini <pbonzini@redhat.com>,
+	=?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Michal Hocko <mhocko@kernel.org>, Ralph Campbell <rcampbell@nvidia.com>,
+ John Hubbard <jhubbard@nvidia.com>, kvm@vger.kernel.org,
+ dri-devel@lists.freedesktop.org, linux-rdma@vger.kernel.org,
+ linux-fsdevel@vger.kernel.org, Arnd Bergmann <arnd@arndb.de>
+Subject: [PATCH v4 6/9] gpu/drm/radeon: optimize out the case when a range is
+ updated to read only
+Date: Wed, 23 Jan 2019 17:23:12 -0500
+Message-Id: <20190123222315.1122-7-jglisse@redhat.com>
+In-Reply-To: <20190123222315.1122-1-jglisse@redhat.com>
+References: <20190123222315.1122-1-jglisse@redhat.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.29]);
+ Wed, 23 Jan 2019 22:23:46 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Jérôme Glisse <jglisse@redhat.com>
+
+When range of virtual address is updated read only and corresponding
+user ptr object are already read only it is pointless to do anything.
+Optimize this case out.
+
+Signed-off-by: Jérôme Glisse <jglisse@redhat.com>
+Cc: Christian König <christian.koenig@amd.com>
+Cc: Jan Kara <jack@suse.cz>
+Cc: Felix Kuehling <Felix.Kuehling@amd.com>
+Cc: Jason Gunthorpe <jgg@mellanox.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: Matthew Wilcox <mawilcox@microsoft.com>
+Cc: Ross Zwisler <zwisler@kernel.org>
+Cc: Dan Williams <dan.j.williams@intel.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Radim Krčmář <rkrcmar@redhat.com>
+Cc: Michal Hocko <mhocko@kernel.org>
+Cc: Ralph Campbell <rcampbell@nvidia.com>
+Cc: John Hubbard <jhubbard@nvidia.com>
+Cc: kvm@vger.kernel.org
+Cc: dri-devel@lists.freedesktop.org
+Cc: linux-rdma@vger.kernel.org
+Cc: linux-fsdevel@vger.kernel.org
+Cc: Arnd Bergmann <arnd@arndb.de>
+---
+ drivers/gpu/drm/radeon/radeon_mn.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/drivers/gpu/drm/radeon/radeon_mn.c b/drivers/gpu/drm/radeon/radeon_mn.c
+index b3019505065a..f77294f58e63 100644
+--- a/drivers/gpu/drm/radeon/radeon_mn.c
++++ b/drivers/gpu/drm/radeon/radeon_mn.c
+@@ -124,6 +124,7 @@ static int radeon_mn_invalidate_range_start(struct mmu_notifier *mn,
+ 	struct radeon_mn *rmn = container_of(mn, struct radeon_mn, mn);
+ 	struct ttm_operation_ctx ctx = { false, false };
+ 	struct interval_tree_node *it;
++	bool update_to_read_only;
+ 	unsigned long end;
+ 	int ret = 0;
+ 
+@@ -138,6 +139,8 @@ static int radeon_mn_invalidate_range_start(struct mmu_notifier *mn,
+ 	else if (!mutex_trylock(&rmn->lock))
+ 		return -EAGAIN;
+ 
++	update_to_read_only = mmu_notifier_range_update_to_read_only(range);
++
+ 	it = interval_tree_iter_first(&rmn->objects, range->start, end);
+ 	while (it) {
+ 		struct radeon_mn_node *node;
+@@ -153,10 +156,20 @@ static int radeon_mn_invalidate_range_start(struct mmu_notifier *mn,
+ 		it = interval_tree_iter_next(it, range->start, end);
+ 
+ 		list_for_each_entry(bo, &node->bos, mn_list) {
++			bool read_only;
+ 
+ 			if (!bo->tbo.ttm || bo->tbo.ttm->state != tt_bound)
+ 				continue;
+ 
++			/*
++			 * If it is already read only and we are updating to
++			 * read only then we do not need to change anything.
++			 * So save time and skip this one.
++			 */
++			read_only = radeon_ttm_tt_is_readonly(bo->tbo.ttm);
++			if (update_to_read_only && read_only)
++				continue;
++
+ 			r = radeon_bo_reserve(bo, true);
+ 			if (r) {
+ 				DRM_ERROR("(%ld) failed to reserve user bo\n", r);
+
+From patchwork Wed Jan 23 22:23:13 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Jerome Glisse <jglisse@redhat.com>
+X-Patchwork-Id: 10778033
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id A2E651390
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:24:21 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 94EBC2C4FF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:24:21 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 894212C509; Wed, 23 Jan 2019 22:24:21 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 21EA22C4FF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:24:21 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727356AbfAWWYP (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 23 Jan 2019 17:24:15 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:54486 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727297AbfAWWXt (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 23 Jan 2019 17:23:49 -0500
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 2DA69432A0;
+        Wed, 23 Jan 2019 22:23:49 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-120-127.rdu2.redhat.com
+ [10.10.120.127])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 87EAF6A685;
+        Wed, 23 Jan 2019 22:23:46 +0000 (UTC)
+From: jglisse@redhat.com
+To: linux-mm@kvack.org
+Cc: Andrew Morton <akpm@linux-foundation.org>, linux-kernel@vger.kernel.org,
+	=?utf-8?b?SsOpcsO0bWUgR2xpc3Nl?= <jglisse@redhat.com>, =?utf-8?q?Christian_?=
+	=?utf-8?q?K=C3=B6nig?= <christian.koenig@amd.com>, Jan Kara <jack@suse.cz>,
+ Felix Kuehling <Felix.Kuehling@amd.com>, Jason Gunthorpe <jgg@mellanox.com>,
+ Matthew Wilcox <mawilcox@microsoft.com>, Ross Zwisler <zwisler@kernel.org>,
+ Dan Williams <dan.j.williams@intel.com>, Paolo Bonzini <pbonzini@redhat.com>,
+	=?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Michal Hocko <mhocko@kernel.org>, Ralph Campbell <rcampbell@nvidia.com>,
+ John Hubbard <jhubbard@nvidia.com>, kvm@vger.kernel.org,
+ dri-devel@lists.freedesktop.org, linux-rdma@vger.kernel.org,
+ linux-fsdevel@vger.kernel.org, Arnd Bergmann <arnd@arndb.de>
+Subject: [PATCH v4 7/9] gpu/drm/amdgpu: optimize out the case when a range is
+ updated to read only
+Date: Wed, 23 Jan 2019 17:23:13 -0500
+Message-Id: <20190123222315.1122-8-jglisse@redhat.com>
+In-Reply-To: <20190123222315.1122-1-jglisse@redhat.com>
+References: <20190123222315.1122-1-jglisse@redhat.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.30]);
+ Wed, 23 Jan 2019 22:23:49 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Jérôme Glisse <jglisse@redhat.com>
+
+When range of virtual address is updated read only and corresponding
+user ptr object are already read only it is pointless to do anything.
+Optimize this case out.
+
+Signed-off-by: Jérôme Glisse <jglisse@redhat.com>
+Cc: Christian König <christian.koenig@amd.com>
+Cc: Jan Kara <jack@suse.cz>
+Cc: Felix Kuehling <Felix.Kuehling@amd.com>
+Cc: Jason Gunthorpe <jgg@mellanox.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: Matthew Wilcox <mawilcox@microsoft.com>
+Cc: Ross Zwisler <zwisler@kernel.org>
+Cc: Dan Williams <dan.j.williams@intel.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Radim Krčmář <rkrcmar@redhat.com>
+Cc: Michal Hocko <mhocko@kernel.org>
+Cc: Ralph Campbell <rcampbell@nvidia.com>
+Cc: John Hubbard <jhubbard@nvidia.com>
+Cc: kvm@vger.kernel.org
+Cc: dri-devel@lists.freedesktop.org
+Cc: linux-rdma@vger.kernel.org
+Cc: linux-fsdevel@vger.kernel.org
+Cc: Arnd Bergmann <arnd@arndb.de>
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_mn.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_mn.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_mn.c
+index 3e6823fdd939..7880eda064cd 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_mn.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_mn.c
+@@ -294,6 +294,7 @@ static int amdgpu_mn_invalidate_range_start_hsa(struct mmu_notifier *mn,
+ {
+ 	struct amdgpu_mn *amn = container_of(mn, struct amdgpu_mn, mn);
+ 	struct interval_tree_node *it;
++	bool update_to_read_only;
+ 	unsigned long end;
+ 
+ 	/* notification is exclusive, but interval is inclusive */
+@@ -302,6 +303,8 @@ static int amdgpu_mn_invalidate_range_start_hsa(struct mmu_notifier *mn,
+ 	if (amdgpu_mn_read_lock(amn, range->blockable))
+ 		return -EAGAIN;
+ 
++	update_to_read_only = mmu_notifier_range_update_to_read_only(range);
++
+ 	it = interval_tree_iter_first(&amn->objects, range->start, end);
+ 	while (it) {
+ 		struct amdgpu_mn_node *node;
+@@ -317,6 +320,16 @@ static int amdgpu_mn_invalidate_range_start_hsa(struct mmu_notifier *mn,
+ 
+ 		list_for_each_entry(bo, &node->bos, mn_list) {
+ 			struct kgd_mem *mem = bo->kfd_bo;
++			bool read_only;
++
++			/*
++			 * If it is already read only and we are updating to
++			 * read only then we do not need to change anything.
++			 * So save time and skip this one.
++			 */
++			read_only = amdgpu_ttm_tt_is_readonly(bo->tbo.ttm);
++			if (update_to_read_only && read_only)
++				continue;
+ 
+ 			if (amdgpu_ttm_tt_affect_userptr(bo->tbo.ttm,
+ 							 range->start,
+
+From patchwork Wed Jan 23 22:23:14 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Jerome Glisse <jglisse@redhat.com>
+X-Patchwork-Id: 10778023
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 820CE1390
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:24:08 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 74B462C4E4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:24:08 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 683232C4FE; Wed, 23 Jan 2019 22:24:08 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E92362C4E4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:24:07 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727342AbfAWWXx (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 23 Jan 2019 17:23:53 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:54554 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727335AbfAWWXw (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 23 Jan 2019 17:23:52 -0500
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 067D8432C1;
+        Wed, 23 Jan 2019 22:23:52 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-120-127.rdu2.redhat.com
+ [10.10.120.127])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 5CF0E5D965;
+        Wed, 23 Jan 2019 22:23:49 +0000 (UTC)
+From: jglisse@redhat.com
+To: linux-mm@kvack.org
+Cc: Andrew Morton <akpm@linux-foundation.org>, linux-kernel@vger.kernel.org,
+	=?utf-8?b?SsOpcsO0bWUgR2xpc3Nl?= <jglisse@redhat.com>, =?utf-8?q?Christian_?=
+	=?utf-8?q?K=C3=B6nig?= <christian.koenig@amd.com>, Jan Kara <jack@suse.cz>,
+ Felix Kuehling <Felix.Kuehling@amd.com>, Jason Gunthorpe <jgg@mellanox.com>,
+ Matthew Wilcox <mawilcox@microsoft.com>, Ross Zwisler <zwisler@kernel.org>,
+ Dan Williams <dan.j.williams@intel.com>, Paolo Bonzini <pbonzini@redhat.com>,
+	=?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Michal Hocko <mhocko@kernel.org>, Ralph Campbell <rcampbell@nvidia.com>,
+ John Hubbard <jhubbard@nvidia.com>, kvm@vger.kernel.org,
+ dri-devel@lists.freedesktop.org, linux-rdma@vger.kernel.org,
+ linux-fsdevel@vger.kernel.org, Arnd Bergmann <arnd@arndb.de>
+Subject: [PATCH v4 8/9] gpu/drm/i915: optimize out the case when a range is
+ updated to read only
+Date: Wed, 23 Jan 2019 17:23:14 -0500
+Message-Id: <20190123222315.1122-9-jglisse@redhat.com>
+In-Reply-To: <20190123222315.1122-1-jglisse@redhat.com>
+References: <20190123222315.1122-1-jglisse@redhat.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.30]);
+ Wed, 23 Jan 2019 22:23:52 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Jérôme Glisse <jglisse@redhat.com>
+
+When range of virtual address is updated read only and corresponding
+user ptr object are already read only it is pointless to do anything.
+Optimize this case out.
+
+Signed-off-by: Jérôme Glisse <jglisse@redhat.com>
+Cc: Christian König <christian.koenig@amd.com>
+Cc: Jan Kara <jack@suse.cz>
+Cc: Felix Kuehling <Felix.Kuehling@amd.com>
+Cc: Jason Gunthorpe <jgg@mellanox.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: Matthew Wilcox <mawilcox@microsoft.com>
+Cc: Ross Zwisler <zwisler@kernel.org>
+Cc: Dan Williams <dan.j.williams@intel.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Radim Krčmář <rkrcmar@redhat.com>
+Cc: Michal Hocko <mhocko@kernel.org>
+Cc: Ralph Campbell <rcampbell@nvidia.com>
+Cc: John Hubbard <jhubbard@nvidia.com>
+Cc: kvm@vger.kernel.org
+Cc: dri-devel@lists.freedesktop.org
+Cc: linux-rdma@vger.kernel.org
+Cc: linux-fsdevel@vger.kernel.org
+Cc: Arnd Bergmann <arnd@arndb.de>
+---
+ drivers/gpu/drm/i915/i915_gem_userptr.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/drivers/gpu/drm/i915/i915_gem_userptr.c b/drivers/gpu/drm/i915/i915_gem_userptr.c
+index 9558582c105e..23330ac3d7ea 100644
+--- a/drivers/gpu/drm/i915/i915_gem_userptr.c
++++ b/drivers/gpu/drm/i915/i915_gem_userptr.c
+@@ -59,6 +59,7 @@ struct i915_mmu_object {
+ 	struct interval_tree_node it;
+ 	struct list_head link;
+ 	struct work_struct work;
++	bool read_only;
+ 	bool attached;
+ };
+ 
+@@ -119,6 +120,7 @@ static int i915_gem_userptr_mn_invalidate_range_start(struct mmu_notifier *_mn,
+ 		container_of(_mn, struct i915_mmu_notifier, mn);
+ 	struct i915_mmu_object *mo;
+ 	struct interval_tree_node *it;
++	bool update_to_read_only;
+ 	LIST_HEAD(cancelled);
+ 	unsigned long end;
+ 
+@@ -128,6 +130,8 @@ static int i915_gem_userptr_mn_invalidate_range_start(struct mmu_notifier *_mn,
+ 	/* interval ranges are inclusive, but invalidate range is exclusive */
+ 	end = range->end - 1;
+ 
++	update_to_read_only = mmu_notifier_range_update_to_read_only(range);
++
+ 	spin_lock(&mn->lock);
+ 	it = interval_tree_iter_first(&mn->objects, range->start, end);
+ 	while (it) {
+@@ -145,6 +149,17 @@ static int i915_gem_userptr_mn_invalidate_range_start(struct mmu_notifier *_mn,
+ 		 * object if it is not in the process of being destroyed.
+ 		 */
+ 		mo = container_of(it, struct i915_mmu_object, it);
++
++		/*
++		 * If it is already read only and we are updating to
++		 * read only then we do not need to change anything.
++		 * So save time and skip this one.
++		 */
++		if (update_to_read_only && mo->read_only) {
++			it = interval_tree_iter_next(it, range->start, end);
++			continue;
++		}
++
+ 		if (kref_get_unless_zero(&mo->obj->base.refcount))
+ 			queue_work(mn->wq, &mo->work);
+ 
+@@ -270,6 +285,7 @@ i915_gem_userptr_init__mmu_notifier(struct drm_i915_gem_object *obj,
+ 	mo->mn = mn;
+ 	mo->obj = obj;
+ 	mo->it.start = obj->userptr.ptr;
++	mo->read_only = i915_gem_object_is_readonly(obj);
+ 	mo->it.last = obj->userptr.ptr + obj->base.size - 1;
+ 	INIT_WORK(&mo->work, cancel_userptr);
+ 
+
+From patchwork Wed Jan 23 22:23:15 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Jerome Glisse <jglisse@redhat.com>
+X-Patchwork-Id: 10778019
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 445B91390
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:24:02 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 343CF2C4F8
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:24:02 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 289AD2C4FF; Wed, 23 Jan 2019 22:24:02 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id AE2602C4FE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 23 Jan 2019 22:24:01 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727388AbfAWWX4 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 23 Jan 2019 17:23:56 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:54594 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727356AbfAWWXz (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 23 Jan 2019 17:23:55 -0500
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id D387F432A0;
+        Wed, 23 Jan 2019 22:23:54 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-120-127.rdu2.redhat.com
+ [10.10.120.127])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 3606D6A685;
+        Wed, 23 Jan 2019 22:23:52 +0000 (UTC)
+From: jglisse@redhat.com
+To: linux-mm@kvack.org
+Cc: Andrew Morton <akpm@linux-foundation.org>, linux-kernel@vger.kernel.org,
+	=?utf-8?b?SsOpcsO0bWUgR2xpc3Nl?= <jglisse@redhat.com>, =?utf-8?q?Christian_?=
+	=?utf-8?q?K=C3=B6nig?= <christian.koenig@amd.com>, Jan Kara <jack@suse.cz>,
+ Felix Kuehling <Felix.Kuehling@amd.com>, Jason Gunthorpe <jgg@mellanox.com>,
+ Matthew Wilcox <mawilcox@microsoft.com>, Ross Zwisler <zwisler@kernel.org>,
+ Dan Williams <dan.j.williams@intel.com>, Paolo Bonzini <pbonzini@redhat.com>,
+	=?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Michal Hocko <mhocko@kernel.org>, Ralph Campbell <rcampbell@nvidia.com>,
+ John Hubbard <jhubbard@nvidia.com>, kvm@vger.kernel.org,
+ dri-devel@lists.freedesktop.org, linux-rdma@vger.kernel.org,
+ linux-fsdevel@vger.kernel.org, Arnd Bergmann <arnd@arndb.de>
+Subject: [PATCH v4 9/9] RDMA/umem_odp: optimize out the case when a range is
+ updated to read only
+Date: Wed, 23 Jan 2019 17:23:15 -0500
+Message-Id: <20190123222315.1122-10-jglisse@redhat.com>
+In-Reply-To: <20190123222315.1122-1-jglisse@redhat.com>
+References: <20190123222315.1122-1-jglisse@redhat.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.30]);
+ Wed, 23 Jan 2019 22:23:55 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Jérôme Glisse <jglisse@redhat.com>
+
+When range of virtual address is updated read only and corresponding
+user ptr object are already read only it is pointless to do anything.
+Optimize this case out.
+
+Signed-off-by: Jérôme Glisse <jglisse@redhat.com>
+Cc: Christian König <christian.koenig@amd.com>
+Cc: Jan Kara <jack@suse.cz>
+Cc: Felix Kuehling <Felix.Kuehling@amd.com>
+Cc: Jason Gunthorpe <jgg@mellanox.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: Matthew Wilcox <mawilcox@microsoft.com>
+Cc: Ross Zwisler <zwisler@kernel.org>
+Cc: Dan Williams <dan.j.williams@intel.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Radim Krčmář <rkrcmar@redhat.com>
+Cc: Michal Hocko <mhocko@kernel.org>
+Cc: Ralph Campbell <rcampbell@nvidia.com>
+Cc: John Hubbard <jhubbard@nvidia.com>
+Cc: kvm@vger.kernel.org
+Cc: dri-devel@lists.freedesktop.org
+Cc: linux-rdma@vger.kernel.org
+Cc: linux-fsdevel@vger.kernel.org
+Cc: Arnd Bergmann <arnd@arndb.de>
+---
+ drivers/infiniband/core/umem_odp.c | 22 +++++++++++++++++++---
+ include/rdma/ib_umem_odp.h         |  1 +
+ 2 files changed, 20 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/infiniband/core/umem_odp.c b/drivers/infiniband/core/umem_odp.c
+index a4ec43093cb3..fa4e7fdcabfc 100644
+--- a/drivers/infiniband/core/umem_odp.c
++++ b/drivers/infiniband/core/umem_odp.c
+@@ -140,8 +140,15 @@ static void ib_umem_notifier_release(struct mmu_notifier *mn,
+ static int invalidate_range_start_trampoline(struct ib_umem_odp *item,
+ 					     u64 start, u64 end, void *cookie)
+ {
++	bool update_to_read_only = *((bool *)cookie);
++
+ 	ib_umem_notifier_start_account(item);
+-	item->umem.context->invalidate_range(item, start, end);
++	/*
++	 * If it is already read only and we are updating to read only then we
++	 * do not need to change anything. So save time and skip this one.
++	 */
++	if (!update_to_read_only || !item->read_only)
++		item->umem.context->invalidate_range(item, start, end);
+ 	return 0;
+ }
+ 
+@@ -150,6 +157,7 @@ static int ib_umem_notifier_invalidate_range_start(struct mmu_notifier *mn,
+ {
+ 	struct ib_ucontext_per_mm *per_mm =
+ 		container_of(mn, struct ib_ucontext_per_mm, mn);
++	bool update_to_read_only;
+ 
+ 	if (range->blockable)
+ 		down_read(&per_mm->umem_rwsem);
+@@ -166,10 +174,13 @@ static int ib_umem_notifier_invalidate_range_start(struct mmu_notifier *mn,
+ 		return 0;
+ 	}
+ 
++	update_to_read_only = mmu_notifier_range_update_to_read_only(range);
++
+ 	return rbt_ib_umem_for_each_in_range(&per_mm->umem_tree, range->start,
+ 					     range->end,
+ 					     invalidate_range_start_trampoline,
+-					     range->blockable, NULL);
++					     range->blockable,
++					     &update_to_read_only);
+ }
+ 
+ static int invalidate_range_end_trampoline(struct ib_umem_odp *item, u64 start,
+@@ -363,6 +374,9 @@ struct ib_umem_odp *ib_alloc_odp_umem(struct ib_ucontext_per_mm *per_mm,
+ 		goto out_odp_data;
+ 	}
+ 
++	/* Assume read only at first, each time GUP is call this is updated. */
++	odp_data->read_only = true;
++
+ 	odp_data->dma_list =
+ 		vzalloc(array_size(pages, sizeof(*odp_data->dma_list)));
+ 	if (!odp_data->dma_list) {
+@@ -619,8 +633,10 @@ int ib_umem_odp_map_dma_pages(struct ib_umem_odp *umem_odp, u64 user_virt,
+ 		goto out_put_task;
+ 	}
+ 
+-	if (access_mask & ODP_WRITE_ALLOWED_BIT)
++	if (access_mask & ODP_WRITE_ALLOWED_BIT) {
++		umem_odp->read_only = false;
+ 		flags |= FOLL_WRITE;
++	}
+ 
+ 	start_idx = (user_virt - ib_umem_start(umem)) >> page_shift;
+ 	k = start_idx;
+diff --git a/include/rdma/ib_umem_odp.h b/include/rdma/ib_umem_odp.h
+index 0b1446fe2fab..8256668c6170 100644
+--- a/include/rdma/ib_umem_odp.h
++++ b/include/rdma/ib_umem_odp.h
+@@ -76,6 +76,7 @@ struct ib_umem_odp {
+ 	struct completion	notifier_completion;
+ 	int			dying;
+ 	struct work_struct	work;
++	bool read_only;
+ };
+ 
+ static inline struct ib_umem_odp *to_ib_umem_odp(struct ib_umem *umem)

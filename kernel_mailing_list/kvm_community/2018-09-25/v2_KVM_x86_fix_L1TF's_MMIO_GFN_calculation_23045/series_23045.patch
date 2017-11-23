@@ -1,0 +1,173 @@
+From patchwork Tue Sep 25 20:20:00 2018
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10614795
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 4A2E9161F
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 25 Sep 2018 20:27:15 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3D0D22AD85
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 25 Sep 2018 20:27:15 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 30A902AD8A; Tue, 25 Sep 2018 20:27:15 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A44E22AD85
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 25 Sep 2018 20:27:14 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726259AbeIZCga (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 25 Sep 2018 22:36:30 -0400
+Received: from mga03.intel.com ([134.134.136.65]:23035 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725918AbeIZCga (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 25 Sep 2018 22:36:30 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga003.jf.intel.com ([10.7.209.27])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 25 Sep 2018 13:27:12 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.54,303,1534834800";
+   d="scan'208";a="86504110"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.148])
+  by orsmga003.jf.intel.com with ESMTP; 25 Sep 2018 13:20:02 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Sakari Ailus <sakari.ailus@iki.fi>,
+        Junaid Shahid <junaids@google.com>,
+        Jim Mattson <jmattson@google.com>
+Subject: [PATCH v2] KVM: x86: fix L1TF's MMIO GFN calculation
+Date: Tue, 25 Sep 2018 13:20:00 -0700
+Message-Id: <20180925202000.27352-1-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.18.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+One defense against L1TF in KVM is to always set the upper five bits
+of the *legal* physical address in the SPTEs for non-present and
+reserved SPTEs, e.g. MMIO SPTEs.  In the MMIO case, the GFN of the
+MMIO SPTE may overlap with the upper five bits that are being usurped
+to defend against L1TF.  To preserve the GFN, the bits of the GFN that
+overlap with the repurposed bits are shifted left into the reserved
+bits, i.e. the GFN in the SPTE will be split into high and low parts.
+When retrieving the GFN from the MMIO SPTE, e.g. to check for an MMIO
+access, get_mmio_spte_gfn() unshifts the affected bits and restores
+the original GFN for comparison.  Unfortunately, get_mmio_spte_gfn()
+neglects to mask off the reserved bits in the SPTE that were used to
+store the upper chunk of the GFN.  As a result, KVM fails to detect
+MMIO accesses whose GPA overlaps the repurprosed bits, which in turn
+causes guest panics and hangs.
+
+Fix the bug by generating a mask that covers the lower chunk of the
+GFN, i.e. the bits that aren't shifted by the L1TF mitigation.  The
+alternative approach would be to explicitly zero the five reserved
+bits that are used to store the upper chunk of the GFN, but that
+requires additional run-time computation and makes an already-ugly
+bit of code even more inscrutable.
+
+I considered adding a WARN_ON_ONCE(low_phys_bits-1 <= PAGE_SHIFT) to
+warn if GENMASK_ULL() generated a nonsensical value, but that seemed
+silly since that would mean a system that supports VMX has less than
+18 bits of physical address space...
+
+Reported-by: Sakari Ailus <sakari.ailus@iki.fi>
+Fixes: d9b47449c1a1 ("kvm: x86: Set highest physical address bits in non-present/reserved SPTEs")
+Cc: Junaid Shahid <junaids@google.com>
+Cc: Jim Mattson <jmattson@google.com>
+Cc: stable@vger.kernel.org
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Reviewed-by: Junaid Shahid <junaids@google.com>
+Tested-by: Sakari Ailus <sakari.ailus@linux.intel.com>
+---
+
+v2: Changed the mask to cover only the GFN and tweaked variable
+    names to better reflect this behavior [Junaid Shahid].
+
+I didn't include Jim and Junaid's "Reviewed-by" tags in the changelog
+because v2 reworks the calculation of the mask, which is the part of
+this change that I'm most likely to screw up (math is hard).  I pasted
+them below in case you feel it's appropriate to keep them.
+
+Reviewed-by: Junaid Shahid <junaids@google.com>
+Reviewed-by: Jim Mattson <jmattson@google.com>
+
+ arch/x86/kvm/mmu.c | 24 ++++++++++++++++++++----
+ 1 file changed, 20 insertions(+), 4 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu.c b/arch/x86/kvm/mmu.c
+index a282321329b5..a04084cb4b7b 100644
+--- a/arch/x86/kvm/mmu.c
++++ b/arch/x86/kvm/mmu.c
+@@ -249,6 +249,17 @@ static u64 __read_mostly shadow_nonpresent_or_rsvd_mask;
+  */
+ static const u64 shadow_nonpresent_or_rsvd_mask_len = 5;
+ 
++/*
++ * In some cases, we need to preserve the GFN of a non-present or reserved
++ * SPTE when we usurp the upper five bits of the physical address space to
++ * defend against L1TF, e.g. for MMIO SPTEs.  To preserve the GFN, we'll
++ * shift bits of the GFN that overlap with shadow_nonpresent_or_rsvd_mask
++ * left into the reserved bits, i.e. the GFN in the SPTE will be split into
++ * high and low parts.  This mask covers the lower bits of the GFN.
++ */
++static u64 __read_mostly shadow_nonpresent_or_rsvd_lower_gfn_mask;
++
++
+ static void mmu_spte_set(u64 *sptep, u64 spte);
+ static union kvm_mmu_page_role
+ kvm_mmu_calc_root_page_role(struct kvm_vcpu *vcpu);
+@@ -357,9 +368,7 @@ static bool is_mmio_spte(u64 spte)
+ 
+ static gfn_t get_mmio_spte_gfn(u64 spte)
+ {
+-	u64 mask = generation_mmio_spte_mask(MMIO_GEN_MASK) | shadow_mmio_mask |
+-		   shadow_nonpresent_or_rsvd_mask;
+-	u64 gpa = spte & ~mask;
++	u64 gpa = spte & shadow_nonpresent_or_rsvd_lower_gfn_mask;
+ 
+ 	gpa |= (spte >> shadow_nonpresent_or_rsvd_mask_len)
+ 	       & shadow_nonpresent_or_rsvd_mask;
+@@ -423,6 +432,8 @@ EXPORT_SYMBOL_GPL(kvm_mmu_set_mask_ptes);
+ 
+ static void kvm_mmu_reset_all_pte_masks(void)
+ {
++	u8 low_phys_bits;
++
+ 	shadow_user_mask = 0;
+ 	shadow_accessed_mask = 0;
+ 	shadow_dirty_mask = 0;
+@@ -437,12 +448,17 @@ static void kvm_mmu_reset_all_pte_masks(void)
+ 	 * appropriate mask to guard against L1TF attacks. Otherwise, it is
+ 	 * assumed that the CPU is not vulnerable to L1TF.
+ 	 */
++	low_phys_bits = boot_cpu_data.x86_phys_bits;
+ 	if (boot_cpu_data.x86_phys_bits <
+-	    52 - shadow_nonpresent_or_rsvd_mask_len)
++	    52 - shadow_nonpresent_or_rsvd_mask_len) {
+ 		shadow_nonpresent_or_rsvd_mask =
+ 			rsvd_bits(boot_cpu_data.x86_phys_bits -
+ 				  shadow_nonpresent_or_rsvd_mask_len,
+ 				  boot_cpu_data.x86_phys_bits - 1);
++		low_phys_bits -= shadow_nonpresent_or_rsvd_mask_len;
++	}
++	shadow_nonpresent_or_rsvd_lower_gfn_mask =
++		GENMASK_ULL(low_phys_bits - 1, PAGE_SHIFT);
+ }
+ 
+ static int is_cpuid_PSE36(void)
