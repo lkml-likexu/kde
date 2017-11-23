@@ -1,0 +1,385 @@
+diff --git a/Makefile b/Makefile
+index bee2033e7d1d..ccd981892ef2 100644
+--- a/Makefile
++++ b/Makefile
+@@ -2,7 +2,7 @@
+ VERSION = 4
+ PATCHLEVEL = 14
+ SUBLEVEL = 0
+-EXTRAVERSION = -rc8
++EXTRAVERSION =
+ NAME = Fearless Coyote
+ 
+ # *DOCUMENTATION*
+diff --git a/arch/x86/include/asm/elf.h b/arch/x86/include/asm/elf.h
+index c1a125e47ff3..3a091cea36c5 100644
+--- a/arch/x86/include/asm/elf.h
++++ b/arch/x86/include/asm/elf.h
+@@ -253,7 +253,7 @@ extern int force_personality32;
+  * space open for things that want to use the area for 32-bit pointers.
+  */
+ #define ELF_ET_DYN_BASE		(mmap_is_ia32() ? 0x000400000UL : \
+-						  (TASK_SIZE / 3 * 2))
++						  (DEFAULT_MAP_WINDOW / 3 * 2))
+ 
+ /* This yields a mask that user programs can use to figure out what
+    instruction set this CPU supports.  This could be done in user space,
+diff --git a/arch/x86/kernel/idt.c b/arch/x86/kernel/idt.c
+index 6107ee1cb8d5..014cb2fc47ff 100644
+--- a/arch/x86/kernel/idt.c
++++ b/arch/x86/kernel/idt.c
+@@ -92,8 +92,6 @@ static const __initdata struct idt_data def_idts[] = {
+ 	INTG(X86_TRAP_DF,		double_fault),
+ #endif
+ 	INTG(X86_TRAP_DB,		debug),
+-	INTG(X86_TRAP_NMI,		nmi),
+-	INTG(X86_TRAP_BP,		int3),
+ 
+ #ifdef CONFIG_X86_MCE
+ 	INTG(X86_TRAP_MC,		&machine_check),
+diff --git a/arch/x86/kernel/smpboot.c b/arch/x86/kernel/smpboot.c
+index ad59edd84de7..65a0ccdc3050 100644
+--- a/arch/x86/kernel/smpboot.c
++++ b/arch/x86/kernel/smpboot.c
+@@ -194,6 +194,12 @@ static void smp_callin(void)
+ 	smp_store_cpu_info(cpuid);
+ 
+ 	/*
++	 * The topology information must be up to date before
++	 * calibrate_delay() and notify_cpu_starting().
++	 */
++	set_cpu_sibling_map(raw_smp_processor_id());
++
++	/*
+ 	 * Get our bogomips.
+ 	 * Update loops_per_jiffy in cpu_data. Previous call to
+ 	 * smp_store_cpu_info() stored a value that is close but not as
+@@ -203,11 +209,6 @@ static void smp_callin(void)
+ 	cpu_data(cpuid).loops_per_jiffy = loops_per_jiffy;
+ 	pr_debug("Stack at about %p\n", &cpuid);
+ 
+-	/*
+-	 * This must be done before setting cpu_online_mask
+-	 * or calling notify_cpu_starting.
+-	 */
+-	set_cpu_sibling_map(raw_smp_processor_id());
+ 	wmb();
+ 
+ 	notify_cpu_starting(cpuid);
+diff --git a/arch/x86/kernel/traps.c b/arch/x86/kernel/traps.c
+index 67db4f43309e..5a6b8f809792 100644
+--- a/arch/x86/kernel/traps.c
++++ b/arch/x86/kernel/traps.c
+@@ -209,9 +209,6 @@ do_trap_no_signal(struct task_struct *tsk, int trapnr, char *str,
+ 		if (fixup_exception(regs, trapnr))
+ 			return 0;
+ 
+-		if (fixup_bug(regs, trapnr))
+-			return 0;
+-
+ 		tsk->thread.error_code = error_code;
+ 		tsk->thread.trap_nr = trapnr;
+ 		die(str, regs, error_code);
+@@ -292,6 +289,13 @@ static void do_error_trap(struct pt_regs *regs, long error_code, char *str,
+ 
+ 	RCU_LOCKDEP_WARN(!rcu_is_watching(), "entry code didn't wake RCU");
+ 
++	/*
++	 * WARN*()s end up here; fix them up before we call the
++	 * notifier chain.
++	 */
++	if (!user_mode(regs) && fixup_bug(regs, trapnr))
++		return;
++
+ 	if (notify_die(DIE_TRAP, str, regs, error_code, trapnr, signr) !=
+ 			NOTIFY_STOP) {
+ 		cond_local_irq_enable(regs);
+diff --git a/arch/x86/kernel/tsc.c b/arch/x86/kernel/tsc.c
+index 796d96bb0821..ad2b925a808e 100644
+--- a/arch/x86/kernel/tsc.c
++++ b/arch/x86/kernel/tsc.c
+@@ -1346,12 +1346,10 @@ void __init tsc_init(void)
+ unsigned long calibrate_delay_is_known(void)
+ {
+ 	int sibling, cpu = smp_processor_id();
+-	struct cpumask *mask = topology_core_cpumask(cpu);
++	int constant_tsc = cpu_has(&cpu_data(cpu), X86_FEATURE_CONSTANT_TSC);
++	const struct cpumask *mask = topology_core_cpumask(cpu);
+ 
+-	if (!tsc_disabled && !cpu_has(&cpu_data(cpu), X86_FEATURE_CONSTANT_TSC))
+-		return 0;
+-
+-	if (!mask)
++	if (tsc_disabled || !constant_tsc || !mask)
+ 		return 0;
+ 
+ 	sibling = cpumask_any_but(mask, cpu);
+diff --git a/arch/x86/kernel/unwind_orc.c b/arch/x86/kernel/unwind_orc.c
+index b95007e7c1b3..a3f973b2c97a 100644
+--- a/arch/x86/kernel/unwind_orc.c
++++ b/arch/x86/kernel/unwind_orc.c
+@@ -279,7 +279,7 @@ static bool deref_stack_reg(struct unwind_state *state, unsigned long addr,
+ 	if (!stack_access_ok(state, addr, sizeof(long)))
+ 		return false;
+ 
+-	*val = READ_ONCE_TASK_STACK(state->task, *(unsigned long *)addr);
++	*val = READ_ONCE_NOCHECK(*(unsigned long *)addr);
+ 	return true;
+ }
+ 
+diff --git a/arch/x86/oprofile/op_model_ppro.c b/arch/x86/oprofile/op_model_ppro.c
+index 350f7096baac..7913b6921959 100644
+--- a/arch/x86/oprofile/op_model_ppro.c
++++ b/arch/x86/oprofile/op_model_ppro.c
+@@ -212,8 +212,8 @@ static void arch_perfmon_setup_counters(void)
+ 	eax.full = cpuid_eax(0xa);
+ 
+ 	/* Workaround for BIOS bugs in 6/15. Taken from perfmon2 */
+-	if (eax.split.version_id == 0 && __this_cpu_read(cpu_info.x86) == 6 &&
+-		__this_cpu_read(cpu_info.x86_model) == 15) {
++	if (eax.split.version_id == 0 && boot_cpu_data.x86 == 6 &&
++	    boot_cpu_data.x86_model == 15) {
+ 		eax.split.version_id = 2;
+ 		eax.split.num_counters = 2;
+ 		eax.split.bit_width = 40;
+diff --git a/include/linux/kallsyms.h b/include/linux/kallsyms.h
+index 11dd93e42580..0a777c5216b1 100644
+--- a/include/linux/kallsyms.h
++++ b/include/linux/kallsyms.h
+@@ -14,6 +14,14 @@
+ #define KSYM_SYMBOL_LEN (sizeof("%s+%#lx/%#lx [%s]") + (KSYM_NAME_LEN - 1) + \
+ 			 2*(BITS_PER_LONG*3/10) + (MODULE_NAME_LEN - 1) + 1)
+ 
++/* How and when do we show kallsyms values? */
++extern int kallsyms_show_value(void);
++#ifndef CONFIG_64BIT
++# define KALLSYM_FMT "%08lx"
++#else
++# define KALLSYM_FMT "%016lx"
++#endif
++
+ struct module;
+ 
+ #ifdef CONFIG_KALLSYMS
+diff --git a/kernel/kallsyms.c b/kernel/kallsyms.c
+index 127e7cfafa55..1e6ae66c6244 100644
+--- a/kernel/kallsyms.c
++++ b/kernel/kallsyms.c
+@@ -480,6 +480,7 @@ struct kallsym_iter {
+ 	char name[KSYM_NAME_LEN];
+ 	char module_name[MODULE_NAME_LEN];
+ 	int exported;
++	int show_value;
+ };
+ 
+ static int get_ksymbol_mod(struct kallsym_iter *iter)
+@@ -582,12 +583,15 @@ static void s_stop(struct seq_file *m, void *p)
+ 
+ static int s_show(struct seq_file *m, void *p)
+ {
++	unsigned long value;
+ 	struct kallsym_iter *iter = m->private;
+ 
+ 	/* Some debugging symbols have no name.  Ignore them. */
+ 	if (!iter->name[0])
+ 		return 0;
+ 
++	value = iter->show_value ? iter->value : 0;
++
+ 	if (iter->module_name[0]) {
+ 		char type;
+ 
+@@ -597,10 +601,10 @@ static int s_show(struct seq_file *m, void *p)
+ 		 */
+ 		type = iter->exported ? toupper(iter->type) :
+ 					tolower(iter->type);
+-		seq_printf(m, "%pK %c %s\t[%s]\n", (void *)iter->value,
++		seq_printf(m, KALLSYM_FMT " %c %s\t[%s]\n", value,
+ 			   type, iter->name, iter->module_name);
+ 	} else
+-		seq_printf(m, "%pK %c %s\n", (void *)iter->value,
++		seq_printf(m, KALLSYM_FMT " %c %s\n", value,
+ 			   iter->type, iter->name);
+ 	return 0;
+ }
+@@ -612,6 +616,40 @@ static const struct seq_operations kallsyms_op = {
+ 	.show = s_show
+ };
+ 
++static inline int kallsyms_for_perf(void)
++{
++#ifdef CONFIG_PERF_EVENTS
++	extern int sysctl_perf_event_paranoid;
++	if (sysctl_perf_event_paranoid <= 1)
++		return 1;
++#endif
++	return 0;
++}
++
++/*
++ * We show kallsyms information even to normal users if we've enabled
++ * kernel profiling and are explicitly not paranoid (so kptr_restrict
++ * is clear, and sysctl_perf_event_paranoid isn't set).
++ *
++ * Otherwise, require CAP_SYSLOG (assuming kptr_restrict isn't set to
++ * block even that).
++ */
++int kallsyms_show_value(void)
++{
++	switch (kptr_restrict) {
++	case 0:
++		if (kallsyms_for_perf())
++			return 1;
++	/* fallthrough */
++	case 1:
++		if (has_capability_noaudit(current, CAP_SYSLOG))
++			return 1;
++	/* fallthrough */
++	default:
++		return 0;
++	}
++}
++
+ static int kallsyms_open(struct inode *inode, struct file *file)
+ {
+ 	/*
+@@ -625,6 +663,7 @@ static int kallsyms_open(struct inode *inode, struct file *file)
+ 		return -ENOMEM;
+ 	reset_iter(iter, 0);
+ 
++	iter->show_value = kallsyms_show_value();
+ 	return 0;
+ }
+ 
+diff --git a/kernel/module.c b/kernel/module.c
+index de66ec825992..0122747ba150 100644
+--- a/kernel/module.c
++++ b/kernel/module.c
+@@ -1516,7 +1516,7 @@ static void add_sect_attrs(struct module *mod, const struct load_info *info)
+ 		sattr->mattr.show = module_sect_show;
+ 		sattr->mattr.store = NULL;
+ 		sattr->mattr.attr.name = sattr->name;
+-		sattr->mattr.attr.mode = S_IRUGO;
++		sattr->mattr.attr.mode = S_IRUSR;
+ 		*(gattr++) = &(sattr++)->mattr.attr;
+ 	}
+ 	*gattr = NULL;
+@@ -4147,6 +4147,7 @@ static int m_show(struct seq_file *m, void *p)
+ {
+ 	struct module *mod = list_entry(p, struct module, list);
+ 	char buf[MODULE_FLAGS_BUF_SIZE];
++	unsigned long value;
+ 
+ 	/* We always ignore unformed modules. */
+ 	if (mod->state == MODULE_STATE_UNFORMED)
+@@ -4162,7 +4163,8 @@ static int m_show(struct seq_file *m, void *p)
+ 		   mod->state == MODULE_STATE_COMING ? "Loading" :
+ 		   "Live");
+ 	/* Used by oprofile and other similar tools. */
+-	seq_printf(m, " 0x%pK", mod->core_layout.base);
++	value = m->private ? 0 : (unsigned long)mod->core_layout.base;
++	seq_printf(m, " 0x" KALLSYM_FMT, value);
+ 
+ 	/* Taints info */
+ 	if (mod->taints)
+@@ -4184,9 +4186,23 @@ static const struct seq_operations modules_op = {
+ 	.show	= m_show
+ };
+ 
++/*
++ * This also sets the "private" pointer to non-NULL if the
++ * kernel pointers should be hidden (so you can just test
++ * "m->private" to see if you should keep the values private).
++ *
++ * We use the same logic as for /proc/kallsyms.
++ */
+ static int modules_open(struct inode *inode, struct file *file)
+ {
+-	return seq_open(file, &modules_op);
++	int err = seq_open(file, &modules_op);
++
++	if (!err) {
++		struct seq_file *m = file->private_data;
++		m->private = kallsyms_show_value() ? NULL : (void *)8ul;
++	}
++
++	return 0;
+ }
+ 
+ static const struct file_operations proc_modules_operations = {
+diff --git a/scripts/mod/modpost.c b/scripts/mod/modpost.c
+index 98314b400a95..f51cf977c65b 100644
+--- a/scripts/mod/modpost.c
++++ b/scripts/mod/modpost.c
+@@ -1963,7 +1963,7 @@ static void read_symbols(char *modname)
+ 	}
+ 
+ 	license = get_modinfo(info.modinfo, info.modinfo_len, "license");
+-	if (info.modinfo && !license && !is_vmlinux(modname))
++	if (!license && !is_vmlinux(modname))
+ 		warn("modpost: missing MODULE_LICENSE() in %s\n"
+ 		     "see include/linux/module.h for "
+ 		     "more information\n", modname);
+diff --git a/tools/include/uapi/drm/i915_drm.h b/tools/include/uapi/drm/i915_drm.h
+index 6598fb76d2c2..9816590d3ad2 100644
+--- a/tools/include/uapi/drm/i915_drm.h
++++ b/tools/include/uapi/drm/i915_drm.h
+@@ -829,6 +829,7 @@ struct drm_i915_gem_exec_fence {
+ 
+ #define I915_EXEC_FENCE_WAIT            (1<<0)
+ #define I915_EXEC_FENCE_SIGNAL          (1<<1)
++#define __I915_EXEC_FENCE_UNKNOWN_FLAGS (-(I915_EXEC_FENCE_SIGNAL << 1))
+ 	__u32 flags;
+ };
+ 
+diff --git a/tools/perf/builtin-trace.c b/tools/perf/builtin-trace.c
+index 771ddab94bb0..d5d7fff1c211 100644
+--- a/tools/perf/builtin-trace.c
++++ b/tools/perf/builtin-trace.c
+@@ -1138,6 +1138,14 @@ static int trace__symbols_init(struct trace *trace, struct perf_evlist *evlist)
+ 	return err;
+ }
+ 
++static void trace__symbols__exit(struct trace *trace)
++{
++	machine__exit(trace->host);
++	trace->host = NULL;
++
++	symbol__exit();
++}
++
+ static int syscall__alloc_arg_fmts(struct syscall *sc, int nr_args)
+ {
+ 	int idx;
+@@ -2481,6 +2489,8 @@ static int trace__run(struct trace *trace, int argc, const char **argv)
+ 	}
+ 
+ out_delete_evlist:
++	trace__symbols__exit(trace);
++
+ 	perf_evlist__delete(evlist);
+ 	trace->evlist = NULL;
+ 	trace->live = false;
+diff --git a/tools/perf/util/parse-events.l b/tools/perf/util/parse-events.l
+index 6680e4fb7967..025729510525 100644
+--- a/tools/perf/util/parse-events.l
++++ b/tools/perf/util/parse-events.l
+@@ -5,6 +5,7 @@
+ %option stack
+ %option bison-locations
+ %option yylineno
++%option reject
+ 
+ %{
+ #include <errno.h>
+@@ -339,8 +340,8 @@ r{num_raw_hex}		{ return raw(yyscanner); }
+ {num_hex}		{ return value(yyscanner, 16); }
+ 
+ {modifier_event}	{ return str(yyscanner, PE_MODIFIER_EVENT); }
+-{bpf_object}		{ if (!isbpf(yyscanner)) USER_REJECT; return str(yyscanner, PE_BPF_OBJECT); }
+-{bpf_source}		{ if (!isbpf(yyscanner)) USER_REJECT; return str(yyscanner, PE_BPF_SOURCE); }
++{bpf_object}		{ if (!isbpf(yyscanner)) { USER_REJECT }; return str(yyscanner, PE_BPF_OBJECT); }
++{bpf_source}		{ if (!isbpf(yyscanner)) { USER_REJECT }; return str(yyscanner, PE_BPF_SOURCE); }
+ {name}			{ return pmu_str_check(yyscanner); }
+ "/"			{ BEGIN(config); return '/'; }
+ -			{ return '-'; }
