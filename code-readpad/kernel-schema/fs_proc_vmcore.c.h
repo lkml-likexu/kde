@@ -1,6 +1,7 @@
 
 EXPORT_SYMBOL_GPL(register_oldmem_pfn_is_ram);
 EXPORT_SYMBOL_GPL(unregister_oldmem_pfn_is_ram);
+\n
 int register_oldmem_pfn_is_ram(int (*fn)
 (unsigned long pfn)
 )
@@ -49,57 +50,58 @@ int vmcore_add_device_dump(struct vmcoredd_data *data)
 static void vmcore_free_device_dumps(void)
 static int __init vmcore_init(void)
 void vmcore_cleanup(void)
-   9 void
-   6 unsigned long pfn
-   6 struct vm_area_struct *vma
-   5 int userbuf
-   5 char *elfptr
-   4 struct list_head *vc_list
-   4 size_t size
-   4 size_t elfsz
-   4 char *buf
-   3 unsigned long size
-   3 unsigned long from
-   3 u64 *ppos
-   3 struct file *file
-   3 size_t elfnotes_sz
-   3 size_t count
-   3 pgprot_t prot
-   3 const Elf64_Ehdr *ehdr_ptr
-   3 const Elf32_Ehdr *ehdr_ptr
-   2 u64 start
-   2 u64 *sz_ptnote
-   2 struct vmcoredd_data *data
-   2 size_t buflen
-   2 size_t *notes_sz
-   2 size_t *elfsz
-   2 loff_t *fpos
-   2 int *nr_ptnote
-   2 char *notes_buf
-   2 char **notes_buf
-   1 void *target
-   1 void *src
-   1 void *dst
-   1 void *buf
-   1 vma->vm_start
-   1 vma->vm_mm
-   1 unsigned long offset
-   1 unsigned long long addr
-   1 unsigned long long *size
-   1 unsigned long long *addr
-   1 unsigned long dst
-   1 unregister_oldmem_pfn_is_ram
-   1 u32 size
-   1 struct vm_fault *vmf
-   1 size_t vmcoreddsz
-   1 size_t elfnotesz
-   1 size_t elfnotesegsz
-   1 size_t dump_size
-   1 size_t csize
-   1 register_oldmem_pfn_is_ram
-   1 len
-   1 int *fn
-   1 char __user *buffer
-   1 char *buffer
-   1 bool encrypted
-   1 NULL
+\n
+      9 void
+      6 unsigned long pfn
+      6 struct vm_area_struct *vma
+      5 int userbuf
+      5 char *elfptr
+      4 struct list_head *vc_list
+      4 size_t size
+      4 size_t elfsz
+      4 char *buf
+      3 unsigned long size
+      3 unsigned long from
+      3 u64 *ppos
+      3 struct file *file
+      3 size_t elfnotes_sz
+      3 size_t count
+      3 pgprot_t prot
+      3 const Elf64_Ehdr *ehdr_ptr
+      3 const Elf32_Ehdr *ehdr_ptr
+      2 u64 *sz_ptnote
+      2 u64 start
+      2 struct vmcoredd_data *data
+      2 size_t *notes_sz
+      2 size_t *elfsz
+      2 size_t buflen
+      2 loff_t *fpos
+      2 int *nr_ptnote
+      2 char *notes_buf
+      2 char **notes_buf
+      1 void *target
+      1 void *src
+      1 void *dst
+      1 void *buf
+      1 vma->vm_start
+      1 vma->vm_mm
+      1 unsigned long offset
+      1 unsigned long long *size
+      1 unsigned long long *addr
+      1 unsigned long long addr
+      1 unsigned long dst
+      1 unregister_oldmem_pfn_is_ram
+      1 u32 size
+      1 struct vm_fault *vmf
+      1 size_t vmcoreddsz
+      1 size_t elfnotesz
+      1 size_t elfnotesegsz
+      1 size_t dump_size
+      1 size_t csize
+      1 register_oldmem_pfn_is_ram
+      1 NULL
+      1 len
+      1 int *fn
+      1 char __user *buffer
+      1 char *buffer
+      1 bool encrypted

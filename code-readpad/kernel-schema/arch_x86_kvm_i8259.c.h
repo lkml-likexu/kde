@@ -1,4 +1,5 @@
 
+\n
 static void pic_lock(struct kvm_pic *s)
 __acquires(&s->lock)
 static void pic_unlock(struct kvm_pic *s)
@@ -30,21 +31,22 @@ static int picdev_eclr_read(struct kvm_vcpu *vcpu, struct kvm_io_device *dev, gp
 static void pic_irq_request(struct kvm *kvm, int level)
 int kvm_pic_init(struct kvm *kvm)
 void kvm_pic_destroy(struct kvm *kvm)
-   8 struct kvm_pic *s
-   8 int len
-   8 gpa_t addr
-   7 struct kvm_kpic_state *s
-   6 struct kvm_vcpu *vcpu
-   6 struct kvm_io_device *dev
-   4 void *val
-   4 void *opaque
-   4 struct kvm *kvm
-   4 int irq
-   4 const void *val
-   3 u32 addr
-   3 int level
-   2 u32 val
-   2 u32 addr1
-   2 int irq_source_id
-   2 &s->lock
-   1 int mask
+\n
+      8 struct kvm_pic *s
+      8 int len
+      8 gpa_t addr
+      7 struct kvm_kpic_state *s
+      6 struct kvm_vcpu *vcpu
+      6 struct kvm_io_device *dev
+      4 void *val
+      4 void *opaque
+      4 struct kvm *kvm
+      4 int irq
+      4 const void *val
+      3 u32 addr
+      3 int level
+      2 u32 val
+      2 u32 addr1
+      2 &s->lock
+      2 int irq_source_id
+      1 int mask

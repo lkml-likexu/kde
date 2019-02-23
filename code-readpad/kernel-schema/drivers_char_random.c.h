@@ -3,6 +3,7 @@ EXPORT_SYMBOL_GPL(add_input_randomness);
 EXPORT_SYMBOL_GPL(add_interrupt_randomness);
 EXPORT_SYMBOL_GPL(add_disk_randomness);
 EXPORT_SYMBOL_GPL(add_hwgenerator_randomness);
+\n
 static void _mix_pool_bytes(struct entropy_store *r, const void *in, int nbytes)
 static void __mix_pool_bytes(struct entropy_store *r, const void *in, int nbytes)
 static void mix_pool_bytes(struct entropy_store *r, const void *in, int nbytes)
@@ -18,10 +19,10 @@ static void numa_crng_init(void)
 static int crng_fast_load(const char *cp, size_t len)
 static int crng_slow_load(const char *cp, size_t len)
 static void crng_reseed(struct crng_state *crng, struct entropy_store *r)
-static void _extract_crng(struct crng_state *crng, __u8 out[CHACHA20_BLOCK_SIZE])
-static void extract_crng(__u8 out[CHACHA20_BLOCK_SIZE])
-static void _crng_backtrack_protect(struct crng_state *crng, __u8 tmp[CHACHA20_BLOCK_SIZE], int used)
-static void crng_backtrack_protect(__u8 tmp[CHACHA20_BLOCK_SIZE], int used)
+static void _extract_crng(struct crng_state *crng, __u8 out[CHACHA_BLOCK_SIZE])
+static void extract_crng(__u8 out[CHACHA_BLOCK_SIZE])
+static void _crng_backtrack_protect(struct crng_state *crng, __u8 tmp[CHACHA_BLOCK_SIZE], int used)
+static void crng_backtrack_protect(__u8 tmp[CHACHA_BLOCK_SIZE], int used)
 static ssize_t extract_crng_user(void __user *buf, size_t nbytes)
 void add_device_randomness(const void *buf, unsigned int size)
 static void add_timer_randomness(struct timer_rand_state *state, unsigned num)
@@ -68,76 +69,77 @@ static DEFINE_PER_CPU(struct batched_entropy, batched_entropy_u32)
 static void invalidate_batched_entropy(void)
 unsigned long randomize_page(unsigned long start, unsigned long range)
 void add_hwgenerator_randomness(const char *buffer, size_t count, size_t entropy)
-  16 struct entropy_store *r
-  11 size_t nbytes
-   8 void
-   6 int nbytes
-   5 void *buf
-   5 loff_t *ppos
-   4 struct file *file
-   4 struct crng_state *crng
-   3 size_t count
-   3 const void *in
-   3 char __user *buf
-   2 void __user *buffer
-   2 void __user *buf
-   2 struct work_struct *work
-   2 struct random_ready_callback *rdy
-   2 struct gendisk *disk
-   2 struct fast_pool *f
-   2 struct ctl_table *table
-   2 struct batched_entropy
-   2 size_t len
-   2 size_t *lenp
-   2 int write
-   2 int used
-   2 int reserved
-   2 int nbits
-   2 int min
-   2 const char __user *buffer
-   2 const char *cp
-   2 __u8 tmp[CHACHA20_BLOCK_SIZE]
-   2 __u8 out[CHACHA20_BLOCK_SIZE]
-   1 void *caller
-   1 void **previous
-   1 unsigned num
-   1 unsigned long start
-   1 unsigned long range
-   1 unsigned long arg
-   1 unsigned int value
-   1 unsigned int type
-   1 unsigned int size
-   1 unsigned int code
-   1 unsigned int cmd
-   1 unsigned int
-   1 struct timer_rand_state *state
-   1 struct pt_regs *regs
-   1 struct file *filp
-   1 struct file *f
-   1 size_t entropy
-   1 size_t
-   1 poll_table * wait
-   1 int on
-   1 int nonblock
-   1 int irq_flags
-   1 int irq
-   1 int fips
-   1 int fd
-   1 getrandom
-   1 flags
-   1 cycles_t start
-   1 count
-   1 const void *buf
-   1 const char *func_name
-   1 const char *buffer
-   1 char __user *
-   1 char *arg
-   1 buf
-   1 batched_entropy_u64
-   1 batched_entropy_u32
-   1 add_interrupt_randomness
-   1 add_input_randomness
-   1 add_hwgenerator_randomness
-   1 add_disk_randomness
-   1 __u8 *out
-   1 CONFIG_RANDOM_TRUST_CPU
+\n
+     16 struct entropy_store *r
+     11 size_t nbytes
+      8 void
+      6 int nbytes
+      5 void *buf
+      5 loff_t *ppos
+      4 struct file *file
+      4 struct crng_state *crng
+      3 size_t count
+      3 const void *in
+      3 char __user *buf
+      2 void __user *buffer
+      2 void __user *buf
+      2 __u8 tmp[CHACHA_BLOCK_SIZE]
+      2 __u8 out[CHACHA_BLOCK_SIZE]
+      2 struct work_struct *work
+      2 struct random_ready_callback *rdy
+      2 struct gendisk *disk
+      2 struct fast_pool *f
+      2 struct ctl_table *table
+      2 struct batched_entropy
+      2 size_t *lenp
+      2 size_t len
+      2 int write
+      2 int used
+      2 int reserved
+      2 int nbits
+      2 int min
+      2 const char __user *buffer
+      2 const char *cp
+      1 void **previous
+      1 void *caller
+      1 unsigned num
+      1 unsigned long start
+      1 unsigned long range
+      1 unsigned long arg
+      1 unsigned int value
+      1 unsigned int type
+      1 unsigned int size
+      1 unsigned int code
+      1 unsigned int cmd
+      1 unsigned int
+      1 __u8 *out
+      1 struct timer_rand_state *state
+      1 struct pt_regs *regs
+      1 struct file *filp
+      1 struct file *f
+      1 size_t entropy
+      1 size_t
+      1 poll_table * wait
+      1 int on
+      1 int nonblock
+      1 int irq_flags
+      1 int irq
+      1 int fips
+      1 int fd
+      1 getrandom
+      1 flags
+      1 cycles_t start
+      1 count
+      1 const void *buf
+      1 const char *func_name
+      1 const char *buffer
+      1 CONFIG_RANDOM_TRUST_CPU
+      1 char __user *
+      1 char *arg
+      1 buf
+      1 batched_entropy_u64
+      1 batched_entropy_u32
+      1 add_interrupt_randomness
+      1 add_input_randomness
+      1 add_hwgenerator_randomness
+      1 add_disk_randomness

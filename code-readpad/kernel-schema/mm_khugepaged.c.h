@@ -1,4 +1,5 @@
 
+\n
 static ssize_t scan_sleep_millisecs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 static ssize_t scan_sleep_millisecs_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
 static ssize_t alloc_sleep_millisecs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
@@ -68,43 +69,44 @@ static void khugepaged_wait_work(void)
 static int khugepaged(void *none)
 static void set_recommended_min_free_kbytes(void)
 int start_stop_khugepaged(void)
-  17 struct kobject *kobj
-  17 struct kobj_attribute *attr
-  15 void
-  12 struct mm_struct *mm
-  11 char *buf
-  10 struct page **hpage
-   7 struct vm_area_struct *vma
-   6 unsigned long address
-   6 size_t count
-   6 const char *buf
-   4 struct address_space *mapping
-   4 int node
-   3 struct mm_slot *mm_slot
-   3 pte_t *pte
-   3 pgoff_t start
-   3 buf
-   3 bool *wait
-   2 unsigned long vm_flags
-   2 struct page *page
-   2 int referenced
-   2 gfp_t gfp
-   2 &khugepaged_mm_lock
-   2 "%u\n"
-   1 void *none
-   1 unsigned long *vm_flags
-   1 unsigned int pages
-   1 struct vm_area_struct **vmap
-   1 spinlock_t *ptl
-   1 pte_t *_pte
-   1 pmd_t *pmd
-   1 pgoff_t pgoff
-   1 kobj
-   1 khugepaged_pages_to_scan
-   1 khugepaged_max_ptes_none
-   1 int nid
-   1 int advice
-   1 attr
-   1 TRANSPARENT_HUGEPAGE_DEFRAG_KHUGEPAGED_FLAG
-   1 THP_COLLAPSE_ALLOC
-   1 *hpage
+\n
+     17 struct kobject *kobj
+     17 struct kobj_attribute *attr
+     15 void
+     12 struct mm_struct *mm
+     11 char *buf
+     10 struct page **hpage
+      7 struct vm_area_struct *vma
+      6 unsigned long address
+      6 size_t count
+      6 const char *buf
+      4 struct address_space *mapping
+      4 int node
+      3 struct mm_slot *mm_slot
+      3 pte_t *pte
+      3 pgoff_t start
+      3 buf
+      3 bool *wait
+      2 unsigned long vm_flags
+      2 "%u\n"
+      2 struct page *page
+      2 &khugepaged_mm_lock
+      2 int referenced
+      2 gfp_t gfp
+      1 void *none
+      1 unsigned long *vm_flags
+      1 unsigned int pages
+      1 TRANSPARENT_HUGEPAGE_DEFRAG_KHUGEPAGED_FLAG
+      1 THP_COLLAPSE_ALLOC
+      1 struct vm_area_struct **vmap
+      1 spinlock_t *ptl
+      1 pte_t *_pte
+      1 pmd_t *pmd
+      1 pgoff_t pgoff
+      1 kobj
+      1 khugepaged_pages_to_scan
+      1 khugepaged_max_ptes_none
+      1 int nid
+      1 int advice
+      1 *hpage
+      1 attr

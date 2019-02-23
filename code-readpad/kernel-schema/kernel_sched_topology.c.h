@@ -1,4 +1,5 @@
 
+\n
 static int __init sched_debug_setup(char *str)
 static inline bool sched_debug(void)
 static int sched_domain_debug_one(struct sched_domain *sd, int cpu, int level, struct cpumask *groupmask)
@@ -6,6 +7,13 @@ static void sched_domain_debug(struct sched_domain *sd, int cpu)
 define sched_debug_enabled 0 static inline bool sched_debug(void)
 static int sd_degenerate(struct sched_domain *sd)
 static int sd_parent_degenerate(struct sched_domain *sd, struct sched_domain *parent)
+static void free_pd(struct perf_domain *pd)
+static struct perf_domain *find_pd(struct perf_domain *pd, int cpu)
+static struct perf_domain *pd_init(int cpu)
+static void perf_domain_debug(const struct cpumask *cpu_map, struct perf_domain *pd)
+static void destroy_perf_domain_rcu(struct rcu_head *rp)
+static void sched_energy_set(bool has_eas)
+extern struct cpufreq_governor schedutil_gov; static bool build_perf_domains(const struct cpumask *cpu_map)
 static void free_rootdomain(struct rcu_head *rcu)
 void rq_attach_root(struct rq *rq, struct root_domain *rd)
 void sched_get_rd(struct root_domain *rd)
@@ -53,36 +61,40 @@ int sched_init_domains(const struct cpumask *cpu_map)
 static void detach_destroy_domains(const struct cpumask *cpu_map)
 static int dattrs_equal(struct sched_domain_attr *cur, int idx_cur, struct sched_domain_attr *new, int idx_new)
 void partition_sched_domains(int ndoms_new, cpumask_var_t doms_new[], struct sched_domain_attr *dattr_new)
-  15 struct sched_domain *sd
-  13 int cpu
-  10 const struct cpumask *cpu_map
-   7 void
-   5 struct root_domain *rd
-   4 struct sched_group *sg
-   3 struct sched_domain_topology_level *tl
-   3 struct sched_domain_attr *attr
-   2 unsigned int ndoms
-   2 unsigned int cpu
-   2 struct sched_domain *child
-   2 struct s_data *d
-   2 struct rcu_head *rcu
-   2 int dflags
-   2 char *str
-   1 struct sd_data *sdd
-   1 struct sched_domain_attr *new
-   1 struct sched_domain_attr *dattr_new
-   1 struct sched_domain_attr *cur
-   1 struct sched_domain *parent
-   1 struct rq *rq
-   1 struct cpumask *mask
-   1 struct cpumask *groupmask
-   1 int ndoms_new
-   1 int level
-   1 int idx_new
-   1 int idx_cur
-   1 int free_sgc
-   1 int distance
-   1 enum s_alloc what
-   1 cpumask_var_t doms_new[]
-   1 cpumask_var_t doms[]
-   1 const char *str
+\n
+     15 struct sched_domain *sd
+     15 int cpu
+     12 const struct cpumask *cpu_map
+      7 void
+      5 struct root_domain *rd
+      4 struct sched_group *sg
+      3 struct sched_domain_topology_level *tl
+      3 struct sched_domain_attr *attr
+      3 struct perf_domain *pd
+      2 unsigned int ndoms
+      2 unsigned int cpu
+      2 struct s_data *d
+      2 struct sched_domain *child
+      2 struct rcu_head *rcu
+      2 int dflags
+      2 char *str
+      1 struct sd_data *sdd
+      1 struct sched_domain *parent
+      1 struct sched_domain_attr *new
+      1 struct sched_domain_attr *dattr_new
+      1 struct sched_domain_attr *cur
+      1 struct rq *rq
+      1 struct rcu_head *rp
+      1 struct cpumask *mask
+      1 struct cpumask *groupmask
+      1 int ndoms_new
+      1 int level
+      1 int idx_new
+      1 int idx_cur
+      1 int free_sgc
+      1 int distance
+      1 enum s_alloc what
+      1 cpumask_var_t doms_new[]
+      1 cpumask_var_t doms[]
+      1 const char *str
+      1 bool has_eas

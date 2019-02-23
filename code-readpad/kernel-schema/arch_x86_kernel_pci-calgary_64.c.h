@@ -1,4 +1,5 @@
 
+\n
 static inline int translation_enabled(struct iommu_table *tbl)
 static void iommu_range_reserve(struct iommu_table *tbl, unsigned long start_addr, unsigned int npages)
 static unsigned long iommu_range_alloc(struct device *dev, struct iommu_table *tbl, unsigned int npages)
@@ -11,7 +12,6 @@ static dma_addr_t calgary_map_page(struct device *dev, struct page *page, unsign
 static void calgary_unmap_page(struct device *dev, dma_addr_t dma_addr, size_t size, enum dma_data_direction dir, unsigned long attrs)
 static void* calgary_alloc_coherent(struct device *dev, size_t size, dma_addr_t *dma_handle, gfp_t flag, unsigned long attrs)
 static void calgary_free_coherent(struct device *dev, size_t size, void *vaddr, dma_addr_t dma_handle, unsigned long attrs)
-static int calgary_mapping_error(struct device *dev, dma_addr_t dma_addr)
 static inline void __iomem * busno_to_bbar(unsigned char num)
 static inline int busno_to_phbid(unsigned char num)
 static inline unsigned long split_queue_offset(unsigned char num)
@@ -51,35 +51,36 @@ int __init detect_calgary(void)
 static int __init calgary_parse_options(char *p)
 static void __init calgary_fixup_one_tce_space(struct pci_dev *dev)
 static int __init calgary_fixup_tce_spaces(void)
-  13 struct pci_dev *dev
-  12 struct iommu_table *tbl
-  10 struct device *dev
-   8 void
-   6 unsigned long attrs
-   5 unsigned char num
-   4 unsigned int npages
-   4 size_t size
-   4 enum dma_data_direction dir
-   3 unsigned short device
-   3 dma_addr_t dma_addr
-   2 void __iomem *bbar
-   2 void *vaddr
-   2 unsigned long offset
-   2 int nelems
-   1 void __iomem *bar
-   1 unsigned short pci_dev
-   1 unsigned long timeout
-   1 unsigned long start_addr
-   1 unsigned char busnum
-   1 u64 start
-   1 u64 limit
-   1 struct timer_list *t
-   1 struct scatterlist *sglist
-   1 struct scatterlist *sg
-   1 struct page *page
-   1 int direction
-   1 int bus
-   1 gfp_t flag
-   1 dma_addr_t dma_handle
-   1 dma_addr_t *dma_handle
-   1 char *p
+\n
+     13 struct pci_dev *dev
+     12 struct iommu_table *tbl
+      9 struct device *dev
+      8 void
+      6 unsigned long attrs
+      5 unsigned char num
+      4 unsigned int npages
+      4 size_t size
+      4 enum dma_data_direction dir
+      3 unsigned short device
+      2 void *vaddr
+      2 void __iomem *bbar
+      2 unsigned long offset
+      2 int nelems
+      2 dma_addr_t dma_addr
+      1 void __iomem *bar
+      1 unsigned short pci_dev
+      1 unsigned long timeout
+      1 unsigned long start_addr
+      1 unsigned char busnum
+      1 u64 start
+      1 u64 limit
+      1 struct timer_list *t
+      1 struct scatterlist *sglist
+      1 struct scatterlist *sg
+      1 struct page *page
+      1 int direction
+      1 int bus
+      1 gfp_t flag
+      1 dma_addr_t dma_handle
+      1 dma_addr_t *dma_handle
+      1 char *p

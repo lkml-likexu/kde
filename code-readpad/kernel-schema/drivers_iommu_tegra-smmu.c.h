@@ -1,4 +1,5 @@
 
+\n
 static struct tegra_smmu_as *to_smmu_as(struct iommu_domain *dom)
 static inline void smmu_writel(struct tegra_smmu *smmu, u32 value, unsigned long offset)
 static inline u32 smmu_readl(struct tegra_smmu *smmu, unsigned long offset)
@@ -45,46 +46,43 @@ static struct iommu_group *tegra_smmu_device_group(struct device *dev)
 static int tegra_smmu_of_xlate(struct device *dev, struct of_phandle_args *args)
 static void tegra_smmu_ahb_enable(void)
 static int tegra_smmu_swgroups_show(struct seq_file *s, void *data)
-static int tegra_smmu_swgroups_open(struct inode *inode, struct file *file)
 static int tegra_smmu_clients_show(struct seq_file *s, void *data)
-static int tegra_smmu_clients_open(struct inode *inode, struct file *file)
 static void tegra_smmu_debugfs_init(struct tegra_smmu *smmu)
 static void tegra_smmu_debugfs_exit(struct tegra_smmu *smmu)
 struct tegra_smmu *tegra_smmu_probe(struct device *dev, const struct tegra_smmu_soc *soc, struct tegra_mc *mc)
 void tegra_smmu_remove(struct tegra_smmu *smmu)
-  23 struct tegra_smmu *smmu
-  12 unsigned long iova
-   8 struct tegra_smmu_as *as
-   8 struct device *dev
-   6 struct iommu_domain *domain
-   5 unsigned int swgroup
-   3 unsigned long offset
-   3 unsigned long asid
-   2 void *data
-   2 unsigned int asid
-   2 u32 value
-   2 struct seq_file *s
-   2 struct of_phandle_args *args
-   2 struct inode *inode
-   2 struct file *file
-   2 size_t size
-   2 dma_addr_t iova
-   2 dma_addr_t *dmap
-   1 void
-   1 unsigned type
-   1 unsigned int id
-   1 unsigned int *idp
-   1 u32 val
-   1 u32 pde
-   1 u32 *pte
-   1 struct tegra_mc *mc
-   1 struct page *pt_page
-   1 struct iommu_domain *dom
-   1 struct device_node *np
-   1 phys_addr_t paddr
-   1 int prot
-   1 enum iommu_cap cap
-   1 dma_addr_t pte_dma
-   1 dma_addr_t dma
-   1 dma_addr_t addr
-   1 const struct tegra_smmu_soc *soc
+\n
+     23 struct tegra_smmu *smmu
+     12 unsigned long iova
+      8 struct tegra_smmu_as *as
+      8 struct device *dev
+      6 struct iommu_domain *domain
+      5 unsigned int swgroup
+      3 unsigned long offset
+      3 unsigned long asid
+      2 void *data
+      2 unsigned int asid
+      2 u32 value
+      2 struct seq_file *s
+      2 struct of_phandle_args *args
+      2 size_t size
+      2 dma_addr_t iova
+      2 dma_addr_t *dmap
+      1 void
+      1 unsigned type
+      1 unsigned int *idp
+      1 unsigned int id
+      1 u32 val
+      1 u32 *pte
+      1 u32 pde
+      1 struct tegra_mc *mc
+      1 struct page *pt_page
+      1 struct iommu_domain *dom
+      1 struct device_node *np
+      1 phys_addr_t paddr
+      1 int prot
+      1 enum iommu_cap cap
+      1 dma_addr_t pte_dma
+      1 dma_addr_t dma
+      1 dma_addr_t addr
+      1 const struct tegra_smmu_soc *soc

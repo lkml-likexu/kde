@@ -1,4 +1,5 @@
 
+\n
 static void __intel_pmu_lbr_enable(bool pmi)
 static void __intel_pmu_lbr_disable(void)
 static void intel_pmu_lbr_reset_32(void)
@@ -37,17 +38,18 @@ __init void intel_pmu_lbr_init_skl(void)
 void __init intel_pmu_lbr_init_atom(void)
 void __init intel_pmu_lbr_init_slm(void)
 void intel_pmu_lbr_init_knl(void)
-  16 void
-   5 struct perf_event *event
-   4 unsigned int idx
-   4 u64 val
-   3 struct cpu_hw_events *cpuc
-   2 struct x86_perf_task_context *task_ctx
-   2 bool pmi
-   1 unsigned long to
-   1 unsigned long from
-   1 unsigned br_sel
-   1 struct perf_event_context *ctx
-   1 int type
-   1 int abort
-   1 bool sched_in
+\n
+     16 void
+      5 struct perf_event *event
+      4 unsigned int idx
+      4 u64 val
+      3 struct cpu_hw_events *cpuc
+      2 struct x86_perf_task_context *task_ctx
+      2 bool pmi
+      1 unsigned long to
+      1 unsigned long from
+      1 unsigned br_sel
+      1 struct perf_event_context *ctx
+      1 int type
+      1 int abort
+      1 bool sched_in

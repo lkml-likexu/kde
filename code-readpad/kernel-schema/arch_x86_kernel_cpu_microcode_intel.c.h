@@ -1,4 +1,5 @@
 
+\n
 static inline bool cpu_signatures_match(unsigned int s1, unsigned int p1, unsigned int s2, unsigned int p2)
 static int find_matching_signature(void *mc, unsigned int csig, int cpf)
 static int has_newer_microcode(void *mc, unsigned int csig, int cpf, int new_rev)
@@ -34,39 +35,40 @@ static int get_ucode_user(void *to, const void *from, size_t n)
 static enum ucode_state request_microcode_user(int cpu, const void __user *buf, size_t size)
 static int __init calc_llc_size_per_core(struct cpuinfo_x86 *c)
 struct microcode_ops * __init init_intel_microcode(void)
-   8 struct ucode_cpu_info *uci
-   7 void
-   4 void *data
-   4 int cpu
-   3 void *mc
-   3 unsigned int size
-   3 size_t size
-   2 void *to
-   2 unsigned int csig
-   2 size_t n
-   2 int cpf
-   2 const void *from
-   1 void *
-   1 unsigned long sig
-   1 unsigned int s2
-   1 unsigned int s1
-   1 unsigned int p2
-   1 unsigned int p1
-   1 unsigned int date
-   1 unsigned int cpu
-   1 u8 *mc
-   1 struct microcode_header_intel *mc_header
-   1 struct device *device
-   1 struct cpuinfo_x86 *c
-   1 struct cpu_signature *csig
-   1 struct cpio_data *cp
-   1 size_t
-   1 int print_err
-   1 int new_rev
-   1 int cpu_num
-   1 int *get_ucode_data
-   1 const void __user *buf
-   1 const void *
-   1 bool save
-   1 bool refresh_fw
-   1 bool early
+\n
+      8 struct ucode_cpu_info *uci
+      7 void
+      4 void *data
+      4 int cpu
+      3 void *mc
+      3 unsigned int size
+      3 size_t size
+      2 void *to
+      2 unsigned int csig
+      2 size_t n
+      2 int cpf
+      2 const void *from
+      1 void *
+      1 unsigned long sig
+      1 unsigned int s2
+      1 unsigned int s1
+      1 unsigned int p2
+      1 unsigned int p1
+      1 unsigned int date
+      1 unsigned int cpu
+      1 u8 *mc
+      1 struct microcode_header_intel *mc_header
+      1 struct device *device
+      1 struct cpu_signature *csig
+      1 struct cpuinfo_x86 *c
+      1 struct cpio_data *cp
+      1 size_t
+      1 int print_err
+      1 int new_rev
+      1 int *get_ucode_data
+      1 int cpu_num
+      1 const void __user *buf
+      1 const void *
+      1 bool save
+      1 bool refresh_fw
+      1 bool early

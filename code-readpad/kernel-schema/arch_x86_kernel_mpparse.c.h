@@ -1,4 +1,5 @@
 
+\n
 static int __init mpf_checksum(unsigned char *mp, int len)
 int __init default_mpc_apic_id(struct mpc_cpu *m)
 static void __init MP_processor_info(struct mpc_cpu *m)
@@ -29,32 +30,33 @@ static int __init update_mptable_setup(char *str)
 static int __initdata alloc_mptable; static int __init parse_alloc_mptable_opt(char *p)
 void __init e820__memblock_alloc_reserved_mpc_new(void)
 static int __init update_mp_table(void)
-   4 struct mpc_table *mpc
-   3 void
-   3 int mpc_default_type
-   3 char *str
-   2 unsigned long mpc_new_phys
-   2 unsigned long mpc_new_length
-   2 unsigned int early
-   2 struct mpf_intel *mpf
-   2 struct mpc_intsrc *m
-   2 struct mpc_cpu *m
-   2 struct mpc_bus *m
-   1 unsigned long physptr
-   1 unsigned long length
-   1 unsigned long base
-   1 unsigned int irq
-   1 unsigned early
-   1 unsigned char *mpt
-   1 unsigned char *mp
-   1 unsigned char **ptr
-   1 struct mpc_lintsrc *m
-   1 struct mpc_ioapic *m
-   1 struct mpc_intsrc *mp_irq
-   1 int size
-   1 int len
-   1 int count
-   1 int *nr_m_spare
-   1 int *count
-   1 char *p
-   1 char *oem
+\n
+      4 struct mpc_table *mpc
+      3 void
+      3 int mpc_default_type
+      3 char *str
+      2 unsigned long mpc_new_phys
+      2 unsigned long mpc_new_length
+      2 unsigned int early
+      2 struct mpf_intel *mpf
+      2 struct mpc_intsrc *m
+      2 struct mpc_cpu *m
+      2 struct mpc_bus *m
+      1 unsigned long physptr
+      1 unsigned long length
+      1 unsigned long base
+      1 unsigned int irq
+      1 unsigned early
+      1 unsigned char **ptr
+      1 unsigned char *mpt
+      1 unsigned char *mp
+      1 struct mpc_lintsrc *m
+      1 struct mpc_ioapic *m
+      1 struct mpc_intsrc *mp_irq
+      1 int size
+      1 int *nr_m_spare
+      1 int len
+      1 int *count
+      1 int count
+      1 char *p
+      1 char *oem

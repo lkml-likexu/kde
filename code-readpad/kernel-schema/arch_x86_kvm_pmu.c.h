@@ -2,6 +2,7 @@
 EXPORT_SYMBOL_GPL(reprogram_gp_counter);
 EXPORT_SYMBOL_GPL(reprogram_fixed_counter);
 EXPORT_SYMBOL_GPL(reprogram_counter);
+\n
 static void kvm_pmi_trigger_fn(struct irq_work *irq_work)
 static void kvm_perf_overflow(struct perf_event *perf_event, struct perf_sample_data *data, struct pt_regs *regs)
 static void kvm_perf_overflow_intr(struct perf_event *perf_event, struct perf_sample_data *data, struct pt_regs *regs)
@@ -20,31 +21,34 @@ int kvm_pmu_get_msr(struct kvm_vcpu *vcpu, u32 msr, u64 *data)
 int kvm_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 void kvm_pmu_refresh(struct kvm_vcpu *vcpu)
 void kvm_pmu_reset(struct kvm_vcpu *vcpu)
+void kvm_pmu_sched_in(struct kvm_vcpu *vcpu)
+void kvm_pmu_sched_out(struct kvm_vcpu *vcpu)
 void kvm_pmu_init(struct kvm_vcpu *vcpu)
 void kvm_pmu_destroy(struct kvm_vcpu *vcpu)
-  12 struct kvm_vcpu *vcpu
-   3 unsigned idx
-   3 u64 *data
-   3 struct kvm_pmc *pmc
-   2 u32 msr
-   2 struct pt_regs *regs
-   2 struct perf_sample_data *data
-   2 struct perf_event *perf_event
-   1 unsigned config
-   1 u8 ctrl
-   1 u64 eventsel
-   1 u32 type
-   1 u32 pmc_idx
-   1 struct msr_data *msr_info
-   1 struct kvm_pmu *pmu
-   1 struct irq_work *irq_work
-   1 reprogram_gp_counter
-   1 reprogram_fixed_counter
-   1 reprogram_counter
-   1 int pmc_idx
-   1 int idx
-   1 bool intr
-   1 bool in_tx_cp
-   1 bool in_tx
-   1 bool exclude_user
-   1 bool exclude_kernel
+\n
+     14 struct kvm_vcpu *vcpu
+      3 unsigned idx
+      3 u64 *data
+      3 struct kvm_pmc *pmc
+      2 u32 msr
+      2 struct pt_regs *regs
+      2 struct perf_sample_data *data
+      2 struct perf_event *perf_event
+      1 unsigned config
+      1 u8 ctrl
+      1 u64 eventsel
+      1 u32 type
+      1 u32 pmc_idx
+      1 struct msr_data *msr_info
+      1 struct kvm_pmu *pmu
+      1 struct irq_work *irq_work
+      1 reprogram_gp_counter
+      1 reprogram_fixed_counter
+      1 reprogram_counter
+      1 int pmc_idx
+      1 int idx
+      1 bool in_tx_cp
+      1 bool in_tx
+      1 bool intr
+      1 bool exclude_user
+      1 bool exclude_kernel

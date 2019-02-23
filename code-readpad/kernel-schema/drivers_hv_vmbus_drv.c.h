@@ -3,6 +3,7 @@ EXPORT_SYMBOL_GPL(__vmbus_driver_register);
 EXPORT_SYMBOL_GPL(vmbus_driver_unregister);
 EXPORT_SYMBOL_GPL(vmbus_allocate_mmio);
 EXPORT_SYMBOL_GPL(vmbus_free_mmio);
+\n
 static int hyperv_panic_event(struct notifier_block *nb, unsigned long val, void *args)
 static int hyperv_die_event(struct notifier_block *nb, unsigned long val, void *args)
 static int vmbus_exists(void)
@@ -94,58 +95,59 @@ static void hv_kexec_handler(void)
 static void hv_crash_handler(struct pt_regs *regs)
 static int __init hv_acpi_init(void)
 static void __exit vmbus_exit(void)
-  39 char *buf
-  28 struct device *dev
-  25 struct device_attribute *dev_attr
-  15 const struct vmbus_channel *channel
-   7 void
-   4 struct vmbus_channel *channel
-   4 struct hv_driver *drv
-   3 struct device_driver *driver
-   3 struct device_attribute *attr
-   3 struct device *device
-   3 struct device *child_device
-   3 size_t count
-   3 const char *buf
-   2 void *args
-   2 unsigned long val
-   2 struct notifier_block *nb
-   2 struct kobject *kobj
-   2 struct hv_per_cpu_context *hv_cpu
-   2 struct hv_driver *hv_driver
-   2 struct hv_device *device_obj
-   2 struct hv_device *dev
-   2 struct acpi_device *device
-   2 resource_size_t size
-   2 const uuid_le *guid
-   2 const struct hv_monitor_page *monitor_page
-   1 void *ctx
-   1 vmbus_free_mmio
-   1 vmbus_driver_unregister
-   1 vmbus_allocate_mmio
-   1 uuid_le *guid
-   1 unsigned long data
-   1 struct work_struct *work
-   1 struct resource **new
-   1 struct pt_regs *regs
-   1 struct module *owner
-   1 struct kobj_uevent_env *env
-   1 struct kmsg_dumper *dumper
-   1 struct hv_monitor_page *monitor_page
-   1 struct hv_message *msg
-   1 struct hv_device *hv_dev
-   1 struct hv_device *child_device_obj
-   1 struct attribute *attr
-   1 struct acpi_resource *res
-   1 sizeofstruct hv_vmbus_device_id *
-   1 resource_size_t start
-   1 resource_size_t min
-   1 resource_size_t max
-   1 resource_size_t align
-   1 enum kmsg_dump_reason reason
-   1 const uuid_le *type
-   1 const uuid_le *instance
-   1 const char *mod_name
-   1 char *alias_name
-   1 bool fb_overlap_ok
-   1 __vmbus_driver_register
+\n
+     39 char *buf
+     28 struct device *dev
+     25 struct device_attribute *dev_attr
+     15 const struct vmbus_channel *channel
+      7 void
+      4 struct vmbus_channel *channel
+      4 struct hv_driver *drv
+      3 struct device_driver *driver
+      3 struct device *device
+      3 struct device *child_device
+      3 struct device_attribute *attr
+      3 size_t count
+      3 const char *buf
+      2 void *args
+      2 unsigned long val
+      2 struct notifier_block *nb
+      2 struct kobject *kobj
+      2 struct hv_per_cpu_context *hv_cpu
+      2 struct hv_driver *hv_driver
+      2 struct hv_device *device_obj
+      2 struct hv_device *dev
+      2 struct acpi_device *device
+      2 resource_size_t size
+      2 const uuid_le *guid
+      2 const struct hv_monitor_page *monitor_page
+      1 void *ctx
+      1 vmbus_free_mmio
+      1 vmbus_driver_unregister
+      1 __vmbus_driver_register
+      1 vmbus_allocate_mmio
+      1 uuid_le *guid
+      1 unsigned long data
+      1 struct work_struct *work
+      1 struct resource **new
+      1 struct pt_regs *regs
+      1 struct module *owner
+      1 struct kobj_uevent_env *env
+      1 struct kmsg_dumper *dumper
+      1 struct hv_monitor_page *monitor_page
+      1 struct hv_message *msg
+      1 struct hv_device *hv_dev
+      1 struct hv_device *child_device_obj
+      1 struct attribute *attr
+      1 struct acpi_resource *res
+      1 sizeofstruct hv_vmbus_device_id *
+      1 resource_size_t start
+      1 resource_size_t min
+      1 resource_size_t max
+      1 resource_size_t align
+      1 enum kmsg_dump_reason reason
+      1 const uuid_le *type
+      1 const uuid_le *instance
+      1 const char *mod_name
+      1 char *alias_name
+      1 bool fb_overlap_ok

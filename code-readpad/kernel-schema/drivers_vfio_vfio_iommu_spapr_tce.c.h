@@ -1,11 +1,12 @@
 
+\n
 static long try_increment_locked_vm(struct mm_struct *mm, long npages)
 static void decrement_locked_vm(struct mm_struct *mm, long npages)
 static long tce_iommu_mm_set(struct tce_container *container)
 static long tce_iommu_prereg_free(struct tce_container *container, struct tce_iommu_prereg *tcemem)
 static long tce_iommu_unregister_pages(struct tce_container *container, __u64 vaddr, __u64 size)
 static long tce_iommu_register_pages(struct tce_container *container, __u64 vaddr, __u64 size)
-static bool tce_page_is_contained(struct page *page, unsigned page_shift)
+static bool tce_page_is_contained(struct mm_struct *mm, unsigned long hpa, unsigned int page_shift)
 static inline bool tce_groups_attached(struct tce_container *container)
 static long tce_iommu_find_table(struct tce_container *container, phys_addr_t ioba, struct iommu_table **ptbl)
 static int tce_iommu_find_free_table(struct tce_container *container)
@@ -34,35 +35,35 @@ static int tce_iommu_attach_group(void *iommu_data, struct iommu_group *iommu_gr
 static void tce_iommu_detach_group(void *iommu_data, struct iommu_group *iommu_group)
 static int __init tce_iommu_init(void)
 static void __exit tce_iommu_cleanup(void)
-  24 struct tce_container *container
-   5 struct iommu_table_group *table_group
-   5 struct iommu_table *tbl
-   4 void *iommu_data
-   4 unsigned long tce
-   4 unsigned long entry
-   3 unsigned long pages
-   2 void
-   2 unsigned long arg
-   2 struct mm_struct *mm
-   2 struct iommu_table **ptbl
-   2 struct iommu_group *iommu_group
-   2 long npages
-   2 enum dma_data_direction direction
-   2 __u64 window_size
-   2 __u64 vaddr
-   2 __u64 size
-   2 __u32 page_shift
-   2 __u32 levels
-   1 unsigned page_shift
-   1 unsigned long shift
-   1 unsigned long hpa
-   1 unsigned long *phpa
-   1 unsigned long *hpa
-   1 unsigned int cmd
-   1 struct tce_iommu_prereg *tcemem
-   1 struct page *page
-   1 struct mm_iommu_table_group_mem_t **pmem
-   1 phys_addr_t ioba
-   1 int num
-   1 __u64 start_addr
-   1 __u64 *start_addr
+\n
+     24 struct tce_container *container
+      5 struct iommu_table *tbl
+      5 struct iommu_table_group *table_group
+      4 void *iommu_data
+      4 unsigned long tce
+      4 unsigned long entry
+      3 unsigned long pages
+      3 struct mm_struct *mm
+      2 void
+      2 unsigned long hpa
+      2 unsigned long arg
+      2 __u64 window_size
+      2 __u64 vaddr
+      2 __u64 size
+      2 __u32 page_shift
+      2 __u32 levels
+      2 struct iommu_table **ptbl
+      2 struct iommu_group *iommu_group
+      2 long npages
+      2 enum dma_data_direction direction
+      1 unsigned long shift
+      1 unsigned long *phpa
+      1 unsigned long *hpa
+      1 unsigned int page_shift
+      1 unsigned int cmd
+      1 __u64 start_addr
+      1 __u64 *start_addr
+      1 struct tce_iommu_prereg *tcemem
+      1 struct mm_iommu_table_group_mem_t **pmem
+      1 phys_addr_t ioba
+      1 int num

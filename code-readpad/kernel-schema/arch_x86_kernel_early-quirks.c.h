@@ -1,4 +1,5 @@
 
+\n
 static void __init fix_hypertransport_config(int num, int slot, int func)
 static void __init via_bugs(intnum, int slot, int func)
 static int __init nvidia_hpet_check(struct acpi_table_header *header)
@@ -37,16 +38,17 @@ static void __init apple_airport_reset(int bus, int slot, int func)
 static int __init check_dev_quirk(int num, int slot, int func)
 static void __init early_pci_scan_bus(int bus)
 void __init early_quirks(void)
-  27 int slot
-  27 int func
-  25 int num
-   6 void
-   6 resource_size_t stolen_size
-   2 int bus
-   1 struct acpi_table_header *header
-   1 rev
-   1 intnum
-   1 const struct intel_early_ops *early_ops
-   1 KERN_INFO "SB600 revision 0x%x\n"
-   1 KERN_INFO "Ignoring ACPI timer override.\n"
-   1 KERN_INFO "If you got timer trouble ""try acpi_use_timer_override\n"
+\n
+     27 int slot
+     27 int func
+     25 int num
+      6 void
+      6 resource_size_t stolen_size
+      2 int bus
+      1 struct acpi_table_header *header
+      1 rev
+      1 KERN_INFO "SB600 revision 0x%x\n"
+      1 KERN_INFO "Ignoring ACPI timer override.\n"
+      1 KERN_INFO "If you got timer trouble ""try acpi_use_timer_override\n"
+      1 intnum
+      1 const struct intel_early_ops *early_ops

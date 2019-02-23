@@ -1,4 +1,5 @@
 
+\n
 static bool ir_pre_enabled(struct intel_iommu *iommu)
 static void clear_ir_pre_enabled(struct intel_iommu *iommu)
 static void init_ir_status(struct intel_iommu *iommu)
@@ -48,47 +49,48 @@ static int intel_irq_remapping_activate(struct irq_domain *domain, struct irq_da
 static void intel_irq_remapping_deactivate(struct irq_domain *domain, struct irq_data *irq_data)
 static int dmar_ir_add(struct dmar_drhd_unit *dmaru, struct intel_iommu *iommu)
 int dmar_ir_hotplug(struct dmar_drhd_unit *dmaru, bool insert)
-  16 struct intel_iommu *iommu
-   8 void
-   5 struct irte *irte
-   5 struct irq_domain *domain
-   3 unsigned int virq
-   3 unsigned int nr_irqs
-   3 struct irq_data *irq_data
-   3 struct irq_alloc_info *info
-   3 struct irq_2_iommu *irq_iommu
-   2 struct pci_dev *dev
-   2 struct irq_data *data
-   2 struct dmar_drhd_unit *dmaru
-   2 struct acpi_dmar_hardware_unit *drhd
-   2 struct acpi_dmar_device_scope *scope
-   2 int index
-   2 int apic
-   2 bool force
-   1 void *opaque
-   1 void *info
-   1 void *arg
-   1 unsigned int svt
-   1 unsigned int sq
-   1 unsigned int sid
-   1 unsigned int dest
-   1 u8 id
-   1 u8 hpet_id
-   1 u16 count
-   1 u16 alias
-   1 struct pci_dev *pdev
-   1 struct msi_msg *msg
-   1 struct irte *irte_modified
-   1 struct irq_data *irqd
-   1 struct irq_cfg *irq_cfg
-   1 struct intel_ir_data *data
-   1 struct acpi_dmar_header *header
-   1 int vector
-   1 int sub_handle
-   1 int mode
-   1 int mask
-   1 int irq
-   1 int eim
-   1 const struct cpumask *mask
-   1 bool reserve
-   1 bool insert
+\n
+     16 struct intel_iommu *iommu
+      8 void
+      5 struct irte *irte
+      5 struct irq_domain *domain
+      3 unsigned int virq
+      3 unsigned int nr_irqs
+      3 struct irq_data *irq_data
+      3 struct irq_alloc_info *info
+      3 struct irq_2_iommu *irq_iommu
+      2 struct pci_dev *dev
+      2 struct irq_data *data
+      2 struct dmar_drhd_unit *dmaru
+      2 struct acpi_dmar_hardware_unit *drhd
+      2 struct acpi_dmar_device_scope *scope
+      2 int index
+      2 int apic
+      2 bool force
+      1 void *opaque
+      1 void *info
+      1 void *arg
+      1 unsigned int svt
+      1 unsigned int sq
+      1 unsigned int sid
+      1 unsigned int dest
+      1 u8 id
+      1 u8 hpet_id
+      1 u16 count
+      1 u16 alias
+      1 struct pci_dev *pdev
+      1 struct msi_msg *msg
+      1 struct irte *irte_modified
+      1 struct irq_data *irqd
+      1 struct irq_cfg *irq_cfg
+      1 struct intel_ir_data *data
+      1 struct acpi_dmar_header *header
+      1 int vector
+      1 int sub_handle
+      1 int mode
+      1 int mask
+      1 int irq
+      1 int eim
+      1 const struct cpumask *mask
+      1 bool reserve
+      1 bool insert

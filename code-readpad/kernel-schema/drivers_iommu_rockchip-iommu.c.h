@@ -1,4 +1,5 @@
 
+\n
 static inline void rk_table_flush(struct rk_iommu_domain *dom, dma_addr_t dma, unsigned int count)
 static struct rk_iommu_domain *to_rk_domain(struct iommu_domain *dom)
 static inline phys_addr_t rk_dte_pt_address(u32 dte)
@@ -52,36 +53,37 @@ static void rk_iommu_shutdown(struct platform_device *pdev)
 static int __maybe_unused rk_iommu_suspend(struct device *dev)
 static int __maybe_unused rk_iommu_resume(struct device *dev)
 static int __init rk_iommu_init(void)
-  13 struct rk_iommu *iommu
-   9 struct device *dev
-   9 dma_addr_t iova
-   7 size_t size
-   6 struct iommu_domain *domain
-   5 struct rk_iommu_domain *rk_domain
-   4 void __iomem *base
-   3 u32 pte
-   3 u32 command
-   3 int prot
-   2 unsigned long _iova
-   2 u32 offset
-   2 u32 dte
-   2 u32 *pte_addr
-   2 struct platform_device *pdev
-   2 phys_addr_t paddr
-   2 dma_addr_t pte_dma
-   1 void *dev_id
-   1 void
-   1 unsigned type
-   1 unsigned int count
-   1 u32 value
-   1 struct rk_iommu_domain *dom
-   1 struct of_phandle_args *args
-   1 struct iommu_domain *dom
-   1 phys_addr_t page
-   1 int irq
-   1 int index
-   1 dma_addr_t pt_dma
-   1 dma_addr_t iova_start
-   1 dma_addr_t dma
-   1 command
-   1 base + RK_MMU_COMMAND
+\n
+     13 struct rk_iommu *iommu
+      9 struct device *dev
+      9 dma_addr_t iova
+      7 size_t size
+      6 struct iommu_domain *domain
+      5 struct rk_iommu_domain *rk_domain
+      4 void __iomem *base
+      3 u32 pte
+      3 u32 command
+      3 int prot
+      2 unsigned long _iova
+      2 u32 *pte_addr
+      2 u32 offset
+      2 u32 dte
+      2 struct platform_device *pdev
+      2 phys_addr_t paddr
+      2 dma_addr_t pte_dma
+      1 void *dev_id
+      1 void
+      1 unsigned type
+      1 unsigned int count
+      1 u32 value
+      1 struct rk_iommu_domain *dom
+      1 struct of_phandle_args *args
+      1 struct iommu_domain *dom
+      1 phys_addr_t page
+      1 int irq
+      1 int index
+      1 dma_addr_t pt_dma
+      1 dma_addr_t iova_start
+      1 dma_addr_t dma
+      1 command
+      1 base + RK_MMU_COMMAND

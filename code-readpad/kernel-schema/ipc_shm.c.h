@@ -1,4 +1,5 @@
 
+\n
 struct shmid_kernelvoid shm_init_ns(struct ipc_namespace *ns)
 static void do_shm_rmid(struct ipc_namespace *ns, struct kern_ipc_perm *ipcp)
 void shm_exit_ns(struct ipc_namespace *ns)
@@ -57,76 +58,77 @@ COMPAT_SYSCALL_DEFINE3(shmat, int, shmid, compat_uptr_t, shmaddr, int, shmflg)
 long ksys_shmdt(char __user *shmaddr)
 SYSCALL_DEFINE1(shmdt, char __user *, shmaddr)
 static int sysvipc_shm_proc_show(struct seq_file *s, void *it)
-  17 struct ipc_namespace *ns
-   9 int
-   8 struct vm_area_struct *vma
-   6 void __user *buf
-   6 struct file *file
-   6 int version
-   6 int shmid
-   5 int cmd
-   4 shmid
-   4 int id
-   3 unsigned long addr
-   3 struct shmid_kernel *shp
-   3 shmflg
-   3 shmaddr
-   2 void
-   2 struct shminfo64 *in
-   2 struct shmid64_ds *out
-   2 struct shmid64_ds *in
-   2 struct kern_ipc_perm *ipcp
-   2 struct ipc_params *params
-   2 shmctl
-   2 shmat
-   2 int shmflg
-   2 cmd
-   2 char __user *shmaddr
-   2 char __user *
-   1 void __user *uptr
-   1 void __user *
-   1 void *p
-   1 void *it
-   1 void *data
-   1 uptr
-   1 unsigned long shmlba
-   1 unsigned long pgoff
-   1 unsigned long len
-   1 unsigned long flags
-   1 unsigned long *swp_add
-   1 unsigned long *swp
-   1 unsigned long *rss_add
-   1 unsigned long *rss
-   1 ulong *raddr
-   1 struct vm_fault *vmf
-   1 struct task_struct *task
-   1 struct shminfo64 *shminfo
-   1 struct shmid_kernel *s
-   1 struct shmid_kernel *ipcp
-   1 struct shmid_ds __user *buf
-   1 struct shmid_ds __user *
-   1 struct shmid64_ds *tbuf
-   1 struct shmid64_ds *shmid64
-   1 struct shm_info *shm_info
-   1 struct shm_info *ip
-   1 struct seq_file *s
-   1 struct rcu_head *head
-   1 struct mempolicy *new
-   1 struct inode *ino
-   1 struct compat_shm_info __user *uip
-   1 size_t size
-   1 size_t
-   1 size
-   1 shmget
-   1 shmdt
-   1 loff_t start
-   1 loff_t offset
-   1 loff_t len
-   1 loff_t end
-   1 key_t key
-   1 key_t
-   1 key
-   1 int mode
-   1 int datasync
-   1 compat_uptr_t
-   1 buf
+\n
+     17 struct ipc_namespace *ns
+      9 int
+      8 struct vm_area_struct *vma
+      6 void __user *buf
+      6 struct file *file
+      6 int version
+      6 int shmid
+      5 int cmd
+      4 shmid
+      4 int id
+      3 unsigned long addr
+      3 struct shmid_kernel *shp
+      3 shmflg
+      3 shmaddr
+      2 void
+      2 struct shminfo64 *in
+      2 struct shmid64_ds *out
+      2 struct shmid64_ds *in
+      2 struct kern_ipc_perm *ipcp
+      2 struct ipc_params *params
+      2 shmctl
+      2 shmat
+      2 int shmflg
+      2 cmd
+      2 char __user *shmaddr
+      2 char __user *
+      1 void __user *uptr
+      1 void __user *
+      1 void *p
+      1 void *it
+      1 void *data
+      1 uptr
+      1 unsigned long *swp_add
+      1 unsigned long *swp
+      1 unsigned long shmlba
+      1 unsigned long *rss_add
+      1 unsigned long *rss
+      1 unsigned long pgoff
+      1 unsigned long len
+      1 unsigned long flags
+      1 ulong *raddr
+      1 struct vm_fault *vmf
+      1 struct task_struct *task
+      1 struct shm_info *shm_info
+      1 struct shm_info *ip
+      1 struct shminfo64 *shminfo
+      1 struct shmid_kernel *s
+      1 struct shmid_kernel *ipcp
+      1 struct shmid_ds __user *buf
+      1 struct shmid_ds __user *
+      1 struct shmid64_ds *tbuf
+      1 struct shmid64_ds *shmid64
+      1 struct seq_file *s
+      1 struct rcu_head *head
+      1 struct mempolicy *new
+      1 struct inode *ino
+      1 struct compat_shm_info __user *uip
+      1 size_t size
+      1 size_t
+      1 size
+      1 shmget
+      1 shmdt
+      1 loff_t start
+      1 loff_t offset
+      1 loff_t len
+      1 loff_t end
+      1 key_t key
+      1 key_t
+      1 key
+      1 int mode
+      1 int datasync
+      1 compat_uptr_t
+      1 buf

@@ -1,4 +1,5 @@
 
+\n
 static void __mmu_spte_walk(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp, inspect_spte_fn fn, int level)
 static void mmu_spte_walk(struct kvm_vcpu *vcpu, inspect_spte_fn fn)
 static void walk_all_active_sps(struct kvm *kvm, sp_handler fn)
@@ -17,14 +18,15 @@ static inline void kvm_mmu_audit(struct kvm_vcpu *vcpu, int point)
 static void mmu_audit_enable(void)
 static void mmu_audit_disable(void)
 static int mmu_audit_set(const char *val, const struct kernel_param *kp)
-   9 struct kvm_vcpu *vcpu
-   6 struct kvm *kvm
-   5 u64 *sptep
-   5 int level
-   4 struct kvm_mmu_page *sp
-   2 void
-   2 int point
-   2 inspect_spte_fn fn
-   1 sp_handler fn
-   1 const struct kernel_param *kp
-   1 const char *val
+\n
+      9 struct kvm_vcpu *vcpu
+      6 struct kvm *kvm
+      5 u64 *sptep
+      5 int level
+      4 struct kvm_mmu_page *sp
+      2 void
+      2 int point
+      2 inspect_spte_fn fn
+      1 sp_handler fn
+      1 const struct kernel_param *kp
+      1 const char *val

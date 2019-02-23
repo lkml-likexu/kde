@@ -37,8 +37,11 @@ EXPORT_SYMBOL_GPL(iommu_domain_set_attr);
 EXPORT_SYMBOL_GPL(iommu_fwspec_init);
 EXPORT_SYMBOL_GPL(iommu_fwspec_free);
 EXPORT_SYMBOL_GPL(iommu_fwspec_add_ids);
+\n
 int iommu_device_register(struct iommu_device *iommu)
 void iommu_device_unregister(struct iommu_device *iommu)
+int iommu_probe_device(struct device *dev)
+void iommu_release_device(struct device *dev)
 static int __init iommu_set_def_domain_type(char *str)
 static int __init iommu_dma_setup(char *str)
 static ssize_t iommu_group_attr_show(struct kobject *kobj, struct attribute *__attr, char *buf)
@@ -127,99 +130,100 @@ const struct iommu_ops *iommu_ops_from_fwnode(struct fwnode_handle *fwnode)
 int iommu_fwspec_init(struct device *dev, struct fwnode_handle *iommu_fwnode, const struct iommu_ops *ops)
 void iommu_fwspec_free(struct device *dev)
 int iommu_fwspec_add_ids(struct device *dev, u32 *ids, int num_ids)
-  25 struct device *dev
-  24 struct iommu_group *group
-  22 struct iommu_domain *domain
-   9 void *data
-   6 unsigned long iova
-   6 struct bus_type *bus
-   5 size_t size
-   4 int prot
-   4 char *buf
-   3 struct pci_dev *pdev
-   3 struct notifier_block *nb
-   3 struct kobject *kobj
-   3 const struct iommu_ops *ops
-   2 void *iommu_data
-   2 void *
-   2 void
-   2 unsigned long *devfns
-   2 u32 wnd_nr
-   2 struct list_head *list
-   2 struct iommu_group_attribute *attr
-   2 struct iommu_device *iommu
-   2 struct device *
-   2 struct attribute *__attr
-   2 phys_addr_t paddr
-   2 int *fn
-   2 enum iommu_attr attr
-   2 char *str
-   1 void *token
-   1 void *release
-   1 void *opaque
-   1 unsigned type
-   1 unsigned long addr_merge
-   1 unsigned long action
-   1 unsigned int nents
-   1 u64 size
-   1 u32 *ids
-   1 u16 alias
-   1 struct scatterlist *sg
-   1 struct list_head *regions
-   1 struct list_head *head
-   1 struct list_head *group_resv_regions
-   1 struct list_head *dev_resv_regions
-   1 struct iommu_resv_region *new
-   1 struct fwnode_handle *iommu_fwnode
-   1 struct fwnode_handle *fwnode
-   1 size_t length
-   1 size_t count
-   1 report_iommu_fault
-   1 phys_addr_t start
-   1 iommu_unmap_fast
-   1 iommu_unmap
-   1 iommu_set_fault_handler
-   1 iommu_present
-   1 iommu_map_sg
-   1 iommu_map
-   1 iommu_iova_to_phys
-   1 iommu_group_unregister_notifier
-   1 iommu_group_set_name
-   1 iommu_group_set_iommudata
-   1 iommu_group_remove_device
-   1 iommu_group_register_notifier
-   1 iommu_group_put
-   1 iommu_group_id
-   1 iommu_group_get_iommudata
-   1 iommu_group_get_by_id
-   1 iommu_group_get
-   1 iommu_group_for_each_dev
-   1 iommu_group_alloc
-   1 iommu_group_add_device
-   1 iommu_get_group_resv_regions
-   1 iommu_get_domain_for_dev
-   1 iommu_fwspec_init
-   1 iommu_fwspec_free
-   1 iommu_fwspec_add_ids
-   1 iommu_fault_handler_t handler
-   1 iommu_domain_window_enable
-   1 iommu_domain_window_disable
-   1 iommu_domain_set_attr
-   1 iommu_domain_get_attr
-   1 iommu_domain_free
-   1 iommu_domain_alloc
-   1 iommu_detach_group
-   1 iommu_detach_device
-   1 iommu_capable
-   1 iommu_attach_group
-   1 iommu_attach_device
-   1 int num_ids
-   1 int id
-   1 int flags
-   1 enum iommu_resv_type type
-   1 enum iommu_cap cap
-   1 dma_addr_t iova
-   1 const char *name
-   1 const char *buf
-   1 bus_set_iommu
-   1 bool sync
+\n
+     27 struct device *dev
+     24 struct iommu_group *group
+     22 struct iommu_domain *domain
+      9 void *data
+      6 unsigned long iova
+      6 struct bus_type *bus
+      5 size_t size
+      4 int prot
+      4 char *buf
+      3 struct pci_dev *pdev
+      3 struct notifier_block *nb
+      3 struct kobject *kobj
+      3 const struct iommu_ops *ops
+      2 void *iommu_data
+      2 void *
+      2 void
+      2 unsigned long *devfns
+      2 u32 wnd_nr
+      2 struct list_head *list
+      2 struct iommu_group_attribute *attr
+      2 struct iommu_device *iommu
+      2 struct device *
+      2 struct attribute *__attr
+      2 phys_addr_t paddr
+      2 int *fn
+      2 enum iommu_attr attr
+      2 char *str
+      1 void *token
+      1 void *release
+      1 void *opaque
+      1 unsigned type
+      1 unsigned long addr_merge
+      1 unsigned long action
+      1 unsigned int nents
+      1 u64 size
+      1 u32 *ids
+      1 u16 alias
+      1 struct scatterlist *sg
+      1 struct list_head *regions
+      1 struct list_head *head
+      1 struct list_head *group_resv_regions
+      1 struct list_head *dev_resv_regions
+      1 struct iommu_resv_region *new
+      1 struct fwnode_handle *iommu_fwnode
+      1 struct fwnode_handle *fwnode
+      1 size_t length
+      1 size_t count
+      1 report_iommu_fault
+      1 phys_addr_t start
+      1 iommu_unmap_fast
+      1 iommu_unmap
+      1 iommu_set_fault_handler
+      1 iommu_present
+      1 iommu_map_sg
+      1 iommu_map
+      1 iommu_iova_to_phys
+      1 iommu_group_unregister_notifier
+      1 iommu_group_set_name
+      1 iommu_group_set_iommudata
+      1 iommu_group_remove_device
+      1 iommu_group_register_notifier
+      1 iommu_group_put
+      1 iommu_group_id
+      1 iommu_group_get_iommudata
+      1 iommu_group_get_by_id
+      1 iommu_group_get
+      1 iommu_group_for_each_dev
+      1 iommu_group_alloc
+      1 iommu_group_add_device
+      1 iommu_get_group_resv_regions
+      1 iommu_get_domain_for_dev
+      1 iommu_fwspec_init
+      1 iommu_fwspec_free
+      1 iommu_fwspec_add_ids
+      1 iommu_fault_handler_t handler
+      1 iommu_domain_window_enable
+      1 iommu_domain_window_disable
+      1 iommu_domain_set_attr
+      1 iommu_domain_get_attr
+      1 iommu_domain_free
+      1 iommu_domain_alloc
+      1 iommu_detach_group
+      1 iommu_detach_device
+      1 iommu_capable
+      1 iommu_attach_group
+      1 iommu_attach_device
+      1 int num_ids
+      1 int id
+      1 int flags
+      1 enum iommu_resv_type type
+      1 enum iommu_cap cap
+      1 dma_addr_t iova
+      1 const char *name
+      1 const char *buf
+      1 bus_set_iommu
+      1 bool sync

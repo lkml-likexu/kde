@@ -1,4 +1,5 @@
 
+\n
 static bool test_aperfmperf(int idx)
 static bool test_ptsc(int idx)
 static bool test_irperf(int idx)
@@ -12,7 +13,8 @@ static void msr_event_stop(struct perf_event *event, int flags)
 static void msr_event_del(struct perf_event *event, int flags)
 static int msr_event_add(struct perf_event *event, int flags)
 static int __init msr_init(void)
-   7 struct perf_event *event
-   5 int idx
-   4 int flags
-   1 void
+\n
+      7 struct perf_event *event
+      5 int idx
+      4 int flags
+      1 void

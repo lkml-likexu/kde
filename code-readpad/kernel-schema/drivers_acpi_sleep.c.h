@@ -1,5 +1,6 @@
 
 EXPORT_SYMBOL_GPL(acpi_target_system_state);
+\n
 static void acpi_sleep_tts_switch(u32 acpi_state)
 static int tts_notify_reboot(struct notifier_block *this, unsigned long code, void *x)
 static int acpi_sleep_prepare(u32 acpi_state)
@@ -52,17 +53,18 @@ static void acpi_sleep_hibernate_setup(void)
 static void acpi_power_off_prepare(void)
 static void acpi_power_off(void)
 int __init acpi_sleep_init(void)
-  36 void
-   4 suspend_state_t pm_state
-   4 const struct dmi_system_id *d
-   3 u32 acpi_state
-   1 void *x
-   1 void *data
-   1 unsigned long code
-   1 unsigned int func
-   1 u8 sleep_state
-   1 struct notifier_block *this
-   1 struct device *dev
-   1 struct acpi_device *adev
-   1 const struct acpi_device_id *not_used
-   1 acpi_target_system_state
+\n
+     36 void
+      4 suspend_state_t pm_state
+      4 const struct dmi_system_id *d
+      3 u32 acpi_state
+      1 void *x
+      1 void *data
+      1 unsigned long code
+      1 unsigned int func
+      1 u8 sleep_state
+      1 struct notifier_block *this
+      1 struct device *dev
+      1 struct acpi_device *adev
+      1 const struct acpi_device_id *not_used
+      1 acpi_target_system_state

@@ -9,6 +9,7 @@ EXPORT_SYMBOL_GPL(irq_generic_chip_ops);
 EXPORT_SYMBOL_GPL(irq_setup_generic_chip);
 EXPORT_SYMBOL_GPL(irq_setup_alt_chip);
 EXPORT_SYMBOL_GPL(irq_remove_generic_chip);
+\n
 void irq_gc_noop(struct irq_data *d)
 void irq_gc_mask_disable_reg(struct irq_data *d)
 void irq_gc_mask_set_bit(struct irq_data *d)
@@ -37,35 +38,36 @@ static int irq_gc_suspend(void)
 static void irq_gc_resume(void)
 static void irq_gc_shutdown(void)
 static int __init irq_gc_init_ops(void)
-  11 struct irq_data *d
-   5 struct irq_domain *d
-   5 struct irq_chip_generic *gc
-   4 void
-   3 unsigned int set
-   3 unsigned int clr
-   3 irq_flow_handler_t handler
-   3 int num_ct
-   3 const char *name
-   2 void __iomem *reg_base
-   2 void __iomem *addr
-   2 unsigned int virq
-   2 unsigned int irq_base
-   2 unsigned int hw_irq
-   2 u32 msk
-   2 enum irq_gc_flags flags
-   1 unsigned int type
-   1 unsigned int on
-   1 u32 val
-   1 irq_setup_generic_chip
-   1 irq_setup_alt_chip
-   1 irq_remove_generic_chip
-   1 irq_hw_number_t hw_irq
-   1 irq_get_domain_generic_chip
-   1 irq_generic_chip_ops
-   1 irq_gc_mask_set_bit
-   1 irq_gc_mask_clr_bit
-   1 irq_gc_ack_set_bit
-   1 irq_alloc_generic_chip
-   1 int irqs_per_chip
-   1 enum irq_gc_flags gcflags
-   1 __irq_alloc_domain_generic_chips
+\n
+     11 struct irq_data *d
+      5 struct irq_domain *d
+      5 struct irq_chip_generic *gc
+      4 void
+      3 unsigned int set
+      3 unsigned int clr
+      3 irq_flow_handler_t handler
+      3 int num_ct
+      3 const char *name
+      2 void __iomem *reg_base
+      2 void __iomem *addr
+      2 unsigned int virq
+      2 unsigned int irq_base
+      2 unsigned int hw_irq
+      2 u32 msk
+      2 enum irq_gc_flags flags
+      1 unsigned int type
+      1 unsigned int on
+      1 u32 val
+      1 irq_setup_generic_chip
+      1 irq_setup_alt_chip
+      1 irq_remove_generic_chip
+      1 irq_hw_number_t hw_irq
+      1 irq_get_domain_generic_chip
+      1 irq_generic_chip_ops
+      1 irq_gc_mask_set_bit
+      1 irq_gc_mask_clr_bit
+      1 irq_gc_ack_set_bit
+      1 irq_alloc_generic_chip
+      1 __irq_alloc_domain_generic_chips
+      1 int irqs_per_chip
+      1 enum irq_gc_flags gcflags

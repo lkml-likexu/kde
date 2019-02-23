@@ -1,4 +1,5 @@
 
+\n
 static ulong reg_read(struct x86_emulate_ctxt *ctxt, unsigned nr)
 static ulong *reg_write(struct x86_emulate_ctxt *ctxt, unsigned nr)
 static ulong *reg_rmw(struct x86_emulate_ctxt *ctxt, unsigned nr)
@@ -210,96 +211,97 @@ int x86_emulate_insn(struct x86_emulate_ctxt *ctxt)
 void emulator_invalidate_register_cache(struct x86_emulate_ctxt *ctxt)
 void emulator_writeback_register_cache(struct x86_emulate_ctxt *ctxt)
 bool emulator_can_use_gpa(struct x86_emulate_ctxt *ctxt)
- 197 struct x86_emulate_ctxt *ctxt
-  11 unsigned size
-  10 struct operand *op
-   8 struct segmented_address addr
-   7 u16 selector
-   7 int reg
-   6 void *data
-   6 struct desc_struct *desc
-   4 void *dest
-   4 u64 smbase
-   4 u16 tss_selector
-   3 unsigned nr
-   3 unsigned int size
-   3 ulong dst
-   3 int seg
-   3 int irq
-   3 int inc
-   3 int err
-   2 unsigned seg
-   2 ulong old_tss_base
-   2 ulong mask
-   2 ulong linear
-   2 ulong *linear
-   2 ulong *desc_addr_p
-   2 u64 *data
-   2 u32 error_code
-   2 u16 port
-   2 u16 old_tss_sel
-   2 u16 len
-   2 struct tss_segment_32 *tss
-   2 struct tss_segment_16 *tss
-   2 struct desc_struct *new_desc
-   2 sse128_t *data
-   2 int reason
-   2 int n
-   2 int len
-   2 int idt_index
-   2 int bytes
-   2 enum x86emul_mode mode
-   2 const void *data
-   2 bool write
-   2 bool has_error_code
-   1 void *insn
-   1 void *get
-   1 void *fop
-   1 unsigned short port
-   1 unsigned long reg
-   1 unsigned long flags
-   1 unsigned long addr
-   1 unsigned long *reg
-   1 unsigned long *address
-   1 unsigned int condition
-   1 unsigned d
-   1 unsigned *max_size
-   1 ulong src
-   1 ulong *reg
-   1 ulong *dest
-   1 u8 modrm_reg
-   1 u8 cpl
-   1 u64 val
-   1 u64 cr4
-   1 u64 cr3
-   1 u64 cr0
-   1 u32 flags
-   1 u32 error
-   1 u16 index
-   1 u16 *size
-   1 struct fxregs_state *fx_state
-   1 struct fastop *
-   1 struct desc_struct *ss
-   1 struct desc_struct *cs
-   1 struct desc_ptr *ptr
-   1 struct desc_ptr *dt
-   1 int vec
-   1 int segment
-   1 int rel
-   1 int op_size
-   1 int op_bytes
-   1 int nregs
-   1 int nr
-   1 int insn_len
-   1 int byteop
-   1 int base_reg
-   1 enum x86_transfer_type transfer
-   1 enum x86_intercept_stage stage
-   1 enum x86_intercept intercept
-   1 const void *orig_data
-   1 const struct desc_struct *cs_desc
-   1 const size_t used_size
-   1 bool valid
-   1 bool sign_extension
-   1 bool lgdt
-   1 bool fetch
+\n
+    197 struct x86_emulate_ctxt *ctxt
+     11 unsigned size
+     10 struct operand *op
+      8 struct segmented_address addr
+      7 u16 selector
+      7 int reg
+      6 void *data
+      6 struct desc_struct *desc
+      4 void *dest
+      4 u64 smbase
+      4 u16 tss_selector
+      3 unsigned nr
+      3 unsigned int size
+      3 ulong dst
+      3 int seg
+      3 int irq
+      3 int inc
+      3 int err
+      2 unsigned seg
+      2 ulong old_tss_base
+      2 ulong mask
+      2 ulong *linear
+      2 ulong linear
+      2 ulong *desc_addr_p
+      2 u64 *data
+      2 u32 error_code
+      2 u16 port
+      2 u16 old_tss_sel
+      2 u16 len
+      2 struct tss_segment_32 *tss
+      2 struct tss_segment_16 *tss
+      2 struct desc_struct *new_desc
+      2 sse128_t *data
+      2 int reason
+      2 int n
+      2 int len
+      2 int idt_index
+      2 int bytes
+      2 enum x86emul_mode mode
+      2 const void *data
+      2 bool write
+      2 bool has_error_code
+      1 void *insn
+      1 void *get
+      1 void *fop
+      1 unsigned short port
+      1 unsigned *max_size
+      1 unsigned long *reg
+      1 unsigned long reg
+      1 unsigned long flags
+      1 unsigned long *address
+      1 unsigned long addr
+      1 unsigned int condition
+      1 unsigned d
+      1 ulong src
+      1 ulong *reg
+      1 ulong *dest
+      1 u8 modrm_reg
+      1 u8 cpl
+      1 u64 val
+      1 u64 cr4
+      1 u64 cr3
+      1 u64 cr0
+      1 u32 flags
+      1 u32 error
+      1 u16 *size
+      1 u16 index
+      1 struct fxregs_state *fx_state
+      1 struct fastop *
+      1 struct desc_struct *ss
+      1 struct desc_struct *cs
+      1 struct desc_ptr *ptr
+      1 struct desc_ptr *dt
+      1 int vec
+      1 int segment
+      1 int rel
+      1 int op_size
+      1 int op_bytes
+      1 int nregs
+      1 int nr
+      1 int insn_len
+      1 int byteop
+      1 int base_reg
+      1 enum x86_transfer_type transfer
+      1 enum x86_intercept_stage stage
+      1 enum x86_intercept intercept
+      1 const void *orig_data
+      1 const struct desc_struct *cs_desc
+      1 const size_t used_size
+      1 bool valid
+      1 bool sign_extension
+      1 bool lgdt
+      1 bool fetch

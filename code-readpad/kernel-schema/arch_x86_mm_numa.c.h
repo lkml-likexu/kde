@@ -1,5 +1,6 @@
 
 EXPORT_SYMBOL_GPL(memory_add_physaddr_to_nid);
+\n
 static __init int numa_setup(char *opt)
 int numa_cpu_node(int cpu)
 void numa_set_node(int cpu, int node)
@@ -36,20 +37,21 @@ void numa_add_cpu(int cpu)
 void numa_remove_cpu(int cpu)
 const struct cpumask *cpumask_of_node(int node)
 int memory_add_physaddr_to_nid(u64 start)
-  11 int cpu
-   9 void
-   4 struct numa_meminfo *mi
-   4 int nid
-   3 u64 start
-   3 int node
-   2 u64 end
-   2 int to
-   2 int from
-   2 const struct numa_meminfo *mi
-   2 bool enable
-   1 nodemask_t *nodemask
-   1 memory_add_physaddr_to_nid
-   1 int idx
-   1 int distance
-   1 int *init_func
-   1 char *opt
+\n
+     11 int cpu
+      9 void
+      4 struct numa_meminfo *mi
+      4 int nid
+      3 u64 start
+      3 int node
+      2 u64 end
+      2 int to
+      2 int from
+      2 const struct numa_meminfo *mi
+      2 bool enable
+      1 nodemask_t *nodemask
+      1 memory_add_physaddr_to_nid
+      1 int *init_func
+      1 int idx
+      1 int distance
+      1 char *opt

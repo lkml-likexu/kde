@@ -1,5 +1,6 @@
 
 EXPORT_SYMBOL_GPL(kvm_set_posted_intr_wakeup_handler);
+\n
 void ack_bad_irq(unsigned int irq)
 define irq_stats(x)
 (&per_cpu(irq_stat, x)
@@ -18,14 +19,15 @@ __visible void smp_kvm_posted_intr_ipi(struct pt_regs *regs)
 __visible void smp_kvm_posted_intr_wakeup_ipi(struct pt_regs *regs)
 __visible void smp_kvm_posted_intr_nested_ipi(struct pt_regs *regs)
 void fixup_irqs(void)
-   5 struct pt_regs *regs
-   4 void
-   2 x
-   1 void *handler
-   1 unsigned int irq
-   1 unsigned int cpu
-   1 struct seq_file *p
-   1 kvm_set_posted_intr_wakeup_handler
-   1 int prec
-   1 *x86_platform_ipi_callback
-   1 &per_cpuirq_stat
+\n
+      5 struct pt_regs *regs
+      4 void
+      2 x
+      1 *x86_platform_ipi_callback
+      1 void *handler
+      1 unsigned int irq
+      1 unsigned int cpu
+      1 struct seq_file *p
+      1 &per_cpuirq_stat
+      1 kvm_set_posted_intr_wakeup_handler
+      1 int prec

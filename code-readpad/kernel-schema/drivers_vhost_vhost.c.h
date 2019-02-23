@@ -38,6 +38,7 @@ EXPORT_SYMBOL_GPL(vhost_disable_notify);
 EXPORT_SYMBOL_GPL(vhost_new_msg);
 EXPORT_SYMBOL_GPL(vhost_enqueue_msg);
 EXPORT_SYMBOL_GPL(vhost_dequeue_msg);
+\n
 static void vhost_disable_cross_endian(struct vhost_virtqueue *vq)
 static void vhost_enable_cross_endian_big(struct vhost_virtqueue *vq)
 static void vhost_enable_cross_endian_little(struct vhost_virtqueue *vq)
@@ -70,7 +71,7 @@ static int vhost_worker(void *data)
 static void vhost_vq_free_iovecs(struct vhost_virtqueue *vq)
 static long vhost_dev_alloc_iovecs(struct vhost_dev *dev)
 static void vhost_dev_free_iovecs(struct vhost_dev *dev)
-void vhost_dev_init(struct vhost_dev *dev, struct vhost_virtqueue **vqs, int nvqs)
+void vhost_dev_init(struct vhost_dev *dev, struct vhost_virtqueue **vqs, int nvqs, int iov_limit)
 long vhost_dev_check_owner(struct vhost_dev *dev)
 static void vhost_attach_cgroups_work(struct vhost_work *work)
 static int vhost_attach_cgroups(struct vhost_dev *dev)
@@ -92,6 +93,8 @@ static int vhost_copy_to_user(struct vhost_virtqueue *vq, void __user *to, const
 static int vhost_copy_from_user(struct vhost_virtqueue *vq, void *to, void __user *from, unsigned size)
 static void __user *__vhost_get_user_slow(struct vhost_virtqueue *vq, void __user *addr, unsigned int size, int type)
 static inline void __user *__vhost_get_user(struct vhost_virtqueue *vq, void *addr, unsigned int size, int type)
+static void vhost_dev_lock_vqs(struct vhost_dev *d)
+static void vhost_dev_unlock_vqs(struct vhost_dev *d)
 static int vhost_new_umem_range(struct vhost_umem *umem, u64 start, u64 size, u64 end, u64 userspace_addr, int perm)
 static void vhost_del_umem_range(struct vhost_umem *umem, u64 start, u64 end)
 static void vhost_iotlb_notify_vq(struct vhost_dev *d, struct vhost_iotlb_msg *msg)
@@ -114,7 +117,9 @@ int vhost_init_device_iotlb(struct vhost_dev *d, bool enabled)
 long vhost_dev_ioctl(struct vhost_dev *d, unsigned int ioctl, void __user *argp)
 static int set_bit_to_user(int nr, void __user *addr)
 static int log_write(void __user *log_base, u64 write_address, u64 write_length)
-int vhost_log_write(struct vhost_virtqueue *vq, struct vhost_log *log, unsigned int log_num, u64 len)
+static int log_write_hva(struct vhost_virtqueue *vq, u64 hva, u64 len)
+static int log_used(struct vhost_virtqueue *vq, u64 used_offset, u64 len)
+int vhost_log_write(struct vhost_virtqueue *vq, struct vhost_log *log, unsigned int log_num, u64 len, struct iovec *iov, int count)
 static int vhost_update_used_flags(struct vhost_virtqueue *vq)
 static int vhost_update_avail_event(struct vhost_virtqueue *vq, u16 avail_event)
 int vhost_vq_init_access(struct vhost_virtqueue *vq)
@@ -138,120 +143,126 @@ void vhost_enqueue_msg(struct vhost_dev *dev, struct list_head *head, struct vho
 struct vhost_msg_node *vhost_dequeue_msg(struct vhost_dev *dev, struct list_head *head)
 static int __init vhost_init(void)
 static void __exit vhost_exit(void)
-  46 struct vhost_virtqueue *vq
-  30 struct vhost_dev *dev
-   7 struct vhost_umem *umem
-   7 struct vhost_dev *d
-   6 int type
-   5 struct vhost_work *work
-   5 struct vhost_poll *poll
-   4 void __user *log_base
-   4 void
-   4 u64 addr
-   4 int access
-   4 int __user *argp
-   3 unsigned int size
-   3 unsigned count
-   3 u64 size
-   3 struct vring_used_elem *heads
-   3 struct vhost_log *log
-   3 struct iovec iov[]
-   3 struct file *file
-   2 void __user *argp
-   2 void __user *addr
-   2 vhost_work_fn_t fn
-   2 unsigned size
-   2 unsigned int iov_size
-   2 unsigned int ioctl
-   2 unsigned int head
-   2 unsigned int *out_num
-   2 unsigned int *log_num
-   2 unsigned int *in_num
-   2 u64 uaddr
-   2 u64 start
-   2 u64 len
-   2 u64 end
-   2 u32 idx
-   2 struct vhost_iotlb_msg *msg
-   2 struct list_head *head
-   2 int log_all
-   2 int len
-   1 wait_queue_head_t *wqh
-   1 wait_queue_entry_t *wait
-   1 vq_iotlb_prefetch
-   1 vq
-   1 void __user *to
-   1 void __user *from
-   1 void *to
-   1 void *key
-   1 void *data
-   1 void *addr
-   1 vhost_work_queue
-   1 vhost_work_init
-   1 vhost_work_flush
-   1 vhost_vring_ioctl
-   1 vhost_vq_init_access
-   1 vhost_vq_avail_empty
-   1 vhost_vq_access_ok
-   1 vhost_signal
-   1 vhost_poll_stop
-   1 vhost_poll_start
-   1 vhost_poll_queue
-   1 vhost_poll_init
-   1 vhost_poll_flush
-   1 vhost_new_msg
-   1 vhost_log_write
-   1 vhost_log_access_ok
-   1 vhost_init_device_iotlb
-   1 vhost_has_work
-   1 vhost_get_vq_desc
-   1 vhost_enqueue_msg
-   1 vhost_enable_notify
-   1 vhost_discard_vq_desc
-   1 vhost_disable_notify
-   1 vhost_dev_stop
-   1 vhost_dev_set_owner
-   1 vhost_dev_reset_owner_prepare
-   1 vhost_dev_reset_owner
-   1 vhost_dev_ioctl
-   1 vhost_dev_init
-   1 vhost_dev_has_owner
-   1 vhost_dev_cleanup
-   1 vhost_dev_check_owner
-   1 vhost_dequeue_msg
-   1 vhost_chr_read_iter
-   1 vhost_add_used_n
-   1 vhost_add_used_and_signal_n
-   1 vhost_add_used_and_signal
-   1 vhost_add_used
-   1 unsigned mode
-   1 unsigned long sz
-   1 unsigned int log_num
-   1 u64 write_length
-   1 u64 write_address
-   1 u64 userspace_addr
-   1 u64 iova
-   1 u32 len
-   1 u16 avail_event
-   1 struct vring_desc *indirect
-   1 struct vring_desc *desc
-   1 struct vhost_virtqueue **vqs
-   1 struct vhost_umem_node *node
-   1 struct vhost_msg_node *node
-   1 struct vhost_memory __user *m
-   1 struct iov_iter *to
-   1 struct iov_iter *from
-   1 poll_table *wait
-   1 poll_table *pt
-   1 int sync
-   1 int perm
-   1 int nvqs
-   1 int nr
-   1 int noblock
-   1 int n
-   1 int iov_size
-   1 const void *from
-   1 const struct vhost_umem_node *node
-   1 bool enabled
-   1 __poll_t mask
-   1 VIRTIO_F_VERSION_1
+\n
+     48 struct vhost_virtqueue *vq
+     30 struct vhost_dev *dev
+      9 struct vhost_dev *d
+      7 struct vhost_umem *umem
+      6 int type
+      5 struct vhost_work *work
+      5 struct vhost_poll *poll
+      4 void __user *log_base
+      4 void
+      4 u64 len
+      4 u64 addr
+      4 int __user *argp
+      4 int access
+      3 unsigned int size
+      3 unsigned count
+      3 u64 size
+      3 struct vring_used_elem *heads
+      3 struct vhost_log *log
+      3 struct iovec iov[]
+      3 struct file *file
+      2 void __user *argp
+      2 void __user *addr
+      2 vhost_work_fn_t fn
+      2 unsigned size
+      2 unsigned int *out_num
+      2 unsigned int *log_num
+      2 unsigned int iov_size
+      2 unsigned int ioctl
+      2 unsigned int *in_num
+      2 unsigned int head
+      2 u64 uaddr
+      2 u64 start
+      2 u64 end
+      2 u32 idx
+      2 struct vhost_iotlb_msg *msg
+      2 struct list_head *head
+      2 int log_all
+      2 int len
+      1 wait_queue_head_t *wqh
+      1 wait_queue_entry_t *wait
+      1 vq_iotlb_prefetch
+      1 vq
+      1 void __user *to
+      1 void __user *from
+      1 void *to
+      1 void *key
+      1 void *data
+      1 void *addr
+      1 VIRTIO_F_VERSION_1
+      1 vhost_work_queue
+      1 vhost_work_init
+      1 vhost_work_flush
+      1 vhost_vring_ioctl
+      1 vhost_vq_init_access
+      1 vhost_vq_avail_empty
+      1 vhost_vq_access_ok
+      1 vhost_signal
+      1 vhost_poll_stop
+      1 vhost_poll_start
+      1 vhost_poll_queue
+      1 vhost_poll_init
+      1 vhost_poll_flush
+      1 vhost_new_msg
+      1 vhost_log_write
+      1 vhost_log_access_ok
+      1 vhost_init_device_iotlb
+      1 vhost_has_work
+      1 vhost_get_vq_desc
+      1 vhost_enqueue_msg
+      1 vhost_enable_notify
+      1 vhost_discard_vq_desc
+      1 vhost_disable_notify
+      1 vhost_dev_stop
+      1 vhost_dev_set_owner
+      1 vhost_dev_reset_owner_prepare
+      1 vhost_dev_reset_owner
+      1 vhost_dev_ioctl
+      1 vhost_dev_init
+      1 vhost_dev_has_owner
+      1 vhost_dev_cleanup
+      1 vhost_dev_check_owner
+      1 vhost_dequeue_msg
+      1 vhost_chr_read_iter
+      1 vhost_add_used_n
+      1 vhost_add_used_and_signal_n
+      1 vhost_add_used_and_signal
+      1 vhost_add_used
+      1 unsigned mode
+      1 unsigned long sz
+      1 unsigned int log_num
+      1 u64 write_length
+      1 u64 write_address
+      1 u64 userspace_addr
+      1 u64 used_offset
+      1 u64 iova
+      1 u64 hva
+      1 u32 len
+      1 u16 avail_event
+      1 struct vring_desc *indirect
+      1 struct vring_desc *desc
+      1 struct vhost_virtqueue **vqs
+      1 struct vhost_umem_node *node
+      1 struct vhost_msg_node *node
+      1 struct vhost_memory __user *m
+      1 struct iov_iter *to
+      1 struct iov_iter *from
+      1 struct iovec *iov
+      1 __poll_t mask
+      1 poll_table *wait
+      1 poll_table *pt
+      1 int sync
+      1 int perm
+      1 int nvqs
+      1 int nr
+      1 int noblock
+      1 int n
+      1 int iov_size
+      1 int iov_limit
+      1 int count
+      1 const void *from
+      1 const struct vhost_umem_node *node
+      1 bool enabled

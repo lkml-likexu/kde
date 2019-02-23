@@ -1,4 +1,5 @@
 
+\n
 static __printf(1, 2)
 __cold void vringh_bad(const char *fmt, ...)
 static inline int __vringh_get_head(const struct vringh *vrh, int (*getu16)
@@ -82,67 +83,68 @@ int vringh_complete_kern(struct vringh *vrh, u16 head, u32 len)
 bool vringh_notify_enable_kern(struct vringh *vrh)
 void vringh_notify_disable_kern(struct vringh *vrh)
 int vringh_need_notify_kern(struct vringh *vrh)
-  28 struct vringh *vrh
-  13 size_t len
-  13 const struct vringh *vrh
-  10 void *dst
-   7 const void *src
-   6 unsigned int num
-   6 u64 addr
-   5 u64
-   5 u16 val
-   5 u16 *val
-   5 struct vringh_range *
-   5 const __virtio16 *p
-   5 bool *getrange
-   5 __virtio16 *p
-   4 struct vringh_range *range
-   4 struct vringh *
-   4 size_t *len
-   3 void *src
-   3 struct vringh_kiov *wiov
-   3 struct vringh_kiov *riov
-   3 struct vring_used_elem *dst
-   3 int *getu16
-   2 void *ptr
-   2 void *addr
-   2 u64 features
-   2 u32 len
-   2 u16 head
-   2 struct vringh_range *r
-   2 struct vringh_kiov *iov
-   2 struct vringh_iov *wiov
-   2 struct vringh_iov *riov
-   2 struct vring_desc **descs
-   2 int *up_next
-   2 int *putu16
-   2 int *desc_max
-   2 gfp_t gfp
-   2 const struct vring_used_elem *src
-   2 bool weak_barriers
-   2 bool *rcheck
-   2 *getrange
-   2 *copy
-   1 unsigned num_used
-   1 unsigned num
-   1 unsigned int num_used
-   1 u16 i
-   1 u16 *i
-   1 u16 *head
-   1 struct vring_used __user *used
-   1 struct vring_used *used
-   1 struct vring_desc __user *desc
-   1 struct vring_desc *desc
-   1 struct vring_avail __user *avail
-   1 struct vring_avail *avail
-   1 int *xfer
-   1 const struct vring_used_elem*src
-   1 const struct vring_used_elem used[]
-   1 const struct vring_used_elem *used
-   1 const struct vring_desc *desc
-   1 const char *fmt
-   1 2
-   1 1
-   1 ...
-   1 *putused
-   1 *putu16
+\n
+     28 struct vringh *vrh
+     13 size_t len
+     13 const struct vringh *vrh
+     10 void *dst
+      7 const void *src
+      6 unsigned int num
+      6 u64 addr
+      5 __virtio16 *p
+      5 u64
+      5 u16 *val
+      5 u16 val
+      5 struct vringh_range *
+      5 const __virtio16 *p
+      5 bool *getrange
+      4 struct vringh_range *range
+      4 struct vringh *
+      4 size_t *len
+      3 void *src
+      3 struct vring_used_elem *dst
+      3 struct vringh_kiov *wiov
+      3 struct vringh_kiov *riov
+      3 int *getu16
+      2 void *ptr
+      2 void *addr
+      2 u64 features
+      2 u32 len
+      2 u16 head
+      2 struct vringh_range *r
+      2 struct vringh_kiov *iov
+      2 struct vringh_iov *wiov
+      2 struct vringh_iov *riov
+      2 struct vring_desc **descs
+      2 int *up_next
+      2 int *putu16
+      2 int *desc_max
+      2 gfp_t gfp
+      2 *getrange
+      2 *copy
+      2 const struct vring_used_elem *src
+      2 bool weak_barriers
+      2 bool *rcheck
+      1 unsigned num_used
+      1 unsigned num
+      1 unsigned int num_used
+      1 u16 *i
+      1 u16 i
+      1 u16 *head
+      1 struct vring_used __user *used
+      1 struct vring_used *used
+      1 struct vring_desc __user *desc
+      1 struct vring_desc *desc
+      1 struct vring_avail __user *avail
+      1 struct vring_avail *avail
+      1 *putused
+      1 *putu16
+      1 int *xfer
+      1 const struct vring_used_elem used[]
+      1 const struct vring_used_elem *used
+      1 const struct vring_used_elem*src
+      1 const struct vring_desc *desc
+      1 const char *fmt
+      1 2
+      1 1
+      1 ...

@@ -7,6 +7,7 @@ EXPORT_SYMBOL_GPL(acpi_dma_configure);
 EXPORT_SYMBOL_GPL(acpi_walk_dep_device_list);
 EXPORT_SYMBOL_GPL(acpi_bus_trim);
 EXPORT_SYMBOL_GPL(acpi_bus_register_early_device);
+\n
 void acpi_scan_lock_acquire(void)
 void acpi_scan_lock_release(void)
 void acpi_lock_hp_context(void)
@@ -103,71 +104,72 @@ static void acpi_table_events_fn(struct work_struct *work)
 void acpi_scan_table_handler(u32 event, void *table, void *context)
 int acpi_reconfig_notifier_register(struct notifier_block *nb)
 int acpi_reconfig_notifier_unregister(struct notifier_block *nb)
-  24 acpi_handle handle
-  19 struct acpi_device *device
-  17 struct acpi_device *adev
-   7 void
-   4 void *context
-   3 void *data
-   3 struct device *dev
-   3 struct acpi_scan_handler *handler
-   3 struct acpi_device_pnp *pnp
-   3 int type
-   2 void **return_value
-   2 void **ret_p
-   2 unsigned long long sta
-   2 u32 lvl
-   2 u32
-   2 struct notifier_block *nb
-   2 struct acpi_resource *ares
-   2 struct acpi_device **device
-   2 struct acpi_device *
-   2 const struct acpi_device_id **matchid
-   2 const char *idstr
-   1 void *table
-   1 void *release
-   1 void *not_used
-   1 void *dev
-   1 void *callback
-   1 void *
-   1 unsigned long long *sta
-   1 u64 *size
-   1 u64 *offset
-   1 u64 *dma_addr
-   1 u32 type
-   1 u32 src
-   1 u32 lvl_not_used
-   1 u32 level
-   1 u32 event
-   1 struct work_struct *work_not_used
-   1 struct work_struct *work
-   1 struct device *
-   1 struct acpi_subtable_header *header
-   1 struct acpi_probe_entry *ap_head
-   1 struct acpi_hotplug_profile *hotplug
-   1 struct acpi_hotplug_context *hp
-   1 struct acpi_device_wakeup *wakeup
-   1 struct acpi_device **child
-   1 int state
-   1 int nr
-   1 int device_type
-   1 int *type
-   1 int *notify
-   1 enum dev_dma_attr attr
-   1 const unsigned long end
-   1 const struct acpi_device_id *not_used
-   1 const struct acpi_device *adev
-   1 const char *hotplug_profile_name
-   1 const char *dev_id
-   1 bool val
-   1 bool uevent
-   1 acpi_walk_dep_device_list
-   1 acpi_scan_lock_release
-   1 acpi_scan_lock_acquire
-   1 acpi_initialize_hp_context
-   1 acpi_handle *ejd
-   1 acpi_dma_configure
-   1 acpi_bus_trim
-   1 acpi_bus_register_early_device
-   1 acpi_bus_get_ejd
-   1 *uevent
+\n
+     24 acpi_handle handle
+     19 struct acpi_device *device
+     17 struct acpi_device *adev
+      7 void
+      4 void *context
+      3 void *data
+      3 struct device *dev
+      3 struct acpi_scan_handler *handler
+      3 struct acpi_device_pnp *pnp
+      3 int type
+      2 void **return_value
+      2 void **ret_p
+      2 unsigned long long sta
+      2 u32 lvl
+      2 u32
+      2 struct notifier_block *nb
+      2 struct acpi_resource *ares
+      2 struct acpi_device **device
+      2 struct acpi_device *
+      2 const struct acpi_device_id **matchid
+      2 const char *idstr
+      1 void *table
+      1 void *release
+      1 void *not_used
+      1 void *dev
+      1 void *callback
+      1 void *
+      1 unsigned long long *sta
+      1 *uevent
+      1 u64 *size
+      1 u64 *offset
+      1 u64 *dma_addr
+      1 u32 type
+      1 u32 src
+      1 u32 lvl_not_used
+      1 u32 level
+      1 u32 event
+      1 struct work_struct *work_not_used
+      1 struct work_struct *work
+      1 struct device *
+      1 struct acpi_subtable_header *header
+      1 struct acpi_probe_entry *ap_head
+      1 struct acpi_hotplug_profile *hotplug
+      1 struct acpi_hotplug_context *hp
+      1 struct acpi_device_wakeup *wakeup
+      1 struct acpi_device **child
+      1 int *type
+      1 int state
+      1 int nr
+      1 int *notify
+      1 int device_type
+      1 enum dev_dma_attr attr
+      1 const unsigned long end
+      1 const struct acpi_device_id *not_used
+      1 const struct acpi_device *adev
+      1 const char *hotplug_profile_name
+      1 const char *dev_id
+      1 bool val
+      1 bool uevent
+      1 acpi_walk_dep_device_list
+      1 acpi_scan_lock_release
+      1 acpi_scan_lock_acquire
+      1 acpi_initialize_hp_context
+      1 acpi_handle *ejd
+      1 acpi_dma_configure
+      1 acpi_bus_trim
+      1 acpi_bus_register_early_device
+      1 acpi_bus_get_ejd

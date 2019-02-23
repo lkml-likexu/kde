@@ -1,5 +1,6 @@
 
 EXPORT_SYMBOL_GPL(kvm_clock);
+\n
 static int __init parse_no_kvmclock(char *arg)
 static int __init parse_no_kvmclock_vsyscall(char *arg)
 static inline struct pvclock_vcpu_time_info *this_cpu_pvti(void)
@@ -23,13 +24,14 @@ static void __init kvmclock_init_mem(void)
 static int __init kvm_setup_vsyscall_timeinfo(void)
 static int kvmclock_setup_percpu(unsigned int cpu)
 void __init kvmclock_init(void)
-  14 void
-   2 char *arg
-   1 unsigned int cpu
-   1 struct timespec64 *now
-   1 struct pt_regs *regs
-   1 struct clocksource *cs
-   1 kvm_clock
-   1 const struct timespec64 *now
-   1 char *txt
-   1 bool stable
+\n
+     14 void
+      2 char *arg
+      1 unsigned int cpu
+      1 struct timespec64 *now
+      1 struct pt_regs *regs
+      1 struct clocksource *cs
+      1 kvm_clock
+      1 const struct timespec64 *now
+      1 char *txt
+      1 bool stable

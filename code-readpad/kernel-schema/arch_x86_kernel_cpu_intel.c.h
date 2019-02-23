@@ -1,4 +1,5 @@
 
+\n
 static int __init forcempx_setup(char *__unused)
 void check_mpx_erratum(struct cpuinfo_x86 *c)
 static int __init ring3mwait_disable(char *__unused)
@@ -22,9 +23,10 @@ static void init_intel(struct cpuinfo_x86 *c)
 static unsigned int intel_size_cache(struct cpuinfo_x86 *c, unsigned int size)
 static void intel_tlb_lookup(const unsigned char desc)
 static void intel_detect_tlb(struct cpuinfo_x86 *c)
-  17 struct cpuinfo_x86 *c
-   3 char *__unused
-   1 void
-   1 unsigned int size
-   1 const unsigned char desc
-   1 c
+\n
+     17 struct cpuinfo_x86 *c
+      3 char *__unused
+      1 void
+      1 unsigned int size
+      1 const unsigned char desc
+      1 c

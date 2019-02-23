@@ -1,4 +1,5 @@
 
+\n
 static unsigned int numachip1_get_apic_id(unsigned long x)
 static u32 numachip1_set_apic_id(unsigned int id)
 static unsigned int numachip2_get_apic_id(unsigned long x)
@@ -23,20 +24,21 @@ static int numachip1_acpi_madt_oem_check(char *oem_id, char *oem_table_id)
 static int numachip2_acpi_madt_oem_check(char *oem_id, char *oem_table_id)
 static void numachip_apic_wait_icr_idle(void)
 static u32 numachip_safe_apic_wait_icr_idle(void)
-   6 void
-   6 int vector
-   2 unsigned long x
-   2 unsigned int val
-   2 unsigned int id
-   2 int apicid
-   2 const struct cpumask *mask
-   2 char *oem_table_id
-   2 char *oem_id
-   1 unsigned long start_rip
-   1 u32 apicid
-   1 struct cpuinfo_x86 *c
-   1 int phys_apicid
-   1 int node
-   1 int initial_apic_id
-   1 int index_msb
-   1 int cpu
+\n
+      6 void
+      6 int vector
+      2 unsigned long x
+      2 unsigned int val
+      2 unsigned int id
+      2 int apicid
+      2 const struct cpumask *mask
+      2 char *oem_table_id
+      2 char *oem_id
+      1 unsigned long start_rip
+      1 u32 apicid
+      1 struct cpuinfo_x86 *c
+      1 int phys_apicid
+      1 int node
+      1 int initial_apic_id
+      1 int index_msb
+      1 int cpu

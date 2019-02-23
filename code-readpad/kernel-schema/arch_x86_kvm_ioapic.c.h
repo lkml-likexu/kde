@@ -1,4 +1,5 @@
 
+\n
 static unsigned long ioapic_read_indirect(struct kvm_ioapic *ioapic, unsigned long addr, unsigned long length)
 static void rtc_irq_eoi_tracking_reset(struct kvm_ioapic *ioapic)
 static void rtc_status_pending_eoi_check_valid(struct kvm_ioapic *ioapic)
@@ -27,27 +28,28 @@ int kvm_ioapic_init(struct kvm *kvm)
 void kvm_ioapic_destroy(struct kvm *kvm)
 void kvm_get_ioapic(struct kvm *kvm, struct kvm_ioapic_state *state)
 void kvm_set_ioapic(struct kvm *kvm, struct kvm_ioapic_state *state)
-  15 struct kvm_ioapic *ioapic
-   8 struct kvm_vcpu *vcpu
-   5 struct kvm *kvm
-   3 gpa_t addr
-   3 bool line_status
-   2 struct kvm_ioapic_state *state
-   2 struct kvm_io_device *this
-   2 int vector
-   2 int trigger_mode
-   2 int len
-   2 int irq_source_id
-   2 int irq
-   1 void *val
-   1 unsigned long length
-   1 unsigned long irr
-   1 unsigned long addr
-   1 unsigned int irq
-   1 ulong *ioapic_handled_vectors
-   1 u32 val
-   1 struct work_struct *work
-   1 struct kvm_io_device *dev
-   1 int level
-   1 int irq_level
-   1 const void *val
+\n
+     15 struct kvm_ioapic *ioapic
+      8 struct kvm_vcpu *vcpu
+      5 struct kvm *kvm
+      3 gpa_t addr
+      3 bool line_status
+      2 struct kvm_io_device *this
+      2 struct kvm_ioapic_state *state
+      2 int vector
+      2 int trigger_mode
+      2 int len
+      2 int irq_source_id
+      2 int irq
+      1 void *val
+      1 unsigned long length
+      1 unsigned long irr
+      1 unsigned long addr
+      1 unsigned int irq
+      1 ulong *ioapic_handled_vectors
+      1 u32 val
+      1 struct work_struct *work
+      1 struct kvm_io_device *dev
+      1 int level
+      1 int irq_level
+      1 const void *val

@@ -1,4 +1,5 @@
 
+\n
 static inline struct kvm_svm *to_kvm_svm(struct kvm *kvm)
 static inline bool svm_sev_enabled(void)
 static inline bool sev_guest(struct kvm *kvm)
@@ -60,7 +61,7 @@ static __exit void svm_hardware_unsetup(void)
 static void init_seg(struct vmcb_seg *seg)
 static void init_sys_seg(struct vmcb_seg *seg, uint32_t type)
 static u64 svm_read_l1_tsc_offset(struct kvm_vcpu *vcpu)
-static void svm_write_tsc_offset(struct kvm_vcpu *vcpu, u64 offset)
+static u64 svm_write_l1_tsc_offset(struct kvm_vcpu *vcpu, u64 offset)
 static void avic_init_vmcb(struct vcpu_svm *svm)
 static void init_vmcb(struct vcpu_svm *svm)
 static u64 *avic_get_physical_id_entry(struct kvm_vcpu *vcpu, unsigned int index)
@@ -86,6 +87,7 @@ static void avic_set_running(struct kvm_vcpu *vcpu, bool is_run)
 static void svm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 static int avic_init_vcpu(struct vcpu_svm *svm)
 static struct kvm_vcpu *svm_create_vcpu(struct kvm *kvm, unsigned int id)
+static void svm_clear_current_vmcb(struct vmcb *vmcb)
 static void svm_free_vcpu(struct kvm_vcpu *vcpu)
 static void svm_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 static void svm_vcpu_put(struct kvm_vcpu *vcpu)
@@ -254,6 +256,7 @@ static bool svm_invpcid_supported(void)
 static bool svm_mpx_supported(void)
 static bool svm_xsaves_supported(void)
 static bool svm_umip_emulated(void)
+static bool svm_pt_supported(void)
 static bool svm_has_wbinvd_exit(void)
 static int svm_check_intercept(struct kvm_vcpu *vcpu, struct x86_instruction_info *info, enum x86_intercept_stage stage)
 static void svm_handle_external_intr(struct kvm_vcpu *vcpu)
@@ -285,129 +288,131 @@ static int svm_mem_enc_op(struct kvm *kvm, void __user *argp)
 static int svm_register_enc_region(struct kvm *kvm, struct kvm_enc_region *range)
 static struct enc_region * find_enc_region(struct kvm *kvm, struct kvm_enc_region *range)
 static int svm_unregister_enc_region(struct kvm *kvm, struct kvm_enc_region *range)
+static uint16_t nested_get_evmcs_version(struct kvm_vcpu *vcpu)
 static int nested_enable_evmcs(struct kvm_vcpu *vcpu, uint16_t *vmcs_version)
 static int __init svm_init(void)
 static void __exit svm_exit(void)
- 106 struct kvm_vcpu *vcpu
-  94 struct vcpu_svm *svm
-  36 struct kvm *kvm
-  25 void
-   8 struct kvm_sev_cmd *argp
-   8 int bit
-   7 int cpu
-   5 int *error
-   4 struct vmcb *vmcb
-   4 struct desc_ptr *dt
-   4 int seg
-   3 unsigned long root
-   3 unsigned long npages
-   3 unsigned long dst_paddr
-   3 struct kvm_enc_region *range
-   3 int size
-   2 void *data
-   2 unsigned msr
-   2 unsigned long value
-   2 unsigned long paddr
-   2 unsigned int handle
-   2 u64 data
-   2 u32 offset
-   2 u32 ldr
-   2 u32 *msrpm
-   2 struct vmcb_seg *seg
-   2 struct vmcb *from_vmcb
-   2 struct page *page
-   2 struct kvm_segment *var
-   2 struct amd_iommu_pi_data *pi
-   2 int write
-   2 int index
-   2 int id
-   2 int *err
-   1 void __user *argp
-   1 void *rtn
-   1 unsigned nr
-   1 unsigned long val
-   1 unsigned long ulen
-   1 unsigned long uaddr
-   1 unsigned long src_paddr
-   1 unsigned long src
-   1 unsigned long rflags
-   1 unsigned long dst
-   1 unsigned long cr4
-   1 unsigned long cr0
-   1 unsigned long addr
-   1 unsigned long __user vaddr
-   1 unsigned long __user dst_vaddr
-   1 unsigned long __user dst_uaddr
-   1 unsigned long *n
-   1 unsigned int index
-   1 unsigned int id
-   1 unsigned int host_irq
-   1 unsigned int addr
-   1 unsigned char *hypercall
-   1 uint32_t type
-   1 uint32_t guest_irq
-   1 uint16_t *vmcs_version
-   1 u8 g_physical_id
-   1 u64 vmcb_gpa
-   1 u64 smbase
-   1 u64 offset
-   1 u64 ident_addr
-   1 u64 gpa
-   1 u64 efer
-   1 u64 *info2
-   1 u64 *info1
-   1 u64 *eoi_exit_bitmap
-   1 u32 msr
-   1 u32 info
-   1 u32 index
-   1 u32 ga_tag
-   1 u32 func
-   1 u32 error_code
-   1 u32 asid
-   1 struct x86_instruction_info *info
-   1 struct x86_exception *fault
-   1 struct vmcb *to_vmcb
-   1 struct vmcb *nested_vmcb
-   1 struct vmcb *dst_vmcb
-   1 struct vcpu_svm **svm
-   1 struct vcpu_data *vcpu_info
-   1 struct svm_cpu_data *sd
-   1 struct page *pages[]
-   1 struct page **pages
-   1 struct page **inpages
-   1 struct page **_page
-   1 struct msr_data *msr_info
-   1 struct msr_data *msr
-   1 struct kvm_msr_entry *msr
-   1 struct kvm_kernel_irq_routing_entry *e
-   1 struct kvm_cpuid_entry2 *entry
-   1 struct enc_region *region
-   1 int vec
-   1 int tpr
-   1 int sz
-   1 int read
-   1 int max_isr
-   1 int max_irr
-   1 int mask
-   1 int irr
-   1 int irq
-   1 int idx
-   1 int fd
-   1 int asid
-   1 gva_t gva
-   1 gfn_t gfn
-   1 enum x86_intercept_stage stage
-   1 enum kvm_reg reg
-   1 char *smstate
-   1 bool valid
-   1 bool set
-   1 bool r
-   1 bool masked
-   1 bool is_run
-   1 bool is_mmio
-   1 bool invalidate_gpa
-   1 bool init_event
-   1 bool has_error_code
-   1 bool flat
-   1 bool enc
-   1 bool dec
+\n
+    107 struct kvm_vcpu *vcpu
+     94 struct vcpu_svm *svm
+     36 struct kvm *kvm
+     26 void
+      8 struct kvm_sev_cmd *argp
+      8 int bit
+      7 int cpu
+      5 struct vmcb *vmcb
+      5 int *error
+      4 struct desc_ptr *dt
+      4 int seg
+      3 unsigned long root
+      3 unsigned long npages
+      3 unsigned long dst_paddr
+      3 struct kvm_enc_region *range
+      3 int size
+      2 void *data
+      2 unsigned msr
+      2 unsigned long value
+      2 unsigned long paddr
+      2 unsigned int handle
+      2 u64 data
+      2 u32 offset
+      2 u32 *msrpm
+      2 u32 ldr
+      2 struct vmcb_seg *seg
+      2 struct vmcb *from_vmcb
+      2 struct page *page
+      2 struct kvm_segment *var
+      2 struct amd_iommu_pi_data *pi
+      2 int write
+      2 int index
+      2 int id
+      2 int *err
+      1 void __user *argp
+      1 void *rtn
+      1 unsigned nr
+      1 unsigned long val
+      1 unsigned long __user vaddr
+      1 unsigned long __user dst_vaddr
+      1 unsigned long __user dst_uaddr
+      1 unsigned long ulen
+      1 unsigned long uaddr
+      1 unsigned long src_paddr
+      1 unsigned long src
+      1 unsigned long rflags
+      1 unsigned long *n
+      1 unsigned long dst
+      1 unsigned long cr4
+      1 unsigned long cr0
+      1 unsigned long addr
+      1 unsigned int index
+      1 unsigned int id
+      1 unsigned int host_irq
+      1 unsigned int addr
+      1 unsigned char *hypercall
+      1 uint32_t type
+      1 uint32_t guest_irq
+      1 uint16_t *vmcs_version
+      1 u8 g_physical_id
+      1 u64 vmcb_gpa
+      1 u64 smbase
+      1 u64 offset
+      1 u64 *info2
+      1 u64 *info1
+      1 u64 ident_addr
+      1 u64 gpa
+      1 u64 *eoi_exit_bitmap
+      1 u64 efer
+      1 u32 msr
+      1 u32 info
+      1 u32 index
+      1 u32 ga_tag
+      1 u32 func
+      1 u32 error_code
+      1 u32 asid
+      1 struct x86_instruction_info *info
+      1 struct x86_exception *fault
+      1 struct vmcb *to_vmcb
+      1 struct vmcb *nested_vmcb
+      1 struct vmcb *dst_vmcb
+      1 struct vcpu_svm **svm
+      1 struct vcpu_data *vcpu_info
+      1 struct svm_cpu_data *sd
+      1 struct page *pages[]
+      1 struct page **pages
+      1 struct page **_page
+      1 struct page **inpages
+      1 struct msr_data *msr_info
+      1 struct msr_data *msr
+      1 struct kvm_msr_entry *msr
+      1 struct kvm_kernel_irq_routing_entry *e
+      1 struct kvm_cpuid_entry2 *entry
+      1 struct enc_region *region
+      1 int vec
+      1 int tpr
+      1 int sz
+      1 int read
+      1 int max_isr
+      1 int max_irr
+      1 int mask
+      1 int irr
+      1 int irq
+      1 int idx
+      1 int fd
+      1 int asid
+      1 gva_t gva
+      1 gfn_t gfn
+      1 enum x86_intercept_stage stage
+      1 enum kvm_reg reg
+      1 char *smstate
+      1 bool valid
+      1 bool set
+      1 bool r
+      1 bool masked
+      1 bool is_run
+      1 bool is_mmio
+      1 bool invalidate_gpa
+      1 bool init_event
+      1 bool has_error_code
+      1 bool flat
+      1 bool enc
+      1 bool dec

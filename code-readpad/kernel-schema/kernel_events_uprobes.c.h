@@ -1,6 +1,8 @@
 
 EXPORT_SYMBOL_GPL(uprobe_unregister);
 EXPORT_SYMBOL_GPL(uprobe_register);
+EXPORT_SYMBOL_GPL(uprobe_register_refctr);
+\n
 static bool valid_vma(struct vm_area_struct *vma, bool is_register)
 static unsigned long offset_to_vaddr(struct vm_area_struct *vma, loff_t offset)
 static loff_t vaddr_to_offset(struct vm_area_struct *vma, unsigned long vaddr)
@@ -10,6 +12,15 @@ bool __weak is_trap_insn(uprobe_opcode_t *insn)
 static void copy_from_page(struct page *page, unsigned long vaddr, void *dst, int len)
 static void copy_to_page(struct page *page, unsigned long vaddr, const void *src, int len)
 static int verify_opcode(struct page *page, unsigned long vaddr, uprobe_opcode_t *new_opcode)
+static struct delayed_uprobe * delayed_uprobe_check(struct uprobe *uprobe, struct mm_struct *mm)
+static int delayed_uprobe_add(struct uprobe *uprobe, struct mm_struct *mm)
+static void delayed_uprobe_delete(struct delayed_uprobe *du)
+static void delayed_uprobe_remove(struct uprobe *uprobe, struct mm_struct *mm)
+static bool valid_ref_ctr_vma(struct uprobe *uprobe, struct vm_area_struct *vma)
+static struct vm_area_struct * find_ref_ctr_vma(struct uprobe *uprobe, struct mm_struct *mm)
+static int __update_ref_ctr(struct mm_struct *mm, unsigned long vaddr, short d)
+static void update_ref_ctr_warn(struct uprobe *uprobe, struct mm_struct *mm, short d)
+static int update_ref_ctr(struct uprobe *uprobe, struct mm_struct *mm, short d)
 int uprobe_write_opcode(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr, uprobe_opcode_t opcode)
 int __weak set_swbp(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr)
 int __weak set_orig_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, unsigned long vaddr)
@@ -20,7 +31,8 @@ static struct uprobe *__find_uprobe(struct inode *inode, loff_t offset)
 static struct uprobe *find_uprobe(struct inode *inode, loff_t offset)
 static struct uprobe *__insert_uprobe(struct uprobe *uprobe)
 static struct uprobe *insert_uprobe(struct uprobe *uprobe)
-static struct uprobe *alloc_uprobe(struct inode *inode, loff_t offset)
+static void ref_ctr_mismatch_warn(struct uprobe *cur_uprobe, struct uprobe *uprobe)
+static struct uprobe *alloc_uprobe(struct inode *inode, loff_t offset, loff_t ref_ctr_offset)
 static void consumer_add(struct uprobe *uprobe, struct uprobe_consumer *uc)
 static bool consumer_del(struct uprobe *uprobe, struct uprobe_consumer *uc)
 static int __copy_insn(struct address_space *mapping, struct file *filp, void *insn, int nbytes, loff_t offset)
@@ -39,12 +51,14 @@ static struct map_info * build_map_info(struct address_space *mapping, loff_t of
 static int register_for_each_vma(struct uprobe *uprobe, struct uprobe_consumer *new)
 static void __uprobe_unregister(struct uprobe *uprobe, struct uprobe_consumer *uc)
 void uprobe_unregister(struct inode *inode, loff_t offset, struct uprobe_consumer *uc)
-static int __uprobe_register(struct inode *inode, loff_t offset, struct uprobe_consumer *uc)
+static int __uprobe_register(struct inode *inode, loff_t offset, loff_t ref_ctr_offset, struct uprobe_consumer *uc)
 int uprobe_register(struct inode *inode, loff_t offset, struct uprobe_consumer *uc)
+int uprobe_register_refctr(struct inode *inode, loff_t offset, loff_t ref_ctr_offset, struct uprobe_consumer *uc)
 int uprobe_apply(struct inode *inode, loff_t offset, struct uprobe_consumer *uc, bool add)
 static int unapply_uprobe(struct uprobe *uprobe, struct mm_struct *mm)
 static struct rb_node * find_node_in_range(struct inode *inode, loff_t min, loff_t max)
 static void build_probe_list(struct inode *inode, struct vm_area_struct *vma, unsigned long start, unsigned long end, struct list_head *head)
+static int delayed_ref_ctr_inc(struct vm_area_struct *vma)
 int uprobe_mmap(struct vm_area_struct *vma)
 static bool vma_has_uprobes(struct vm_area_struct *vma, unsigned long start, unsigned long end)
 void uprobe_munmap(struct vm_area_struct *vma, unsigned long start, unsigned long end)
@@ -88,62 +102,68 @@ void uprobe_notify_resume(struct pt_regs *regs)
 int uprobe_pre_sstep_notifier(struct pt_regs *regs)
 int uprobe_post_sstep_notifier(struct pt_regs *regs)
 static int __init init_uprobes(void)
-  21 struct uprobe *uprobe
-  15 struct pt_regs *regs
-  13 unsigned long vaddr
-  13 struct mm_struct *mm
-  10 loff_t offset
-   9 struct vm_area_struct *vma
-   9 struct inode *inode
-   8 struct uprobe_consumer *uc
-   7 void
-   4 struct task_struct *t
-   4 struct page *page
-   3 unsigned long start
-   3 unsigned long end
-   3 struct return_instance *ri
-   3 struct arch_uprobe *auprobe
-   2 uprobe_opcode_t *insn
-   2 unsigned long bp_vaddr
-   2 struct xol_area *area
-   2 struct uprobe_task *utask
-   2 struct file *filp
-   2 struct address_space *mapping
-   2 int len
-   2 enum uprobe_filter_ctx ctx
-   2 bool is_register
-   1 void *src
-   1 void *insn
-   1 void *dst
-   1 uprobe_unregister
-   1 uprobe_register
-   1 uprobe_opcode_t opcode
-   1 uprobe_opcode_t *new_opcode
-   1 unsigned long len
-   1 unsigned long flags
-   1 unsigned long addr
-   1 struct uprobe_task *o_utask
-   1 struct uprobe_consumer *new
-   1 struct uprobe *r
-   1 struct uprobe *l
-   1 struct task_struct *tsk
-   1 struct return_instance *ret
-   1 struct page *old_page
-   1 struct page *new_page
-   1 struct mm_struct *oldmm
-   1 struct mm_struct *newmm
-   1 struct map_info *info
-   1 struct list_head *head
-   1 struct file *file
-   1 struct callback_head *work
-   1 struct arch_uprobe *aup
-   1 loff_t min
-   1 loff_t max
-   1 int nbytes
-   1 int *is_swbp
-   1 enum rp_check ctx
-   1 const void *src
-   1 const char *msg
-   1 bool chained
-   1 bool add
-   1 &uprobe->rb_node
+\n
+     29 struct uprobe *uprobe
+     20 struct mm_struct *mm
+     15 struct pt_regs *regs
+     14 unsigned long vaddr
+     11 struct vm_area_struct *vma
+     11 loff_t offset
+     10 struct inode *inode
+      9 struct uprobe_consumer *uc
+      7 void
+      4 struct task_struct *t
+      4 struct page *page
+      3 unsigned long start
+      3 unsigned long end
+      3 struct return_instance *ri
+      3 struct arch_uprobe *auprobe
+      3 short d
+      3 loff_t ref_ctr_offset
+      2 uprobe_opcode_t *insn
+      2 unsigned long bp_vaddr
+      2 struct xol_area *area
+      2 struct uprobe_task *utask
+      2 struct file *filp
+      2 struct address_space *mapping
+      2 int len
+      2 enum uprobe_filter_ctx ctx
+      2 bool is_register
+      1 void *src
+      1 void *insn
+      1 void *dst
+      1 uprobe_unregister
+      1 uprobe_register_refctr
+      1 uprobe_register
+      1 &uprobe->rb_node
+      1 uprobe_opcode_t opcode
+      1 uprobe_opcode_t *new_opcode
+      1 unsigned long len
+      1 unsigned long flags
+      1 unsigned long addr
+      1 struct uprobe_task *o_utask
+      1 struct uprobe *r
+      1 struct uprobe *l
+      1 struct uprobe *cur_uprobe
+      1 struct uprobe_consumer *new
+      1 struct task_struct *tsk
+      1 struct return_instance *ret
+      1 struct page *old_page
+      1 struct page *new_page
+      1 struct mm_struct *oldmm
+      1 struct mm_struct *newmm
+      1 struct map_info *info
+      1 struct list_head *head
+      1 struct file *file
+      1 struct delayed_uprobe *du
+      1 struct callback_head *work
+      1 struct arch_uprobe *aup
+      1 loff_t min
+      1 loff_t max
+      1 int nbytes
+      1 int *is_swbp
+      1 enum rp_check ctx
+      1 const void *src
+      1 const char *msg
+      1 bool chained
+      1 bool add

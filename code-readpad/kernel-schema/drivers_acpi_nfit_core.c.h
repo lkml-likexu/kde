@@ -6,8 +6,8 @@ EXPORT_SYMBOL_GPL(acpi_nfit_init);
 EXPORT_SYMBOL_GPL(acpi_nfit_desc_init);
 EXPORT_SYMBOL_GPL(acpi_nfit_shutdown);
 EXPORT_SYMBOL_GPL(__acpi_nfit_notify);
+\n
 const guid_t *to_nfit_uuid(enum nfit_uuids id)
-static struct acpi_nfit_desc *to_acpi_nfit_desc( struct nvdimm_bus_descriptor *nd_desc)
 static struct acpi_device *to_acpi_dev(struct acpi_nfit_desc *acpi_desc)
 static int xlat_bus_status(void *buf, unsigned int cmd, u32 status)
 static int xlat_nvdimm_status(struct nvdimm *nvdimm, void *buf, unsigned int cmd, u32 status)
@@ -18,6 +18,8 @@ static union acpi_object *acpi_label_write(acpi_handle handle, u32 offset, u32 l
 static union acpi_object *acpi_label_read(acpi_handle handle, u32 offset, u32 len)
 static union acpi_object *acpi_label_info(acpi_handle handle)
 static u8 nfit_dsm_revid(unsigned family, unsigned func)
+static bool payload_dumpable(struct nvdimm *nvdimm, unsigned int func)
+static int cmd_to_func(struct nfit_mem *nfit_mem, unsigned int cmd, struct nd_cmd_pkg *call_pkg)
 int acpi_nfit_ctl(struct nvdimm_bus_descriptor *nd_desc, struct nvdimm *nvdimm, unsigned int cmd, void *buf, unsigned int buf_len, int *cmd_rc)
 static const char *spa_type_name(u16 type)
 int nfit_spa_type(struct acpi_nfit_system_address *spa)
@@ -75,6 +77,7 @@ __weak void nfit_intel_shutdown_status(struct nfit_mem *nfit_mem)
 static void populate_shutdown_status(struct nfit_mem *nfit_mem)
 static int acpi_nfit_add_dimm(struct acpi_nfit_desc *acpi_desc, struct nfit_mem *nfit_mem, u32 device_handle)
 static void shutdown_dimm_notify(void *data)
+static const struct nvdimm_security_ops *acpi_nfit_get_security_ops(int family)
 static int acpi_nfit_register_dimms(struct acpi_nfit_desc *acpi_desc)
 static void acpi_nfit_init_dsms(struct acpi_nfit_desc *acpi_desc)
 static ssize_t range_index_show(struct device *dev, struct device_attribute *attr, char *buf)
@@ -121,7 +124,8 @@ static int acpi_nfit_desc_init_scrub_attr(struct acpi_nfit_desc *acpi_desc)
 static void acpi_nfit_unregister(void *data)
 int acpi_nfit_init(struct acpi_nfit_desc *acpi_desc, void *data, acpi_size sz)
 static int acpi_nfit_flush_probe(struct nvdimm_bus_descriptor *nd_desc)
-static int acpi_nfit_clear_to_send(struct nvdimm_bus_descriptor *nd_desc, struct nvdimm *nvdimm, unsigned int cmd)
+static int __acpi_nfit_clear_to_send(struct nvdimm_bus_descriptor *nd_desc, struct nvdimm *nvdimm, unsigned int cmd)
+static int acpi_nfit_clear_to_send(struct nvdimm_bus_descriptor *nd_desc, struct nvdimm *nvdimm, unsigned int cmd, void *buf)
 int acpi_nfit_ars_rescan(struct acpi_nfit_desc *acpi_desc, enum nfit_ars_state req_type)
 void acpi_nfit_desc_init(struct acpi_nfit_desc *acpi_desc, struct device *dev)
 static void acpi_nfit_put_table(void *table)
@@ -134,84 +138,88 @@ void __acpi_nfit_notify(struct device *dev, acpi_handle handle, u32 event)
 static void acpi_nfit_notify(struct acpi_device *adev, u32 event)
 static __init int nfit_init(void)
 static __exit void nfit_exit(void)
-  43 struct acpi_nfit_desc *acpi_desc
-  32 struct device *dev
-  24 struct device_attribute *attr
-  22 char *buf
-   8 struct nfit_table_prev *prev
-   7 void *data
-   7 struct nfit_spa *nfit_spa
-   7 struct acpi_nfit_system_address *spa
-   7 acpi_handle handle
-   6 struct nvdimm *nvdimm
-   5 unsigned int cmd
-   5 struct nvdimm_bus_descriptor *nd_desc
-   5 struct nfit_mem *nfit_mem
-   4 void *buf
-   4 u32 event
-   4 struct nfit_blk *nfit_blk
-   4 struct acpi_device *adev
-   3 u32 status
-   3 u32 device_handle
-   3 struct nd_region_desc *ndr_desc
-   3 struct acpi_nfit_interleave *idt
-   3 resource_size_t dpa
-   3 int n
-   3 const void *m1
-   3 const void *m0
-   2 void *table
-   2 void *iobuf
-   2 void
-   2 unsigned int bw
-   2 u32 offset
-   2 u32 len
-   2 struct nvdimm_bus *nvdimm_bus
-   2 struct nfit_blk_mmio *mmio
-   2 struct kobject *kobj
-   2 struct attribute *a
-   2 struct acpi_nfit_memory_map *memdev
-   2 struct acpi_nfit_flush_address *flush
-   2 struct acpi_nfit_control_region *dcr
-   2 size_t size
-   2 int rw
-   2 int num_mappings
-   2 enum nfit_ars_state req_type
-   2 const char *buf
-   1 void *priv
-   1 unsigned int write
-   1 unsigned int tmo
-   1 unsigned int len
-   1 unsigned int lane
-   1 unsigned int buf_len
-   1 unsigned func
-   1 unsigned family
-   1 union acpi_object *pkg
-   1 union acpi_object *integer
-   1 u64 offset
-   1 u64 len
-   1 u16 type
-   1 u16 range_index
-   1 u16 interleave_ways
-   1 u16 *flags
-   1 struct work_struct *work
-   1 struct nd_mapping_desc *mapping
-   1 struct nd_cmd_ars_cap *cmd
-   1 struct nd_blk_region *ndbr
-   1 struct list_head *_b
-   1 struct list_head *_a
-   1 struct acpi_nfit_data_region *bdw
-   1 struct acpi_nfit_capabilities *pcap
-   1 size_t len
-   1 nfit_get_smbios_id
-   1 int query_rc
-   1 int *cmd_rc
-   1 enum nfit_uuids id
-   1 const void *end
-   1 char *method
-   1 acpi_size sz
-   1 acpi_nfit_shutdown
-   1 acpi_nfit_init
-   1 acpi_nfit_desc_init
-   1 acpi_nfit_ctl
-   1 __acpi_nvdimm_notify
-   1 __acpi_nfit_notify
+\n
+     43 struct acpi_nfit_desc *acpi_desc
+     32 struct device *dev
+     24 struct device_attribute *attr
+     22 char *buf
+      8 struct nvdimm *nvdimm
+      8 struct nfit_table_prev *prev
+      7 void *data
+      7 unsigned int cmd
+      7 struct nfit_spa *nfit_spa
+      7 struct acpi_nfit_system_address *spa
+      7 acpi_handle handle
+      6 struct nfit_mem *nfit_mem
+      5 void *buf
+      5 struct nvdimm_bus_descriptor *nd_desc
+      4 u32 event
+      4 struct nfit_blk *nfit_blk
+      4 struct acpi_device *adev
+      3 u32 status
+      3 u32 device_handle
+      3 struct nd_region_desc *ndr_desc
+      3 struct acpi_nfit_interleave *idt
+      3 resource_size_t dpa
+      3 int n
+      3 const void *m1
+      3 const void *m0
+      2 void *table
+      2 void *iobuf
+      2 void
+      2 unsigned int bw
+      2 u32 offset
+      2 u32 len
+      2 struct nvdimm_bus *nvdimm_bus
+      2 struct nfit_blk_mmio *mmio
+      2 struct kobject *kobj
+      2 struct attribute *a
+      2 struct acpi_nfit_memory_map *memdev
+      2 struct acpi_nfit_flush_address *flush
+      2 struct acpi_nfit_control_region *dcr
+      2 size_t size
+      2 int rw
+      2 int num_mappings
+      2 enum nfit_ars_state req_type
+      2 const char *buf
+      1 void *priv
+      1 unsigned int write
+      1 unsigned int tmo
+      1 unsigned int len
+      1 unsigned int lane
+      1 unsigned int func
+      1 unsigned int buf_len
+      1 unsigned func
+      1 unsigned family
+      1 union acpi_object *pkg
+      1 union acpi_object *integer
+      1 u64 offset
+      1 u64 len
+      1 u16 type
+      1 u16 range_index
+      1 u16 interleave_ways
+      1 u16 *flags
+      1 struct work_struct *work
+      1 struct nd_mapping_desc *mapping
+      1 struct nd_cmd_pkg *call_pkg
+      1 struct nd_cmd_ars_cap *cmd
+      1 struct nd_blk_region *ndbr
+      1 struct list_head *_b
+      1 struct list_head *_a
+      1 struct acpi_nfit_data_region *bdw
+      1 struct acpi_nfit_capabilities *pcap
+      1 size_t len
+      1 nfit_get_smbios_id
+      1 int query_rc
+      1 int family
+      1 int *cmd_rc
+      1 enum nfit_uuids id
+      1 const void *end
+      1 char *method
+      1 acpi_size sz
+      1 __acpi_nvdimm_notify
+      1 acpi_nfit_shutdown
+      1 __acpi_nfit_notify
+      1 acpi_nfit_init
+      1 acpi_nfit_desc_init
+      1 acpi_nfit_ctl

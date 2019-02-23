@@ -3,6 +3,7 @@ EXPORT_SYMBOL_GPL(kvm_async_pf_task_wait);
 EXPORT_SYMBOL_GPL(kvm_async_pf_task_wake);
 EXPORT_SYMBOL_GPL(kvm_read_and_reset_pf_reason);
 EXPORT_SYMBOL_GPL(kvm_para_available);
+\n
 static int __init parse_no_kvmapf(char *arg)
 static int steal_acc = 1; static int __init parse_no_stealacc(char *arg)
 static void kvm_io_delay(void)
@@ -52,32 +53,33 @@ static void kvm_kick_cpu(int cpu)
 static void kvm_wait(u8 *ptr, u8 val)
 __visible bool __kvm_vcpu_is_preempted(long cpu)
 void __init kvm_spinlock_init(void)
-  25 void
-   5 int vector
-   3 u32 token
-   3 const struct cpumask *mask
-   2 void *unused
-   2 unsigned int cpu
-   2 int cpu
-   2 char *arg
-   1 void *ptr
-   1 unsigned long size
-   1 unsigned long error_code
-   1 unsigned long code
-   1 unsigned int max_cpus
-   1 u8 val
-   1 u8 *ptr
-   1 u32 val
-   1 u32 reg
-   1 struct pt_regs *regs
-   1 struct notifier_block *nb
-   1 struct kvm_task_sleep_node *n
-   1 struct kvm_task_sleep_head *b
-   1 long cpu
-   1 kvm_read_and_reset_pf_reason
-   1 kvm_para_available
-   1 kvm_async_pf_task_wake
-   1 kvm_async_pf_task_wait
-   1 int interrupt_kernel
-   1 const struct flush_tlb_info *info
-   1 const struct cpumask *cpumask
+\n
+     25 void
+      5 int vector
+      3 u32 token
+      3 const struct cpumask *mask
+      2 void *unused
+      2 unsigned int cpu
+      2 int cpu
+      2 char *arg
+      1 void *ptr
+      1 unsigned long size
+      1 unsigned long error_code
+      1 unsigned long code
+      1 unsigned int max_cpus
+      1 u8 val
+      1 u8 *ptr
+      1 u32 val
+      1 u32 reg
+      1 struct pt_regs *regs
+      1 struct notifier_block *nb
+      1 struct kvm_task_sleep_node *n
+      1 struct kvm_task_sleep_head *b
+      1 long cpu
+      1 kvm_read_and_reset_pf_reason
+      1 kvm_para_available
+      1 kvm_async_pf_task_wake
+      1 kvm_async_pf_task_wait
+      1 int interrupt_kernel
+      1 const struct flush_tlb_info *info
+      1 const struct cpumask *cpumask

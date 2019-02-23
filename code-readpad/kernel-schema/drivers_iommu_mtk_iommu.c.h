@@ -1,4 +1,5 @@
 
+\n
 static struct mtk_iommu_data *mtk_iommu_get_m4u_data(void)
 static struct mtk_iommu_domain *to_mtk_domain(struct iommu_domain *dom)
 static void mtk_iommu_tlb_flush_all(void *cookie)
@@ -25,24 +26,25 @@ static int mtk_iommu_remove(struct platform_device *pdev)
 static int __maybe_unused mtk_iommu_suspend(struct device *dev)
 static int __maybe_unused mtk_iommu_resume(struct device *dev)
 static int __init mtk_iommu_init(void)
-   9 struct device *dev
-   7 struct iommu_domain *domain
-   3 void *cookie
-   3 unsigned long iova
-   3 size_t size
-   2 void
-   2 struct platform_device *pdev
-   1 void *dev_id
-   1 unsigned type
-   1 struct of_phandle_args *args
-   1 struct mtk_iommu_domain *dom
-   1 struct mtk_iommu_data *data
-   1 struct iommu_domain *dom
-   1 size_t granule
-   1 phys_addr_t paddr
-   1 int prot
-   1 int irq
-   1 dma_addr_t iova
-   1 const struct mtk_iommu_data *data
-   1 bool leaf
-   1 bool enable
+\n
+      9 struct device *dev
+      7 struct iommu_domain *domain
+      3 void *cookie
+      3 unsigned long iova
+      3 size_t size
+      2 void
+      2 struct platform_device *pdev
+      1 void *dev_id
+      1 unsigned type
+      1 struct of_phandle_args *args
+      1 struct mtk_iommu_domain *dom
+      1 struct mtk_iommu_data *data
+      1 struct iommu_domain *dom
+      1 size_t granule
+      1 phys_addr_t paddr
+      1 int prot
+      1 int irq
+      1 dma_addr_t iova
+      1 const struct mtk_iommu_data *data
+      1 bool leaf
+      1 bool enable

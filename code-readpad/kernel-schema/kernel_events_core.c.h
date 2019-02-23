@@ -16,6 +16,7 @@ EXPORT_SYMBOL_GPL(perf_pmu_unregister);
 EXPORT_SYMBOL_GPL(perf_event_create_kernel_counter);
 EXPORT_SYMBOL_GPL(perf_pmu_migrate_context);
 EXPORT_SYMBOL_GPL(perf_event_sysfs_show);
+\n
 static void remote_function(void *data)
 static int task_function_call(struct task_struct *p, remote_function_f func, void *info)
 static int cpu_function_call(int cpu, remote_function_f func, void *info)
@@ -219,6 +220,7 @@ static void perf_event_for_each(struct perf_event *event, void (*func)
 (struct perf_event *)
 )
 static void __perf_event_period(struct perf_event *event, struct perf_cpu_context *cpuctx, struct perf_event_context *ctx, void *info)
+static int perf_event_check_period(struct perf_event *event, u64 value)
 static int perf_event_period(struct perf_event *event, u64 __user *arg)
 static inline int perf_fget_light(int fd, struct fd *p)
 static long _perf_ioctl(struct perf_event *event, unsigned int cmd, unsigned long arg)
@@ -392,6 +394,7 @@ static int task_clock_event_init(struct perf_event *event)
 static void perf_pmu_nop_void(struct pmu *pmu)
 static void perf_pmu_nop_txn(struct pmu *pmu, unsigned int flags)
 static int perf_pmu_nop_int(struct pmu *pmu)
+static int perf_event_nop_int(struct perf_event *event, u64 value)
 static void perf_pmu_start_txn(struct pmu *pmu, unsigned int flags)
 static int perf_pmu_commit_txn(struct pmu *pmu)
 static void perf_pmu_cancel_txn(struct pmu *pmu)
@@ -452,219 +455,221 @@ static struct cgroup_subsys_state * perf_cgroup_css_alloc(struct cgroup_subsys_s
 static void perf_cgroup_css_free(struct cgroup_subsys_state *css)
 static int __perf_cgroup_move(void *info)
 static void perf_cgroup_attach(struct cgroup_taskset *tset)
- 226 struct perf_event *event
-  48 struct perf_event_context *ctx
-  32 struct task_struct *task
-  25 struct pt_regs *regs
-  25 struct perf_cpu_context *cpuctx
-  19 void
-  18 void *data
-  18 struct pmu *pmu
-  18 struct perf_sample_data *data
-  12 void *info
-  12 int flags
-  12 int cpu
-   9 struct task_struct *child
-   8 struct perf_output_handle *handle
-   8 struct file *file
-   8 int ctxn
-   7 u32 event_id
-   7 struct perf_event_attr *attr
-   6 struct task_struct *next
-   6 struct device *dev
-   6 enum event_type_t event_type
-   5 u64 now
-   5 u64 *running
-   5 u64 *enabled
-   5 u32 prog_fd
-   5 struct vm_area_struct *vma
-   5 struct perf_event_groups *groups
-   5 struct perf_event *group_leader
-   5 struct device_attribute *attr
-   4 u64 nr
-   4 u64 count
-   4 struct task_struct *prev
-   4 struct task_struct *p
-   4 struct swevent_htable *swhash
-   4 struct perf_event_header *header
-   4 struct perf_event *
-   4 char __user *buf
-   4 char *page
-   3 unsigned long arg
-   3 unsigned int cpu
-   3 unsigned int cmd
-   3 u64 type
-   3 u64 read_format
-   3 struct task_struct *parent
-   3 struct perf_event_context *task_ctx
-   3 struct perf_event_context *parent_ctx
-   3 struct perf_event_context *child_ctx
-   3 struct perf_event *parent_event
-   3 struct list_head *filters
-   3 size_t count
-   3 perf_iterate_f output
-   3 loff_t *ppos
-   3 int rctx
-   3 int fd
-   2 void __user *buffer
-   2 void *func
-   2 void *context
-   2 unsigned long size
-   2 unsigned int flags
-   2 u64 running
-   2 u64 nsec
-   2 u64 enabled
-   2 u64 addr
-   2 struct ring_buffer *rb
-   2 struct rcu_head *head
-   2 struct perf_guest_info_callbacks *cbs
-   2 struct perf_event *leader
-   2 struct perf_event *group_event
-   2 struct perf_event *child_event
-   2 struct perf_event *bp
-   2 struct perf_addr_filter *filter
-   2 struct hlist_head *head
-   2 struct ctl_table *table
-   2 size_t *lenp
-   2 remote_function_f func
-   2 prog
-   2 perf_overflow_handler_t overflow_handler
-   2 int write
-   2 int throttle
-   2 int refresh
-   2 int
-   2 event_f func
-   2 event->overflow_handler
-   2 event->orig_overflow_handler
-   2 enum perf_type_id type
-   2 bool sched_in
-   2 bool add
-   1 void __user *arg
-   1 void *v
-   1 void *record
-   1 void *raw_data
-   1 void *__info
-   1 void *
-   1 unsigned long val
-   1 unsigned long offset
-   1 unsigned long head
-   1 unsigned long flags
-   1 unsigned long *flags
-   1 unsigned long
-   1 unsigned int fd
-   1 unsigned int
-   1 u64 virt
-   1 u64 sample_type
-   1 u64 sample_len_ns
-   1 u64 overflow
-   1 u64 mask
-   1 u64 lost
-   1 u64 flags
-   1 u64 dump_size
-   1 u64 __user *arg
-   1 u64 *values
-   1 u64 *value
-   1 u64 *now
-   1 u16 stack_size
-   1 u16 header_size
-   1 u16 event_type
-   1 struct work_struct *work
-   1 struct vm_fault *vmf
-   1 struct trace_event_call *call
-   1 struct task_struct *next_prev
-   1 struct swevent_hlist *hlist
-   1 struct pt_regs *regs_user_copy
-   1 struct perf_sample_data *sample
-   1 struct perf_regs *regs_user
-   1 struct perf_regs *regs_intr
-   1 struct perf_output_handle *
-   1 struct perf_ns_link_info *ns_link_info
-   1 struct perf_mmap_event *mmap_event
-   1 struct perf_event_mmap_page *userpg
-   1 struct perf_event_context *next_ctx
-   1 struct perf_event_context *ctx2
-   1 struct perf_event_context *ctx1
-   1 struct perf_event_attr __user *uattr
-   1 struct perf_event_attr __user *
-   1 struct perf_event *right
-   1 struct perf_event *output_event
-   1 struct perf_event *next_event
-   1 struct perf_event *left
-   1 struct perf_event *e2
-   1 struct perf_event *e1
-   1 struct perf_comm_event *comm_event
-   1 struct perf_cgroup *cgrp
-   1 struct notifier_block *notifier
-   1 struct mutex *b
-   1 struct mutex *a
-   1 struct mm_struct *mm
-   1 struct list_head *head
-   1 struct irq_work *w
-   1 struct irq_work *entry
-   1 struct inode *inode
-   1 struct hrtimer *hrtimer
-   1 struct hrtimer *hr
-   1 struct file *filp
-   1 struct fd *p
-   1 struct cgroup_taskset *tset
-   1 struct cgroup_subsys_state *parent_css
-   1 struct cgroup_subsys_state *css
-   1 poll_table *wait
-   1 pid_t vpid
-   1 pid_t pid
-   1 pid_t
-   1 pid
-   1 perf_unregister_guest_info_callbacks
-   1 perf_trace_run_bpf_submit
-   1 perf_tp_event
-   1 perf_swevent_get_recursion_context
-   1 perf_register_guest_info_callbacks
-   1 perf_pmu_unregister
-   1 perf_pmu_register
-   1 perf_pmu_migrate_context
-   1 perf_event_update_userpage
-   1 perf_event_sysfs_show
-   1 perf_event_release_kernel
-   1 perf_event_refresh
-   1 perf_event_read_value
-   1 perf_event_open
-   1 perf_event_enable
-   1 perf_event_disable
-   1 perf_event_create_kernel_counter
-   1 perf_event_addr_filters_sync
-   1 int type
-   1 int src_cpu
-   1 int size
-   1 int restart
-   1 int on
-   1 int nr_siblings
-   1 int new
-   1 int nesting
-   1 int needs_unthr
-   1 int mode
-   1 int event_cpu
-   1 int entry_size
-   1 int enable
-   1 int dst_cpu
-   1 int cgroup_fd
-   1 int can_add_hw
-   1 int *output_begin
-   1 int *inherited_all
-   1 int *func
-   1 group_fd
-   1 flags
-   1 enum pid_type type
-   1 enum perf_event_state state
-   1 cpu
-   1 const struct proc_ns_operations *ns_ops
-   1 const char *name
-   1 const char *buf
-   1 clockid_t clk_id
-   1 char *fstr
-   1 char *filter_str
-   1 bool group
-   1 bool exec
-   1 bool disable
-   1 bool all
-   1 attr_uptr
-   1 1000 / HZ
+\n
+    228 struct perf_event *event
+     48 struct perf_event_context *ctx
+     32 struct task_struct *task
+     25 struct pt_regs *regs
+     25 struct perf_cpu_context *cpuctx
+     19 void
+     18 void *data
+     18 struct pmu *pmu
+     18 struct perf_sample_data *data
+     12 void *info
+     12 int flags
+     12 int cpu
+      9 struct task_struct *child
+      8 struct perf_output_handle *handle
+      8 struct file *file
+      8 int ctxn
+      7 u32 event_id
+      7 struct perf_event_attr *attr
+      6 struct task_struct *next
+      6 struct device *dev
+      6 enum event_type_t event_type
+      5 u64 *running
+      5 u64 now
+      5 u64 *enabled
+      5 u32 prog_fd
+      5 struct vm_area_struct *vma
+      5 struct perf_event_groups *groups
+      5 struct perf_event *group_leader
+      5 struct device_attribute *attr
+      4 u64 nr
+      4 u64 count
+      4 struct task_struct *prev
+      4 struct task_struct *p
+      4 struct swevent_htable *swhash
+      4 struct perf_event_header *header
+      4 struct perf_event *
+      4 char __user *buf
+      4 char *page
+      3 unsigned long arg
+      3 unsigned int cpu
+      3 unsigned int cmd
+      3 u64 type
+      3 u64 read_format
+      3 struct task_struct *parent
+      3 struct perf_event *parent_event
+      3 struct perf_event_context *task_ctx
+      3 struct perf_event_context *parent_ctx
+      3 struct perf_event_context *child_ctx
+      3 struct list_head *filters
+      3 size_t count
+      3 perf_iterate_f output
+      3 loff_t *ppos
+      3 int rctx
+      3 int fd
+      2 void __user *buffer
+      2 void *func
+      2 void *context
+      2 unsigned long size
+      2 unsigned int flags
+      2 u64 value
+      2 u64 running
+      2 u64 nsec
+      2 u64 enabled
+      2 u64 addr
+      2 struct ring_buffer *rb
+      2 struct rcu_head *head
+      2 struct perf_guest_info_callbacks *cbs
+      2 struct perf_event *leader
+      2 struct perf_event *group_event
+      2 struct perf_event *child_event
+      2 struct perf_event *bp
+      2 struct perf_addr_filter *filter
+      2 struct hlist_head *head
+      2 struct ctl_table *table
+      2 size_t *lenp
+      2 remote_function_f func
+      2 prog
+      2 perf_overflow_handler_t overflow_handler
+      2 int write
+      2 int throttle
+      2 int refresh
+      2 int
+      2 event->overflow_handler
+      2 event->orig_overflow_handler
+      2 event_f func
+      2 enum perf_type_id type
+      2 bool sched_in
+      2 bool add
+      1 void *v
+      1 void __user *arg
+      1 void *record
+      1 void *raw_data
+      1 void *__info
+      1 void *
+      1 unsigned long val
+      1 unsigned long offset
+      1 unsigned long head
+      1 unsigned long *flags
+      1 unsigned long flags
+      1 unsigned long
+      1 unsigned int fd
+      1 unsigned int
+      1 u64 virt
+      1 u64 *values
+      1 u64 *value
+      1 u64 __user *arg
+      1 u64 sample_type
+      1 u64 sample_len_ns
+      1 u64 overflow
+      1 u64 *now
+      1 u64 mask
+      1 u64 lost
+      1 u64 flags
+      1 u64 dump_size
+      1 u16 stack_size
+      1 u16 header_size
+      1 u16 event_type
+      1 struct work_struct *work
+      1 struct vm_fault *vmf
+      1 struct trace_event_call *call
+      1 struct task_struct *next_prev
+      1 struct swevent_hlist *hlist
+      1 struct pt_regs *regs_user_copy
+      1 struct perf_sample_data *sample
+      1 struct perf_regs *regs_user
+      1 struct perf_regs *regs_intr
+      1 struct perf_output_handle *
+      1 struct perf_ns_link_info *ns_link_info
+      1 struct perf_mmap_event *mmap_event
+      1 struct perf_event *right
+      1 struct perf_event *output_event
+      1 struct perf_event *next_event
+      1 struct perf_event_mmap_page *userpg
+      1 struct perf_event *left
+      1 struct perf_event *e2
+      1 struct perf_event *e1
+      1 struct perf_event_context *next_ctx
+      1 struct perf_event_context *ctx2
+      1 struct perf_event_context *ctx1
+      1 struct perf_event_attr __user *uattr
+      1 struct perf_event_attr __user *
+      1 struct perf_comm_event *comm_event
+      1 struct perf_cgroup *cgrp
+      1 struct notifier_block *notifier
+      1 struct mutex *b
+      1 struct mutex *a
+      1 struct mm_struct *mm
+      1 struct list_head *head
+      1 struct irq_work *w
+      1 struct irq_work *entry
+      1 struct inode *inode
+      1 struct hrtimer *hrtimer
+      1 struct hrtimer *hr
+      1 struct file *filp
+      1 struct fd *p
+      1 struct cgroup_taskset *tset
+      1 struct cgroup_subsys_state *parent_css
+      1 struct cgroup_subsys_state *css
+      1 poll_table *wait
+      1 pid_t vpid
+      1 pid_t pid
+      1 pid_t
+      1 pid
+      1 perf_unregister_guest_info_callbacks
+      1 perf_trace_run_bpf_submit
+      1 perf_tp_event
+      1 perf_swevent_get_recursion_context
+      1 perf_register_guest_info_callbacks
+      1 perf_pmu_unregister
+      1 perf_pmu_register
+      1 perf_pmu_migrate_context
+      1 perf_event_update_userpage
+      1 perf_event_sysfs_show
+      1 perf_event_release_kernel
+      1 perf_event_refresh
+      1 perf_event_read_value
+      1 perf_event_open
+      1 perf_event_enable
+      1 perf_event_disable
+      1 perf_event_create_kernel_counter
+      1 perf_event_addr_filters_sync
+      1 int type
+      1 int src_cpu
+      1 int size
+      1 int restart
+      1 int *output_begin
+      1 int on
+      1 int nr_siblings
+      1 int new
+      1 int nesting
+      1 int needs_unthr
+      1 int mode
+      1 int *inherited_all
+      1 int *func
+      1 int event_cpu
+      1 int entry_size
+      1 int enable
+      1 int dst_cpu
+      1 int cgroup_fd
+      1 int can_add_hw
+      1 group_fd
+      1 flags
+      1 enum pid_type type
+      1 enum perf_event_state state
+      1 cpu
+      1 const struct proc_ns_operations *ns_ops
+      1 const char *name
+      1 const char *buf
+      1 clockid_t clk_id
+      1 char *fstr
+      1 char *filter_str
+      1 bool group
+      1 bool exec
+      1 bool disable
+      1 bool all
+      1 attr_uptr
+      1 1000 / HZ

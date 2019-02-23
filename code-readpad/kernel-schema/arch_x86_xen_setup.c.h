@@ -1,4 +1,5 @@
 
+\n
 static void __init xen_parse_512gb(void)
 static void __init xen_add_extra_mem(unsigned long start_pfn, unsigned long n_pfns)
 static void __init xen_del_extra_mem(unsigned long start_pfn, unsigned long n_pfns)
@@ -30,24 +31,25 @@ void xen_enable_sysenter(void)
 void xen_enable_syscall(void)
 void __init xen_pvmmu_arch_setup(void)
 void __init xen_arch_setup(void)
-  13 void
-   7 unsigned long start_pfn
-   5 unsigned long nr_pages
-   4 unsigned long end_pfn
-   3 phys_addr_t size
-   2 unsigned long remap_pfn
-   2 unsigned long pfn
-   2 unsigned long n_pfns
-   2 unsigned long mfn
-   2 phys_addr_t start
-   1 unsigned type
-   1 unsigned long size
-   1 unsigned long remap_pages
-   1 unsigned long last_val
-   1 unsigned long *min_pfn
-   1 unsigned long *func
-   1 phys_addr_t src
-   1 phys_addr_t n
-   1 phys_addr_t dest
-   1 int type
-   1 const void *func
+\n
+     13 void
+      7 unsigned long start_pfn
+      5 unsigned long nr_pages
+      4 unsigned long end_pfn
+      3 phys_addr_t size
+      2 unsigned long remap_pfn
+      2 unsigned long pfn
+      2 unsigned long n_pfns
+      2 unsigned long mfn
+      2 phys_addr_t start
+      1 unsigned type
+      1 unsigned long size
+      1 unsigned long remap_pages
+      1 unsigned long *min_pfn
+      1 unsigned long last_val
+      1 unsigned long *func
+      1 phys_addr_t src
+      1 phys_addr_t n
+      1 phys_addr_t dest
+      1 int type
+      1 const void *func

@@ -1,4 +1,5 @@
 
+\n
 void __init kclist_add(struct kcore_list *new, void *addr, size_t size, int type)
 static size_t get_kcore_size(int *nphdr, size_t *phdrs_len, size_t *notes_len, size_t *data_offset)
 static int kcore_ram_list(struct list_head *head)
@@ -22,38 +23,39 @@ kclist_add(&kcore_modules, (void *)
 MODULES_VADDR, MODULES_END - MODULES_VADDR, KCORE_VMALLOC)
 ;} } static void __init add_modules_range(void)
 static int __init proc_kcore_init(void)
-   8 void
-   3 struct list_head *head
-   2 void *arg
-   2 struct kcore_list *ent
-   2 struct inode *inode
-   2 struct file *file
-   1 void *addr
-   1 void *
-   1 unsigned long pfn
-   1 unsigned long nr_pages
-   1 unsigned long action
-   1 unsigned int type
-   1 struct notifier_block *self
-   1 struct list_head *list
-   1 struct kcore_list *new
-   1 struct file *filp
-   1 size_t size
-   1 size_t descsz
-   1 size_t buflen
-   1 size_t *phdrs_len
-   1 size_t *notes_len
-   1 size_t *i
-   1 size_t *data_offset
-   1 loff_t *fpos
-   1 int type
-   1 int *nphdr
-   1 const void *desc
-   1 const char *name
-   1 char __user *buffer
-   1 char *notes
-   1 _text
-   1 _end - _text
-   1 KCORE_TEXT
-   1 &kcore_text
-   1 &kcore_modules
+\n
+      8 void
+      3 struct list_head *head
+      2 void *arg
+      2 struct kcore_list *ent
+      2 struct inode *inode
+      2 struct file *file
+      1 void *addr
+      1 void *
+      1 unsigned long pfn
+      1 unsigned long nr_pages
+      1 unsigned long action
+      1 unsigned int type
+      1 _text
+      1 struct notifier_block *self
+      1 struct list_head *list
+      1 struct kcore_list *new
+      1 struct file *filp
+      1 size_t size
+      1 size_t *phdrs_len
+      1 size_t *notes_len
+      1 size_t *i
+      1 size_t descsz
+      1 size_t *data_offset
+      1 size_t buflen
+      1 loff_t *fpos
+      1 KCORE_TEXT
+      1 &kcore_text
+      1 &kcore_modules
+      1 int type
+      1 int *nphdr
+      1 _end - _text
+      1 const void *desc
+      1 const char *name
+      1 char __user *buffer
+      1 char *notes

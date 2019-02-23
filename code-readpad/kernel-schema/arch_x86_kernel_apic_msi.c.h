@@ -1,6 +1,7 @@
 
 EXPORT_SYMBOL_GPL(pci_msi_prepare);
 EXPORT_SYMBOL_GPL(pci_msi_set_desc);
+\n
 static void irq_msi_compose_msg(struct irq_data *data, struct msi_msg *msg)
 int native_setup_msi_irqs(struct pci_dev *dev, int nvec, int type)
 void native_teardown_msi_irq(unsigned int irq)
@@ -22,28 +23,29 @@ static int hpet_msi_init(struct irq_domain *domain, struct msi_domain_info *info
 static void hpet_msi_free(struct irq_domain *domain, struct msi_domain_info *info, unsigned int virq)
 struct irq_domain *hpet_create_irq_domain(int hpet_id)
 int hpet_assign_irq(struct irq_domain *domain, struct hpet_dev *dev, int dev_num)
-   7 msi_alloc_info_t *arg
-   6 struct msi_domain_info *info
-   6 struct irq_domain *domain
-   3 unsigned int virq
-   3 struct msi_msg *msg
-   3 struct irq_data *data
-   2 struct irq_domain *parent
-   2 irq_hw_number_t hwirq
-   2 int nvec
-   2 int id
-   1 void *arg
-   1 void
-   1 unsigned int irq
-   1 struct pci_dev *dev
-   1 struct msi_desc *desc
-   1 struct hpet_dev *dev
-   1 struct device *dev
-   1 pci_msi_set_desc
-   1 pci_msi_prepare
-   1 int type
-   1 int node
-   1 int irq
-   1 int hpet_id
-   1 int dev_num
-   1 const char *name
+\n
+      7 msi_alloc_info_t *arg
+      6 struct msi_domain_info *info
+      6 struct irq_domain *domain
+      3 unsigned int virq
+      3 struct msi_msg *msg
+      3 struct irq_data *data
+      2 struct irq_domain *parent
+      2 irq_hw_number_t hwirq
+      2 int nvec
+      2 int id
+      1 void *arg
+      1 void
+      1 unsigned int irq
+      1 struct pci_dev *dev
+      1 struct msi_desc *desc
+      1 struct hpet_dev *dev
+      1 struct device *dev
+      1 pci_msi_set_desc
+      1 pci_msi_prepare
+      1 int type
+      1 int node
+      1 int irq
+      1 int hpet_id
+      1 int dev_num
+      1 const char *name

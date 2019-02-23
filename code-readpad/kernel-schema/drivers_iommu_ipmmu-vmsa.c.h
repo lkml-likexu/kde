@@ -1,4 +1,5 @@
 
+\n
 static struct ipmmu_vmsa_domain *to_vmsa_domain(struct iommu_domain *dom)
 static struct ipmmu_vmsa_device *to_ipmmu(struct device *dev)
 static bool ipmmu_is_root(struct ipmmu_vmsa_device *mmu)
@@ -41,30 +42,30 @@ static void ipmmu_device_reset(struct ipmmu_vmsa_device *mmu)
 static int ipmmu_probe(struct platform_device *pdev)
 static int ipmmu_remove(struct platform_device *pdev)
 static int __init ipmmu_init(void)
-static void __exit ipmmu_exit(void)
-  11 struct ipmmu_vmsa_domain *domain
-  11 struct device *dev
-   7 struct iommu_domain *io_domain
-   6 struct ipmmu_vmsa_device *mmu
-   3 void
-   3 unsigned long iova
-   3 unsigned int reg
-   3 u32 data
-   3 size_t size
-   2 void *cookie
-   2 unsigned type
-   2 unsigned int utlb
-   2 unsigned int offset
-   2 struct platform_device *pdev
-   1 void *dev
-   1 void *data
-   1 unsigned int context_id
-   1 struct of_phandle_args *spec
-   1 struct of_phandle_args *args
-   1 struct iommu_domain *dom
-   1 size_t granule
-   1 phys_addr_t paddr
-   1 int prot
-   1 int irq
-   1 dma_addr_t iova
-   1 bool leaf
+\n
+     11 struct ipmmu_vmsa_domain *domain
+     11 struct device *dev
+      7 struct iommu_domain *io_domain
+      6 struct ipmmu_vmsa_device *mmu
+      3 unsigned long iova
+      3 unsigned int reg
+      3 u32 data
+      3 size_t size
+      2 void *cookie
+      2 void
+      2 unsigned type
+      2 unsigned int utlb
+      2 unsigned int offset
+      2 struct platform_device *pdev
+      1 void *dev
+      1 void *data
+      1 unsigned int context_id
+      1 struct of_phandle_args *spec
+      1 struct of_phandle_args *args
+      1 struct iommu_domain *dom
+      1 size_t granule
+      1 phys_addr_t paddr
+      1 int prot
+      1 int irq
+      1 dma_addr_t iova
+      1 bool leaf

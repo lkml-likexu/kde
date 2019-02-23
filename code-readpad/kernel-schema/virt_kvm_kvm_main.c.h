@@ -16,6 +16,7 @@ EXPORT_SYMBOL_GPL(__kvm_set_memory_region);
 EXPORT_SYMBOL_GPL(kvm_set_memory_region);
 EXPORT_SYMBOL_GPL(kvm_get_dirty_log);
 EXPORT_SYMBOL_GPL(kvm_get_dirty_log_protect);
+EXPORT_SYMBOL_GPL(kvm_clear_dirty_log_protect);
 EXPORT_SYMBOL_GPL(kvm_disable_largepages);
 EXPORT_SYMBOL_GPL(gfn_to_memslot);
 EXPORT_SYMBOL_GPL(kvm_is_visible_gfn);
@@ -67,6 +68,7 @@ EXPORT_SYMBOL_GPL(kvm_io_bus_write);
 EXPORT_SYMBOL_GPL(kvm_io_bus_get_dev);
 EXPORT_SYMBOL_GPL(kvm_init);
 EXPORT_SYMBOL_GPL(kvm_exit);
+\n
 __weak int kvm_arch_mmu_notifier_invalidate_range(struct kvm *kvm, unsigned long start, unsigned long end, bool blockable)
 bool kvm_is_reserved_pfn(kvm_pfn_t pfn)
 void vcpu_load(struct kvm_vcpu *vcpu)
@@ -82,8 +84,8 @@ int kvm_vcpu_init(struct kvm_vcpu *vcpu, struct kvm *kvm, unsigned id)
 void kvm_vcpu_uninit(struct kvm_vcpu *vcpu)
 static inline struct kvm *mmu_notifier_to_kvm(struct mmu_notifier *mn)
 static void kvm_mmu_notifier_change_pte(struct mmu_notifier *mn, struct mm_struct *mm, unsigned long address, pte_t pte)
-static int kvm_mmu_notifier_invalidate_range_start(struct mmu_notifier *mn, struct mm_struct *mm, unsigned long start, unsigned long end, bool blockable)
-static void kvm_mmu_notifier_invalidate_range_end(struct mmu_notifier *mn, struct mm_struct *mm, unsigned long start, unsigned long end)
+static int kvm_mmu_notifier_invalidate_range_start(struct mmu_notifier *mn, const struct mmu_notifier_range *range)
+static void kvm_mmu_notifier_invalidate_range_end(struct mmu_notifier *mn, const struct mmu_notifier_range *range)
 static int kvm_mmu_notifier_clear_flush_young(struct mmu_notifier *mn, struct mm_struct *mm, unsigned long start, unsigned long end)
 static int kvm_mmu_notifier_clear_young(struct mmu_notifier *mn, struct mm_struct *mm, unsigned long start, unsigned long end)
 static int kvm_mmu_notifier_test_young(struct mmu_notifier *mn, struct mm_struct *mm, unsigned long address)
@@ -110,7 +112,8 @@ int __kvm_set_memory_region(struct kvm *kvm, const struct kvm_userspace_memory_r
 int kvm_set_memory_region(struct kvm *kvm, const struct kvm_userspace_memory_region *mem)
 static int kvm_vm_ioctl_set_memory_region(struct kvm *kvm, struct kvm_userspace_memory_region *mem)
 int kvm_get_dirty_log(struct kvm *kvm, struct kvm_dirty_log *log, int *is_dirty)
-int kvm_get_dirty_log_protect(struct kvm *kvm, struct kvm_dirty_log *log, bool *is_dirty)
+int kvm_get_dirty_log_protect(struct kvm *kvm, struct kvm_dirty_log *log, bool *flush)
+int kvm_clear_dirty_log_protect(struct kvm *kvm, struct kvm_clear_dirty_log *log, bool *flush)
 bool kvm_largepages_enabled(void)
 void kvm_disable_largepages(void)
 struct kvm_memory_slot *gfn_to_memslot(struct kvm *kvm, gfn_t gfn)
@@ -167,7 +170,7 @@ int kvm_write_guest(struct kvm *kvm, gpa_t gpa, const void *data, unsigned long 
 int kvm_vcpu_write_guest(struct kvm_vcpu *vcpu, gpa_t gpa, const void *data, unsigned long len)
 static int __kvm_gfn_to_hva_cache_init(struct kvm_memslots *slots, struct gfn_to_hva_cache *ghc, gpa_t gpa, unsigned long len)
 int kvm_gfn_to_hva_cache_init(struct kvm *kvm, struct gfn_to_hva_cache *ghc, gpa_t gpa, unsigned long len)
-int kvm_write_guest_offset_cached(struct kvm *kvm, struct gfn_to_hva_cache *ghc, void *data, int offset, unsigned long len)
+int kvm_write_guest_offset_cached(struct kvm *kvm, struct gfn_to_hva_cache *ghc, void *data, unsigned int offset, unsigned long len)
 int kvm_write_guest_cached(struct kvm *kvm, struct gfn_to_hva_cache *ghc, void *data, unsigned long len)
 int kvm_read_guest_cached(struct kvm *kvm, struct gfn_to_hva_cache *ghc, void *data, unsigned long len)
 int kvm_clear_guest_page(struct kvm *kvm, gfn_t gfn, int offset, int len)
@@ -205,6 +208,10 @@ int kvm_register_device_ops(struct kvm_device_ops *ops, u32 type)
 void kvm_unregister_device_ops(u32 type)
 static int kvm_ioctl_create_device(struct kvm *kvm, struct kvm_create_device *cd)
 static long kvm_vm_ioctl_check_extension_generic(struct kvm *kvm, long arg)
+int __attribute__((weak)
+)
+kvm_vm_ioctl_enable_cap(struct kvm *kvm, struct kvm_enable_cap *cap)
+static int kvm_vm_ioctl_enable_cap_generic(struct kvm *kvm, struct kvm_enable_cap *cap)
 static long kvm_vm_ioctl(struct file *filp, unsigned int ioctl, unsigned long arg)
 static long kvm_vm_compat_ioctl(struct file *filp, unsigned int ioctl, unsigned long arg)
 static int kvm_dev_ioctl_create_vm(unsigned long type)
@@ -254,177 +261,184 @@ static void kvm_sched_in(struct preempt_notifier *pn, int cpu)
 static void kvm_sched_out(struct preempt_notifier *pn, struct task_struct *next)
 int kvm_init(void *opaque, unsigned vcpu_size, unsigned vcpu_align, struct module *module)
 void kvm_exit(void)
-  50 struct kvm *kvm
-  34 struct kvm_vcpu *vcpu
-  34 gfn_t gfn
-  15 void *data
-  14 unsigned long len
-  12 int len
-  11 struct kvm_memory_slot *slot
-  10 void
-  10 struct file *filp
-  10 int offset
-   9 gpa_t gpa
-   9 bool *writable
-   8 struct mmu_notifier *mn
-   7 struct mm_struct *mm
-   7 struct inode *inode
-   7 kvm_pfn_t pfn
-   7 bool write_fault
-   6 unsigned long arg
-   6 unsigned int ioctl
-   6 gpa_t addr
-   6 enum kvm_bus bus_idx
-   5 unsigned long start
-   5 unsigned long end
-   5 unsigned long addr
-   5 struct gfn_to_hva_cache *ghc
-   5 struct file *file
-   5 const void *data
-   4 void *_offset
-   4 u64 val
-   4 u64 *val
-   4 struct kvm_memslots *slots
-   4 struct kvm_memory_slot *memslot
-   4 struct kvm_io_bus *bus
-   4 bool *async
-   3 struct vm_area_struct *vma
-   3 struct preempt_notifier *pn
-   3 const void *val
-   3 const struct kvm_userspace_memory_region *mem
-   2 void *val
-   2 void *junk
-   2 void *
-   2 unsigned long type
-   2 unsigned long address
-   2 unsigned int req
-   2 unsigned int cpu
-   2 u32 type
-   2 struct page *page
-   2 struct kvm_io_range *range
-   2 struct kvm_io_device *dev
-   2 struct kvm_dirty_log *log
-   2 struct kvm_device *dev
-   2 kvm_pfn_t *pfn
-   2 gfn_t *nr_pages
-   2 bool blockable
-   2 bool atomic
-   1 void *v
-   1 void *opaque
-   1 void *_completed
-   1 vcpu_put
-   1 vcpu_load
-   1 unsigned vcpu_size
-   1 unsigned vcpu_align
-   1 unsigned req
-   1 unsigned long val
-   1 unsigned long *vcpu_bitmap
-   1 unsigned int type
-   1 unsigned id
-   1 u64 *
-   1 u64
-   1 u32 id
-   1 struct vm_fault *vmf
-   1 struct task_struct *next
-   1 struct page **pages
-   1 struct notifier_block *notifier
-   1 struct module *module
-   1 struct kvm_vcpu *target
-   1 struct kvm_vcpu *me
-   1 struct kvm_userspace_memory_region *mem
-   1 struct kvm_memory_slot *new
-   1 struct kvm_memory_slot *free
-   1 struct kvm_memory_slot *dont
-   1 struct kvm_device_ops *ops
-   1 struct kvm_device_attr *attr
-   1 struct kvm_create_device *cd
-   1 sigset_t *sigset
-   1 pte_t pte
-   1 mark_page_dirty
-   1 long cookie
-   1 long arg
-   1 kvm_write_guest_page
-   1 kvm_write_guest_offset_cached
-   1 kvm_write_guest_cached
-   1 kvm_write_guest
-   1 kvm_vcpu_yield_to
-   1 kvm_vcpu_write_guest_page
-   1 kvm_vcpu_write_guest
-   1 kvm_vcpu_wake_up
-   1 kvm_vcpu_uninit
-   1 kvm_vcpu_read_guest_page
-   1 kvm_vcpu_read_guest_atomic
-   1 kvm_vcpu_read_guest
-   1 kvm_vcpu_on_spin
-   1 kvm_vcpu_mark_page_dirty
-   1 kvm_vcpu_kick
-   1 kvm_vcpu_init
-   1 kvm_vcpu_gfn_to_pfn_atomic
-   1 kvm_vcpu_gfn_to_pfn
-   1 kvm_vcpu_gfn_to_page
-   1 kvm_vcpu_gfn_to_hva
-   1 kvm_vcpu_cache
-   1 kvm_vcpu_block
-   1 kvm_set_pfn_dirty
-   1 kvm_set_pfn_accessed
-   1 kvm_set_memory_region
-   1 kvm_release_pfn_dirty
-   1 kvm_release_pfn_clean
-   1 kvm_release_page_dirty
-   1 kvm_release_page_clean
-   1 kvm_rebooting
-   1 kvm_read_guest_page
-   1 kvm_read_guest_cached
-   1 kvm_read_guest_atomic
-   1 kvm_read_guest
-   1 kvm_put_kvm
-   1 kvm_pfn_t *p_pfn
-   1 kvm_is_visible_gfn
-   1 kvm_io_bus_write
-   1 kvm_io_bus_get_dev
-   1 kvm_init
-   1 kvm_gfn_to_hva_cache_init
-   1 kvm_get_pfn
-   1 kvm_get_kvm
-   1 kvm_get_dirty_log_protect
-   1 kvm_get_dirty_log
-   1 kvm_flush_remote_tlbs
-   1 kvm_exit
-   1 kvm_disable_largepages
-   1 kvm_debugfs_dir
-   1 kvm_clear_guest_page
-   1 kvm_clear_guest
-   1 int nr_pages
-   1 int fd
-   1 int cpu
-   1 int as_id
-   1 int *is_dirty
-   1 int *get
-   1 int *accessor
-   1 halt_poll_ns_shrink
-   1 halt_poll_ns_grow
-   1 halt_poll_ns
-   1 gfn_to_pfn_prot
-   1 gfn_to_pfn_memslot_atomic
-   1 gfn_to_pfn_memslot
-   1 gfn_to_pfn_atomic
-   1 gfn_to_pfn
-   1 gfn_to_page_many_atomic
-   1 gfn_to_page
-   1 gfn_to_memslot
-   1 gfn_to_hva_memslot
-   1 gfn_to_hva
-   1 enum kvm_mr_change change
-   1 cpumask_var_t tmp
-   1 const void *p2
-   1 const void *p1
-   1 const struct kvm_io_range *r2
-   1 const struct kvm_io_range *r1
-   1 const struct cpumask *cpus
-   1 bool yield_to_kernel_mode
-   1 bool write
-   1 bool wait
-   1 bool *is_dirty
-   1 __kvm_set_memory_region
-   1 __gfn_to_pfn_memslot
-   1 *set
+\n
+     53 struct kvm *kvm
+     34 struct kvm_vcpu *vcpu
+     34 gfn_t gfn
+     15 void *data
+     14 unsigned long len
+     12 int len
+     11 struct kvm_memory_slot *slot
+     10 void
+     10 struct file *filp
+      9 int offset
+      9 gpa_t gpa
+      9 bool *writable
+      8 struct mmu_notifier *mn
+      7 struct inode *inode
+      7 kvm_pfn_t pfn
+      7 bool write_fault
+      6 unsigned long arg
+      6 unsigned int ioctl
+      6 gpa_t addr
+      6 enum kvm_bus bus_idx
+      5 unsigned long addr
+      5 struct mm_struct *mm
+      5 struct gfn_to_hva_cache *ghc
+      5 struct file *file
+      5 const void *data
+      4 void *_offset
+      4 u64 *val
+      4 u64 val
+      4 struct kvm_memslots *slots
+      4 struct kvm_memory_slot *memslot
+      4 struct kvm_io_bus *bus
+      4 bool *async
+      3 unsigned long start
+      3 unsigned long end
+      3 struct vm_area_struct *vma
+      3 struct preempt_notifier *pn
+      3 const void *val
+      3 const struct kvm_userspace_memory_region *mem
+      2 void *val
+      2 void *junk
+      2 void *
+      2 unsigned long type
+      2 unsigned long address
+      2 unsigned int req
+      2 unsigned int cpu
+      2 u32 type
+      2 struct page *page
+      2 struct kvm_io_range *range
+      2 struct kvm_io_device *dev
+      2 struct kvm_enable_cap *cap
+      2 struct kvm_dirty_log *log
+      2 struct kvm_device *dev
+      2 kvm_pfn_t *pfn
+      2 gfn_t *nr_pages
+      2 const struct mmu_notifier_range *range
+      2 bool *flush
+      2 bool atomic
+      1 weak
+      1 void *v
+      1 void *opaque
+      1 void *_completed
+      1 vcpu_put
+      1 vcpu_load
+      1 unsigned vcpu_size
+      1 unsigned vcpu_align
+      1 unsigned req
+      1 unsigned long *vcpu_bitmap
+      1 unsigned long val
+      1 unsigned int type
+      1 unsigned int offset
+      1 unsigned id
+      1 u64 *
+      1 u64
+      1 u32 id
+      1 struct vm_fault *vmf
+      1 struct task_struct *next
+      1 struct page **pages
+      1 struct notifier_block *notifier
+      1 struct module *module
+      1 struct kvm_vcpu *target
+      1 struct kvm_vcpu *me
+      1 struct kvm_userspace_memory_region *mem
+      1 struct kvm_memory_slot *new
+      1 struct kvm_memory_slot *free
+      1 struct kvm_memory_slot *dont
+      1 struct kvm_device_ops *ops
+      1 struct kvm_device_attr *attr
+      1 struct kvm_create_device *cd
+      1 struct kvm_clear_dirty_log *log
+      1 sigset_t *sigset
+      1 *set
+      1 pte_t pte
+      1 mark_page_dirty
+      1 long cookie
+      1 long arg
+      1 kvm_write_guest_page
+      1 kvm_write_guest_offset_cached
+      1 kvm_write_guest_cached
+      1 kvm_write_guest
+      1 kvm_vcpu_yield_to
+      1 kvm_vcpu_write_guest_page
+      1 kvm_vcpu_write_guest
+      1 kvm_vcpu_wake_up
+      1 kvm_vcpu_uninit
+      1 kvm_vcpu_read_guest_page
+      1 kvm_vcpu_read_guest_atomic
+      1 kvm_vcpu_read_guest
+      1 kvm_vcpu_on_spin
+      1 kvm_vcpu_mark_page_dirty
+      1 kvm_vcpu_kick
+      1 kvm_vcpu_init
+      1 kvm_vcpu_gfn_to_pfn_atomic
+      1 kvm_vcpu_gfn_to_pfn
+      1 kvm_vcpu_gfn_to_page
+      1 kvm_vcpu_gfn_to_hva
+      1 kvm_vcpu_cache
+      1 kvm_vcpu_block
+      1 kvm_set_pfn_dirty
+      1 kvm_set_pfn_accessed
+      1 kvm_set_memory_region
+      1 __kvm_set_memory_region
+      1 kvm_release_pfn_dirty
+      1 kvm_release_pfn_clean
+      1 kvm_release_page_dirty
+      1 kvm_release_page_clean
+      1 kvm_rebooting
+      1 kvm_read_guest_page
+      1 kvm_read_guest_cached
+      1 kvm_read_guest_atomic
+      1 kvm_read_guest
+      1 kvm_put_kvm
+      1 kvm_pfn_t *p_pfn
+      1 kvm_is_visible_gfn
+      1 kvm_io_bus_write
+      1 kvm_io_bus_get_dev
+      1 kvm_init
+      1 kvm_gfn_to_hva_cache_init
+      1 kvm_get_pfn
+      1 kvm_get_kvm
+      1 kvm_get_dirty_log_protect
+      1 kvm_get_dirty_log
+      1 kvm_flush_remote_tlbs
+      1 kvm_exit
+      1 kvm_disable_largepages
+      1 kvm_debugfs_dir
+      1 kvm_clear_guest_page
+      1 kvm_clear_guest
+      1 kvm_clear_dirty_log_protect
+      1 int nr_pages
+      1 int *is_dirty
+      1 int *get
+      1 int fd
+      1 int cpu
+      1 int as_id
+      1 int *accessor
+      1 halt_poll_ns_shrink
+      1 halt_poll_ns_grow
+      1 halt_poll_ns
+      1 gfn_to_pfn_prot
+      1 gfn_to_pfn_memslot_atomic
+      1 gfn_to_pfn_memslot
+      1 __gfn_to_pfn_memslot
+      1 gfn_to_pfn_atomic
+      1 gfn_to_pfn
+      1 gfn_to_page_many_atomic
+      1 gfn_to_page
+      1 gfn_to_memslot
+      1 gfn_to_hva_memslot
+      1 gfn_to_hva
+      1 enum kvm_mr_change change
+      1 cpumask_var_t tmp
+      1 const void *p2
+      1 const void *p1
+      1 const struct kvm_io_range *r2
+      1 const struct kvm_io_range *r1
+      1 const struct cpumask *cpus
+      1 bool yield_to_kernel_mode
+      1 bool write
+      1 bool wait
+      1 bool blockable

@@ -16,6 +16,7 @@ EXPORT_SYMBOL_GPL(free_percpu_irq);
 EXPORT_SYMBOL_GPL(__request_percpu_irq);
 EXPORT_SYMBOL_GPL(irq_get_irqchip_state);
 EXPORT_SYMBOL_GPL(irq_set_irqchip_state);
+\n
 static int __init setup_forced_irqthreads(char *arg)
 static void __synchronize_hardirq(struct irq_desc *desc)
 bool synchronize_hardirq(unsigned int irq)
@@ -91,61 +92,62 @@ int setup_percpu_irq(unsigned int irq, struct irqaction *act)
 int __request_percpu_irq(unsigned int irq, irq_handler_t handler, unsigned long flags, const char *devname, void __percpu *dev_id)
 int irq_get_irqchip_state(unsigned int irq, enum irqchip_irq_state which, bool *state)
 int irq_set_irqchip_state(unsigned int irq, enum irqchip_irq_state which, bool val)
-  35 unsigned int irq
-  18 struct irq_desc *desc
-   8 void *dev_id
-   6 struct irqaction *action
-   6 struct irq_data *data
-   4 struct irqaction *act
-   4 int irq
-   4 bool force
-   3 void __percpu *dev_id
-   3 unsigned long flags
-   3 struct irqaction *new
-   3 irq_handler_t handler
-   3 const struct cpumask *mask
-   3 const struct cpumask *dest
-   3 &mask
-   2 unsigned long irqflags
-   2 unsigned int on
-   2 nodemask
-   2 enum irqchip_irq_state which
-   2 const char *devname
-   1 void *vcpu_info
-   1 void *data
-   1 unsigned int type
-   1 struct work_struct *work
-   1 struct irq_affinity_notify *notify
-   1 struct callback_head *unused
-   1 setup_irq
-   1 request_any_context_irq
-   1 remove_irq
-   1 irq_wake_thread
-   1 irq_set_vcpu_affinity
-   1 irq_set_parent
-   1 irq_set_irqchip_state
-   1 irq_set_affinity_notifier
-   1 irq_set_affinity_hint
-   1 irq_percpu_is_enabled
-   1 irq_handler_t thread_fn
-   1 irq_get_irqchip_state
-   1 int parent_irq
-   1 free_percpu_irq
-   1 force_irqthreads
-   1 false
-   1 enable_percpu_irq
-   1 disable_percpu_irq
-   1 disable_hardirq
-   1 dest
-   1 desc
-   1 data
-   1 cpumask_intersects&mask
-   1 const struct cpumask *m
-   1 const char *name
-   1 char *arg
-   1 bool val
-   1 bool secondary
-   1 bool *state
-   1 __request_percpu_irq
-   1 &mask_lock
-   1 &desc->irq_data
+\n
+     35 unsigned int irq
+     18 struct irq_desc *desc
+      8 void *dev_id
+      6 struct irq_data *data
+      6 struct irqaction *action
+      4 struct irqaction *act
+      4 int irq
+      4 bool force
+      3 void __percpu *dev_id
+      3 unsigned long flags
+      3 struct irqaction *new
+      3 &mask
+      3 irq_handler_t handler
+      3 const struct cpumask *mask
+      3 const struct cpumask *dest
+      2 unsigned long irqflags
+      2 unsigned int on
+      2 nodemask
+      2 enum irqchip_irq_state which
+      2 const char *devname
+      1 void *vcpu_info
+      1 void *data
+      1 unsigned int type
+      1 struct work_struct *work
+      1 struct irq_affinity_notify *notify
+      1 struct callback_head *unused
+      1 setup_irq
+      1 __request_percpu_irq
+      1 request_any_context_irq
+      1 remove_irq
+      1 &mask_lock
+      1 irq_wake_thread
+      1 irq_set_vcpu_affinity
+      1 irq_set_parent
+      1 irq_set_irqchip_state
+      1 irq_set_affinity_notifier
+      1 irq_set_affinity_hint
+      1 irq_percpu_is_enabled
+      1 irq_handler_t thread_fn
+      1 irq_get_irqchip_state
+      1 int parent_irq
+      1 free_percpu_irq
+      1 force_irqthreads
+      1 false
+      1 enable_percpu_irq
+      1 disable_percpu_irq
+      1 disable_hardirq
+      1 dest
+      1 &desc->irq_data
+      1 desc
+      1 data
+      1 cpumask_intersects&mask
+      1 const struct cpumask *m
+      1 const char *name
+      1 char *arg
+      1 bool val
+      1 bool *state
+      1 bool secondary

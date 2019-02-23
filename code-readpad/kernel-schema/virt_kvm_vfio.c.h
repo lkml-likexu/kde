@@ -1,4 +1,5 @@
 
+\n
 static struct vfio_group *kvm_vfio_group_get_external_user(struct file *filep)
 static bool kvm_vfio_external_group_match_file(struct vfio_group *group, struct file *filep)
 static void kvm_vfio_group_put_external_user(struct vfio_group *vfio_group)
@@ -15,13 +16,14 @@ static void kvm_vfio_destroy(struct kvm_device *dev)
 static int kvm_vfio_create(struct kvm_device *dev, u32 type)
 int kvm_vfio_ops_init(void)
 void kvm_vfio_ops_exit(void)
-   6 struct kvm_device *dev
-   4 struct vfio_group *vfio_group
-   3 struct vfio_group *group
-   2 void
-   2 struct kvm_device_attr *attr
-   2 struct kvm *kvm
-   2 struct file *filep
-   1 u64 arg
-   1 u32 type
-   1 long attr
+\n
+      6 struct kvm_device *dev
+      4 struct vfio_group *vfio_group
+      3 struct vfio_group *group
+      2 void
+      2 struct kvm *kvm
+      2 struct kvm_device_attr *attr
+      2 struct file *filep
+      1 u64 arg
+      1 u32 type
+      1 long attr

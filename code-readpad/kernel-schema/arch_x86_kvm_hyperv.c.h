@@ -1,6 +1,7 @@
 
 EXPORT_SYMBOL_GPL(kvm_hv_assist_page_enabled);
 EXPORT_SYMBOL_GPL(kvm_hv_get_assist_page);
+\n
 static inline u64 synic_read_sint(struct kvm_vcpu_hv_synic *synic, int sint)
 static inline int synic_get_sint_vector(u64 sint_value)
 static bool synic_has_vector_connected(struct kvm_vcpu_hv_synic *synic, int vector)
@@ -9,7 +10,6 @@ static void synic_update_vector(struct kvm_vcpu_hv_synic *synic, int vector)
 static int synic_set_sint(struct kvm_vcpu_hv_synic *synic, int sint, u64 data, bool host)
 static struct kvm_vcpu *get_vcpu_by_vpidx(struct kvm *kvm, u32 vpidx)
 static struct kvm_vcpu_hv_synic *synic_get(struct kvm *kvm, u32 vpidx)
-static void synic_clear_sint_msg_pending(struct kvm_vcpu_hv_synic *synic, u32 sint)
 static void kvm_hv_notify_acked_sint(struct kvm_vcpu *vcpu, u32 sint)
 static void synic_exit(struct kvm_vcpu_hv_synic *synic, u32 msr)
 static int synic_set_msr(struct kvm_vcpu_hv_synic *synic, u32 msr, u64 data, bool host)
@@ -29,8 +29,9 @@ static int stimer_set_config(struct kvm_vcpu_hv_stimer *stimer, u64 config, bool
 static int stimer_set_count(struct kvm_vcpu_hv_stimer *stimer, u64 count, bool host)
 static int stimer_get_config(struct kvm_vcpu_hv_stimer *stimer, u64 *pconfig)
 static int stimer_get_count(struct kvm_vcpu_hv_stimer *stimer, u64 *pcount)
-static int synic_deliver_msg(struct kvm_vcpu_hv_synic *synic, u32 sint, struct hv_message *src_msg)
+static int synic_deliver_msg(struct kvm_vcpu_hv_synic *synic, u32 sint, struct hv_message *src_msg, bool no_retry)
 static int stimer_send_msg(struct kvm_vcpu_hv_stimer *stimer)
+static int stimer_notify_direct(struct kvm_vcpu_hv_stimer *stimer)
 static void stimer_expiration(struct kvm_vcpu_hv_stimer *stimer)
 void kvm_hv_process_stimers(struct kvm_vcpu *vcpu)
 void kvm_hv_vcpu_uninit(struct kvm_vcpu *vcpu)
@@ -70,49 +71,54 @@ void kvm_hv_destroy_vm(struct kvm *kvm)
 static int kvm_hv_eventfd_assign(struct kvm *kvm, u32 conn_id, int fd)
 static int kvm_hv_eventfd_deassign(struct kvm *kvm, u32 conn_id)
 int kvm_vm_ioctl_hv_eventfd(struct kvm *kvm, struct kvm_hyperv_eventfd *args)
-  24 struct kvm_vcpu *vcpu
-  15 struct kvm *kvm
-  12 struct kvm_vcpu_hv_synic *synic
-  11 struct kvm_vcpu_hv_stimer *stimer
-  11 bool host
-  10 u32 msr
-   7 u64 data
-   6 u64 *pdata
-   6 u32 sint
-   4 u32 vpidx
-   4 int vector
-   2 unsigned long *vcpu_bitmap
-   2 u64 result
-   2 u64 ingpa
-   2 u32 index
-   2 u32 conn_id
-   2 struct pvclock_vcpu_time_info *hv_clock
-   2 struct kvm_vcpu *current_vcpu
-   2 int sint
-   2 bool fast
-   2 bool ex
-   1 void
-   1 u64 valid_bank_mask
-   1 u64 sint_value
-   1 u64 param
-   1 u64 outgpa
-   1 u64 count
-   1 u64 config
-   1 u64 *vp_bitmap
-   1 u64 *sparse_banks
-   1 u64 *pcount
-   1 u64 *pconfig
-   1 u32 vector
-   1 u16 rep_cnt
-   1 struct kvm_hyperv_eventfd *args
-   1 struct hv_vp_assist_page *assist_page
-   1 struct hv_message *src_msg
-   1 struct hrtimer *timer
-   1 kvm_hv_get_assist_page
-   1 kvm_hv_assist_page_enabled
-   1 int timer_index
-   1 int gsi
-   1 int fd
-   1 bool vcpu_kick
-   1 bool dont_zero_synic_pages
-   1 HV_REFERENCE_TSC_PAGE *tsc_ref
+int kvm_vcpu_ioctl_get_hv_cpuid(struct kvm_vcpu *vcpu, struct kvm_cpuid2 *cpuid, struct kvm_cpuid_entry2 __user *entries)
+\n
+     25 struct kvm_vcpu *vcpu
+     15 struct kvm *kvm
+     12 struct kvm_vcpu_hv_stimer *stimer
+     11 struct kvm_vcpu_hv_synic *synic
+     11 bool host
+     10 u32 msr
+      7 u64 data
+      6 u64 *pdata
+      5 u32 sint
+      4 u32 vpidx
+      4 int vector
+      2 unsigned long *vcpu_bitmap
+      2 u64 result
+      2 u64 ingpa
+      2 u32 index
+      2 u32 conn_id
+      2 struct pvclock_vcpu_time_info *hv_clock
+      2 struct kvm_vcpu *current_vcpu
+      2 int sint
+      2 bool fast
+      2 bool ex
+      1 void
+      1 u64 *vp_bitmap
+      1 u64 valid_bank_mask
+      1 u64 *sparse_banks
+      1 u64 sint_value
+      1 u64 *pcount
+      1 u64 *pconfig
+      1 u64 param
+      1 u64 outgpa
+      1 u64 count
+      1 u64 config
+      1 u32 vector
+      1 u16 rep_cnt
+      1 struct kvm_hyperv_eventfd *args
+      1 struct kvm_cpuid_entry2 __user *entries
+      1 struct kvm_cpuid2 *cpuid
+      1 struct hv_vp_assist_page *assist_page
+      1 struct hv_message *src_msg
+      1 struct hrtimer *timer
+      1 kvm_hv_get_assist_page
+      1 kvm_hv_assist_page_enabled
+      1 int timer_index
+      1 int gsi
+      1 int fd
+      1 HV_REFERENCE_TSC_PAGE *tsc_ref
+      1 bool vcpu_kick
+      1 bool no_retry
+      1 bool dont_zero_synic_pages

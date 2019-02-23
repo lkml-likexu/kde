@@ -7,6 +7,7 @@ EXPORT_SYMBOL_GPL(erst_get_record_id_end);
 EXPORT_SYMBOL_GPL(erst_write);
 EXPORT_SYMBOL_GPL(erst_read);
 EXPORT_SYMBOL_GPL(erst_clear);
+\n
 static inline int erst_errno(int command_status)
 static int erst_timedout(u64 *t, u64 spin_unit)
 static int erst_exec_load_var1(struct apei_exec_context *ctx, struct acpi_whea_header *entry)
@@ -53,30 +54,31 @@ static ssize_t erst_reader(struct pstore_record *record)
 static int erst_writer(struct pstore_record *record)
 static int erst_clearer(struct pstore_record *record)
 static int __init erst_init(void)
-  15 struct apei_exec_context *ctx
-  14 struct acpi_whea_header *entry
-   8 u64 record_id
-   7 void
-   3 struct pstore_record *record
-   2 u64 offset
-   2 u64 *record_id
-   2 u64 *offset
-   2 struct pstore_info *psi
-   2 struct cper_record_header *record
-   2 size_t buflen
-   2 int *pos
-   2 const struct cper_record_header *record
-   1 u64 spin_unit
-   1 u64 *t
-   1 struct erst_erange *range
-   1 struct acpi_table_erst *erst_tab
-   1 int command_status
-   1 erst_write
-   1 erst_read
-   1 erst_get_record_id_next
-   1 erst_get_record_id_end
-   1 erst_get_record_id_begin
-   1 erst_get_record_count
-   1 erst_disable
-   1 erst_clear
-   1 char *str
+\n
+     15 struct apei_exec_context *ctx
+     14 struct acpi_whea_header *entry
+      8 u64 record_id
+      7 void
+      3 struct pstore_record *record
+      2 u64 *record_id
+      2 u64 *offset
+      2 u64 offset
+      2 struct pstore_info *psi
+      2 struct cper_record_header *record
+      2 size_t buflen
+      2 int *pos
+      2 const struct cper_record_header *record
+      1 u64 *t
+      1 u64 spin_unit
+      1 struct erst_erange *range
+      1 struct acpi_table_erst *erst_tab
+      1 int command_status
+      1 erst_write
+      1 erst_read
+      1 erst_get_record_id_next
+      1 erst_get_record_id_end
+      1 erst_get_record_id_begin
+      1 erst_get_record_count
+      1 erst_disable
+      1 erst_clear
+      1 char *str

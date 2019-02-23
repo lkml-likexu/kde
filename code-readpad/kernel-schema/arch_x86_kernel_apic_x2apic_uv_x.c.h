@@ -5,6 +5,7 @@ EXPORT_SYMBOL_GPL(is_uv_system);
 EXPORT_SYMBOL_GPL(is_uv_hubless);
 EXPORT_SYMBOL_GPL(__uv_hub_info_list);
 EXPORT_SYMBOL_GPL(uv_possible_blades);
+\n
 unsigned long uv_undefined(char *str)
 static unsigned long __init uv_early_read_mmr(unsigned long addr)
 static inline bool is_GRU_range(u64 start, u64 end)
@@ -55,10 +56,10 @@ static int uv_heartbeat_disable(unsigned int cpu)
 static __init void uv_scir_register_cpu_notifier(void)
 static __init void uv_scir_register_cpu_notifier(void)
 static __init int uv_init_heartbeat(void)
-int uv_set_vga_state(struct pci_dev *pdev, bool decode, unsigned int command_bits, u32 flags)
+static int uv_set_vga_state(struct pci_dev *pdev, bool decode, unsigned int command_bits, u32 flags)
 void uv_cpu_init(void)
 static void get_mn(struct mn *mnp)
-void __init uv_init_hub_info(struct uv_hub_info_s *hi)
+static void __init uv_init_hub_info(struct uv_hub_info_s *hi)
 static void __init decode_gam_params(unsigned long ptr)
 static void __init decode_gam_rng_tbl(unsigned long ptr)
 static int __init decode_uv_systab(void)
@@ -66,50 +67,51 @@ static __init void boot_init_possible_blades(struct uv_hub_info_s *hub_info)
 static void __init build_socket_tables(void)
 static void __init uv_system_init_hub(void)
 void __init uv_system_init(void)
-  25 void
-   6 int vector
-   5 int max_pnode
-   3 unsigned int cpu
-   2 unsigned long ptr
-   2 u64 start
-   2 u64 end
-   2 int min_pnode
-   2 const struct cpumask *mask
-   1 uv_possible_blades
-   1 uv_min_hub_revision_id
-   1 uv_apicid_hibits
-   1 unsigned long x
-   1 unsigned long start_rip
-   1 unsigned long c
-   1 unsigned long base
-   1 unsigned long addr
-   1 unsigned long *size
-   1 unsigned long *base
-   1 unsigned int id
-   1 unsigned int command_bits
-   1 u32 lgre
-   1 u32 flags
-   1 u32 apicid
-   1 struct uv_hub_info_s *hub_info
-   1 struct uv_hub_info_s *hi
-   1 struct timer_list *timer
-   1 struct pci_dev *pdev
-   1 struct mn *mnp
-   1 is_uv_system
-   1 is_uv_hubless
-   1 int pshift
-   1 int pnode
-   1 int phys_apicid
-   1 int initial_apicid
-   1 int index_msb
-   1 int index
-   1 int cpu
-   1 int bshift
-   1 enum map_type map_type
-   1 char *str
-   1 char *ptr
-   1 char *oem_table_id
-   1 char *oem_id
-   1 char *id
-   1 bool decode
-   1 __uv_hub_info_list
+\n
+     25 void
+      6 int vector
+      5 int max_pnode
+      3 unsigned int cpu
+      2 unsigned long ptr
+      2 u64 start
+      2 u64 end
+      2 int min_pnode
+      2 const struct cpumask *mask
+      1 uv_possible_blades
+      1 uv_min_hub_revision_id
+      1 __uv_hub_info_list
+      1 uv_apicid_hibits
+      1 unsigned long x
+      1 unsigned long start_rip
+      1 unsigned long *size
+      1 unsigned long c
+      1 unsigned long *base
+      1 unsigned long base
+      1 unsigned long addr
+      1 unsigned int id
+      1 unsigned int command_bits
+      1 u32 lgre
+      1 u32 flags
+      1 u32 apicid
+      1 struct uv_hub_info_s *hub_info
+      1 struct uv_hub_info_s *hi
+      1 struct timer_list *timer
+      1 struct pci_dev *pdev
+      1 struct mn *mnp
+      1 is_uv_system
+      1 is_uv_hubless
+      1 int pshift
+      1 int pnode
+      1 int phys_apicid
+      1 int initial_apicid
+      1 int index_msb
+      1 int index
+      1 int cpu
+      1 int bshift
+      1 enum map_type map_type
+      1 char *str
+      1 char *ptr
+      1 char *oem_table_id
+      1 char *oem_id
+      1 char *id
+      1 bool decode

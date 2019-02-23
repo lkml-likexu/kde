@@ -1,4 +1,5 @@
 
+\n
 static void pit_set_gate(struct kvm_pit *pit, int channel, u32 val)
 static int pit_get_gate(struct kvm_pit *pit, int channel)
 static s64 __kpit_elapsed(struct kvm_pit *pit)
@@ -29,25 +30,26 @@ static void kvm_pit_reset(struct kvm_pit *pit)
 static void pit_mask_notifer(struct kvm_irq_mask_notifier *kimn, bool mask)
 struct kvm_pit *kvm_create_pit(struct kvm *kvm, u32 flags)
 void kvm_free_pit(struct kvm *kvm)
-  15 struct kvm_pit *pit
-   9 int channel
-   5 struct kvm_vcpu *vcpu
-   5 gpa_t addr
-   4 u32 val
-   4 struct kvm_io_device *this
-   4 int len
-   2 void *data
-   2 struct kvm_io_device *dev
-   2 struct kvm *kvm
-   2 const void *data
-   1 u32 flags
-   1 struct kvm_kpit_state *ps
-   1 struct kvm_kpit_channel_state *c
-   1 struct kvm_irq_mask_notifier *kimn
-   1 struct kvm_irq_ack_notifier *kian
-   1 struct kthread_work *work
-   1 struct hrtimer *data
-   1 int is_period
-   1 int hpet_legacy_start
-   1 bool reinject
-   1 bool mask
+\n
+     15 struct kvm_pit *pit
+      9 int channel
+      5 struct kvm_vcpu *vcpu
+      5 gpa_t addr
+      4 u32 val
+      4 struct kvm_io_device *this
+      4 int len
+      2 void *data
+      2 struct kvm *kvm
+      2 struct kvm_io_device *dev
+      2 const void *data
+      1 u32 flags
+      1 struct kvm_kpit_state *ps
+      1 struct kvm_kpit_channel_state *c
+      1 struct kvm_irq_mask_notifier *kimn
+      1 struct kvm_irq_ack_notifier *kian
+      1 struct kthread_work *work
+      1 struct hrtimer *data
+      1 int is_period
+      1 int hpet_legacy_start
+      1 bool reinject
+      1 bool mask

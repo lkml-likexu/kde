@@ -1,6 +1,7 @@
 
 EXPORT_SYMBOL_GPL(intel_iommu_enabled);
 EXPORT_SYMBOL_GPL(intel_iommu_gfx_mapped);
+\n
 static inline int agaw_to_level(int agaw)
 static inline int agaw_to_width(int agaw)
 static inline int width_to_agaw(int width)
@@ -37,11 +38,6 @@ static inline void context_set_address_width(struct context_entry *context, unsi
 static inline void context_set_domain_id(struct context_entry *context, unsigned long value)
 static inline int context_domain_id(struct context_entry *c)
 static inline void context_clear_entry(struct context_entry *context)
-static inline void dma_clear_pte(struct dma_pte *pte)
-static inline u64 dma_pte_addr(struct dma_pte *pte)
-static inline bool dma_pte_present(struct dma_pte *pte)
-static inline bool dma_pte_superpage(struct dma_pte *pte)
-static inline int first_pte_in_page(struct dma_pte *pte)
 int for_each_device_domain(int (*fn)
 (struct device_domain_info *info, void *data)
 , void *data)
@@ -88,7 +84,7 @@ static void dma_free_pagelist(struct page *freelist)
 static void iova_entry_free(unsigned long data)
 static int iommu_alloc_root_entry(struct intel_iommu *iommu)
 static void iommu_set_root_entry(struct intel_iommu *iommu)
-static void iommu_flush_write_buffer(struct intel_iommu *iommu)
+void iommu_flush_write_buffer(struct intel_iommu *iommu)
 static void __iommu_flush_context(struct intel_iommu *iommu, u16 did, u16 source_id, u8 function_mask, u64 type)
 static void __iommu_flush_iotlb(struct intel_iommu *iommu, u16 did, u64 addr, unsigned int size_order, u64 type)
 static struct device_domain_info * iommu_support_dev_iotlb (struct dmar_domain *domain, struct intel_iommu *iommu, u8 bus, u8 devfn)
@@ -113,7 +109,11 @@ static void domain_reserve_special_ranges(struct dmar_domain *domain)
 static inline int guestwidth_to_adjustwidth(int gaw)
 static int domain_init(struct dmar_domain *domain, struct intel_iommu *iommu, int guest_width)
 static void domain_exit(struct dmar_domain *domain)
-static int domain_context_mapping_one(struct dmar_domain *domain, struct intel_iommu *iommu, u8 bus, u8 devfn)
+static inline unsigned long context_get_sm_pds(struct pasid_table *table)
+static inline void context_set_sm_rid2pasid(struct context_entry *context, unsigned long pasid)
+static inline void context_set_sm_dte(struct context_entry *context)
+static inline void context_set_sm_pre(struct context_entry *context)
+static int domain_context_mapping_one(struct dmar_domain *domain, struct intel_iommu *iommu, struct pasid_table *table, u8 bus, u8 devfn)
 static int domain_context_mapping_cb(struct pci_dev *pdev, u16 alias, void *opaque)
 static int domain_context_mapping(struct dmar_domain *domain, struct device *dev)
 static int domain_context_mapped_cb(struct pci_dev *pdev, u16 alias, void *opaque)
@@ -156,7 +156,7 @@ static int __init init_dmars(void)
 static unsigned long intel_alloc_iova(struct device *dev, struct dmar_domain *domain, unsigned long nrpages, uint64_t dma_mask)
 struct dmar_domain *get_valid_domain_for_dev(struct device *dev)
 static int iommu_no_mapping(struct device *dev)
-static dma_addr_t __intel_map_single(struct device *dev, phys_addr_t paddr, size_t size, int dir, u64 dma_mask)
+static dma_addr_t __intel_map_page(struct device *dev, struct page *page, unsigned long offset, size_t size, int dir, u64 dma_mask)
 static dma_addr_t intel_map_page(struct device *dev, struct page *page, unsigned long offset, size_t size, enum dma_data_direction dir, unsigned long attrs)
 static void intel_unmap(struct device *dev, dma_addr_t dev_addr, size_t size)
 static void intel_unmap_page(struct device *dev, dma_addr_t dev_addr, size_t size, enum dma_data_direction dir, unsigned long attrs)
@@ -165,7 +165,6 @@ static void intel_free_coherent(struct device *dev, size_t size, void *vaddr, dm
 static void intel_unmap_sg(struct device *dev, struct scatterlist *sglist, int nelems, enum dma_data_direction dir, unsigned long attrs)
 static int intel_nontranslate_map_sg(struct device *hddev, struct scatterlist *sglist, int nelems, int dir)
 static int intel_map_sg(struct device *dev, struct scatterlist *sglist, int nelems, enum dma_data_direction dir, unsigned long attrs)
-static int intel_mapping_error(struct device *dev, dma_addr_t dma_addr)
 static inline int iommu_domain_cache_init(void)
 static inline int iommu_devinfo_cache_init(void)
 static int __init iommu_init_mempool(void)
@@ -200,6 +199,7 @@ static ssize_t intel_iommu_show_cap(struct device *dev, struct device_attribute 
 static ssize_t intel_iommu_show_ecap(struct device *dev, struct device_attribute *attr, char *buf)
 static ssize_t intel_iommu_show_ndoms(struct device *dev, struct device_attribute *attr, char *buf)
 static ssize_t intel_iommu_show_ndoms_used(struct device *dev, struct device_attribute *attr, char *buf)
+static int __init platform_optin_force_iommu(void)
 int __init intel_iommu_init(void)
 static int domain_context_clear_one_cb(struct pci_dev *pdev, u16 alias, void *opaque)
 static void domain_context_clear(struct intel_iommu *iommu, struct device *dev)
@@ -218,138 +218,136 @@ static int intel_iommu_add_device(struct device *dev)
 static void intel_iommu_remove_device(struct device *dev)
 static void intel_iommu_get_resv_regions(struct device *device, struct list_head *head)
 static void intel_iommu_put_resv_regions(struct device *dev, struct list_head *head)
-define MAX_NR_PASID_BITS (20)
-static inline unsigned long intel_iommu_get_pts(struct device *dev)
 int intel_iommu_enable_pasid(struct intel_iommu *iommu, struct intel_svm_dev *sdev)
 struct intel_iommu *intel_svm_device_to_iommu(struct device *dev)
 static void quirk_iommu_g4x_gfx(struct pci_dev *dev)
 static void quirk_iommu_rwbf(struct pci_dev *dev)
 static void quirk_calpella_no_shadow_gtt(struct pci_dev *dev)
 static void __init check_tylersburg_isoch(void)
-  46 struct device *dev
-  43 struct dmar_domain *domain
-  36 struct intel_iommu *iommu
-  20 void
-  13 struct context_entry *context
-   9 unsigned long pfn
-   9 size_t size
-   9 int level
-   8 struct dma_pte *pte
-   6 unsigned long attrs
-   6 struct iommu_domain *domain
-   6 struct device_attribute *attr
-   6 char *buf
-   5 unsigned long start_pfn
-   5 unsigned long last_pfn
-   5 unsigned long iov_pfn
-   5 u8 devfn
-   5 u8 bus
-   5 struct pci_dev *pdev
-   5 struct device_domain_info *info
-   4 void *vaddr
-   4 void *opaque
-   4 void *arg
-   4 unsigned long value
-   4 unsigned long nr_pages
-   4 u16 did
-   4 u16 alias
-   4 struct pci_dev *dev
-   4 int prot
-   4 enum dma_data_direction dir
-   3 unsigned long phys_pfn
-   3 unsigned long mm_pfn
-   3 unsigned long long start
-   3 unsigned long long end
-   3 struct scatterlist *sglist
-   3 struct scatterlist *sg
-   3 struct page *freelist
-   3 struct acpi_dmar_header *hdr
-   3 int nelems
-   3 int hw
-   3 int gaw
-   3 int bus
-   2 void *data
-   2 unsigned long iova
-   2 unsigned int pages
-   2 unsigned int cpu
-   2 u64 type
-   2 u64 addr
-   2 struct root_entry *re
-   2 struct page *pg
-   2 struct notifier_block *nb
-   2 struct list_head *head
-   2 struct intel_iommu *skip
-   2 struct dmar_drhd_unit *dmaru
-   2 int retain_level
-   2 int guest_width
-   2 int dir
-   2 int devfn
-   2 int agaw
-   2 dma_addr_t dev_addr
-   2 PAGE_SHIFT - VTD_PAGE_SHIFT
-   1 void *v
-   1 void *p
-   1 void *addr
-   1 unsigned type
-   1 unsigned mask
-   1 unsigned long val
-   1 unsigned long phy_pfn
-   1 unsigned long pages
-   1 unsigned long offset
-   1 unsigned long nrpages
-   1 unsigned long host_addr
-   1 unsigned long dma_pfn
-   1 unsigned long data
-   1 unsigned long action
-   1 unsigned int size_order
-   1 unsigned int lvl
-   1 uint64_t dma_mask
-   1 u8 function_mask
-   1 u8 *devfn
-   1 u8 *bus
-   1 u64 dma_mask
-   1 u16 source_id
-   1 struct root_entry *old_re
-   1 struct page *page
-   1 struct iova_domain *iovad
-   1 struct iommu_domain *dom
-   1 struct intel_svm_dev *sdev
-   1 struct dmar_rmrr_unit *rmrr
-   1 struct dmar_pci_notify_info *info
-   1 struct dmar_atsr_unit *atsru
-   1 struct device *hddev
-   1 struct device *device
-   1 struct context_entry *c
-   1 struct context_entry **tbl
-   1 struct acpi_dmar_header *header
-   1 struct acpi_dmar_atsr *atsr
-   1 phys_addr_t paddr
-   1 phys_addr_t hpa
-   1 pdev
-   1 page_to_pfnpg
-   1 intel_iommu_gfx_mapped
-   1 intel_iommu_enabled
-   1 int width
-   1 int startup
-   1 int size
-   1 int segment
-   1 int node
-   1 int max_gaw
-   1 int map
-   1 int iommu_prot
-   1 int ih
-   1 int flags
-   1 int alloc
-   1 int *target_level
-   1 int *large_page
-   1 int *fn
-   1 gfp_t flags
-   1 enum iommu_cap cap
-   1 dma_addr_t iova
-   1 dma_addr_t dma_handle
-   1 dma_addr_t dma_addr
-   1 dma_addr_t *dma_handle
-   1 char *str
-   1 bool insert
-   1 bool ext
-   1 20
+\n
+     44 struct device *dev
+     43 struct dmar_domain *domain
+     36 struct intel_iommu *iommu
+     21 void
+     16 struct context_entry *context
+      9 unsigned long pfn
+      9 size_t size
+      9 int level
+      6 unsigned long attrs
+      6 struct iommu_domain *domain
+      6 struct device_attribute *attr
+      6 char *buf
+      5 unsigned long start_pfn
+      5 unsigned long last_pfn
+      5 unsigned long iov_pfn
+      5 u8 devfn
+      5 u8 bus
+      5 struct pci_dev *pdev
+      5 struct device_domain_info *info
+      4 void *vaddr
+      4 void *opaque
+      4 void *arg
+      4 unsigned long value
+      4 unsigned long nr_pages
+      4 u16 did
+      4 u16 alias
+      4 struct pci_dev *dev
+      4 int prot
+      4 enum dma_data_direction dir
+      3 unsigned long phys_pfn
+      3 unsigned long mm_pfn
+      3 unsigned long long start
+      3 unsigned long long end
+      3 struct scatterlist *sglist
+      3 struct scatterlist *sg
+      3 struct page *freelist
+      3 struct dma_pte *pte
+      3 struct acpi_dmar_header *hdr
+      3 int nelems
+      3 int hw
+      3 int gaw
+      3 int bus
+      2 void *data
+      2 unsigned long offset
+      2 unsigned long iova
+      2 unsigned int pages
+      2 unsigned int cpu
+      2 u64 type
+      2 u64 addr
+      2 struct root_entry *re
+      2 struct pasid_table *table
+      2 struct page *pg
+      2 struct page *page
+      2 struct notifier_block *nb
+      2 struct list_head *head
+      2 struct intel_iommu *skip
+      2 struct dmar_drhd_unit *dmaru
+      2 PAGE_SHIFT - VTD_PAGE_SHIFT
+      2 int retain_level
+      2 int guest_width
+      2 int dir
+      2 int devfn
+      2 int agaw
+      2 dma_addr_t dev_addr
+      1 void *v
+      1 void *p
+      1 void *addr
+      1 unsigned type
+      1 unsigned mask
+      1 unsigned long val
+      1 unsigned long phy_pfn
+      1 unsigned long pasid
+      1 unsigned long pages
+      1 unsigned long nrpages
+      1 unsigned long host_addr
+      1 unsigned long dma_pfn
+      1 unsigned long data
+      1 unsigned long action
+      1 unsigned int size_order
+      1 unsigned int lvl
+      1 uint64_t dma_mask
+      1 u8 function_mask
+      1 u8 *devfn
+      1 u8 *bus
+      1 u64 dma_mask
+      1 u16 source_id
+      1 struct root_entry *old_re
+      1 struct iova_domain *iovad
+      1 struct iommu_domain *dom
+      1 struct intel_svm_dev *sdev
+      1 struct dmar_rmrr_unit *rmrr
+      1 struct dmar_pci_notify_info *info
+      1 struct dmar_atsr_unit *atsru
+      1 struct device *hddev
+      1 struct device *device
+      1 struct context_entry **tbl
+      1 struct context_entry *c
+      1 struct acpi_dmar_header *header
+      1 struct acpi_dmar_atsr *atsr
+      1 phys_addr_t hpa
+      1 pdev
+      1 page_to_pfnpg
+      1 int width
+      1 int *target_level
+      1 int startup
+      1 int size
+      1 int segment
+      1 int node
+      1 int max_gaw
+      1 int map
+      1 int *large_page
+      1 int iommu_prot
+      1 int ih
+      1 int *fn
+      1 int flags
+      1 intel_iommu_gfx_mapped
+      1 intel_iommu_enabled
+      1 int alloc
+      1 gfp_t flags
+      1 enum iommu_cap cap
+      1 dma_addr_t iova
+      1 dma_addr_t dma_handle
+      1 dma_addr_t *dma_handle
+      1 char *str
+      1 bool insert
+      1 bool ext

@@ -1,4 +1,5 @@
 
+\n
 static u32 lv1ent_offset(sysmmu_iova_t iova)
 static u32 lv2ent_offset(sysmmu_iova_t iova)
 static sysmmu_pte_t *section_entry(sysmmu_pte_t *pgtable, sysmmu_iova_t iova)
@@ -38,31 +39,32 @@ static int exynos_iommu_add_device(struct device *dev)
 static void exynos_iommu_remove_device(struct device *dev)
 static int exynos_iommu_of_xlate(struct device *dev, struct of_phandle_args *spec)
 static int __init exynos_iommu_init(void)
-  14 struct sysmmu_drvdata *data
-  10 sysmmu_iova_t iova
-   7 struct device *dev
-   6 struct iommu_domain *iommu_domain
-   5 size_t size
-   3 sysmmu_pte_t *sent
-   3 struct exynos_iommu_domain *domain
-   3 phys_addr_t paddr
-   3 int prot
-   2 unsigned long l_iova
-   2 short *pgcnt
-   1 void *dev_id
-   1 void
-   1 unsigned type
-   1 unsigned int num_inv
-   1 sysmmu_pte_t val
-   1 sysmmu_pte_t *pgtable
-   1 sysmmu_pte_t *pent
-   1 sysmmu_pte_t *ent
-   1 sysmmu_iova_t fault_addr
-   1 struct platform_device *pdev
-   1 struct of_phandle_args *spec
-   1 struct iommu_domain *dom
-   1 short *pgcounter
-   1 phys_addr_t pgd
-   1 int irq
-   1 dma_addr_t iova
-   1 const struct sysmmu_fault_info *finfo
+\n
+     14 struct sysmmu_drvdata *data
+     10 sysmmu_iova_t iova
+      7 struct device *dev
+      6 struct iommu_domain *iommu_domain
+      5 size_t size
+      3 sysmmu_pte_t *sent
+      3 struct exynos_iommu_domain *domain
+      3 phys_addr_t paddr
+      3 int prot
+      2 unsigned long l_iova
+      2 short *pgcnt
+      1 void *dev_id
+      1 void
+      1 unsigned type
+      1 unsigned int num_inv
+      1 sysmmu_pte_t val
+      1 sysmmu_pte_t *pgtable
+      1 sysmmu_pte_t *pent
+      1 sysmmu_pte_t *ent
+      1 sysmmu_iova_t fault_addr
+      1 struct platform_device *pdev
+      1 struct of_phandle_args *spec
+      1 struct iommu_domain *dom
+      1 short *pgcounter
+      1 phys_addr_t pgd
+      1 int irq
+      1 dma_addr_t iova
+      1 const struct sysmmu_fault_info *finfo

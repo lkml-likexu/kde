@@ -13,6 +13,7 @@ EXPORT_SYMBOL_GPL(kvm_lapic_switch_to_sw_timer);
 EXPORT_SYMBOL_GPL(kvm_lapic_reg_write);
 EXPORT_SYMBOL_GPL(kvm_lapic_set_eoi);
 EXPORT_SYMBOL_GPL(kvm_apic_write_nodecode);
+\n
 static inline int apic_test_vector(int vec, void *bitmap)
 bool kvm_apic_pending_eoi(struct kvm_vcpu *vcpu, int vector)
 static inline void apic_clear_vector(int vec, void *bitmap)
@@ -145,92 +146,93 @@ int kvm_lapic_enable_pv_eoi(struct kvm_vcpu *vcpu, u64 data, unsigned long len)
 void kvm_apic_accept_events(struct kvm_vcpu *vcpu)
 void kvm_lapic_init(void)
 void kvm_lapic_exit(void)
-  56 struct kvm_lapic *apic
-  55 struct kvm_vcpu *vcpu
-   7 struct kvm *kvm
-   7 int vec
-   6 void *bitmap
-   5 struct kvm_lapic_irq *irq
-   5 int vector
-   4 u64 data
-   3 u32 reg
-   3 u32 mda
-   3 u32 id
-   3 struct kvm_lapic_state *s
-   3 struct dest_map *dest_map
-   3 int lvt_type
-   3 int len
-   2 void *data
-   2 void
-   2 u64 *data
-   2 u32 val
-   2 u32 offset
-   2 u32 msr
-   2 u32 *pir
-   2 struct kvm_lapic *source
-   2 struct kvm_lapic **src
-   2 struct kvm_io_device *this
-   2 struct kvm_apic_map *map
-   2 int *max_irr
-   2 gpa_t address
-   2 bool write
-   1 void *regs
-   1 unsigned long len
-   1 unsigned long ipi_bitmap_low
-   1 unsigned long ipi_bitmap_high
-   1 unsigned long icr
-   1 unsigned long cr8
-   1 unsigned long *bitmap
-   1 unsigned int offset
-   1 unsigned int dest_id
-   1 unsigned int dest
-   1 uint32_t old_divisor
-   1 u8 val
-   1 u8 id
-   1 u8 *val
-   1 u64 value
-   1 u32 vector
-   1 u32 tpr
-   1 u32 ppr
-   1 u32 min
-   1 u32 lvt_val
-   1 u32 lvt0_val
-   1 u32 dest_vcpus
-   1 u32 bitmap_size
-   1 u32 *new_ppr
-   1 struct rcu_head *rcu
-   1 struct kvm_vcpu *vcpu2
-   1 struct kvm_vcpu *vcpu1
-   1 struct kvm_vcpu **dest_vcpu
-   1 struct kvm_lapic *target
-   1 struct kvm_lapic *src
-   1 struct kvm_lapic ***dst
-   1 struct kvm_io_device *dev
-   1 struct hrtimer *data
-   1 kvm_lapic_switch_to_sw_timer
-   1 kvm_lapic_switch_to_hv_timer
-   1 kvm_lapic_set_eoi
-   1 kvm_lapic_reg_write
-   1 kvm_lapic_reg_read
-   1 kvm_lapic_hv_timer_in_use
-   1 kvm_lapic_find_highest_irr
-   1 kvm_lapic_expired_hv_timer
-   1 kvm_apic_write_nodecode
-   1 kvm_apic_update_ppr
-   1 kvm_apic_update_irr
-   1 kvm_apic_set_eoi_accelerated
-   1 kvm_apic_match_dest
-   1 int trig_mode
-   1 int short_hand
-   1 int op_64_bit
-   1 int level
-   1 int dest_mode
-   1 int delivery_mode
-   1 int *r
-   1 gpa_t vapic_addr
-   1 gpa_t addr
-   1 const void *data
-   1 const unsigned long *bitmap
-   1 bool set
-   1 bool init_event
-   1 __kvm_apic_update_irr
+\n
+     56 struct kvm_lapic *apic
+     55 struct kvm_vcpu *vcpu
+      7 struct kvm *kvm
+      7 int vec
+      6 void *bitmap
+      5 struct kvm_lapic_irq *irq
+      5 int vector
+      4 u64 data
+      3 u32 reg
+      3 u32 mda
+      3 u32 id
+      3 struct kvm_lapic_state *s
+      3 struct dest_map *dest_map
+      3 int lvt_type
+      3 int len
+      2 void *data
+      2 void
+      2 u64 *data
+      2 u32 val
+      2 u32 *pir
+      2 u32 offset
+      2 u32 msr
+      2 struct kvm_lapic **src
+      2 struct kvm_lapic *source
+      2 struct kvm_io_device *this
+      2 struct kvm_apic_map *map
+      2 int *max_irr
+      2 gpa_t address
+      2 bool write
+      1 void *regs
+      1 unsigned long len
+      1 unsigned long ipi_bitmap_low
+      1 unsigned long ipi_bitmap_high
+      1 unsigned long icr
+      1 unsigned long cr8
+      1 unsigned long *bitmap
+      1 unsigned int offset
+      1 unsigned int dest_id
+      1 unsigned int dest
+      1 uint32_t old_divisor
+      1 u8 *val
+      1 u8 val
+      1 u8 id
+      1 u64 value
+      1 u32 vector
+      1 u32 tpr
+      1 u32 ppr
+      1 u32 *new_ppr
+      1 u32 min
+      1 u32 lvt_val
+      1 u32 lvt0_val
+      1 u32 dest_vcpus
+      1 u32 bitmap_size
+      1 struct rcu_head *rcu
+      1 struct kvm_vcpu *vcpu2
+      1 struct kvm_vcpu *vcpu1
+      1 struct kvm_vcpu **dest_vcpu
+      1 struct kvm_lapic *target
+      1 struct kvm_lapic *src
+      1 struct kvm_lapic ***dst
+      1 struct kvm_io_device *dev
+      1 struct hrtimer *data
+      1 kvm_lapic_switch_to_sw_timer
+      1 kvm_lapic_switch_to_hv_timer
+      1 kvm_lapic_set_eoi
+      1 kvm_lapic_reg_write
+      1 kvm_lapic_reg_read
+      1 kvm_lapic_hv_timer_in_use
+      1 kvm_lapic_find_highest_irr
+      1 kvm_lapic_expired_hv_timer
+      1 kvm_apic_write_nodecode
+      1 kvm_apic_update_ppr
+      1 kvm_apic_update_irr
+      1 __kvm_apic_update_irr
+      1 kvm_apic_set_eoi_accelerated
+      1 kvm_apic_match_dest
+      1 int trig_mode
+      1 int short_hand
+      1 int *r
+      1 int op_64_bit
+      1 int level
+      1 int dest_mode
+      1 int delivery_mode
+      1 gpa_t vapic_addr
+      1 gpa_t addr
+      1 const void *data
+      1 const unsigned long *bitmap
+      1 bool set
+      1 bool init_event

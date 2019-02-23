@@ -1,4 +1,5 @@
 
+\n
 static const struct _cache_table cache_table[] = static void amd_cpuid4(int leaf, union _cpuid4_leaf_eax *eax, union _cpuid4_leaf_ebx *ebx, union _cpuid4_leaf_ecx *ecx)
 static void amd_calc_l3_indices(struct amd_northbridge *nb)
 static int amd_get_l3_disable_slot(struct amd_northbridge *nb, unsigned slot)
@@ -29,34 +30,35 @@ static void ci_leaf_init(struct cacheinfo *this_leaf, struct _cpuid4_info_regs *
 static int __init_cache_level(unsigned int cpu)
 static void get_cache_id(int cpu, struct _cpuid4_info_regs *id4_regs)
 static int __populate_cache_leaves(unsigned int cpu)
-   6 struct cpuinfo_x86 *c
-   5 int cpu
-   4 unsigned int cpu
-   4 struct device *dev
-   4 struct cacheinfo *this_leaf
-   4 struct amd_northbridge *nb
-   4 int index
-   3 unsigned slot
-   3 struct _cpuid4_info_regs *base
-   3 size_t count
-   3 char *buf
-   2 unsigned int slot
-   2 u8 node_id
-   2 struct device_attribute *attr
-   2 struct _cpuid4_info_regs *this_leaf
-   2 slot
-   2 const char *buf
-   1 void
-   1 unsigned long index
-   1 unsigned long idx
-   1 union _cpuid4_leaf_ecx *ecx
-   1 union _cpuid4_leaf_ebx *ebx
-   1 union _cpuid4_leaf_eax *eax
-   1 struct kobject *kobj
-   1 struct attribute *attr
-   1 struct _cpuid4_info_regs *id4_regs
-   1 int unused
-   1 int leaf
-   1 \struct device_attribute *attr
-   1 \ struct device_attribute *attr
-   1 \ const char *buf
+\n
+      6 struct cpuinfo_x86 *c
+      5 int cpu
+      4 unsigned int cpu
+      4 struct device *dev
+      4 struct cacheinfo *this_leaf
+      4 struct amd_northbridge *nb
+      4 int index
+      3 unsigned slot
+      3 struct _cpuid4_info_regs *base
+      3 size_t count
+      3 char *buf
+      2 unsigned int slot
+      2 u8 node_id
+      2 struct device_attribute *attr
+      2 struct _cpuid4_info_regs *this_leaf
+      2 slot
+      2 const char *buf
+      1 void
+      1 unsigned long index
+      1 unsigned long idx
+      1 union _cpuid4_leaf_ecx *ecx
+      1 union _cpuid4_leaf_ebx *ebx
+      1 union _cpuid4_leaf_eax *eax
+      1 struct kobject *kobj
+      1 \struct device_attribute *attr
+      1 \ struct device_attribute *attr
+      1 struct _cpuid4_info_regs *id4_regs
+      1 struct attribute *attr
+      1 int unused
+      1 int leaf
+      1 \ const char *buf

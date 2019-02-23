@@ -1,6 +1,7 @@
 
 EXPORT_SYMBOL_GPL(load_direct_gdt);
 EXPORT_SYMBOL_GPL(load_fixmap_gdt);
+\n
 void __init setup_cpu_local_masks(void)
 static void default_init(struct cpuinfo_x86 *c)
 static int __init x86_mpx_setup(char *s)
@@ -73,16 +74,17 @@ void cpu_init(void)
 static void bsp_resume(void)
 static int __init init_cpu_syscore(void)
 void microcode_check(void)
-  31 struct cpuinfo_x86 *c
-  16 void
-   7 char *s
-   6 int cpu
-   5 char *arg
-   3 u32 flag
-   2 x86_serial_nr_setup
-   2 "serialnumber"
-   1 unsigned long addr
-   1 load_fixmap_gdt
-   1 load_direct_gdt
-   1 char *str
-   1 bool warn
+\n
+     31 struct cpuinfo_x86 *c
+     16 void
+      7 char *s
+      6 int cpu
+      5 char *arg
+      3 u32 flag
+      2 x86_serial_nr_setup
+      2 "serialnumber"
+      1 unsigned long addr
+      1 load_fixmap_gdt
+      1 load_direct_gdt
+      1 char *str
+      1 bool warn

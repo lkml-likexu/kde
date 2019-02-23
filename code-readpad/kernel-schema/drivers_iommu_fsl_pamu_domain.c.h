@@ -1,4 +1,5 @@
 
+\n
 static struct fsl_dma_domain *to_fsl_dma_domain(struct iommu_domain *dom)
 static int __init iommu_init_mempool(void)
 static phys_addr_t get_phys_addr(struct fsl_dma_domain *dma_domain, dma_addr_t iova)
@@ -40,28 +41,29 @@ static struct iommu_group *fsl_pamu_device_group(struct device *dev)
 static int fsl_pamu_add_device(struct device *dev)
 static void fsl_pamu_remove_device(struct device *dev)
 int __init pamu_domain_init(void)
-  16 struct fsl_dma_domain *dma_domain
-  10 struct iommu_domain *domain
-  10 struct device *dev
-   7 int liodn
-   5 u32 wnd_nr
-   4 void *data
-   3 void
-   3 u32 win_cnt
-   3 dma_addr_t iova
-   2 u64 size
-   2 u32 val
-   2 struct pci_dev *pdev
-   2 struct iommu_domain_geometry *geom_attr
-   2 enum iommu_attr attr_type
-   1 unsigned type
-   1 u32 w_count
-   1 struct pci_controller *pci_ctl
-   1 struct iommu_domain *dom
-   1 struct device_domain_info *info
-   1 phys_addr_t paddr
-   1 int prot
-   1 int num
-   1 enum iommu_cap cap
-   1 const u32 *liodn
-   1 bool enable
+\n
+     16 struct fsl_dma_domain *dma_domain
+     10 struct iommu_domain *domain
+     10 struct device *dev
+      7 int liodn
+      5 u32 wnd_nr
+      4 void *data
+      3 void
+      3 u32 win_cnt
+      3 dma_addr_t iova
+      2 u64 size
+      2 u32 val
+      2 struct pci_dev *pdev
+      2 struct iommu_domain_geometry *geom_attr
+      2 enum iommu_attr attr_type
+      1 unsigned type
+      1 u32 w_count
+      1 struct pci_controller *pci_ctl
+      1 struct iommu_domain *dom
+      1 struct device_domain_info *info
+      1 phys_addr_t paddr
+      1 int prot
+      1 int num
+      1 enum iommu_cap cap
+      1 const u32 *liodn
+      1 bool enable

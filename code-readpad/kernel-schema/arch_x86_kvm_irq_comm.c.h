@@ -1,6 +1,7 @@
 
 EXPORT_SYMBOL_GPL(kvm_set_msi_irq);
 EXPORT_SYMBOL_GPL(kvm_intr_is_single_vcpu);
+\n
 static int kvm_set_pic_irq(struct kvm_kernel_irq_routing_entry *e, struct kvm *kvm, int irq_source_id, int level, bool line_status)
 static int kvm_set_ioapic_irq(struct kvm_kernel_irq_routing_entry *e, struct kvm *kvm, int irq_source_id, int level, bool line_status)
 int kvm_irq_delivery_to_apic(struct kvm *kvm, struct kvm_lapic *src, struct kvm_lapic_irq *irq, struct dest_map *dest_map)
@@ -22,22 +23,23 @@ int kvm_setup_empty_irq_routing(struct kvm *kvm)
 void kvm_arch_post_irq_routing_update(struct kvm *kvm)
 void kvm_scan_ioapic_routes(struct kvm_vcpu *vcpu, ulong *ioapic_handled_vectors)
 void kvm_arch_irq_routing_update(struct kvm *kvm)
-  20 struct kvm *kvm
-   8 struct kvm_kernel_irq_routing_entry *e
-   6 int irq_source_id
-   5 int level
-   5 bool line_status
-   3 struct kvm_lapic_irq *irq
-   2 struct kvm_irq_mask_notifier *kimn
-   2 int irq
-   1 unsigned pin
-   1 unsigned irqchip
-   1 ulong *ioapic_handled_vectors
-   1 struct kvm_vcpu *vcpu
-   1 struct kvm_vcpu **dest_vcpu
-   1 struct kvm_lapic *src
-   1 struct dest_map *dest_map
-   1 kvm_set_msi_irq
-   1 kvm_intr_is_single_vcpu
-   1 const struct kvm_irq_routing_entry *ue
-   1 bool mask
+\n
+     20 struct kvm *kvm
+      8 struct kvm_kernel_irq_routing_entry *e
+      6 int irq_source_id
+      5 int level
+      5 bool line_status
+      3 struct kvm_lapic_irq *irq
+      2 struct kvm_irq_mask_notifier *kimn
+      2 int irq
+      1 unsigned pin
+      1 unsigned irqchip
+      1 ulong *ioapic_handled_vectors
+      1 struct kvm_vcpu *vcpu
+      1 struct kvm_vcpu **dest_vcpu
+      1 struct kvm_lapic *src
+      1 struct dest_map *dest_map
+      1 kvm_set_msi_irq
+      1 kvm_intr_is_single_vcpu
+      1 const struct kvm_irq_routing_entry *ue
+      1 bool mask

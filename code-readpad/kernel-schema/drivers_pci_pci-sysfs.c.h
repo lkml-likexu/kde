@@ -1,4 +1,5 @@
 
+\n
 define pci_config_attr(field, format_string)
 \ static ssize_t\ field_show(struct device *dev, struct device_attribute *attr, char *buf)
 \ static ssize_t broken_parity_status_show(struct device *dev, struct device_attribute *attr, char *buf)
@@ -75,30 +76,31 @@ static umode_t pci_dev_hp_attrs_are_visible(struct kobject *kobj, struct attribu
 static umode_t pci_bridge_attrs_are_visible(struct kobject *kobj, struct attribute *a, int n)
 static umode_t pcie_dev_attrs_are_visible(struct kobject *kobj, struct attribute *a, int n)
 static umode_t sriov_attrs_are_visible(struct kobject *kobj, struct attribute *a, int n)
-  43 struct device_attribute *attr
-  43 struct device *dev
-  40 char *buf
-  22 size_t count
-  19 struct kobject *kobj
-  13 struct file *filp
-  13 const char *buf
-   9 loff_t off
-   8 struct bin_attribute *attr
-   6 struct vm_area_struct *vma
-   6 struct pci_dev *pdev
-   6 struct bin_attribute *bin_attr
-   5 struct attribute *a
-   5 int n
-   3 struct pci_bus *b
-   2 struct pci_dev *dev
-   2 int write_combine
-   1 void
-   1 struct bus_type *bus
-   1 int resno
-   1 int num
-   1 format_string
-   1 field
-   1 enum pci_mmap_state mmap_type
-   1 enum pci_mmap_api mmap_api
-   1 bool write
-   1 bool list
+\n
+     43 struct device *dev
+     43 struct device_attribute *attr
+     40 char *buf
+     22 size_t count
+     19 struct kobject *kobj
+     13 struct file *filp
+     13 const char *buf
+      9 loff_t off
+      8 struct bin_attribute *attr
+      6 struct vm_area_struct *vma
+      6 struct pci_dev *pdev
+      6 struct bin_attribute *bin_attr
+      5 struct attribute *a
+      5 int n
+      3 struct pci_bus *b
+      2 struct pci_dev *dev
+      2 int write_combine
+      1 void
+      1 struct bus_type *bus
+      1 int resno
+      1 int num
+      1 format_string
+      1 field
+      1 enum pci_mmap_state mmap_type
+      1 enum pci_mmap_api mmap_api
+      1 bool write
+      1 bool list

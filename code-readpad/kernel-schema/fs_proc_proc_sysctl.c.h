@@ -1,4 +1,5 @@
 
+\n
 static bool is_empty_dir(struct ctl_table_header *head)
 static void set_empty_dir(struct ctl_dir *dir)
 void proc_sys_poll_notify(struct ctl_table_poll *poll)
@@ -70,61 +71,62 @@ void setup_sysctl_set(struct ctl_table_set *set, struct ctl_table_root *root, in
 )
 void retire_sysctl_set(struct ctl_table_set *set)
 int __init proc_sys_init(void)
-  18 struct ctl_table *table
-  15 struct ctl_table_header *head
-  11 struct ctl_dir *dir
-   8 struct ctl_table_set *set
-   7 const char *path
-   6 const char *name
-   5 struct file *filp
-   5 struct ctl_table_header **phead
-   5 int namelen
-   4 struct inode *inode
-   4 struct file *file
-   4 struct dir_context *ctx
-   4 struct ctl_table_header *p
-   3 struct dentry *dentry
-   3 struct ctl_table_root *root
-   3 struct ctl_table_header *header
-   3 struct ctl_table **pentry
-   3 size_t count
-   3 loff_t *ppos
-   2 unsigned int flags
-   2 struct ctl_table_root *link_root
-   2 struct ctl_table *entry
-   2 int op
-   2 const struct dentry *dentry
-   2 const struct ctl_path *path
-   2 char *pos
-   1 void __user *buf
-   1 void
-   1 unsigned long *pos
-   1 unsigned int query_flags
-   1 unsigned int len
-   1 u32 request_mask
-   1 struct super_block *sb
-   1 struct rb_node *node
-   1 struct kstat *stat
-   1 struct inode *dir
-   1 struct iattr *attr
-   1 struct ctl_table_set *
-   1 struct ctl_table_poll *poll
-   1 struct ctl_table_header ***subheader
-   1 struct ctl_table_header * header
-   1 struct ctl_node *node
-   1 poll_table *wait
-   1 int write
-   1 int mode
-   1 int mask
-   1 int len2
-   1 int len1
-   1 int *is_seen
-   1 const struct qstr *name
-   1 const struct path *path
-   1 const char __user *buf
-   1 const char *str
-   1 const char *name2
-   1 const char *name1
-   1 char __user *buf
-   1 char *fmt
-   1 ...
+\n
+     18 struct ctl_table *table
+     15 struct ctl_table_header *head
+     11 struct ctl_dir *dir
+      8 struct ctl_table_set *set
+      7 const char *path
+      6 const char *name
+      5 struct file *filp
+      5 struct ctl_table_header **phead
+      5 int namelen
+      4 struct inode *inode
+      4 struct file *file
+      4 struct dir_context *ctx
+      4 struct ctl_table_header *p
+      3 struct dentry *dentry
+      3 struct ctl_table_root *root
+      3 struct ctl_table **pentry
+      3 struct ctl_table_header *header
+      3 size_t count
+      3 loff_t *ppos
+      2 unsigned int flags
+      2 struct ctl_table_root *link_root
+      2 struct ctl_table *entry
+      2 int op
+      2 const struct dentry *dentry
+      2 const struct ctl_path *path
+      2 char *pos
+      1 void __user *buf
+      1 void
+      1 unsigned long *pos
+      1 unsigned int query_flags
+      1 unsigned int len
+      1 u32 request_mask
+      1 struct super_block *sb
+      1 struct rb_node *node
+      1 struct kstat *stat
+      1 struct inode *dir
+      1 struct iattr *attr
+      1 struct ctl_table_set *
+      1 struct ctl_table_poll *poll
+      1 struct ctl_table_header ***subheader
+      1 struct ctl_table_header * header
+      1 struct ctl_node *node
+      1 poll_table *wait
+      1 int write
+      1 int mode
+      1 int mask
+      1 int len2
+      1 int len1
+      1 int *is_seen
+      1 const struct qstr *name
+      1 const struct path *path
+      1 const char __user *buf
+      1 const char *str
+      1 const char *name2
+      1 const char *name1
+      1 char __user *buf
+      1 char *fmt
+      1 ...

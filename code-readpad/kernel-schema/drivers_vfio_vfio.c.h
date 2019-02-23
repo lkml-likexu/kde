@@ -15,6 +15,7 @@ EXPORT_SYMBOL_GPL(vfio_external_user_iommu_id);
 EXPORT_SYMBOL_GPL(vfio_external_check_extension);
 EXPORT_SYMBOL_GPL(vfio_info_cap_add);
 EXPORT_SYMBOL_GPL(vfio_group_set_kvm);
+\n
 struct iommu_group *vfio_iommu_group_get(struct device *dev)
 void vfio_iommu_group_put(struct iommu_group *group, struct device *dev)
 static void *vfio_noiommu_open(unsigned long arg)
@@ -104,68 +105,69 @@ int vfio_unregister_notifier(struct device *dev, enum vfio_notify_type type, str
 static char *vfio_devnode(struct device *dev, umode_t *mode)
 static int __init vfio_init(void)
 static void __exit vfio_cleanup(void)
-  27 struct vfio_group *group
-  19 struct file *filep
-  18 struct device *dev
-  11 unsigned long arg
-   7 unsigned int cmd
-   7 struct notifier_block *nb
-   5 struct vfio_container *container
-   5 struct inode *inode
-   4 void *iommu_data
-   4 struct iommu_group *iommu_group
-   4 size_t count
-   4 loff_t *ppos
-   3 void *data
-   3 unsigned long *events
-   3 struct vfio_info_cap *caps
-   3 struct vfio_device *device
-   3 struct kref *kref
-   2 void *device_data
-   2 void
-   2 unsigned long *user_pfn
-   2 struct vm_area_struct *vma
-   2 size_t size
-   2 int npage
-   2 int minor
-   2 enum vfio_notify_type type
-   2 const struct vfio_iommu_driver_ops *ops
-   2 const struct vfio_device_ops *ops
-   2 const char __user *buf
-   2 char __user *buf
-   2 char *buf
-   1 vfio_unregister_iommu_driver
-   1 vfio_register_iommu_driver
-   1 vfio_iommu_group_put
-   1 vfio_iommu_group_get
-   1 vfio_info_cap_add
-   1 vfio_group_set_kvm
-   1 vfio_group_put_external_user
-   1 vfio_group_get_external_user
-   1 vfio_external_user_iommu_id
-   1 vfio_external_group_match_file
-   1 vfio_external_check_extension
-   1 vfio_device_put
-   1 vfio_device_get_from_dev
-   1 vfio_device_data
-   1 vfio_del_group_dev
-   1 vfio_add_group_dev
-   1 unsigned long action
-   1 unsigned long *phys_pfn
-   1 umode_t *mode
-   1 u16 version
-   1 u16 id
-   1 struct work_struct *work
-   1 struct vfio_irq_set *hdr
-   1 struct vfio_iommu_driver *driver
-   1 struct vfio_info_cap_header *cap
-   1 struct vfio_group *test_group
-   1 struct kvm *kvm
-   1 struct iommu_group *group
-   1 struct device_driver *drv
-   1 size_t offset
-   1 size_t *data_size
-   1 int prot
-   1 int num_irqs
-   1 int max_irq_type
-   1 int container_fd
+\n
+     27 struct vfio_group *group
+     19 struct file *filep
+     18 struct device *dev
+     11 unsigned long arg
+      7 unsigned int cmd
+      7 struct notifier_block *nb
+      5 struct vfio_container *container
+      5 struct inode *inode
+      4 void *iommu_data
+      4 struct iommu_group *iommu_group
+      4 size_t count
+      4 loff_t *ppos
+      3 void *data
+      3 unsigned long *events
+      3 struct vfio_info_cap *caps
+      3 struct vfio_device *device
+      3 struct kref *kref
+      2 void *device_data
+      2 void
+      2 unsigned long *user_pfn
+      2 struct vm_area_struct *vma
+      2 size_t size
+      2 int npage
+      2 int minor
+      2 enum vfio_notify_type type
+      2 const struct vfio_iommu_driver_ops *ops
+      2 const struct vfio_device_ops *ops
+      2 const char __user *buf
+      2 char __user *buf
+      2 char *buf
+      1 vfio_unregister_iommu_driver
+      1 vfio_register_iommu_driver
+      1 vfio_iommu_group_put
+      1 vfio_iommu_group_get
+      1 vfio_info_cap_add
+      1 vfio_group_set_kvm
+      1 vfio_group_put_external_user
+      1 vfio_group_get_external_user
+      1 vfio_external_user_iommu_id
+      1 vfio_external_group_match_file
+      1 vfio_external_check_extension
+      1 vfio_device_put
+      1 vfio_device_get_from_dev
+      1 vfio_device_data
+      1 vfio_del_group_dev
+      1 vfio_add_group_dev
+      1 unsigned long *phys_pfn
+      1 unsigned long action
+      1 umode_t *mode
+      1 u16 version
+      1 u16 id
+      1 struct work_struct *work
+      1 struct vfio_irq_set *hdr
+      1 struct vfio_iommu_driver *driver
+      1 struct vfio_info_cap_header *cap
+      1 struct vfio_group *test_group
+      1 struct kvm *kvm
+      1 struct iommu_group *group
+      1 struct device_driver *drv
+      1 size_t offset
+      1 size_t *data_size
+      1 int prot
+      1 int num_irqs
+      1 int max_irq_type
+      1 int container_fd

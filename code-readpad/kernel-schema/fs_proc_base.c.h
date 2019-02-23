@@ -1,4 +1,5 @@
 
+\n
 static unsigned int __init pid_entry_nlink(const struct pid_entry *entries, unsigned int n)
 static int get_task_root(struct task_struct *task, struct path *root)
 static int proc_cwd_link(struct dentry *dentry, struct path *path)
@@ -104,6 +105,7 @@ static int proc_setgroups_open(struct inode *inode, struct file *file)
 static int proc_setgroups_release(struct inode *inode, struct file *file)
 static int proc_pid_personality(struct seq_file *m, struct pid_namespace *ns, struct pid *pid, struct task_struct *task)
 static int proc_pid_patch_state(struct seq_file *m, struct pid_namespace *ns, struct pid *pid, struct task_struct *task)
+static int proc_stack_depth(struct seq_file *m, struct pid_namespace *ns, struct pid *pid, struct task_struct *task)
 static int proc_tgid_base_readdir(struct file *file, struct dir_context *ctx)
 static struct dentry *proc_tgid_base_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags)
 static void proc_flush_task_mnt(struct vfsmount *mnt, pid_t pid, pid_t tgid)
@@ -122,74 +124,75 @@ static struct task_struct *next_tid(struct task_struct *start)
 static int proc_task_readdir(struct file *file, struct dir_context *ctx)
 static int proc_task_getattr(const struct path *path, struct kstat *stat, u32 request_mask, unsigned int query_flags)
 void __init set_proc_pid_nlink(void)
-  43 struct file *file
-  28 size_t count
-  27 struct inode *inode
-  24 struct task_struct *task
-  21 struct seq_file *m
-  21 loff_t *ppos
-  18 struct dentry *dentry
-  12 struct pid_namespace *ns
-  11 struct pid *pid
-  11 char __user *buf
-  10 const char __user *buf
-   9 void *v
-   8 unsigned int flags
-   8 struct dir_context *ctx
-   7 struct inode *dir
-   7 struct file * file
-   5 struct file *filp
-   5 const void *ptr
-   4 struct path *path
-   4 struct dentry * dentry
-   4 loff_t *pos
-   4 loff_t *offset
-   4 char __user * buf
-   3 const char __user * buf
-   2 unsigned int query_flags
-   2 unsigned int nents
-   2 unsigned int mode
-   2 umode_t mode
-   2 u32 request_mask
-   2 struct kstat *stat
-   2 struct delayed_call *done
-   2 int mask
-   2 int buflen
-   2 const struct pid_entry *ents
-   2 const struct path *path
-   1 void
-   1 unsigned long *start
-   1 unsigned long *end
-   1 unsigned int n
-   1 unsigned int len
-   1 struct vfsmount *mnt
-   1 struct tgid_iter iter
-   1 struct task_struct *tsk
-   1 struct task_struct *start
-   1 struct super_block * sb
-   1 struct pid_namespace *pid
-   1 struct path *root
-   1 struct path *exe_path
-   1 struct mm_struct *mm
-   1 struct iattr *attr
-   1 pid_t tgid
-   1 pid_t pid
-   1 loff_t offset
-   1 loff_t f_pos
-   1 loff_t *offs
-   1 kuid_t *ruid
-   1 kgid_t *rgid
-   1 int write
-   1 int whole
-   1 int tid
-   1 int orig
-   1 int oom_adj
-   1 int hide_pid_min
-   1 instantiate_t instantiate
-   1 const struct seq_operations *seq_ops
-   1 const struct pid_entry *entries
-   1 const struct dentry *dentry
-   1 const char *name
-   1 char __user *buffer
-   1 char __user * buffer
-   1 bool legacy
+\n
+     43 struct file *file
+     28 size_t count
+     27 struct inode *inode
+     25 struct task_struct *task
+     22 struct seq_file *m
+     21 loff_t *ppos
+     18 struct dentry *dentry
+     13 struct pid_namespace *ns
+     12 struct pid *pid
+     11 char __user *buf
+     10 const char __user *buf
+      9 void *v
+      8 unsigned int flags
+      8 struct dir_context *ctx
+      7 struct inode *dir
+      7 struct file * file
+      5 struct file *filp
+      5 const void *ptr
+      4 struct path *path
+      4 struct dentry * dentry
+      4 loff_t *pos
+      4 loff_t *offset
+      4 char __user * buf
+      3 const char __user * buf
+      2 unsigned int query_flags
+      2 unsigned int nents
+      2 unsigned int mode
+      2 umode_t mode
+      2 u32 request_mask
+      2 struct kstat *stat
+      2 struct delayed_call *done
+      2 int mask
+      2 int buflen
+      2 const struct pid_entry *ents
+      2 const struct path *path
+      1 void
+      1 unsigned long *start
+      1 unsigned long *end
+      1 unsigned int n
+      1 unsigned int len
+      1 struct vfsmount *mnt
+      1 struct tgid_iter iter
+      1 struct task_struct *tsk
+      1 struct task_struct *start
+      1 struct super_block * sb
+      1 struct pid_namespace *pid
+      1 struct path *root
+      1 struct path *exe_path
+      1 struct mm_struct *mm
+      1 struct iattr *attr
+      1 pid_t tgid
+      1 pid_t pid
+      1 loff_t offset
+      1 loff_t *offs
+      1 loff_t f_pos
+      1 kuid_t *ruid
+      1 kgid_t *rgid
+      1 int write
+      1 int whole
+      1 int tid
+      1 int orig
+      1 int oom_adj
+      1 int hide_pid_min
+      1 instantiate_t instantiate
+      1 const struct seq_operations *seq_ops
+      1 const struct pid_entry *entries
+      1 const struct dentry *dentry
+      1 const char *name
+      1 char __user * buffer
+      1 char __user *buffer
+      1 bool legacy

@@ -4,6 +4,7 @@ EXPORT_SYMBOL_GPL(perf_aux_output_begin);
 EXPORT_SYMBOL_GPL(perf_aux_output_end);
 EXPORT_SYMBOL_GPL(perf_aux_output_skip);
 EXPORT_SYMBOL_GPL(perf_get_aux);
+\n
 static void perf_output_wakeup(struct perf_output_handle *handle)
 static void perf_output_get_handle(struct perf_output_handle *handle)
 static void perf_output_put_handle(struct perf_output_handle *handle)
@@ -39,32 +40,33 @@ static void rb_free_work(struct work_struct *work)
 void rb_free(struct ring_buffer *rb)
 struct ring_buffer *rb_alloc(int nr_pages, long watermark, int cpu, int flags)
 struct page * perf_mmap_to_page(struct ring_buffer *rb, unsigned long pgoff)
-  15 struct perf_output_handle *handle
-  12 struct ring_buffer *rb
-   6 struct perf_event *event
-   5 unsigned int size
-   4 long watermark
-   4 int flags
-   3 unsigned long pgoff
-   3 int nr_pages
-   3 int cpu
-   2 unsigned long size
-   2 unsigned int len
-   2 bool backward
-   1 void *addr
-   1 unsigned long tail
-   1 unsigned long head
-   1 unsigned long data_size
-   1 unsigned long addr
-   1 u64 flags
-   1 struct work_struct *work
-   1 pgoff_t pgoff
-   1 perf_get_aux
-   1 perf_aux_output_skip
-   1 perf_aux_output_flag
-   1 perf_aux_output_end
-   1 perf_aux_output_begin
-   1 int order
-   1 int node
-   1 int idx
-   1 const void *buf
+\n
+     15 struct perf_output_handle *handle
+     12 struct ring_buffer *rb
+      6 struct perf_event *event
+      5 unsigned int size
+      4 long watermark
+      4 int flags
+      3 unsigned long pgoff
+      3 int nr_pages
+      3 int cpu
+      2 unsigned long size
+      2 unsigned int len
+      2 bool backward
+      1 void *addr
+      1 unsigned long tail
+      1 unsigned long head
+      1 unsigned long data_size
+      1 unsigned long addr
+      1 u64 flags
+      1 struct work_struct *work
+      1 pgoff_t pgoff
+      1 perf_get_aux
+      1 perf_aux_output_skip
+      1 perf_aux_output_flag
+      1 perf_aux_output_end
+      1 perf_aux_output_begin
+      1 int order
+      1 int node
+      1 int idx
+      1 const void *buf

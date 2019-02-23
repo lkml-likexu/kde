@@ -1,6 +1,7 @@
 
 EXPORT_SYMBOL_GPL(get_cached_msi_msg);
-struct msi_desc * alloc_msi_entry(struct device *dev, int nvec, const struct cpumask *affinity)
+\n
+struct msi_desc *alloc_msi_entry(struct device *dev, int nvec, const struct irq_affinity_desc *affinity)
 void free_msi_entry(struct msi_desc *entry)
 void __get_cached_msi_msg(struct msi_desc *entry, struct msi_msg *msg)
 void get_cached_msi_msg(unsigned int irq, struct msi_msg *msg)
@@ -25,26 +26,27 @@ static bool msi_check_reservation_mode(struct irq_domain *domain, struct msi_dom
 int msi_domain_alloc_irqs(struct irq_domain *domain, struct device *dev, int nvec)
 void msi_domain_free_irqs(struct irq_domain *domain, struct device *dev)
 struct msi_domain_info *msi_get_domain_info(struct irq_domain *domain)
-  14 struct irq_domain *domain
-   8 struct device *dev
-   7 struct msi_domain_info *info
-   6 msi_alloc_info_t *arg
-   5 int nvec
-   4 struct msi_msg *msg
-   3 unsigned int virq
-   3 struct irq_data *irq_data
-   2 unsigned int nr_irqs
-   2 struct msi_desc *entry
-   1 void *arg
-   1 unsigned int irq
-   1 struct msi_desc *desc
-   1 struct irq_domain *parent
-   1 struct irq_data *data
-   1 struct fwnode_handle *fwnode
-   1 irq_hw_number_t hwirq
-   1 int virq
-   1 get_cached_msi_msg
-   1 const struct cpumask *mask
-   1 const struct cpumask *affinity
-   1 bool force
-   1 bool early
+\n
+     14 struct irq_domain *domain
+      8 struct device *dev
+      7 struct msi_domain_info *info
+      6 msi_alloc_info_t *arg
+      5 int nvec
+      4 struct msi_msg *msg
+      3 unsigned int virq
+      3 struct irq_data *irq_data
+      2 unsigned int nr_irqs
+      2 struct msi_desc *entry
+      1 void *arg
+      1 unsigned int irq
+      1 struct msi_desc *desc
+      1 struct irq_domain *parent
+      1 struct irq_data *data
+      1 struct fwnode_handle *fwnode
+      1 irq_hw_number_t hwirq
+      1 int virq
+      1 get_cached_msi_msg
+      1 const struct irq_affinity_desc *affinity
+      1 const struct cpumask *mask
+      1 bool force
+      1 bool early

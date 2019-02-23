@@ -1,4 +1,6 @@
 
+EXPORT_SYMBOL_GPL(dmar_platform_optin);
+\n
 static void dmar_register_drhd_unit(struct dmar_drhd_unit *drhd)
 void *dmar_alloc_dev_scope(void *start, void *end, int *cnt)
 void dmar_free_dev_scope(struct dmar_dev_scope **devices, int *cnt)
@@ -72,67 +74,70 @@ static acpi_status dmar_get_dsm_handle(acpi_handle handle, u32 lvl, void *contex
 static int dmar_device_hotplug(acpi_handle handle, bool insert)
 int dmar_device_add(acpi_handle handle)
 int dmar_device_remove(acpi_handle handle)
-  18 struct intel_iommu *iommu
-  11 void
-   8 void *arg
-   8 acpi_handle handle
-   7 struct acpi_dmar_header *header
-   6 struct dmar_pci_notify_info *info
-   4 int irq
-   3 u64 addr
-   3 struct pci_dev *dev
-   2 void *start
-   2 u8 fault_reason
-   2 u64 type
-   2 u16 sid
-   2 u16 segment
-   2 u16 did
-   2 struct msi_msg *msg
-   2 struct irq_data *data
-   2 struct dmar_res_callback *cb
-   2 struct dmar_drhd_unit *drhd
-   2 struct dmar_dev_scope *devices
-   2 int func
-   2 int count
-   2 int *cnt
-   1 void*end
-   1 void *end
-   1 void *dev_id
-   1 void *data
-   1 void *context
-   1 void **retval
-   1 unsigned mask
-   1 unsigned long long addr
-   1 unsigned long event
-   1 unsigned long action
-   1 unsigned int size_order
-   1 u8 fm
-   1 u8 device_number
-   1 u64 phys_addr
-   1 u32 lvl
-   1 u16 source_id
-   1 u16 qdep
-   1 u16 pfsid
-   1 struct qi_desc *desc
-   1 struct q_inval *qi
-   1 struct notifier_block *nb
-   1 struct dmar_drhd_unit *dmaru
-   1 struct dmar_dev_scope devices[]
-   1 struct dmar_dev_scope **devices
-   1 struct acpi_table_dmar *dmar
-   1 struct acpi_dmar_pci_path *path
-   1 struct acpi_dmar_header *start
-   1 struct acpi_dmar_header *entry
-   1 struct acpi_dmar_hardware_unit *drhd
-   1 struct acpi_device *adev
-   1 size_t len
-   1 int type
-   1 int index
-   1 int devices_cnt
-   1 int cnt
-   1 int bus
-   1 int *fault_type
-   1 dmar_res_handler_t handler
-   1 const char *message
-   1 bool insert
-   1 16
+bool dmar_platform_optin(void)
+\n
+     18 struct intel_iommu *iommu
+     12 void
+      8 void *arg
+      8 acpi_handle handle
+      7 struct acpi_dmar_header *header
+      6 struct dmar_pci_notify_info *info
+      4 int irq
+      3 u64 addr
+      3 struct pci_dev *dev
+      2 void *start
+      2 u8 fault_reason
+      2 u64 type
+      2 u16 sid
+      2 u16 segment
+      2 u16 did
+      2 struct msi_msg *msg
+      2 struct irq_data *data
+      2 struct dmar_res_callback *cb
+      2 struct dmar_drhd_unit *drhd
+      2 struct dmar_dev_scope *devices
+      2 int func
+      2 int count
+      2 int *cnt
+      1 void **retval
+      1 void*end
+      1 void *end
+      1 void *dev_id
+      1 void *data
+      1 void *context
+      1 unsigned mask
+      1 unsigned long long addr
+      1 unsigned long event
+      1 unsigned long action
+      1 unsigned int size_order
+      1 u8 fm
+      1 u8 device_number
+      1 u64 phys_addr
+      1 u32 lvl
+      1 u16 source_id
+      1 u16 qdep
+      1 u16 pfsid
+      1 struct q_inval *qi
+      1 struct qi_desc *desc
+      1 struct notifier_block *nb
+      1 struct dmar_drhd_unit *dmaru
+      1 struct dmar_dev_scope devices[]
+      1 struct dmar_dev_scope **devices
+      1 struct acpi_table_dmar *dmar
+      1 struct acpi_dmar_pci_path *path
+      1 struct acpi_dmar_header *start
+      1 struct acpi_dmar_header *entry
+      1 struct acpi_dmar_hardware_unit *drhd
+      1 struct acpi_device *adev
+      1 size_t len
+      1 int type
+      1 int index
+      1 int *fault_type
+      1 int devices_cnt
+      1 int cnt
+      1 int bus
+      1 dmar_res_handler_t handler
+      1 dmar_platform_optin
+      1 const char *message
+      1 bool insert
+      1 16

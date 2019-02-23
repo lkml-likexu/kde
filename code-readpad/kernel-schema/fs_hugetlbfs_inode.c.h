@@ -1,4 +1,5 @@
 
+\n
 static inline void hugetlb_set_vma_policy(struct vm_area_struct *vma, struct inode *inode, pgoff_t index)
 static inline void hugetlb_drop_vma_policy(struct vm_area_struct *vma)
 static inline void hugetlb_drop_vma_policy(struct vm_area_struct *vma)
@@ -46,68 +47,69 @@ static int can_do_hugetlb_shm(void)
 static int get_hstate_idx(int page_size_log)
 struct file *hugetlb_file_setup(const char *name, size_t size, vm_flags_t acctflag, struct user_struct **user, int creat_flags, int page_size_log)
 static int __init init_hugetlbfs_fs(void)
-   7 struct inode *inode
-   6 struct vm_area_struct *vma
-   6 struct page *page
-   6 struct dentry *dentry
-   5 struct super_block *sb
-   5 struct inode *dir
-   5 struct file *file
-   4 umode_t mode
-   4 struct address_space *mapping
-   3 loff_t offset
-   2 void *data
-   2 void
-   2 unsigned len
-   2 struct iov_iter *to
-   2 struct hugetlbfs_sb_info *sbinfo
-   2 pgoff_t index
-   2 loff_t pos
-   2 loff_t len
-   2 int page_size_log
-   2 dev_t dev
-   1 void *fsdata
-   1 void *foo
-   1 void **fsdata
-   1 vma->vm_policy
-   1 vm_flags_t acctflag
-   1 unsigned long size
-   1 unsigned long pgoff
-   1 unsigned long offset
-   1 unsigned long long size_opt
-   1 unsigned long len
-   1 unsigned long flags
-   1 unsigned long addr
-   1 unsigned flags
-   1 unsigned copied
-   1 struct user_struct **user
-   1 struct seq_file *m
-   1 struct rcu_head *head
-   1 struct rb_root_cached *root
-   1 struct pagevec *pvec
-   1 struct page *newpage
-   1 struct page **pagep
-   1 struct kstatfs *buf
-   1 struct kiocb *iocb
-   1 struct iattr *attr
-   1 struct hugetlbfs_config *pconfig
-   1 struct hugetlbfs_config *config
-   1 struct hstate *h
-   1 struct file_system_type *fs_type
-   1 struct dentry *root
-   1 size_t size
-   1 pgoff_t start
-   1 pgoff_t end
-   1 loff_t lstart
-   1 loff_t lend
-   1 int silent
-   1 int mode
-   1 int flags
-   1 int creat_flags
-   1 enum migrate_mode mode
-   1 enum hugetlbfs_size_type val_type
-   1 const char *symname
-   1 const char *name
-   1 const char *dev_name
-   1 char *options
-   1 bool excl
+\n
+      7 struct inode *inode
+      6 struct vm_area_struct *vma
+      6 struct page *page
+      6 struct dentry *dentry
+      5 struct super_block *sb
+      5 struct inode *dir
+      5 struct file *file
+      4 umode_t mode
+      4 struct address_space *mapping
+      3 loff_t offset
+      2 void *data
+      2 void
+      2 unsigned len
+      2 struct iov_iter *to
+      2 struct hugetlbfs_sb_info *sbinfo
+      2 pgoff_t index
+      2 loff_t pos
+      2 loff_t len
+      2 int page_size_log
+      2 dev_t dev
+      1 void **fsdata
+      1 void *fsdata
+      1 void *foo
+      1 vm_flags_t acctflag
+      1 vma->vm_policy
+      1 unsigned long size
+      1 unsigned long pgoff
+      1 unsigned long offset
+      1 unsigned long long size_opt
+      1 unsigned long len
+      1 unsigned long flags
+      1 unsigned long addr
+      1 unsigned flags
+      1 unsigned copied
+      1 struct user_struct **user
+      1 struct seq_file *m
+      1 struct rcu_head *head
+      1 struct rb_root_cached *root
+      1 struct pagevec *pvec
+      1 struct page **pagep
+      1 struct page *newpage
+      1 struct kstatfs *buf
+      1 struct kiocb *iocb
+      1 struct iattr *attr
+      1 struct hugetlbfs_config *pconfig
+      1 struct hugetlbfs_config *config
+      1 struct hstate *h
+      1 struct file_system_type *fs_type
+      1 struct dentry *root
+      1 size_t size
+      1 pgoff_t start
+      1 pgoff_t end
+      1 loff_t lstart
+      1 loff_t lend
+      1 int silent
+      1 int mode
+      1 int flags
+      1 int creat_flags
+      1 enum migrate_mode mode
+      1 enum hugetlbfs_size_type val_type
+      1 const char *symname
+      1 const char *name
+      1 const char *dev_name
+      1 char *options
+      1 bool excl

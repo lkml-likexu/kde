@@ -1,4 +1,5 @@
 
+\n
 static int __init set_x2apic_phys_mode(char *arg)
 static bool x2apic_fadt_phys(void)
 static int x2apic_acpi_madt_oem_check(char *oem_id, char *oem_table_id)
@@ -17,18 +18,19 @@ unsigned int x2apic_get_apic_id(unsigned long id)
 u32 x2apic_set_apic_id(unsigned int id)
 int x2apic_phys_pkg_id(int initial_apicid, int index_msb)
 void x2apic_send_IPI_self(int vector)
-   8 int vector
-   4 void
-   3 const struct cpumask *mask
-   1 unsigned long id
-   1 unsigned int id
-   1 unsigned int dest
-   1 unsigned int apicid
-   1 u32 apicid
-   1 int initial_apicid
-   1 int index_msb
-   1 int cpu
-   1 int apic_dest
-   1 char *oem_table_id
-   1 char *oem_id
-   1 char *arg
+\n
+      8 int vector
+      4 void
+      3 const struct cpumask *mask
+      1 unsigned long id
+      1 unsigned int id
+      1 unsigned int dest
+      1 unsigned int apicid
+      1 u32 apicid
+      1 int initial_apicid
+      1 int index_msb
+      1 int cpu
+      1 int apic_dest
+      1 char *oem_table_id
+      1 char *oem_id
+      1 char *arg

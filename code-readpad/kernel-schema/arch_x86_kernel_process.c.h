@@ -1,4 +1,5 @@
 
+\n
 int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 void exit_thread(struct task_struct *tsk)
 void flush_thread(void)
@@ -12,7 +13,7 @@ static void enable_cpuid(void)
 static int get_cpuid_mode(void)
 static int set_cpuid_mode(struct task_struct *task, unsigned long cpuid_enabled)
 void arch_setup_new_exec(void)
-static inline void switch_to_bitmap(struct tss_struct *tss, struct thread_struct *prev, struct thread_struct *next, unsigned long tifp, unsigned long tifn)
+static inline void switch_to_bitmap(struct thread_struct *prev, struct thread_struct *next, unsigned long tifp, unsigned long tifn)
 void speculative_store_bypass_ht_init(void)
 static __always_inline void amd_set_core_ssb_state(unsigned long tifn)
 raw_spin_lock(&st->shared_state->lock)
@@ -21,10 +22,11 @@ wrmsrl(MSR_AMD64_LS_CFG, msr)
 ; raw_spin_unlock(&st->shared_state->lock)
 ;} } static __always_inline void amd_set_core_ssb_state(unsigned long tifn)
 static __always_inline void amd_set_ssb_virt_state(unsigned long tifn)
-static __always_inline void intel_set_ssb_state(unsigned long tifn)
-static __always_inline void __speculative_store_bypass_update(unsigned long tifn)
-void speculative_store_bypass_update(unsigned long tif)
-void __switch_to_xtra(struct task_struct *prev_p, struct task_struct *next_p, struct tss_struct *tss)
+static __always_inline void __speculation_ctrl_update(unsigned long tifp, unsigned long tifn)
+static unsigned long speculation_ctrl_update_tif(struct task_struct *tsk)
+void speculation_ctrl_update(unsigned long tif)
+void speculation_ctrl_update_current(void)
+void __switch_to_xtra(struct task_struct *prev_p, struct task_struct *next_p)
 static inline void play_dead(void)
 void arch_cpu_idle_enter(void)
 void arch_cpu_idle_dead(void)
@@ -43,31 +45,31 @@ unsigned long arch_align_stack(unsigned long sp)
 unsigned long arch_randomize_brk(struct mm_struct *mm)
 unsigned long get_wchan(struct task_struct *p)
 long do_arch_prctl_common(struct task_struct *task, int option, unsigned long cpuid_enabled)
-  18 void
-   6 unsigned long tifn
-   2 unsigned long cpuid_enabled
-   2 struct tss_struct *tss
-   2 struct task_struct *task
-   2 const struct cpuinfo_x86 *c
-   2 &st->shared_state->lock
-   1 void *dummy
-   1 unsigned long tifp
-   1 unsigned long tif
-   1 unsigned long sp
-   1 unsigned long adr
-   1 unsigned int val
-   1 struct thread_struct *prev
-   1 struct thread_struct *next
-   1 struct task_struct *tsk
-   1 struct task_struct *src
-   1 struct task_struct *prev_p
-   1 struct task_struct *p
-   1 struct task_struct *next_p
-   1 struct task_struct *dst
-   1 struct mm_struct *mm
-   1 msr
-   1 int option
-   1 char *str
-   1 bool on
-   1 MSR_AMD64_LS_CFG
-   1 !st->shared_state->disable_state
+\n
+     19 void
+      5 unsigned long tifn
+      2 unsigned long tifp
+      2 unsigned long cpuid_enabled
+      2 &st->shared_state->lock
+      2 struct task_struct *tsk
+      2 struct task_struct *task
+      2 const struct cpuinfo_x86 *c
+      1 void *dummy
+      1 unsigned long tif
+      1 unsigned long sp
+      1 unsigned long adr
+      1 unsigned int val
+      1 !st->shared_state->disable_state
+      1 struct thread_struct *prev
+      1 struct thread_struct *next
+      1 struct task_struct *src
+      1 struct task_struct *prev_p
+      1 struct task_struct *p
+      1 struct task_struct *next_p
+      1 struct task_struct *dst
+      1 struct mm_struct *mm
+      1 MSR_AMD64_LS_CFG
+      1 msr
+      1 int option
+      1 char *str
+      1 bool on

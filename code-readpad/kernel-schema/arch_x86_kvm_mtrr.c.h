@@ -1,6 +1,7 @@
 
 EXPORT_SYMBOL_GPL(kvm_mtrr_valid);
 EXPORT_SYMBOL_GPL(kvm_mtrr_get_guest_memory_type);
+\n
 static bool msr_mtrr_valid(unsigned msr)
 static bool valid_pat_type(unsigned t)
 static bool valid_mtrr_type(unsigned t)
@@ -38,26 +39,27 @@ static bool mtrr_lookup_okay(struct mtrr_iter *iter)
 static void mtrr_lookup_next(struct mtrr_iter *iter)
 u8 kvm_mtrr_get_guest_memory_type(struct kvm_vcpu *vcpu, gfn_t gfn)
 bool kvm_mtrr_check_gfn_range_consistency(struct kvm_vcpu *vcpu, gfn_t gfn, int page_num)
-  10 struct mtrr_iter *iter
-   9 struct kvm_vcpu *vcpu
-   8 u32 msr
-   6 int seg
-   4 struct kvm_mtrr *mtrr_state
-   3 u64 data
-   3 u64 *start
-   3 u64 *end
-   3 struct kvm_mtrr_range *range
-   2 unsigned t
-   2 u64 addr
-   2 int unit
-   2 gfn_t gfn
-   1 unsigned msr
-   1 u64 start
-   1 u64 end
-   1 u64 *pdata
-   1 kvm_mtrr_valid
-   1 kvm_mtrr_get_guest_memory_type
-   1 int page_num
-   1 int index
-   1 int *unit
-   1 int *seg
+\n
+     10 struct mtrr_iter *iter
+      9 struct kvm_vcpu *vcpu
+      8 u32 msr
+      6 int seg
+      4 struct kvm_mtrr *mtrr_state
+      3 u64 *start
+      3 u64 *end
+      3 u64 data
+      3 struct kvm_mtrr_range *range
+      2 unsigned t
+      2 u64 addr
+      2 int unit
+      2 gfn_t gfn
+      1 unsigned msr
+      1 u64 start
+      1 u64 *pdata
+      1 u64 end
+      1 kvm_mtrr_valid
+      1 kvm_mtrr_get_guest_memory_type
+      1 int *unit
+      1 int *seg
+      1 int page_num
+      1 int index

@@ -1,4 +1,5 @@
 
+\n
 int arch_update_cpu_topology(void)
 static inline void smpboot_setup_warm_reset_vector(unsigned long start_eip)
 static inline void smpboot_restore_warm_reset_vector(void)
@@ -63,24 +64,26 @@ void native_play_dead(void)
 int native_cpu_disable(void)
 void native_cpu_die(unsigned int cpu)
 void native_play_dead(void)
-  31 void
-   7 unsigned int cpu
-   7 int cpu
-   5 struct cpuinfo_x86 *o
-   5 struct cpuinfo_x86 *c
-   5 int apicid
-   3 unsigned long start_eip
-   2 unsigned int max_cpus
-   2 struct task_struct *idle
-   2 int *cpu0_nmi_registered
-   2 char *str
-   1 void *unused
-   1 unsigned long start_ip
-   1 unsigned int pkg
-   1 unsigned int phys_pkg
-   1 unsigned int cmd
-   1 struct task_struct *tidle
-   1 struct pt_regs *regs
-   1 int phys_apicid
-   1 int id
-   1 const char *name
+\n
+     31 void
+      7 unsigned int cpu
+      7 int cpu
+      5 struct cpuinfo_x86 *o
+      5 struct cpuinfo_x86 *c
+      5 int apicid
+      3 unsigned long start_eip
+      2 unsigned int max_cpus
+      2 struct task_struct *idle
+      2 int *cpu0_nmi_registered
+      2 char *str
+      2 
+      1 void *unused
+      1 unsigned long start_ip
+      1 unsigned int pkg
+      1 unsigned int phys_pkg
+      1 unsigned int cmd
+      1 struct task_struct *tidle
+      1 struct pt_regs *regs
+      1 int phys_apicid
+      1 int id
+      1 const char *name

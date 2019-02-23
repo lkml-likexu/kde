@@ -1,6 +1,10 @@
 
+EXPORT_SYMBOL_GPL(intel_pt_validate_cap);
+EXPORT_SYMBOL_GPL(intel_pt_validate_hw_cap);
 EXPORT_SYMBOL_GPL(intel_pt_handle_vmx);
-static u32 pt_cap_get(enum pt_capabilities cap)
+\n
+u32 intel_pt_validate_cap(u32 *caps, enum pt_capabilities capability)
+u32 intel_pt_validate_hw_cap(enum pt_capabilities cap)
 static ssize_t pt_cap_show(struct device *cdev, struct device_attribute *attr, char *buf)
 static ssize_t pt_timing_attr_show(struct device *dev, struct device_attribute *attr, char *page)
 static int __init pt_pmu_hw_init(void)
@@ -44,31 +48,36 @@ static void pt_event_destroy(struct perf_event *event)
 static int pt_event_init(struct perf_event *event)
 void cpu_emergency_stop_pt(void)
 static __init int pt_init(void)
-  14 struct perf_event *event
-  12 struct pt_buffer *buf
-   4 void
-   4 int mode
-   3 struct topa *topa
-   3 gfp_t gfp
-   2 struct pt *pt
-   2 struct device_attribute *attr
-   2 int cpu
-   1 void *data
-   1 void *buf
-   1 void **pages
-   1 unsigned long nr_pages
-   1 unsigned long ip
-   1 unsigned long head
-   1 unsigned int topa_idx
-   1 unsigned int pg
-   1 unsigned int output_off
-   1 struct list_head *filters
-   1 struct device *dev
-   1 struct device *cdev
-   1 intel_pt_handle_vmx
-   1 int on
-   1 int nr_pages
-   1 enum pt_capabilities cap
-   1 char *page
-   1 char *buf
-   1 bool snapshot
+\n
+     14 struct perf_event *event
+     12 struct pt_buffer *buf
+      4 void
+      4 int mode
+      3 struct topa *topa
+      3 gfp_t gfp
+      2 struct pt *pt
+      2 struct device_attribute *attr
+      2 int cpu
+      1 void **pages
+      1 void *data
+      1 void *buf
+      1 unsigned long nr_pages
+      1 unsigned long ip
+      1 unsigned long head
+      1 unsigned int topa_idx
+      1 unsigned int pg
+      1 unsigned int output_off
+      1 u32 *caps
+      1 struct list_head *filters
+      1 struct device *dev
+      1 struct device *cdev
+      1 int on
+      1 int nr_pages
+      1 intel_pt_validate_hw_cap
+      1 intel_pt_validate_cap
+      1 intel_pt_handle_vmx
+      1 enum pt_capabilities capability
+      1 enum pt_capabilities cap
+      1 char *page
+      1 char *buf
+      1 bool snapshot

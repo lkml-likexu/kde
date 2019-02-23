@@ -1,6 +1,7 @@
 
 EXPORT_SYMBOL_GPL(register_oom_notifier);
 EXPORT_SYMBOL_GPL(unregister_oom_notifier);
+\n
 static bool has_intersects_mems_allowed(struct task_struct *start, const nodemask_t *mask)
 return ret; } static bool has_intersects_mems_allowed(struct task_struct *tsk, const nodemask_t *mask)
 struct task_struct *find_lock_task_mm(struct task_struct *p)
@@ -13,6 +14,7 @@ static enum oom_constraint constrained_alloc(struct oom_control *oc)
 static int oom_evaluate_task(struct task_struct *task, void *arg)
 static void select_bad_process(struct oom_control *oc)
 static void dump_tasks(struct mem_cgroup *memcg, const nodemask_t *nodemask)
+static void dump_oom_summary(struct oom_control *oc, struct task_struct *victim)
 static void dump_header(struct oom_control *oc, struct task_struct *p)
 bool process_shares_mm(struct task_struct *p, struct mm_struct *mm)
 bool __oom_reap_task_mm(struct mm_struct *mm)
@@ -39,27 +41,28 @@ int register_oom_notifier(struct notifier_block *nb)
 int unregister_oom_notifier(struct notifier_block *nb)
 bool out_of_memory(struct oom_control *oc)
 void pagefault_out_of_memory(void)
-   8 struct oom_control *oc
-   6 void
-   6 struct task_struct *tsk
-   5 struct task_struct *p
-   4 struct task_struct *task
-   3 struct mm_struct *mm
-   3 struct mem_cgroup *memcg
-   3 const nodemask_t *nodemask
-   2 void *unused
-   2 struct notifier_block *nb
-   2 const nodemask_t *mask
-   1 void *arg
-   1 unsigned long totalpages
-   1 unregister_oom_notifier
-   1 struct task_struct *victim
-   1 struct task_struct *start
-   1 signed long timeout
-   1 register_oom_notifier
-   1 oom_reaper
-   1 oom_init
-   1 enum oom_constraint constraint
-   1 const char *message
-   1 NULL
-   1 "oom_reaper"
+\n
+      9 struct oom_control *oc
+      6 void
+      6 struct task_struct *tsk
+      5 struct task_struct *p
+      4 struct task_struct *task
+      3 struct mm_struct *mm
+      3 struct mem_cgroup *memcg
+      3 const nodemask_t *nodemask
+      2 void *unused
+      2 struct task_struct *victim
+      2 struct notifier_block *nb
+      2 const nodemask_t *mask
+      1 void *arg
+      1 unsigned long totalpages
+      1 unregister_oom_notifier
+      1 struct task_struct *start
+      1 signed long timeout
+      1 register_oom_notifier
+      1 oom_reaper
+      1 "oom_reaper"
+      1 oom_init
+      1 NULL
+      1 enum oom_constraint constraint
+      1 const char *message

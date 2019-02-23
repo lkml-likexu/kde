@@ -1,4 +1,5 @@
 
+\n
 static int __init ksm_slab_init(void)
 static void __init ksm_slab_free(void)
 static __always_inline bool is_stable_node_chain(struct stable_node *chain)
@@ -97,59 +98,61 @@ static ssize_t stable_node_chains_prune_millisecs_show(struct kobject *kobj, str
 static ssize_t stable_node_chains_prune_millisecs_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
 static ssize_t full_scans_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 static int __init ksm_init(void)
-  22 struct kobject *kobj
-  22 struct kobj_attribute *attr
-  15 char *buf
-  13 struct page *page
-  12 struct stable_node *stable_node
-  11 void
-   9 struct rmap_item *rmap_item
-   9 struct rb_root *root
-   7 struct vm_area_struct *vma
-   7 size_t count
-   7 const char *buf
-   6 struct mm_struct *mm
-   5 struct stable_node *dup
-   4 struct page *kpage
-   4 struct mm_slot *mm_slot
-   3 unsigned long start_pfn
-   3 unsigned long end_pfn
-   3 unsigned long addr
-   3 struct stable_node *chain
-   2 unsigned long start
-   2 unsigned long end
-   2 struct stable_node **s_n_d
-   2 struct stable_node **_stable_node_dup
-   2 struct stable_node **_stable_node
-   2 struct rmap_item **rmap_list
-   2 struct page *page2
-   2 struct page *page1
-   2 bool prune_stale_stable_nodes
-   1 void *nothing
-   1 void *arg
-   1 unsigned long kpfn
-   1 unsigned long address
-   1 unsigned long action
-   1 unsigned long *vm_flags
-   1 unsigned int scan_npages
-   1 struct stable_node *s_n
-   1 struct stable_node **s_n
-   1 struct rmap_walk_control *rwc
-   1 struct rmap_item *tree_rmap_item
-   1 struct page *tree_page
-   1 struct page *oldpage
-   1 struct page *newpage
-   1 struct page **tree_pagep
-   1 struct page **page
-   1 struct notifier_block *self
-   1 pte_t orig_pte
-   1 pte_t *orig_pte
-   1 ksm_use_zero_pages
-   1 int offset
-   1 int advice
-   1 ilog2KSM_RUN_OFFLINE
-   1 buf
-   1 bool max_page_sharing_bypass
-   1 bool lock_it
-   1 &ksm_run
-   1 "%u\n"
+\n
+     22 struct kobject *kobj
+     22 struct kobj_attribute *attr
+     15 char *buf
+     13 struct page *page
+     12 struct stable_node *stable_node
+     11 void
+      9 struct rmap_item *rmap_item
+      9 struct rb_root *root
+      7 struct vm_area_struct *vma
+      7 size_t count
+      7 const char *buf
+      6 struct mm_struct *mm
+      5 struct stable_node *dup
+      4 struct page *kpage
+      4 struct mm_slot *mm_slot
+      3 unsigned long start_pfn
+      3 unsigned long end_pfn
+      3 unsigned long addr
+      3 struct stable_node *chain
+      2 unsigned long start
+      2 unsigned long end
+      2 struct stable_node **_stable_node_dup
+      2 struct stable_node **_stable_node
+      2 struct stable_node **s_n_d
+      2 struct rmap_item **rmap_list
+      2 struct page *page2
+      2 struct page *page1
+      2 bool prune_stale_stable_nodes
+      1 void *nothing
+      1 void *arg
+      1 unsigned long *vm_flags
+      1 unsigned long kpfn
+      1 unsigned long address
+      1 unsigned long action
+      1 unsigned int scan_npages
+      1 "%u\n"
+      1 struct stable_node *s_n
+      1 struct stable_node **s_n
+      1 struct rmap_walk_control *rwc
+      1 struct rmap_item *tree_rmap_item
+      1 struct page **tree_pagep
+      1 struct page *tree_page
+      1 struct page **page
+      1 struct page *oldpage
+      1 struct page *newpage
+      1 struct notifier_block *self
+      1 pte_t orig_pte
+      1 pte_t *orig_pte
+      1 ksm_use_zero_pages
+      1 &ksm_run
+      1 int offset
+      1 int advice
+      1 ilog2KSM_RUN_OFFLINE
+      1 buf
+      1 bool max_page_sharing_bypass
+      1 bool lock_it
+      1 

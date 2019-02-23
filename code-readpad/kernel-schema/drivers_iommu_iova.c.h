@@ -13,6 +13,7 @@ EXPORT_SYMBOL_GPL(queue_iova);
 EXPORT_SYMBOL_GPL(put_iova_domain);
 EXPORT_SYMBOL_GPL(reserve_iova);
 EXPORT_SYMBOL_GPL(copy_reserved_iova);
+\n
 void init_iova_domain(struct iova_domain *iovad, unsigned long granule, unsigned long start_pfn)
 static void free_iova_flush_queue(struct iova_domain *iovad)
 int init_iova_flush_queue(struct iova_domain *iovad, iova_flush_cb flush_cb, iova_entry_dtor entry_dtor)
@@ -62,49 +63,50 @@ static unsigned long __iova_rcache_get(struct iova_rcache *rcache, unsigned long
 static unsigned long iova_rcache_get(struct iova_domain *iovad, unsigned long size, unsigned long limit_pfn)
 static void free_iova_rcaches(struct iova_domain *iovad)
 void free_cpu_cached_iovas(unsigned int cpu, struct iova_domain *iovad)
-  30 struct iova_domain *iovad
-   7 unsigned long pfn
-   7 unsigned long limit_pfn
-   6 unsigned long size
-   6 struct iova_magazine *mag
-   6 struct iova *iova
-   5 unsigned long pfn_lo
-   5 unsigned long pfn_hi
-   3 void
-   3 struct iova_fq *fq
-   2 struct iova_rcache *rcache
-   2 struct iova *new
-   2 bool size_aligned
-   1 unsigned long start_pfn
-   1 unsigned long pages
-   1 unsigned long iova_pfn
-   1 unsigned long granule
-   1 unsigned long data
-   1 unsigned long *pfn_lo
-   1 unsigned long *pfn_hi
-   1 unsigned int cpu
-   1 struct timer_list *t
-   1 struct rb_root *root
-   1 struct rb_node *start
-   1 struct rb_node *node
-   1 struct iova_domain *to
-   1 struct iova_domain *from
-   1 struct iova *free
-   1 reserve_iova
-   1 queue_iova
-   1 put_iova_domain
-   1 iova_flush_cb flush_cb
-   1 iova_entry_dtor entry_dtor
-   1 iova_cache_put
-   1 iova_cache_get
-   1 init_iova_flush_queue
-   1 init_iova_domain
-   1 gfp_t flags
-   1 free_iova_fast
-   1 free_iova
-   1 find_iova
-   1 copy_reserved_iova
-   1 bool flush_rcache
-   1 alloc_iova_fast
-   1 alloc_iova
-   1 __free_iova
+\n
+     30 struct iova_domain *iovad
+      7 unsigned long pfn
+      7 unsigned long limit_pfn
+      6 unsigned long size
+      6 struct iova_magazine *mag
+      6 struct iova *iova
+      5 unsigned long pfn_lo
+      5 unsigned long pfn_hi
+      3 void
+      3 struct iova_fq *fq
+      2 struct iova_rcache *rcache
+      2 struct iova *new
+      2 bool size_aligned
+      1 unsigned long start_pfn
+      1 unsigned long *pfn_lo
+      1 unsigned long *pfn_hi
+      1 unsigned long pages
+      1 unsigned long iova_pfn
+      1 unsigned long granule
+      1 unsigned long data
+      1 unsigned int cpu
+      1 struct timer_list *t
+      1 struct rb_root *root
+      1 struct rb_node *start
+      1 struct rb_node *node
+      1 struct iova *free
+      1 struct iova_domain *to
+      1 struct iova_domain *from
+      1 reserve_iova
+      1 queue_iova
+      1 put_iova_domain
+      1 iova_flush_cb flush_cb
+      1 iova_entry_dtor entry_dtor
+      1 iova_cache_put
+      1 iova_cache_get
+      1 init_iova_flush_queue
+      1 init_iova_domain
+      1 gfp_t flags
+      1 free_iova_fast
+      1 free_iova
+      1 __free_iova
+      1 find_iova
+      1 copy_reserved_iova
+      1 bool flush_rcache
+      1 alloc_iova_fast
+      1 alloc_iova

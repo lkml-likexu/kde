@@ -4,6 +4,7 @@ EXPORT_SYMBOL_GPL(modify_user_hw_breakpoint);
 EXPORT_SYMBOL_GPL(unregister_hw_breakpoint);
 EXPORT_SYMBOL_GPL(register_wide_hw_breakpoint);
 EXPORT_SYMBOL_GPL(unregister_wide_hw_breakpoint);
+\n
 static struct bp_cpuinfo *get_bp_info(int cpu, enum bp_type_idx type)
 __weak int hw_breakpoint_weight(struct perf_event *bp)
 static inline enum bp_type_idx find_slot_idx(u64 bp_type)
@@ -39,30 +40,31 @@ static void hw_breakpoint_del(struct perf_event *bp, int flags)
 static void hw_breakpoint_start(struct perf_event *bp, int flags)
 static void hw_breakpoint_stop(struct perf_event *bp, int flags)
 int __init init_hw_breakpoint(void)
-  25 struct perf_event *bp
-   6 enum bp_type_idx type
-   4 struct perf_event_attr *attr
-   4 int flags
-   4 int cpu
-   3 u64 bp_type
-   3 int weight
-   2 void *context
-   2 u64 old_type
-   2 u64 new_type
-   2 struct bp_busy_slots *slots
-   2 perf_overflow_handler_t triggered
-   1 void
-   1 unregister_wide_hw_breakpoint
-   1 unregister_hw_breakpoint
-   1 struct task_struct *tsk
-   1 struct perf_event_attr *to
-   1 struct perf_event_attr *from
-   1 struct perf_event *event
-   1 struct perf_event * __percpu *cpu_events
-   1 struct arch_hw_breakpoint *hw
-   1 register_wide_hw_breakpoint
-   1 register_user_hw_breakpoint
-   1 modify_user_hw_breakpoint
-   1 const struct perf_event_attr *attr
-   1 bool enable
-   1 bool check
+\n
+     25 struct perf_event *bp
+      6 enum bp_type_idx type
+      4 struct perf_event_attr *attr
+      4 int flags
+      4 int cpu
+      3 u64 bp_type
+      3 int weight
+      2 void *context
+      2 u64 old_type
+      2 u64 new_type
+      2 struct bp_busy_slots *slots
+      2 perf_overflow_handler_t triggered
+      1 void
+      1 unregister_wide_hw_breakpoint
+      1 unregister_hw_breakpoint
+      1 struct task_struct *tsk
+      1 struct perf_event * __percpu *cpu_events
+      1 struct perf_event *event
+      1 struct perf_event_attr *to
+      1 struct perf_event_attr *from
+      1 struct arch_hw_breakpoint *hw
+      1 register_wide_hw_breakpoint
+      1 register_user_hw_breakpoint
+      1 modify_user_hw_breakpoint
+      1 const struct perf_event_attr *attr
+      1 bool enable
+      1 bool check

@@ -1,4 +1,5 @@
 
+\n
 static void proc_evict_inode(struct inode *inode)
 static struct inode *proc_alloc_inode(struct super_block *sb)
 static void proc_i_callback(struct rcu_head *head)
@@ -24,34 +25,35 @@ static void proc_put_link(void *p)
 static const char *proc_get_link(struct dentry *dentry, struct inode *inode, struct delayed_call *done)
 struct inode *proc_get_inode(struct super_block *sb, struct proc_dir_entry *de)
 int proc_fill_super(struct super_block *s, void *data, int silent)
-  10 struct file *file
-   5 struct inode *inode
-   3 struct proc_dir_entry *pde
-   2 unsigned long arg
-   2 unsigned int cmd
-   2 struct super_block *sb
-   2 struct proc_dir_entry *de
-   2 size_t count
-   2 loff_t *ppos
-   1 void *p
-   1 void *foo
-   1 void *data
-   1 void
-   1 unsigned long pgoff
-   1 unsigned long orig_addr
-   1 unsigned long len
-   1 unsigned long flags
-   1 struct vm_area_struct *vma
-   1 struct super_block *s
-   1 struct seq_file *seq
-   1 struct rcu_head *head
-   1 struct poll_table_struct *pts
-   1 struct pde_opener *pdeo
-   1 struct dentry *root
-   1 struct dentry *dentry
-   1 struct delayed_call *done
-   1 loff_t offset
-   1 int whence
-   1 int silent
-   1 const char __user *buf
-   1 char __user *buf
+\n
+     10 struct file *file
+      5 struct inode *inode
+      3 struct proc_dir_entry *pde
+      2 unsigned long arg
+      2 unsigned int cmd
+      2 struct super_block *sb
+      2 struct proc_dir_entry *de
+      2 size_t count
+      2 loff_t *ppos
+      1 void *p
+      1 void *foo
+      1 void *data
+      1 void
+      1 unsigned long pgoff
+      1 unsigned long orig_addr
+      1 unsigned long len
+      1 unsigned long flags
+      1 struct vm_area_struct *vma
+      1 struct super_block *s
+      1 struct seq_file *seq
+      1 struct rcu_head *head
+      1 struct poll_table_struct *pts
+      1 struct pde_opener *pdeo
+      1 struct dentry *root
+      1 struct dentry *dentry
+      1 struct delayed_call *done
+      1 loff_t offset
+      1 int whence
+      1 int silent
+      1 const char __user *buf
+      1 char __user *buf

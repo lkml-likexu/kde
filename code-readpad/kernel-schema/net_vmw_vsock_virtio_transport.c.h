@@ -1,4 +1,5 @@
 
+\n
 static struct virtio_vsock *virtio_vsock_get(void)
 static u32 virtio_transport_get_local_cid(void)
 static void virtio_transport_loopback_work(struct work_struct *work)
@@ -23,12 +24,13 @@ static int virtio_vsock_probe(struct virtio_device *vdev)
 static void virtio_vsock_remove(struct virtio_device *vdev)
 static int __init virtio_vsock_init(void)
 static void __exit virtio_vsock_exit(void)
-   7 struct virtio_vsock *vsock
-   5 struct work_struct *work
-   4 void
-   3 struct virtqueue *vq
-   2 struct virtio_vsock_pkt *pkt
-   2 struct virtio_vsock_event *event
-   2 struct virtio_device *vdev
-   1 struct vsock_sock *vsk
-   1 struct sock *sk
+\n
+      7 struct virtio_vsock *vsock
+      5 struct work_struct *work
+      4 void
+      3 struct virtqueue *vq
+      2 struct virtio_vsock_pkt *pkt
+      2 struct virtio_vsock_event *event
+      2 struct virtio_device *vdev
+      1 struct vsock_sock *vsk
+      1 struct sock *sk

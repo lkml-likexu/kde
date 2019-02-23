@@ -1,4 +1,5 @@
 
+\n
 static struct vfio_dma *vfio_find_dma(struct vfio_iommu *iommu, dma_addr_t start, size_t size)
 static void vfio_link_dma(struct vfio_iommu *iommu, struct vfio_dma *new)
 static void vfio_unlink_dma(struct vfio_iommu *iommu, struct vfio_dma *old)
@@ -26,7 +27,6 @@ static long vfio_unmap_unpin(struct vfio_iommu *iommu, struct vfio_dma *dma, boo
 static void vfio_remove_dma(struct vfio_iommu *iommu, struct vfio_dma *dma)
 static unsigned long vfio_pgsize_bitmap(struct vfio_iommu *iommu)
 static int vfio_dma_do_unmap(struct vfio_iommu *iommu, struct vfio_iommu_type1_dma_unmap *unmap)
-static int map_try_harder(struct vfio_domain *domain, dma_addr_t iova, unsigned long pfn, long npage, int prot)
 static int vfio_iommu_map(struct vfio_iommu *iommu, dma_addr_t iova, unsigned long pfn, long npage, int prot)
 static int vfio_pin_map_dma(struct vfio_iommu *iommu, struct vfio_dma *dma, size_t map_size)
 static int vfio_dma_do_map(struct vfio_iommu *iommu, struct vfio_iommu_type1_dma_map *map)
@@ -49,50 +49,51 @@ static int vfio_iommu_type1_register_notifier(void *iommu_data, unsigned long *e
 static int vfio_iommu_type1_unregister_notifier(void *iommu_data, struct notifier_block *nb)
 static int __init vfio_iommu_type1_init(void)
 static void __exit vfio_iommu_type1_cleanup(void)
-  18 struct vfio_dma *dma
-  15 struct vfio_iommu *iommu
-   8 void *iommu_data
-   8 struct vfio_domain *domain
-   6 unsigned long pfn
-   6 dma_addr_t iova
-   5 long npage
-   5 int prot
-   4 bool do_accounting
-   3 unsigned long vaddr
-   3 struct iommu_group *iommu_group
-   2 void
-   2 unsigned long arg
-   2 unsigned long *user_pfn
-   2 unsigned long *pfn_base
-   2 struct vfio_pfn *vpfn
-   2 struct notifier_block *nb
-   2 size_t len
-   2 phys_addr_t phys
-   2 long *unlocked
-   2 int npage
-   2 dma_addr_t *iova
-   1 void *data
-   1 unsigned long limit
-   1 unsigned long iova
-   1 unsigned long *phys_pfn
-   1 unsigned long *pfn
-   1 unsigned long *events
-   1 unsigned int cmd
-   1 struct vfio_pfn *old
-   1 struct vfio_pfn *new
-   1 struct vfio_iommu_type1_dma_unmap *unmap
-   1 struct vfio_iommu_type1_dma_map *map
-   1 struct vfio_dma *old
-   1 struct vfio_dma *new
-   1 struct mm_struct *mm
-   1 struct list_head *unmapped_list
-   1 struct list_head *regions
-   1 struct iommu_group *group
-   1 struct device *dev
-   1 size_t size
-   1 size_t map_size
-   1 phys_addr_t *base
-   1 int *unmapped_cnt
-   1 dma_addr_t start
-   1 bool external
-   1 bool async
+\n
+     18 struct vfio_dma *dma
+     15 struct vfio_iommu *iommu
+      8 void *iommu_data
+      7 struct vfio_domain *domain
+      5 unsigned long pfn
+      5 dma_addr_t iova
+      4 long npage
+      4 int prot
+      4 bool do_accounting
+      3 unsigned long vaddr
+      3 struct iommu_group *iommu_group
+      2 void
+      2 unsigned long *user_pfn
+      2 unsigned long *pfn_base
+      2 unsigned long arg
+      2 struct vfio_pfn *vpfn
+      2 struct notifier_block *nb
+      2 size_t len
+      2 phys_addr_t phys
+      2 long *unlocked
+      2 int npage
+      2 dma_addr_t *iova
+      1 void *data
+      1 unsigned long *phys_pfn
+      1 unsigned long *pfn
+      1 unsigned long limit
+      1 unsigned long iova
+      1 unsigned long *events
+      1 unsigned int cmd
+      1 struct vfio_pfn *old
+      1 struct vfio_pfn *new
+      1 struct vfio_iommu_type1_dma_unmap *unmap
+      1 struct vfio_iommu_type1_dma_map *map
+      1 struct vfio_dma *old
+      1 struct vfio_dma *new
+      1 struct mm_struct *mm
+      1 struct list_head *unmapped_list
+      1 struct list_head *regions
+      1 struct iommu_group *group
+      1 struct device *dev
+      1 size_t size
+      1 size_t map_size
+      1 phys_addr_t *base
+      1 int *unmapped_cnt
+      1 dma_addr_t start
+      1 bool external
+      1 bool async

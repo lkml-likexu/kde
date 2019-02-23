@@ -1,4 +1,5 @@
 
+\n
 static ssize_t node_read_cpumap(struct device *dev, bool list, char *buf)
 static inline ssize_t node_read_cpumask(struct device *dev, struct device_attribute *attr, char *buf)
 static inline ssize_t node_read_cpumask(struct device *dev, struct device_attribute *attr, char *buf)
@@ -34,31 +35,32 @@ void unregister_one_node(int nid)
 static ssize_t print_nodes_state(enum node_states state, char *buf)
 static ssize_t show_node_state(struct device *dev, struct device_attribute *attr, char *buf)
 define NODE_CALLBACK_PRI 2static int __init register_node_type(void)
-  10 struct device *dev
-  10 char *buf
-   8 struct device_attribute *attr
-   4 struct node *node
-   4 int nid
-   3 void *arg
-   2 x
-   2 unsigned long action
-   2 unsigned int nid
-   2 unsigned int cpu
-   2 struct notifier_block *self
-   2 struct memory_block *mem_blk
-   1 void
-   1 unsigned long start_pfn
-   1 unsigned long phys_index
-   1 unsigned long pfn
-   1 unsigned long end_pfn
-   1 struct work_struct *work
-   1 node_registration_func_t unregister
-   1 node_registration_func_t doregister
-   1 int num
-   1 false
-   1 enum node_states state
-   1 dev
-   1 buf
-   1 bool list
-   1 PAGE_SHIFT - 10
-   1 CONFIG_HUGETLBFS
+\n
+     10 struct device *dev
+     10 char *buf
+      8 struct device_attribute *attr
+      4 struct node *node
+      4 int nid
+      3 void *arg
+      2 x
+      2 unsigned long action
+      2 unsigned int nid
+      2 unsigned int cpu
+      2 struct notifier_block *self
+      2 struct memory_block *mem_blk
+      1 void
+      1 unsigned long start_pfn
+      1 unsigned long phys_index
+      1 unsigned long pfn
+      1 unsigned long end_pfn
+      1 struct work_struct *work
+      1 PAGE_SHIFT - 10
+      1 node_registration_func_t unregister
+      1 node_registration_func_t doregister
+      1 int num
+      1 false
+      1 enum node_states state
+      1 dev
+      1 CONFIG_HUGETLBFS
+      1 buf
+      1 bool list

@@ -1,4 +1,5 @@
 
+\n
 static bool amd_check_current_patch_level(void)
 static bool __init check_loader_disabled_bsp(void)
 bool get_builtin_firmware(struct cpio_data *cd, const char *name)
@@ -35,28 +36,29 @@ static void mc_bp_resume(void)
 static int mc_cpu_online(unsigned int cpu)
 static int mc_cpu_down_prep(unsigned int cpu)
 int __init microcode_init(void)
-  13 void
-   7 int cpu
-   5 struct device *dev
-   3 struct device_attribute *attr
-   2 void *arg
-   2 unsigned int cpu
-   2 struct subsys_interface *sif
-   2 struct file *file
-   2 size_t size
-   2 char *buf
-   1 void *info
-   1 struct inode *inode
-   1 struct cpu_signature *cpu_sig
-   1 struct cpio_data *cd
-   1 size_t len
-   1 long long timeout
-   1 loff_t *ppos
-   1 const void __user *buf
-   1 const char __user *buf
-   1 const char *path
-   1 const char *name
-   1 const char *buf
-   1 bool use_pa
-   1 bool refresh_fw
-   1 atomic_t *t
+\n
+     13 void
+      7 int cpu
+      5 struct device *dev
+      3 struct device_attribute *attr
+      2 void *arg
+      2 unsigned int cpu
+      2 struct subsys_interface *sif
+      2 struct file *file
+      2 size_t size
+      2 char *buf
+      1 void *info
+      1 struct inode *inode
+      1 struct cpu_signature *cpu_sig
+      1 struct cpio_data *cd
+      1 size_t len
+      1 long long timeout
+      1 loff_t *ppos
+      1 const void __user *buf
+      1 const char __user *buf
+      1 const char *path
+      1 const char *name
+      1 const char *buf
+      1 bool use_pa
+      1 bool refresh_fw
+      1 atomic_t *t

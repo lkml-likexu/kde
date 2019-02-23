@@ -3,6 +3,7 @@ EXPORT_SYMBOL_GPL(pat_enabled);
 EXPORT_SYMBOL_GPL(pat_pfn_immune_to_uc_mtrr);
 EXPORT_SYMBOL_GPL(pgprot_writecombine);
 EXPORT_SYMBOL_GPL(pgprot_writethrough);
+\n
 void pat_disable(const char *reason)
 static int __init nopat(char *str)
 bool pat_enabled(void)
@@ -60,50 +61,51 @@ static void memtype_seq_stop(struct seq_file *seq, void *v)
 static int memtype_seq_show(struct seq_file *seq, void *v)
 static int memtype_seq_open(struct inode *inode, struct file *file)
 static int __init pat_memtype_list_init(void)
-  10 unsigned long size
-   8 unsigned long pfn
-   5 u64 start
-   5 u64 end
-   5 struct vm_area_struct *vma
-   5 struct page *pg
-   5 resource_size_t start
-   4 void
-   4 struct seq_file *seq
-   3 void *v
-   3 u64 pat
-   3 u64 paddr
-   3 struct file *file
-   3 resource_size_t end
-   3 enum page_cache_mode req_type
-   2 resource_size_t size
-   2 pgprot_t prot
-   2 pgprot_t *vma_prot
-   2 pgprot_t *prot
-   2 old_flags & _PGMT_CLEAR_MASK
-   2 old_flags
-   2 new_flags
-   2 loff_t *pos
-   2 enum page_cache_mode memtype
-   2 enum page_cache_mode *new_type
-   2 cmpxchg&pg->flags
-   2 char *str
-   1 void *arg
-   1 unsigned pat_val
-   1 unsigned long total_nr_pages
-   1 unsigned long initial_pfn
-   1 unsigned long addr
-   1 u64 base
-   1 u64 address
-   1 struct inode *inode
-   1 pgprot_writethrough
-   1 pgprot_writecombine
-   1 pgprot_t vma_prot
-   1 pfn_t pfn
-   1 pat_pfn_immune_to_uc_mtrr
-   1 pat_enabled
-   1 loff_t pos
-   1 int strict_prot
-   1 enum page_cache_mode pcm
-   1 enum page_cache_mode *type
-   1 const char *reason
-   1 char *msg
+\n
+     10 unsigned long size
+      8 unsigned long pfn
+      5 u64 start
+      5 u64 end
+      5 struct vm_area_struct *vma
+      5 struct page *pg
+      5 resource_size_t start
+      4 void
+      4 struct seq_file *seq
+      3 void *v
+      3 u64 pat
+      3 u64 paddr
+      3 struct file *file
+      3 resource_size_t end
+      3 enum page_cache_mode req_type
+      2 resource_size_t size
+      2 pgprot_t *vma_prot
+      2 pgprot_t *prot
+      2 pgprot_t prot
+      2 old_flags & _PGMT_CLEAR_MASK
+      2 old_flags
+      2 new_flags
+      2 loff_t *pos
+      2 enum page_cache_mode *new_type
+      2 enum page_cache_mode memtype
+      2 cmpxchg&pg->flags
+      2 char *str
+      1 void *arg
+      1 unsigned pat_val
+      1 unsigned long total_nr_pages
+      1 unsigned long initial_pfn
+      1 unsigned long addr
+      1 u64 base
+      1 u64 address
+      1 struct inode *inode
+      1 pgprot_writethrough
+      1 pgprot_writecombine
+      1 pgprot_t vma_prot
+      1 pfn_t pfn
+      1 pat_pfn_immune_to_uc_mtrr
+      1 pat_enabled
+      1 loff_t pos
+      1 int strict_prot
+      1 enum page_cache_mode *type
+      1 enum page_cache_mode pcm
+      1 const char *reason
+      1 char *msg

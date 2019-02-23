@@ -1,4 +1,5 @@
 
+\n
 static void *vhost_net_buf_get_ptr(struct vhost_net_buf *rxq)
 static int vhost_net_buf_get_size(struct vhost_net_buf *rxq)
 static int vhost_net_buf_is_empty(struct vhost_net_buf *rxq)
@@ -38,6 +39,7 @@ static size_t init_iov_iter(struct vhost_virtqueue *vq, struct iov_iter *iter, s
 static bool vhost_exceeds_weight(int pkts, int total_len)
 static int get_tx_bufs(struct vhost_net *net, struct vhost_net_virtqueue *nvq, struct msghdr *msg, unsigned int *out, unsigned int *in, size_t *len, bool *busyloop_intr)
 static bool tx_can_batch(struct vhost_virtqueue *vq, size_t total_len)
+static bool vhost_net_page_frag_refill(struct vhost_net *net, unsigned int sz, struct page_frag *pfrag, gfp_t gfp)
 static int vhost_net_build_xdp(struct vhost_net_virtqueue *nvq, struct iov_iter *from)
 static void handle_tx_copy(struct vhost_net *net, struct socket *sock)
 static void handle_tx_zerocopy(struct vhost_net *net, struct socket *sock)
@@ -72,59 +74,63 @@ static ssize_t vhost_net_chr_write_iter(struct kiocb *iocb, struct iov_iter *fro
 static __poll_t vhost_net_chr_poll(struct file *file, poll_table *wait)
 static int vhost_net_init(void)
 static void vhost_net_exit(void)
-  15 struct vhost_net *net
-  14 struct vhost_net *n
-   9 struct vhost_virtqueue *vq
-   7 struct vhost_net_virtqueue *nvq
-   6 struct socket *sock
-   5 struct vhost_net_buf *rxq
-   5 int fd
-   4 struct vhost_work *work
-   4 struct file *f
-   4 bool *busyloop_intr
-   3 void
-   3 struct vhost_net_ubuf_ref *ubufs
-   2 unsigned long arg
-   2 unsigned int ioctl
-   2 u64 features
-   2 struct sock *sk
-   2 struct msghdr *msghdr
-   2 struct kiocb *iocb
-   2 struct iov_iter *from
-   2 struct inode *inode
-   1 void *ptr
-   1 unsigned long endtime
-   1 unsigned int quota
-   1 unsigned int *out_num
-   1 unsigned int *out
-   1 unsigned int *in_num
-   1 unsigned int *in
-   1 unsigned index
-   1 unsigned *log_num
-   1 unsigned *iovcount
-   1 struct vring_used_elem *heads
-   1 struct vhost_virtqueue *tvq
-   1 struct vhost_virtqueue *rvq
-   1 struct vhost_net_virtqueue *tnvq
-   1 struct vhost_net_virtqueue *rvq
-   1 struct vhost_log *log
-   1 struct ubuf_info *ubuf
-   1 struct socket **tx_sock
-   1 struct socket **rx_sock
-   1 struct msghdr *msg
-   1 struct iov_iter *to
-   1 struct iov_iter *iter
-   1 struct file *file
-   1 size_t total_len
-   1 size_t hdr_size
-   1 size_t *len
-   1 poll_table *wait
-   1 int vq
-   1 int total_len
-   1 int pkts
-   1 int out
-   1 int index
-   1 int datalen
-   1 bool zcopy
-   1 bool success
-   1 bool poll_rx
+\n
+     16 struct vhost_net *net
+     14 struct vhost_net *n
+      9 struct vhost_virtqueue *vq
+      7 struct vhost_net_virtqueue *nvq
+      6 struct socket *sock
+      5 struct vhost_net_buf *rxq
+      5 int fd
+      4 struct vhost_work *work
+      4 struct file *f
+      4 bool *busyloop_intr
+      3 void
+      3 struct vhost_net_ubuf_ref *ubufs
+      2 unsigned long arg
+      2 unsigned int ioctl
+      2 u64 features
+      2 struct sock *sk
+      2 struct msghdr *msghdr
+      2 struct kiocb *iocb
+      2 struct iov_iter *from
+      2 struct inode *inode
+      1 void *ptr
+      1 unsigned long endtime
+      1 unsigned *log_num
+      1 unsigned *iovcount
+      1 unsigned int sz
+      1 unsigned int quota
+      1 unsigned int *out_num
+      1 unsigned int *out
+      1 unsigned int *in_num
+      1 unsigned int *in
+      1 unsigned index
+      1 struct vring_used_elem *heads
+      1 struct vhost_virtqueue *tvq
+      1 struct vhost_virtqueue *rvq
+      1 struct vhost_net_virtqueue *tnvq
+      1 struct vhost_net_virtqueue *rvq
+      1 struct vhost_log *log
+      1 struct ubuf_info *ubuf
+      1 struct socket **tx_sock
+      1 struct socket **rx_sock
+      1 struct page_frag *pfrag
+      1 struct msghdr *msg
+      1 struct iov_iter *to
+      1 struct iov_iter *iter
+      1 struct file *file
+      1 size_t total_len
+      1 size_t *len
+      1 size_t hdr_size
+      1 poll_table *wait
+      1 int vq
+      1 int total_len
+      1 int pkts
+      1 int out
+      1 int index
+      1 int datalen
+      1 gfp_t gfp
+      1 bool zcopy
+      1 bool success
+      1 bool poll_rx

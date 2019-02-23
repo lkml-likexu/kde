@@ -2,6 +2,7 @@
 EXPORT_SYMBOL_GPL(acpi_gsi_to_irq);
 EXPORT_SYMBOL_GPL(acpi_register_gsi);
 EXPORT_SYMBOL_GPL(acpi_unregister_gsi);
+\n
 void __init __iomem *__acpi_map_table(unsigned long phys, unsigned long size)
 void __init __acpi_unmap_table(void __iomem *map, unsigned long size)
 static int __init acpi_parse_madt(struct acpi_table_header *table)
@@ -64,44 +65,45 @@ int __acpi_acquire_global_lock(unsigned int *lock)
 int __acpi_release_global_lock(unsigned int *lock)
 void __init arch_reserve_mem_area(acpi_physical_address addr, size_t size)
 u64 x86_default_get_root_pointer(void)
-  16 void
-  10 u32 gsi
-   9 const unsigned long end
-   6 struct acpi_subtable_header * header
-   5 acpi_handle handle
-   4 struct device *dev
-   4 struct acpi_table_header *table
-   4 int trigger
-   4 int polarity
-   4 const struct dmi_system_id *d
-   4 char *arg
-   3 u8 bus_irq
-   3 u32 gsi_base
-   3 struct acpi_subtable_header *header
-   2 unsigned long size
-   2 unsigned int *lock
-   2 u8 trigger
-   2 u8 polarity
-   2 u16 trigger
-   2 int cpu
-   1 void __iomem *map
-   1 unsigned long phys
-   1 unsigned isa_irq
-   1 unsigned int irq
-   1 unsigned int *irqp
-   1 u8 enabled
-   1 u64 phys_addr
-   1 u32 acpiid
-   1 u32 acpi_id
-   1 u32 *gsi
-   1 u16 polarity
-   1 size_t size
-   1 phys_cpuid_t physid
-   1 int physid
-   1 int id
-   1 int *pcpu
-   1 char *s
-   1 acpi_unregister_gsi
-   1 acpi_register_gsi
-   1 acpi_physical_address addr
-   1 acpi_gsi_to_irq
+\n
+     16 void
+     10 u32 gsi
+      9 const unsigned long end
+      6 struct acpi_subtable_header * header
+      5 acpi_handle handle
+      4 struct device *dev
+      4 struct acpi_table_header *table
+      4 int trigger
+      4 int polarity
+      4 const struct dmi_system_id *d
+      4 char *arg
+      3 u8 bus_irq
+      3 u32 gsi_base
+      3 struct acpi_subtable_header *header
+      2 unsigned long size
+      2 unsigned int *lock
+      2 u8 trigger
+      2 u8 polarity
+      2 u16 trigger
+      2 int cpu
+      1 void __iomem *map
+      1 unsigned long phys
+      1 unsigned isa_irq
+      1 unsigned int *irqp
+      1 unsigned int irq
+      1 u8 enabled
+      1 u64 phys_addr
+      1 u32 *gsi
+      1 u32 acpi_id
+      1 u32 acpiid
+      1 u16 polarity
+      1 size_t size
+      1 phys_cpuid_t physid
+      1 int physid
+      1 int *pcpu
+      1 int id
+      1 char *s
+      1 acpi_unregister_gsi
+      1 acpi_register_gsi
+      1 acpi_physical_address addr
+      1 acpi_gsi_to_irq

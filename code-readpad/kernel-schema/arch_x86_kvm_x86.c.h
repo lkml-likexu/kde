@@ -8,6 +8,7 @@ EXPORT_SYMBOL_GPL(kvm_max_tsc_scaling_ratio);
 EXPORT_SYMBOL_GPL(kvm_default_tsc_scaling_ratio);
 EXPORT_SYMBOL_GPL(lapic_timer_advance_ns);
 EXPORT_SYMBOL_GPL(enable_vmware_backdoor);
+EXPORT_SYMBOL_GPL(x86_fpu_cache);
 EXPORT_SYMBOL_GPL(kvm_define_shared_msr);
 EXPORT_SYMBOL_GPL(kvm_set_shared_msr);
 EXPORT_SYMBOL_GPL(kvm_get_apic_base);
@@ -78,6 +79,7 @@ EXPORT_SYMBOL_GPL(kvm_arch_register_noncoherent_dma);
 EXPORT_SYMBOL_GPL(kvm_arch_unregister_noncoherent_dma);
 EXPORT_SYMBOL_GPL(kvm_arch_has_noncoherent_dma);
 EXPORT_SYMBOL_GPL(kvm_vector_hashing_enabled);
+\n
 static inline void kvm_async_pf_hash_reset(struct kvm_vcpu *vcpu)
 static void kvm_on_user_return(struct user_return_notifier *urn)
 static void shared_msr_update(unsigned slot, u32 msr)
@@ -232,8 +234,9 @@ static int kvm_vm_ioctl_get_pit2(struct kvm *kvm, struct kvm_pit_state2 *ps)
 static int kvm_vm_ioctl_set_pit2(struct kvm *kvm, struct kvm_pit_state2 *ps)
 static int kvm_vm_ioctl_reinject(struct kvm *kvm, struct kvm_reinject_control *control)
 int kvm_vm_ioctl_get_dirty_log(struct kvm *kvm, struct kvm_dirty_log *log)
+int kvm_vm_ioctl_clear_dirty_log(struct kvm *kvm, struct kvm_clear_dirty_log *log)
 int kvm_vm_ioctl_irq_line(struct kvm *kvm, struct kvm_irq_level *irq_event, bool line_status)
-static int kvm_vm_ioctl_enable_cap(struct kvm *kvm, struct kvm_enable_cap *cap)
+int kvm_vm_ioctl_enable_cap(struct kvm *kvm, struct kvm_enable_cap *cap)
 long kvm_arch_vm_ioctl(struct file *filp, unsigned int ioctl, unsigned long arg)
 static void kvm_init_msr_list(void)
 static int vcpu_mmio_write(struct kvm_vcpu *vcpu, gpa_t addr, int len, const void *v)
@@ -412,6 +415,7 @@ bool kvm_vcpu_is_bsp(struct kvm_vcpu *vcpu)
 int kvm_arch_vcpu_init(struct kvm_vcpu *vcpu)
 void kvm_arch_vcpu_uninit(struct kvm_vcpu *vcpu)
 void kvm_arch_sched_in(struct kvm_vcpu *vcpu, int cpu)
+void kvm_arch_sched_out(struct kvm_vcpu *vcpu)
 int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
 static void kvm_unload_vcpu_mmu(struct kvm_vcpu *vcpu)
 static void kvm_free_vcpus(struct kvm *kvm)
@@ -461,312 +465,315 @@ int kvm_arch_irq_bypass_add_producer(struct irq_bypass_consumer *cons, struct ir
 void kvm_arch_irq_bypass_del_producer(struct irq_bypass_consumer *cons, struct irq_bypass_producer *prod)
 int kvm_arch_update_irqfd_routing(struct kvm *kvm, unsigned int host_irq, uint32_t guest_irq, bool set)
 bool kvm_vector_hashing_enabled(void)
- 230 struct kvm_vcpu *vcpu
-  46 struct kvm *kvm
-  42 struct x86_emulate_ctxt *ctxt
-  21 void
-  19 void *val
-  18 struct x86_exception *exception
-  13 unsigned int bytes
-  10 gpa_t gpa
-   8 unsigned long addr
-   7 unsigned nr
-   7 int bytes
-   7 gva_t addr
-   6 unsigned short port
-   6 int size
-   6 int seg
-   6 int dr
-   6 gfn_t gfn
-   5 unsigned index
-   5 u64 *tsc_timestamp
-   5 u64 *data
-   5 u32 error_code
-   5 u32 access
-   5 struct kvm_sregs *sregs
-   5 int emulation_type
-   4 void *data
-   4 struct msr_data *msr_info
-   4 struct kvm_regs *regs
-   4 struct desc_ptr *dt
-   4 int len
-   4 gva_t gva
-   4 char *buf
-   3 unsigned slot
-   3 unsigned long val
-   3 unsigned long payload
-   3 unsigned long arg
-   3 unsigned int ioctl
-   3 unsigned int count
-   3 u64 data
-   3 u64 *pdata
-   3 u32 msr
-   3 struct work_struct *work
-   3 struct msr_data *msr
-   3 struct kvm_vcpu *v
-   3 struct kvm_async_pf *work
-   3 struct file *filp
-   3 const void *val
-   2 void *insn
-   2 unsigned reg
-   2 unsigned long rflags
-   2 unsigned long gva
-   2 unsigned long cr3
-   2 unsigned long cr2
-   2 unsigned int cpu
-   2 unsigned emul_flags
-   2 ulong val
-   2 u64 xcr
-   2 u64 tsc
-   2 u64 smbase
-   2 u64 mask
-   2 u64 efer
-   2 u32 user_tsc_khz
-   2 u32 size
-   2 u32 pmc
-   2 u32 msr_index
-   2 u32 index
-   2 struct x86_exception *fault
-   2 struct timespec64 *ts
-   2 struct notifier_block *nb
-   2 struct kvm_xsave *guest_xsave
-   2 struct kvm_xcrs *guest_xcrs
-   2 struct kvm_vcpu_events *events
-   2 struct kvm_segment *var
-   2 struct kvm_pit_state2 *ps
-   2 struct kvm_pit_state *ps
-   2 struct kvm_mp_state *mp_state
-   2 struct kvm_mmu *mmu
-   2 struct kvm_memory_slot *slot
-   2 struct kvm_lapic_state *s
-   2 struct kvm_irqchip *chip
-   2 struct kvm_fpu *fpu
-   2 struct kvm_enable_cap *cap
-   2 struct kvm_debugregs *dbgregs
-   2 struct irq_bypass_producer *prod
-   2 struct irq_bypass_consumer *cons
-   2 struct desc_struct *desc
-   2 s64 adjustment
-   2 int vector
-   2 int offset
-   2 int n
-   2 int insn_len
-   2 int id
-   2 int cr
-   2 int cpu
-   2 int *r
-   2 int *do_msr
-   2 gpa_t addr
-   2 enum kvm_mr_change change
-   2 const struct read_write_emulator_ops *ops
-   2 const struct kvm_userspace_memory_region *mem
-   2 bool write
-   2 bool system
-   1 x86_set_memory_region
-   1 void *v
-   1 void *rtn
-   1 void *priv
-   1 void *pd
-   1 void *opaque
-   1 void *garbage
-   1 unsigned long value
-   1 unsigned long unused
-   1 unsigned long type
-   1 unsigned long start
-   1 unsigned long npages
-   1 unsigned long msw
-   1 unsigned long linear_rip
-   1 unsigned long flags
-   1 unsigned long end
-   1 unsigned long cr8
-   1 unsigned long cr4
-   1 unsigned long cr0
-   1 unsigned long clock_type
-   1 unsigned long *val
-   1 unsigned long *dest
-   1 unsigned long *db
-   1 unsigned int id
-   1 unsigned int host_irq
-   1 ulong address
-   1 uint64_t scaled_hz
-   1 uint64_t base_hz
-   1 uint32_t guest_irq
-   1 uint32_t divisor
-   1 uint32_t dividend
-   1 u8 vector
-   1 u8 *src
-   1 u8 *dest
-   1 u64 value
-   1 u64 target_tsc
-   1 u64 ratio
-   1 u64 offset
-   1 u64 mcg_cap
-   1 u64 ident_addr
-   1 u64 host_tsc
-   1 u64 curr_cr
-   1 u32 val
-   1 u32 type
-   1 u32 new_val
-   1 u32 mask
-   1 u32 kvm_nr_mmu_pages
-   1 u32 khz
-   1 u32 key
-   1 u32 dr7
-   1 u32 base3
-   1 u32 *val
-   1 u32 *pmultiplier
-   1 u32 *edx
-   1 u32 *ecx
-   1 u32 *ebx
-   1 u32 *eax
-   1 u32 *base3
-   1 u16 tss_selector
-   1 u16 selector
-   1 u16 *selector
-   1 struct x86_instruction_info *info
-   1 struct vm_fault *vmf
-   1 struct user_return_notifier *urn
-   1 struct timekeeper *tk
-   1 struct kvm_x86_mce *mce
-   1 struct kvm_translation *tr
-   1 struct kvm_tpr_access_ctl *tac
-   1 struct kvm_segment *seg
-   1 struct kvm_run *kvm_run
-   1 struct kvm_reinject_control *control
-   1 struct kvm_msrs __user *user_msrs
-   1 struct kvm_msrs *msrs
-   1 struct kvm_msr_entry *msr
-   1 struct kvm_msr_entry *entries
-   1 struct kvm_memslots *slots
-   1 struct kvm_memory_slot *new
-   1 struct kvm_memory_slot *memslot
-   1 struct kvm_memory_slot *free
-   1 struct kvm_memory_slot *dont
-   1 struct kvm_irq_level *irq_event
-   1 struct kvm_interrupt *irq
-   1 struct kvm_guest_debug *dbg
-   1 struct kvm_dirty_log *log
-   1 s8 *pshift
-   1 s64 offset
-   1 s64 kernel_ns
-   1 s64 *t
-   1 s64 *kernel_ns
-   1 s32 ppm
-   1 pdptrs_changed
-   1 long ext
-   1 load_pdptrs
-   1 lapic_timer_advance_ns
-   1 kvm_x86_ops
-   1 kvm_write_tsc
-   1 kvm_write_guest_virt_system
-   1 kvm_vector_hashing_enabled
-   1 kvm_vcpu_reload_apic_access_page
-   1 kvm_vcpu_is_reset_bsp
-   1 kvm_vcpu_halt
-   1 kvm_valid_efer
-   1 kvm_tsc_scaling_ratio_frac_bits
-   1 kvm_task_switch
-   1 kvm_spurious_fault
-   1 kvm_skip_emulated_instruction
-   1 kvm_set_xcr
-   1 kvm_set_shared_msr
-   1 kvm_set_rflags
-   1 kvm_set_msr_common
-   1 kvm_set_msr
-   1 kvm_set_dr
-   1 kvm_set_cr8
-   1 kvm_set_cr4
-   1 kvm_set_cr3
-   1 kvm_set_cr0
-   1 kvm_set_apic_base
-   1 kvm_scale_tsc
-   1 kvm_require_dr
-   1 kvm_require_cpl
-   1 kvm_requeue_exception_e
-   1 kvm_requeue_exception
-   1 kvm_read_l1_tsc
-   1 kvm_read_guest_virt
-   1 kvm_read_guest_page_mmu
-   1 kvm_rdpmc
-   1 kvm_queue_exception_e
-   1 kvm_queue_exception
-   1 kvm_no_apic_vcpu
-   1 kvm_mce_cap_supported
-   1 kvm_max_tsc_scaling_ratio
-   1 kvm_max_guest_tsc_khz
-   1 kvm_lmsw
-   1 kvm_is_linear_rip
-   1 kvm_inject_realmode_interrupt
-   1 kvm_inject_page_fault
-   1 kvm_inject_nmi
-   1 kvm_has_tsc_control
-   1 kvm_get_rflags
-   1 kvm_get_msr_common
-   1 kvm_get_msr
-   1 kvm_get_linear_rip
-   1 kvm_get_dr
-   1 kvm_get_cs_db_l_bits
-   1 kvm_get_cr8
-   1 kvm_get_arch_capabilities
-   1 kvm_get_apic_mode
-   1 kvm_get_apic_base
-   1 kvm_fast_pio
-   1 kvm_enable_efer_bits
-   1 kvm_emulate_wbinvd
-   1 kvm_emulate_instruction_from_buffer
-   1 kvm_emulate_instruction
-   1 kvm_emulate_hypercall
-   1 kvm_emulate_halt
-   1 kvm_deliver_exception_payload
-   1 kvm_define_shared_msr
-   1 kvm_default_tsc_scaling_ratio
-   1 kvm_complete_insn_gp
-   1 kvm_arch_unregister_noncoherent_dma
-   1 kvm_arch_start_assignment
-   1 kvm_arch_register_noncoherent_dma
-   1 kvm_arch_has_noncoherent_dma
-   1 kvm_arch_has_assigned_device
-   1 kvm_arch_end_assignment
-   1 int required_cpl
-   1 int reason
-   1 int mode
-   1 int irq
-   1 int inc_eip
-   1 int in
-   1 int idt_index
-   1 int err
-   1 int apicid
-   1 int *mode
-   1 int *l
-   1 int *db
-   1 handle_ud
-   1 gva_t cr2
-   1 gpa_t wall_clock
-   1 gpa_t paddr
-   1 gpa_t *gpa
-   1 gfn_t ngfn
-   1 enum x86_intercept_stage stage
-   1 enable_vmware_backdoor
-   1 const void *v
-   1 const void *old
-   1 const void *new
-   1 const struct kvm_memory_slot *old
-   1 const struct kvm_memory_slot *new
-   1 bool write_fault_to_shadow_pgtable
-   1 bool set
-   1 bool scale
-   1 bool req_int_win
-   1 bool reinject
-   1 bool masked
-   1 bool line_status
-   1 bool invalidate_gpa
-   1 bool init_event
-   1 bool in
-   1 bool host
-   1 bool has_payload
-   1 bool has_error_code
-   1 bool has_error
-   1 bool check_limit
-   1 bool blockable
-   1 __x86_set_memory_region
-   1 __kvm_request_immediate_exit
+\n
+    231 struct kvm_vcpu *vcpu
+     47 struct kvm *kvm
+     42 struct x86_emulate_ctxt *ctxt
+     21 void
+     19 void *val
+     18 struct x86_exception *exception
+     13 unsigned int bytes
+     10 gpa_t gpa
+      8 unsigned long addr
+      7 unsigned nr
+      7 int bytes
+      7 gva_t addr
+      6 unsigned short port
+      6 int size
+      6 int seg
+      6 int dr
+      6 gfn_t gfn
+      5 unsigned index
+      5 u64 *tsc_timestamp
+      5 u64 *data
+      5 u32 error_code
+      5 u32 access
+      5 struct kvm_sregs *sregs
+      5 int emulation_type
+      4 void *data
+      4 struct msr_data *msr_info
+      4 struct kvm_regs *regs
+      4 struct desc_ptr *dt
+      4 int len
+      4 gva_t gva
+      4 char *buf
+      3 unsigned slot
+      3 unsigned long val
+      3 unsigned long payload
+      3 unsigned long arg
+      3 unsigned int ioctl
+      3 unsigned int count
+      3 u64 *pdata
+      3 u64 data
+      3 u32 msr
+      3 struct work_struct *work
+      3 struct msr_data *msr
+      3 struct kvm_vcpu *v
+      3 struct kvm_async_pf *work
+      3 struct file *filp
+      3 const void *val
+      2 void *insn
+      2 unsigned reg
+      2 unsigned long rflags
+      2 unsigned long gva
+      2 unsigned long cr3
+      2 unsigned long cr2
+      2 unsigned int cpu
+      2 unsigned emul_flags
+      2 ulong val
+      2 u64 xcr
+      2 u64 tsc
+      2 u64 smbase
+      2 u64 mask
+      2 u64 efer
+      2 u32 user_tsc_khz
+      2 u32 size
+      2 u32 pmc
+      2 u32 msr_index
+      2 u32 index
+      2 struct x86_exception *fault
+      2 struct timespec64 *ts
+      2 struct notifier_block *nb
+      2 struct kvm_xsave *guest_xsave
+      2 struct kvm_xcrs *guest_xcrs
+      2 struct kvm_vcpu_events *events
+      2 struct kvm_segment *var
+      2 struct kvm_pit_state *ps
+      2 struct kvm_pit_state2 *ps
+      2 struct kvm_mp_state *mp_state
+      2 struct kvm_mmu *mmu
+      2 struct kvm_memory_slot *slot
+      2 struct kvm_lapic_state *s
+      2 struct kvm_irqchip *chip
+      2 struct kvm_fpu *fpu
+      2 struct kvm_enable_cap *cap
+      2 struct kvm_debugregs *dbgregs
+      2 struct irq_bypass_producer *prod
+      2 struct irq_bypass_consumer *cons
+      2 struct desc_struct *desc
+      2 s64 adjustment
+      2 int vector
+      2 int *r
+      2 int offset
+      2 int n
+      2 int insn_len
+      2 int id
+      2 int *do_msr
+      2 int cr
+      2 int cpu
+      2 gpa_t addr
+      2 enum kvm_mr_change change
+      2 const struct read_write_emulator_ops *ops
+      2 const struct kvm_userspace_memory_region *mem
+      2 bool write
+      2 bool system
+      1 x86_set_memory_region
+      1 __x86_set_memory_region
+      1 x86_fpu_cache
+      1 void *v
+      1 void *rtn
+      1 void *priv
+      1 void *pd
+      1 void *opaque
+      1 void *garbage
+      1 unsigned long value
+      1 unsigned long *val
+      1 unsigned long unused
+      1 unsigned long type
+      1 unsigned long start
+      1 unsigned long npages
+      1 unsigned long msw
+      1 unsigned long linear_rip
+      1 unsigned long flags
+      1 unsigned long end
+      1 unsigned long *dest
+      1 unsigned long *db
+      1 unsigned long cr8
+      1 unsigned long cr4
+      1 unsigned long cr0
+      1 unsigned long clock_type
+      1 unsigned int id
+      1 unsigned int host_irq
+      1 ulong address
+      1 uint64_t scaled_hz
+      1 uint64_t base_hz
+      1 uint32_t guest_irq
+      1 uint32_t divisor
+      1 uint32_t dividend
+      1 u8 vector
+      1 u8 *src
+      1 u8 *dest
+      1 u64 value
+      1 u64 target_tsc
+      1 u64 ratio
+      1 u64 offset
+      1 u64 mcg_cap
+      1 u64 ident_addr
+      1 u64 host_tsc
+      1 u64 curr_cr
+      1 u32 *val
+      1 u32 val
+      1 u32 type
+      1 u32 *pmultiplier
+      1 u32 new_val
+      1 u32 mask
+      1 u32 kvm_nr_mmu_pages
+      1 u32 khz
+      1 u32 key
+      1 u32 *edx
+      1 u32 *ecx
+      1 u32 *ebx
+      1 u32 *eax
+      1 u32 dr7
+      1 u32 *base3
+      1 u32 base3
+      1 u16 tss_selector
+      1 u16 *selector
+      1 u16 selector
+      1 struct x86_instruction_info *info
+      1 struct vm_fault *vmf
+      1 struct user_return_notifier *urn
+      1 struct timekeeper *tk
+      1 struct kvm_x86_mce *mce
+      1 struct kvm_translation *tr
+      1 struct kvm_tpr_access_ctl *tac
+      1 struct kvm_segment *seg
+      1 struct kvm_run *kvm_run
+      1 struct kvm_reinject_control *control
+      1 struct kvm_msrs __user *user_msrs
+      1 struct kvm_msrs *msrs
+      1 struct kvm_msr_entry *msr
+      1 struct kvm_msr_entry *entries
+      1 struct kvm_memslots *slots
+      1 struct kvm_memory_slot *new
+      1 struct kvm_memory_slot *memslot
+      1 struct kvm_memory_slot *free
+      1 struct kvm_memory_slot *dont
+      1 struct kvm_irq_level *irq_event
+      1 struct kvm_interrupt *irq
+      1 struct kvm_guest_debug *dbg
+      1 struct kvm_dirty_log *log
+      1 struct kvm_clear_dirty_log *log
+      1 s8 *pshift
+      1 s64 *t
+      1 s64 offset
+      1 s64 kernel_ns
+      1 s64 *kernel_ns
+      1 s32 ppm
+      1 pdptrs_changed
+      1 long ext
+      1 load_pdptrs
+      1 lapic_timer_advance_ns
+      1 kvm_x86_ops
+      1 kvm_write_tsc
+      1 kvm_write_guest_virt_system
+      1 kvm_vector_hashing_enabled
+      1 kvm_vcpu_reload_apic_access_page
+      1 kvm_vcpu_is_reset_bsp
+      1 kvm_vcpu_halt
+      1 kvm_valid_efer
+      1 kvm_tsc_scaling_ratio_frac_bits
+      1 kvm_task_switch
+      1 kvm_spurious_fault
+      1 kvm_skip_emulated_instruction
+      1 kvm_set_xcr
+      1 kvm_set_shared_msr
+      1 kvm_set_rflags
+      1 kvm_set_msr_common
+      1 kvm_set_msr
+      1 kvm_set_dr
+      1 kvm_set_cr8
+      1 kvm_set_cr4
+      1 kvm_set_cr3
+      1 kvm_set_cr0
+      1 kvm_set_apic_base
+      1 kvm_scale_tsc
+      1 kvm_require_dr
+      1 kvm_require_cpl
+      1 kvm_requeue_exception_e
+      1 kvm_requeue_exception
+      1 __kvm_request_immediate_exit
+      1 kvm_read_l1_tsc
+      1 kvm_read_guest_virt
+      1 kvm_read_guest_page_mmu
+      1 kvm_rdpmc
+      1 kvm_queue_exception_e
+      1 kvm_queue_exception
+      1 kvm_no_apic_vcpu
+      1 kvm_mce_cap_supported
+      1 kvm_max_tsc_scaling_ratio
+      1 kvm_max_guest_tsc_khz
+      1 kvm_lmsw
+      1 kvm_is_linear_rip
+      1 kvm_inject_realmode_interrupt
+      1 kvm_inject_page_fault
+      1 kvm_inject_nmi
+      1 kvm_has_tsc_control
+      1 kvm_get_rflags
+      1 kvm_get_msr_common
+      1 kvm_get_msr
+      1 kvm_get_linear_rip
+      1 kvm_get_dr
+      1 kvm_get_cs_db_l_bits
+      1 kvm_get_cr8
+      1 kvm_get_arch_capabilities
+      1 kvm_get_apic_mode
+      1 kvm_get_apic_base
+      1 kvm_fast_pio
+      1 kvm_enable_efer_bits
+      1 kvm_emulate_wbinvd
+      1 kvm_emulate_instruction_from_buffer
+      1 kvm_emulate_instruction
+      1 kvm_emulate_hypercall
+      1 kvm_emulate_halt
+      1 kvm_deliver_exception_payload
+      1 kvm_define_shared_msr
+      1 kvm_default_tsc_scaling_ratio
+      1 kvm_complete_insn_gp
+      1 kvm_arch_unregister_noncoherent_dma
+      1 kvm_arch_start_assignment
+      1 kvm_arch_register_noncoherent_dma
+      1 kvm_arch_has_noncoherent_dma
+      1 kvm_arch_has_assigned_device
+      1 kvm_arch_end_assignment
+      1 int required_cpl
+      1 int reason
+      1 int *mode
+      1 int mode
+      1 int *l
+      1 int irq
+      1 int inc_eip
+      1 int in
+      1 int idt_index
+      1 int err
+      1 int *db
+      1 int apicid
+      1 handle_ud
+      1 gva_t cr2
+      1 gpa_t wall_clock
+      1 gpa_t paddr
+      1 gpa_t *gpa
+      1 gfn_t ngfn
+      1 enum x86_intercept_stage stage
+      1 enable_vmware_backdoor
+      1 const void *v
+      1 const void *old
+      1 const void *new
+      1 const struct kvm_memory_slot *old
+      1 const struct kvm_memory_slot *new
+      1 bool write_fault_to_shadow_pgtable
+      1 bool set
+      1 bool scale
+      1 bool req_int_win
+      1 bool reinject
+      1 bool masked
+      1 bool line_status
+      1 bool invalidate_gpa
+      1 bool init_event
+      1 bool in
+      1 bool host
+      1 bool has_payload
+      1 bool has_error_code
+      1 bool has_error
+      1 bool check_limit
+      1 bool blockable

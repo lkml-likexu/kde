@@ -4,12 +4,12 @@ EXPORT_SYMBOL_GPL(__mmdrop);
 EXPORT_SYMBOL_GPL(__put_task_struct);
 EXPORT_SYMBOL_GPL(mmput);
 EXPORT_SYMBOL_GPL(get_task_mm);
+\n
 int lockdep_tasklist_lock_is_held(void)
 int nr_processes(void)
 void __weak arch_release_task_struct(struct task_struct *tsk)
 static inline struct task_struct *alloc_task_struct_node(int node)
 static inline void free_task_struct(struct task_struct *tsk)
-void __weak arch_release_thread_stack(unsigned long *stack)
 static int free_vm_stack_cache(unsigned int cpu)
 static unsigned long *alloc_thread_stack_node(struct task_struct *tsk, int node)
 static inline void free_thread_stack(struct task_struct *tsk)
@@ -103,80 +103,80 @@ int ksys_unshare(unsigned long unshare_flags)
 SYSCALL_DEFINE1(unshare, unsigned long, unshare_flags)
 int unshare_files(struct files_struct **displaced)
 int sysctl_max_threads(struct ctl_table *table, int write, void __user *buffer, size_t *lenp, loff_t *ppos)
-  23 struct task_struct *tsk
-  19 struct mm_struct *mm
-  13 unsigned long
-   9 unsigned long clone_flags
-   9 int __user *
-   6 void
-   5 struct task_struct *task
-   5 struct task_struct *p
-   5 int node
-   4 unsigned long unshare_flags
-   4 tls
-   4 parent_tidptr
-   4 newsp
-   4 clone_flags
-   4 clone
-   4 child_tidptr
-   3 unsigned long stack_start
-   3 unsigned long stack_size
-   3 struct signal_struct *sig
-   3 int __user *child_tidptr
-   2 void *data
-   2 unsigned long tls
-   2 struct work_struct *work
-   2 struct pid *pid
-   2 struct mm_struct *oldmm
-   2 int __user *parent_tidptr
-   1 void __user *buffer
-   1 void *
-   1 vfork
-   1 unsigned long *stack
-   1 unsigned long *size
-   1 unsigned long *offset
-   1 unsigned int mode
-   1 unsigned int max_threads_suggested
-   1 unsigned int cpu
-   1 unshare_flags
-   1 unshare
-   1 tidptr
-   1 struct vm_area_struct *vma
-   1 struct vm_area_struct *orig
-   1 struct user_namespace *user_ns
-   1 struct task_struct *top
-   1 struct task_struct *src
-   1 struct task_struct *orig
-   1 struct task_struct *idle
-   1 struct task_struct *dst
-   1 struct task_struct *child
-   1 struct sighand_struct *sighand
-   1 struct fs_struct **new_fsp
-   1 struct files_struct **new_fdp
-   1 struct files_struct **displaced
-   1 struct file *new_exe_file
-   1 struct ctl_table *table
-   1 struct completion *vfork
-   1 stack_size
-   1 size_t *lenp
-   1 set_tid_address
-   1 proc_visitor visitor
-   1 mmput
-   1 mm->pgd
-   1 mm
-   1 loff_t *ppos
-   1 lockdep_tasklist_lock_is_held
-   1 int write
-   1 int trace
-   1 int cpu
-   1 int account
-   1 int *fn
-   1 int
-   1 get_task_mm
-   1 fork
-   1 enum pid_type type
-   1 char *s
-   1 __put_task_struct
-   1 __mmdrop
-   1 CONFIG_CLONE_BACKWARDS3
-   1 CONFIG_CLONE_BACKWARDS2
+\n
+     23 struct task_struct *tsk
+     19 struct mm_struct *mm
+     13 unsigned long
+      9 unsigned long clone_flags
+      9 int __user *
+      6 void
+      5 struct task_struct *task
+      5 struct task_struct *p
+      5 int node
+      4 unsigned long unshare_flags
+      4 tls
+      4 parent_tidptr
+      4 newsp
+      4 clone_flags
+      4 clone
+      4 child_tidptr
+      3 unsigned long stack_start
+      3 unsigned long stack_size
+      3 struct signal_struct *sig
+      3 int __user *child_tidptr
+      2 void *data
+      2 unsigned long tls
+      2 struct work_struct *work
+      2 struct pid *pid
+      2 struct mm_struct *oldmm
+      2 int __user *parent_tidptr
+      1 void __user *buffer
+      1 void *
+      1 vfork
+      1 unsigned long *size
+      1 unsigned long *offset
+      1 unsigned int mode
+      1 unsigned int max_threads_suggested
+      1 unsigned int cpu
+      1 unshare_flags
+      1 unshare
+      1 tidptr
+      1 struct vm_area_struct *vma
+      1 struct vm_area_struct *orig
+      1 struct user_namespace *user_ns
+      1 struct task_struct *top
+      1 struct task_struct *src
+      1 struct task_struct *orig
+      1 struct task_struct *idle
+      1 struct task_struct *dst
+      1 struct task_struct *child
+      1 struct sighand_struct *sighand
+      1 struct fs_struct **new_fsp
+      1 struct files_struct **new_fdp
+      1 struct files_struct **displaced
+      1 struct file *new_exe_file
+      1 struct ctl_table *table
+      1 struct completion *vfork
+      1 stack_size
+      1 size_t *lenp
+      1 set_tid_address
+      1 __put_task_struct
+      1 proc_visitor visitor
+      1 mmput
+      1 mm->pgd
+      1 __mmdrop
+      1 mm
+      1 loff_t *ppos
+      1 lockdep_tasklist_lock_is_held
+      1 int write
+      1 int trace
+      1 int *fn
+      1 int cpu
+      1 int account
+      1 int
+      1 get_task_mm
+      1 fork
+      1 enum pid_type type
+      1 CONFIG_CLONE_BACKWARDS3
+      1 CONFIG_CLONE_BACKWARDS2
+      1 char *s

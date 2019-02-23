@@ -2,6 +2,7 @@
 EXPORT_SYMBOL_GPL(perf_assign_events);
 EXPORT_SYMBOL_GPL(events_sysfs_show);
 EXPORT_SYMBOL_GPL(perf_get_x86_pmu_capability);
+\n
 u64 x86_perf_event_update(struct perf_event *event)
 static int x86_pmu_extra_regs(u64 config, struct perf_event *event)
 static bool reserve_pmc_hardware(void)
@@ -78,6 +79,7 @@ static ssize_t set_attr_rdpmc(struct device *cdev, struct device_attribute *attr
 static ssize_t max_precise_show(struct device *cdev, struct device_attribute *attr, char *buf)
 static void x86_pmu_sched_task(struct perf_event_context *ctx, bool sched_in)
 void perf_check_microcode(void)
+static int x86_pmu_check_period(struct perf_event *event, u64 value)
 void arch_perf_update_userpage(struct perf_event *event, struct perf_event_mmap_page *userpg, u64 now)
 void perf_callchain_kernel(struct perf_callchain_entry_ctx *entry, struct pt_regs *regs)
 static inline int valid_user_frame(const void __user *fp, unsigned long size)
@@ -92,56 +94,59 @@ static unsigned long code_segment_base(struct pt_regs *regs)
 unsigned long perf_instruction_pointer(struct pt_regs *regs)
 unsigned long perf_misc_flags(struct pt_regs *regs)
 void perf_get_x86_pmu_capability(struct x86_pmu_capability *cap)
-  26 struct perf_event *event
-  14 void
-   9 struct pt_regs *regs
-   6 struct perf_sched *sched
-   5 unsigned int cpu
-   5 struct pmu *pmu
-   5 struct device_attribute *attr
-   5 struct cpu_hw_events *cpuc
-   4 struct perf_callchain_entry_ctx *entry
-   4 int flags
-   3 struct device *cdev
-   3 char *page
-   2 unsigned int what
-   2 u64 config
-   2 struct mm_struct *mm
-   2 struct hw_perf_event *hwc
-   2 struct event_constraint **constraints
-   2 struct device *dev
-   2 int wmin
-   2 int wmax
-   2 int n
-   2 int i
-   2 int gpmax
-   2 int *assign
-   2 char *buf
-   1 void *ignored
-   1 unsigned long size
-   1 unsigned int txn_flags
-   1 unsigned int segment
-   1 unsigned int cmd
-   1 u64 now
-   1 u64 event
-   1 struct x86_pmu_capability *cap
-   1 struct perf_event_mmap_page *userpg
-   1 struct perf_event_context *ctx
-   1 struct perf_event *leader
-   1 struct attribute **b
-   1 struct attribute **attrs
-   1 struct attribute **a
-   1 ss_base + frame.next_frame
-   1 size_t count
-   1 pmu
-   1 perf_get_x86_pmu_capability
-   1 perf_assign_events
-   1 int num
-   1 int added
-   1 events_sysfs_show
-   1 entry
-   1 cs_base + frame.return_address
-   1 const void __user *fp
-   1 const char *buf
-   1 bool sched_in
-   1 bool dogrp
+\n
+     27 struct perf_event *event
+     14 void
+      9 struct pt_regs *regs
+      6 struct perf_sched *sched
+      5 unsigned int cpu
+      5 struct pmu *pmu
+      5 struct device_attribute *attr
+      5 struct cpu_hw_events *cpuc
+      4 struct perf_callchain_entry_ctx *entry
+      4 int flags
+      3 struct device *cdev
+      3 char *page
+      2 unsigned int what
+      2 u64 config
+      2 struct mm_struct *mm
+      2 struct hw_perf_event *hwc
+      2 struct event_constraint **constraints
+      2 struct device *dev
+      2 int wmin
+      2 int wmax
+      2 int n
+      2 int i
+      2 int gpmax
+      2 int *assign
+      2 char *buf
+      1 void *ignored
+      1 unsigned long size
+      1 unsigned int txn_flags
+      1 unsigned int segment
+      1 unsigned int cmd
+      1 u64 value
+      1 u64 now
+      1 u64 event
+      1 struct x86_pmu_capability *cap
+      1 struct perf_event_mmap_page *userpg
+      1 struct perf_event *leader
+      1 struct perf_event_context *ctx
+      1 struct attribute **b
+      1 struct attribute **attrs
+      1 struct attribute **a
+      1 ss_base + frame.next_frame
+      1 size_t count
+      1 pmu
+      1 perf_get_x86_pmu_capability
+      1 perf_assign_events
+      1 int num
+      1 int added
+      1 events_sysfs_show
+      1 entry
+      1 cs_base + frame.return_address
+      1 const void __user *fp
+      1 const char *buf
+      1 bool sched_in
+      1 bool dogrp
+      1 

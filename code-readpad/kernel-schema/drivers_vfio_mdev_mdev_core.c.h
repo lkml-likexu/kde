@@ -1,4 +1,5 @@
 
+\n
 struct device *mdev_parent_dev(struct mdev_device *mdev)
 void *mdev_get_drvdata(struct mdev_device *mdev)
 void mdev_set_drvdata(struct mdev_device *mdev, void *data)
@@ -19,13 +20,14 @@ int mdev_device_create(struct kobject *kobj, struct device *dev, uuid_le uuid)
 int mdev_device_remove(struct device *dev, bool force_remove)
 static int __init mdev_init(void)
 static void __exit mdev_exit(void)
-   8 struct device *dev
-   7 struct mdev_device *mdev
-   2 void *data
-   2 void
-   2 struct mdev_parent *parent
-   2 struct kobject *kobj
-   2 bool force_remove
-   1 uuid_le uuid
-   1 struct kref *kref
-   1 const struct mdev_parent_ops *ops
+\n
+      8 struct device *dev
+      7 struct mdev_device *mdev
+      2 void *data
+      2 void
+      2 struct mdev_parent *parent
+      2 struct kobject *kobj
+      2 bool force_remove
+      1 uuid_le uuid
+      1 struct kref *kref
+      1 const struct mdev_parent_ops *ops

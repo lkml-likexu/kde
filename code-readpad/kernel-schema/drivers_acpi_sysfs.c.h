@@ -1,4 +1,5 @@
 
+\n
 static int param_get_debug_layer(char *buffer, const struct kernel_param *kp)
 static int param_get_debug_level(char *buffer, const struct kernel_param *kp)
 static int param_set_trace_method_name(const char *val, const struct kernel_param *kp)
@@ -31,37 +32,38 @@ void acpi_sysfs_add_hotplug_profile(struct acpi_hotplug_profile *hotplug, const 
 static ssize_t force_remove_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 static ssize_t force_remove_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t size)
 int __init acpi_sysfs_init(void)
-   8 struct kobject *kobj
-   7 const struct kernel_param *kp
-   6 void
-   6 struct kobj_attribute *attr
-   6 char *buf
-   5 char *buffer
-   3 size_t size
-   3 const char *buf
-   2 void *context
-   2 u32 event_number
-   2 struct file *filp
-   2 struct bin_attribute *bin_attr
-   2 size_t count
-   2 loff_t offset
-   2 const char *val
-   1 void *th
-   1 void *table
-   1 u32 index
-   1 u32 gpe_number
-   1 u32 event_type
-   1 u32 event
-   1 struct kobject *tables_obj
-   1 struct device_attribute *attr
-   1 struct device *dev
-   1 struct acpi_table_header *th
-   1 struct acpi_table_header *table_header
-   1 struct acpi_table_attr *table_attr
-   1 struct acpi_hotplug_profile *hotplug
-   1 struct acpi_data_attr *data_attr
-   1 const char *name
-   1 char *val
-   1 acpi_handle device
-   1 acpi_handle *handle
-   1 acpi_event_status *status
+\n
+      8 struct kobject *kobj
+      7 const struct kernel_param *kp
+      6 void
+      6 struct kobj_attribute *attr
+      6 char *buf
+      5 char *buffer
+      3 size_t size
+      3 const char *buf
+      2 void *context
+      2 u32 event_number
+      2 struct file *filp
+      2 struct bin_attribute *bin_attr
+      2 size_t count
+      2 loff_t offset
+      2 const char *val
+      1 void *th
+      1 void *table
+      1 u32 index
+      1 u32 gpe_number
+      1 u32 event_type
+      1 u32 event
+      1 struct kobject *tables_obj
+      1 struct device *dev
+      1 struct device_attribute *attr
+      1 struct acpi_table_header *th
+      1 struct acpi_table_header *table_header
+      1 struct acpi_table_attr *table_attr
+      1 struct acpi_hotplug_profile *hotplug
+      1 struct acpi_data_attr *data_attr
+      1 const char *name
+      1 char *val
+      1 acpi_handle *handle
+      1 acpi_handle device
+      1 acpi_event_status *status

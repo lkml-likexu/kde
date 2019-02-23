@@ -1,6 +1,7 @@
 
 EXPORT_SYMBOL_GPL(omap_iommu_save_ctx);
 EXPORT_SYMBOL_GPL(omap_iommu_restore_ctx);
+\n
 static struct omap_iommu_domain *to_omap_domain(struct iommu_domain *dom)
 void omap_iommu_save_ctx(struct device *dev)
 void omap_iommu_restore_ctx(struct device *dev)
@@ -60,42 +61,43 @@ static int omap_iommu_add_device(struct device *dev)
 static void omap_iommu_remove_device(struct device *dev)
 static struct iommu_group *omap_iommu_device_group(struct device *dev)
 static int __init omap_iommu_init(void)
-  33 struct omap_iommu *obj
-  11 struct device *dev
-  10 u32 da
-   8 struct iotlb_entry *e
-   6 struct iommu_domain *domain
-   5 u32 pa
-   4 u32 prot
-   4 struct platform_device *pdev
-   3 struct cr_regs *cr
-   2 unsigned long da
-   2 u32 *iopgd
-   2 struct omap_iommu_domain *odomain
-   2 struct iotlb_lock *l
-   1 void *data
-   1 void
-   1 unsigned type
-   1 unsigned long offset
-   1 u32 *iopte
-   1 u32 *da
-   1 u32 **ppte
-   1 u32 **ppgd
-   1 struct omap_iommu_domain *omap_domain
-   1 struct iommu_domain *dom
-   1 size_t size
-   1 size_t bytes
-   1 phys_addr_t pa
-   1 omap_iommu_save_ctx
-   1 omap_iommu_restore_ctx
-   1 int prot
-   1 int pgsz
-   1 int num_entries
-   1 int n
-   1 int irq
-   1 dma_addr_t dma
-   1 dma_addr_t da
-   1 dma_addr_t *pt_dma
-   1 bool on
-   1 bool enable
-   1 bool dma_valid
+\n
+     33 struct omap_iommu *obj
+     11 struct device *dev
+     10 u32 da
+      8 struct iotlb_entry *e
+      6 struct iommu_domain *domain
+      5 u32 pa
+      4 u32 prot
+      4 struct platform_device *pdev
+      3 struct cr_regs *cr
+      2 unsigned long da
+      2 u32 *iopgd
+      2 struct omap_iommu_domain *odomain
+      2 struct iotlb_lock *l
+      1 void *data
+      1 void
+      1 unsigned type
+      1 unsigned long offset
+      1 u32 **ppte
+      1 u32 **ppgd
+      1 u32 *iopte
+      1 u32 *da
+      1 struct omap_iommu_domain *omap_domain
+      1 struct iommu_domain *dom
+      1 size_t size
+      1 size_t bytes
+      1 phys_addr_t pa
+      1 omap_iommu_save_ctx
+      1 omap_iommu_restore_ctx
+      1 int prot
+      1 int pgsz
+      1 int num_entries
+      1 int n
+      1 int irq
+      1 dma_addr_t *pt_dma
+      1 dma_addr_t dma
+      1 dma_addr_t da
+      1 bool on
+      1 bool enable
+      1 bool dma_valid

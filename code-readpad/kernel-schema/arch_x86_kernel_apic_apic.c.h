@@ -2,6 +2,7 @@
 EXPORT_SYMBOL_GPL(boot_cpu_physical_apicid);
 EXPORT_SYMBOL_GPL(local_apic_timer_c2_ok);
 EXPORT_SYMBOL_GPL(setup_APIC_eilvt);
+\n
 static inline void imcr_pic_to_apic(void)
 static inline void imcr_apic_to_pic(void)
 static int __init parse_lapic(char *arg)
@@ -102,47 +103,48 @@ static int __init apic_set_verbosity(char *arg)
 static int __init lapic_insert_resource(void)
 static int __init apic_set_disabled_cpu_apicid(char *arg)
 static int __init apic_set_extnmi(char *arg)
-  57 void
-   9 char *arg
-   6 struct clock_event_device *evt
-   3 struct pt_regs *regs
-   2 unsigned long delta
-   2 unsigned int new
-   2 int apicid
-   1 void *info
-   1 void *eoi_write
-   1 unsigned long address
-   1 unsigned long addr
-   1 unsigned int old
-   1 unsigned int multiplier
-   1 unsigned int clocks
-   1 unsigned int apicid
-   1 u8 vector
-   1 u8 offset
-   1 u8 msg_type
-   1 u8 mask
-   1 u32 v
-   1 u32 reg
-   1 u32 low
-   1 u32 id
-   1 switching to x2apic ops\n"
-   1 struct clock_event_device *dev
-   1 setup_APIC_eilvt
-   1 long deltapm
-   1 long *deltatsc
-   1 long *delta
-   1 local_apic_timer_c2_ok
-   1 int virt_wire_setup
-   1 int version
-   1 int remap_mode
-   1 int oneshot
-   1 int offset
-   1 int irqen
-   1 const struct dmi_system_id *d
-   1 const struct cpumask *mask
-   1 char *str
-   1 char *s
-   1 boot_cpu_physical_apicid
-   1 bool upmode
-   1 bool oneshot
-   1 "x2apic: enabled by BIOS
+\n
+     57 void
+      9 char *arg
+      6 struct clock_event_device *evt
+      3 struct pt_regs *regs
+      2 unsigned long delta
+      2 unsigned int new
+      2 int apicid
+      1 "x2apic: enabled by BIOS
+      1 void *info
+      1 void *eoi_write
+      1 unsigned long address
+      1 unsigned long addr
+      1 unsigned int old
+      1 unsigned int multiplier
+      1 unsigned int clocks
+      1 unsigned int apicid
+      1 u8 vector
+      1 u8 offset
+      1 u8 msg_type
+      1 u8 mask
+      1 u32 v
+      1 u32 reg
+      1 u32 low
+      1 u32 id
+      1 switching to x2apic ops\n"
+      1 struct clock_event_device *dev
+      1 setup_APIC_eilvt
+      1 long *deltatsc
+      1 long deltapm
+      1 long *delta
+      1 local_apic_timer_c2_ok
+      1 int virt_wire_setup
+      1 int version
+      1 int remap_mode
+      1 int oneshot
+      1 int offset
+      1 int irqen
+      1 const struct dmi_system_id *d
+      1 const struct cpumask *mask
+      1 char *str
+      1 char *s
+      1 boot_cpu_physical_apicid
+      1 bool upmode
+      1 bool oneshot

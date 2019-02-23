@@ -13,6 +13,7 @@ EXPORT_SYMBOL_GPL(kthread_mod_delayed_work);
 EXPORT_SYMBOL_GPL(kthread_cancel_work_sync);
 EXPORT_SYMBOL_GPL(kthread_cancel_delayed_work_sync);
 EXPORT_SYMBOL_GPL(kthread_flush_worker);
+\n
 struct kthread_create_info static inline void set_kthread_struct(void *kthread)
 static inline struct kthread *to_kthread(struct task_struct *k)
 void free_kthread_struct(struct task_struct *k)
@@ -68,53 +69,54 @@ void kthread_flush_worker(struct kthread_worker *worker)
 void kthread_destroy_worker(struct kthread_worker *worker)
 void kthread_associate_blkcg(struct cgroup_subsys_state *css)
 struct cgroup_subsys_state *kthread_blkcg(void)
-  10 struct kthread_worker *worker
-   9 struct kthread_work *work
-   5 struct task_struct *k
-   4 void
-   4 struct task_struct *p
-   4 struct kthread_delayed_work *dwork
-   3 void *data
-   3 unsigned long delay
-   3 unsigned int flags
-   3 int *threadfn
-   3 const char namefmt[]
-   2 unsigned int cpu
-   2 struct task_struct *task
-   2 long state
-   2 int cpu
-   2 const struct cpumask *mask
-   2 bool is_dwork
-   2 0
-   2 ...
-   1 void *worker_ptr
-   1 void *unused
-   1 void *kthread
-   1 void *_create
-   1 va_list args
-   1 unsigned long *flags
-   1 struct timer_list *t
-   1 struct task_struct *tsk
-   1 struct lock_class_key *key
-   1 struct list_head *pos
-   1 struct kthread_create_info *create
-   1 struct kthread *self
-   1 struct cgroup_subsys_state *css
-   1 kthread_worker_fn
-   1 kthread_unpark
-   1 kthread_should_park
-   1 kthread_queue_work
-   1 kthread_queue_delayed_work
-   1 kthread_parkme
-   1 kthread_park
-   1 kthread_mod_delayed_work
-   1 kthread_freezable_should_stop
-   1 kthread_flush_worker
-   1 kthread_flush_work
-   1 kthread_cancel_work_sync
-   1 kthread_cancel_delayed_work_sync
-   1 const char *name
-   1 bool *was_frozen
-   1 __kthread_init_worker
-   1 4
-   1 3
+\n
+     10 struct kthread_worker *worker
+      9 struct kthread_work *work
+      5 struct task_struct *k
+      4 void
+      4 struct task_struct *p
+      4 struct kthread_delayed_work *dwork
+      3 void *data
+      3 unsigned long delay
+      3 unsigned int flags
+      3 int *threadfn
+      3 const char namefmt[]
+      2 unsigned int cpu
+      2 struct task_struct *task
+      2 long state
+      2 int cpu
+      2 const struct cpumask *mask
+      2 bool is_dwork
+      2 0
+      2 ...
+      1 void *worker_ptr
+      1 void *unused
+      1 void *kthread
+      1 void *_create
+      1 va_list args
+      1 unsigned long *flags
+      1 struct timer_list *t
+      1 struct task_struct *tsk
+      1 struct lock_class_key *key
+      1 struct list_head *pos
+      1 struct kthread *self
+      1 struct kthread_create_info *create
+      1 struct cgroup_subsys_state *css
+      1 kthread_worker_fn
+      1 kthread_unpark
+      1 kthread_should_park
+      1 kthread_queue_work
+      1 kthread_queue_delayed_work
+      1 kthread_parkme
+      1 kthread_park
+      1 kthread_mod_delayed_work
+      1 __kthread_init_worker
+      1 kthread_freezable_should_stop
+      1 kthread_flush_worker
+      1 kthread_flush_work
+      1 kthread_cancel_work_sync
+      1 kthread_cancel_delayed_work_sync
+      1 const char *name
+      1 bool *was_frozen
+      1 4
+      1 3

@@ -1,4 +1,5 @@
 
+\n
 static ktime_t fixup_debug_start(struct pci_dev *dev, void (*fn)
 (struct pci_dev *dev)
 )
@@ -30,6 +31,7 @@ static void quirk_cs5536_vsa(struct pci_dev *dev)
 static void quirk_io_region(struct pci_dev *dev, int port, unsigned size, int nr, const char *name)
 static void quirk_ati_exploding_mce(struct pci_dev *dev)
 static void quirk_amd_nl_class(struct pci_dev *pdev)
+static void quirk_synopsys_haps(struct pci_dev *pdev)
 static void quirk_ali7101_acpi(struct pci_dev *dev)
 static void piix4_io_quirk(struct pci_dev *dev, const char *name, unsigned int port, unsigned int enable)
 static void piix4_mem_quirk(struct pci_dev *dev, const char *name, unsigned int port, unsigned int enable)
@@ -178,32 +180,33 @@ static void quirk_fsl_no_msi(struct pci_dev *pdev)
 static void quirk_gpu_hda(struct pci_dev *hda)
 int pci_idt_bus_quirk(struct pci_bus *bus, int devfn, u32 *l, int timeout)
 static void quirk_switchtec_ntb_dma_alias(struct pci_dev *pdev)
- 146 struct pci_dev *dev
-  23 struct pci_dev *pdev
-   8 u16 acs_flags
-   6 int probe
-   6 const char *name
-   2 void *fn
-   2 unsigned size
-   2 unsigned reg
-   2 unsigned int port
-   2 unsigned int enable
-   2 struct pci_dev *host_bridge
-   1 void
-   1 u32 *l
-   1 struct pci_fixup *f
-   1 struct pci_fixup *end
-   1 struct pci_dev *hda
-   1 struct pci_dev *d
-   1 struct pci_bus *bus
-   1 ktime_t calltime
-   1 int timeout
-   1 int pos
-   1 int port
-   1 int nr
-   1 int dynsize
-   1 int devfn
-   1 int all
-   1 enum pci_fixup_pass pass
-   1 const struct dmi_system_id *d
-   1 1 << 31
+\n
+    146 struct pci_dev *dev
+     24 struct pci_dev *pdev
+      8 u16 acs_flags
+      6 int probe
+      6 const char *name
+      2 void *fn
+      2 unsigned size
+      2 unsigned reg
+      2 unsigned int port
+      2 unsigned int enable
+      2 struct pci_dev *host_bridge
+      1 void
+      1 u32 *l
+      1 struct pci_fixup *f
+      1 struct pci_fixup *end
+      1 struct pci_dev *hda
+      1 struct pci_dev *d
+      1 struct pci_bus *bus
+      1 ktime_t calltime
+      1 int timeout
+      1 int pos
+      1 int port
+      1 int nr
+      1 int dynsize
+      1 int devfn
+      1 int all
+      1 enum pci_fixup_pass pass
+      1 const struct dmi_system_id *d
+      1 1 << 31

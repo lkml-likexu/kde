@@ -2,6 +2,7 @@
 EXPORT_SYMBOL_GPL(linear_hugepage_index);
 EXPORT_SYMBOL_GPL(vma_kernel_pagesize);
 EXPORT_SYMBOL_GPL(PageHuge);
+\n
 static inline void unlock_or_release_subpool(struct hugepage_subpool *spool)
 struct hugepage_subpool *hugepage_new_subpool(struct hstate *h, long max_hpages, long min_hpages)
 void hugepage_put_subpool(struct hugepage_subpool *spool)
@@ -191,131 +192,133 @@ struct page * __weak follow_huge_pgd(struct mm_struct *mm, unsigned long address
 bool isolate_huge_page(struct page *page, struct list_head *list)
 void putback_active_hugepage(struct page *page)
 void move_hugetlb_state(struct page *oldpage, struct page *newpage, int reason)
-  49 struct vm_area_struct *vma
-  44 struct hstate *h
-  23 struct page *page
-  20 unsigned long address
-  18 struct mm_struct *mm
-  14 unsigned long addr
-  14 struct kobject *kobj
-  13 int nid
-  10 void
-  10 struct kobj_attribute *attr
-  10 nodemask_t *nodes_allowed
-   8 char *buf
-   7 gfp_t gfp_mask
-   6 nodemask_t *nmask
-   5 unsigned int order
-   5 struct resv_map *resv
-   5 struct inode *inode
-   5 pte_t *ptep
-   5 pgoff_t idx
-   5 long t
-   5 long f
-   5 int write
-   4 void __user *buffer
-   4 unsigned long start_pfn
-   4 unsigned long end
-   4 unsigned long count
-   4 struct hugepage_subpool *spool
-   4 struct ctl_table *table
-   4 struct address_space *mapping
-   4 size_t len
-   4 size_t *length
-   4 loff_t *ppos
-   4 int flags
-   4 const char *buf
-   3 unsigned long start
-   3 unsigned long nr_pages
-   3 unsigned int flags
-   3 struct page *ref_page
-   3 pud_t *pud
-   3 long delta
-   3 int *nidp
-   3 bool obey_mempolicy
-   2 unsigned long sz
-   2 unsigned long *start
-   2 unsigned long *end
-   2 unsigned long *addr
-   2 struct seq_file *m
-   2 struct node *node
-   2 struct mmu_gather *tlb
-   2 pte_t pte
-   2 page
-   2 long chg
-   2 int delta
-   2 int avoid_reserve
-   2 h
-   2 char *s
-   1 weak
-   1 vma_kernel_pagesize
-   1 vm_flags_t vm_flags
-   1 virt_to_pageptep
-   1 unsigned long value
-   1 unsigned long unused_resv_pages
-   1 unsigned long src_addr
-   1 unsigned long size
-   1 unsigned long flags
-   1 unsigned long flag
-   1 unsigned long end_pfn
-   1 unsigned long dst_addr
-   1 unsigned long *position
-   1 unsigned long *nr_pages
-   1 unsigned int *array
-   1 struct zone *z
-   1 struct vm_fault *vmf
-   1 struct vm_area_struct *svma
-   1 struct vm_area_struct *dst_vma
-   1 struct vm_area_struct **vmas
-   1 struct resv_map *map
-   1 struct page *pagecache_page
-   1 struct page *page_head
-   1 struct page *oldpage
-   1 struct page *newpage
-   1 struct page **pages
-   1 struct page **pagep
-   1 struct mm_struct *src
-   1 struct mm_struct *dst_mm
-   1 struct mm_struct *dst
-   1 struct list_head *list
-   1 struct kref *ref
-   1 struct kobject *parent
-   1 struct kobject **hstate_kobjs
-   1 spinlock_t *ptl
-   1 size_t count
-   1 pud
-   1 pte_t *dst_pte
-   1 pmd_t *pmd
-   1 pgprot_t newprot
-   1 pgd_t *pgd
-   1 num_fault_mutexes - 1
-   1 nodemask_t *nodemask
-   1 mm
-   1 long to
-   1 long start
-   1 long min_hpages
-   1 long max_hpages
-   1 long i
-   1 long from
-   1 long freed
-   1 long end
-   1 linear_hugepage_index
-   1 int writable
-   1 int reason
-   1 int preferred_nid
-   1 int pdshift
-   1 int *nonblocking
-   1 hugepd_t hpd
-   1 h->nr_huge_pages - h->surplus_huge_pages
-   1 enum vma_resv_mode mode
-   1 count >= h->nr_huge_pages
-   1 const struct zone *zone
-   1 const struct attribute_group *hstate_attr_group
-   1 bool acct_surplus
-   1 alias"__alloc_bootmem_huge_page"
-   1 PageHuge
-   1 PageHighMempage
-   1 HPAGE_SIZE * PTRS_PER_PTE
-   1 1
-   1 *addr
-   1 &page->lru
+\n
+     49 struct vm_area_struct *vma
+     44 struct hstate *h
+     23 struct page *page
+     20 unsigned long address
+     18 struct mm_struct *mm
+     14 unsigned long addr
+     14 struct kobject *kobj
+     13 int nid
+     10 void
+     10 struct kobj_attribute *attr
+     10 nodemask_t *nodes_allowed
+      8 char *buf
+      7 gfp_t gfp_mask
+      6 nodemask_t *nmask
+      5 unsigned int order
+      5 struct resv_map *resv
+      5 struct inode *inode
+      5 pte_t *ptep
+      5 pgoff_t idx
+      5 long t
+      5 long f
+      5 int write
+      4 void __user *buffer
+      4 unsigned long start_pfn
+      4 unsigned long end
+      4 unsigned long count
+      4 struct hugepage_subpool *spool
+      4 struct ctl_table *table
+      4 struct address_space *mapping
+      4 size_t *length
+      4 size_t len
+      4 loff_t *ppos
+      4 int flags
+      4 const char *buf
+      3 unsigned long start
+      3 unsigned long nr_pages
+      3 unsigned int flags
+      3 struct page *ref_page
+      3 pud_t *pud
+      3 long delta
+      3 int *nidp
+      3 bool obey_mempolicy
+      2 unsigned long sz
+      2 unsigned long *start
+      2 unsigned long *end
+      2 unsigned long *addr
+      2 struct seq_file *m
+      2 struct node *node
+      2 struct mmu_gather *tlb
+      2 pte_t pte
+      2 page
+      2 long chg
+      2 int delta
+      2 int avoid_reserve
+      2 h
+      2 char *s
+      1 weak
+      1 vm_flags_t vm_flags
+      1 vma_kernel_pagesize
+      1 virt_to_pageptep
+      1 unsigned long value
+      1 unsigned long unused_resv_pages
+      1 unsigned long src_addr
+      1 unsigned long size
+      1 unsigned long *position
+      1 unsigned long *nr_pages
+      1 unsigned long flags
+      1 unsigned long flag
+      1 unsigned long end_pfn
+      1 unsigned long dst_addr
+      1 unsigned int *array
+      1 struct zone *z
+      1 struct vm_fault *vmf
+      1 struct vm_area_struct **vmas
+      1 struct vm_area_struct *svma
+      1 struct vm_area_struct *dst_vma
+      1 struct resv_map *map
+      1 struct page **pages
+      1 struct page **pagep
+      1 struct page *page_head
+      1 struct page *pagecache_page
+      1 struct page *oldpage
+      1 struct page *newpage
+      1 struct mm_struct *src
+      1 struct mm_struct *dst_mm
+      1 struct mm_struct *dst
+      1 struct list_head *list
+      1 struct kref *ref
+      1 struct kobject *parent
+      1 struct kobject **hstate_kobjs
+      1 spinlock_t *ptl
+      1 size_t count
+      1 pud
+      1 pte_t *dst_pte
+      1 pmd_t *pmd
+      1 pgprot_t newprot
+      1 pgd_t *pgd
+      1 &page->lru
+      1 PageHuge
+      1 PageHighMempage
+      1 num_fault_mutexes - 1
+      1 nodemask_t *nodemask
+      1 mm
+      1 long to
+      1 long start
+      1 long min_hpages
+      1 long max_hpages
+      1 long i
+      1 long from
+      1 long freed
+      1 long end
+      1 linear_hugepage_index
+      1 int writable
+      1 int reason
+      1 int preferred_nid
+      1 int pdshift
+      1 int *nonblocking
+      1 hugepd_t hpd
+      1 HPAGE_SIZE * PTRS_PER_PTE
+      1 h->nr_huge_pages - h->surplus_huge_pages
+      1 enum vma_resv_mode mode
+      1 count >= h->nr_huge_pages
+      1 const struct zone *zone
+      1 const struct attribute_group *hstate_attr_group
+      1 bool acct_surplus
+      1 alias"__alloc_bootmem_huge_page"
+      1 *addr
+      1 1
+      1 

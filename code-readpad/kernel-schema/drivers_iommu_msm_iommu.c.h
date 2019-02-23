@@ -1,4 +1,5 @@
 
+\n
 static struct msm_priv *to_msm_priv(struct iommu_domain *dom)
 static int __enable_clocks(struct msm_iommu_dev *iommu)
 static void __disable_clocks(struct msm_iommu_dev *iommu)
@@ -30,34 +31,34 @@ irqreturn_t msm_iommu_fault_handler(int irq, void *dev_id)
 static int msm_iommu_probe(struct platform_device *pdev)
 static int msm_iommu_remove(struct platform_device *pdev)
 static int __init msm_iommu_driver_init(void)
-static void __exit msm_iommu_driver_exit(void)
-   7 struct device *dev
-   6 struct iommu_domain *domain
-   4 void __iomem *base
-   3 void *cookie
-   3 unsigned long iova
-   3 struct msm_iommu_dev *iommu
-   3 int ctx
-   2 void
-   2 unsigned long *map
-   2 struct platform_device *pdev
-   2 struct of_phandle_args *spec
-   2 struct msm_priv *priv
-   2 size_t len
-   1 void *dev_id
-   1 unsigned type
-   1 struct msm_iommu_dev **iommu
-   1 struct msm_iommu_ctx_dev *master
-   1 struct iommu_domain *dom
-   1 size_t size
-   1 size_t granule
-   1 phys_addr_t pa
-   1 int start
-   1 int prot
-   1 int ncb
-   1 int irq
-   1 int idx
-   1 int end
-   1 enum iommu_cap cap
-   1 dma_addr_t va
-   1 bool leaf
+\n
+      7 struct device *dev
+      6 struct iommu_domain *domain
+      4 void __iomem *base
+      3 void *cookie
+      3 unsigned long iova
+      3 struct msm_iommu_dev *iommu
+      3 int ctx
+      2 unsigned long *map
+      2 struct platform_device *pdev
+      2 struct of_phandle_args *spec
+      2 struct msm_priv *priv
+      2 size_t len
+      1 void *dev_id
+      1 void
+      1 unsigned type
+      1 struct msm_iommu_dev **iommu
+      1 struct msm_iommu_ctx_dev *master
+      1 struct iommu_domain *dom
+      1 size_t size
+      1 size_t granule
+      1 phys_addr_t pa
+      1 int start
+      1 int prot
+      1 int ncb
+      1 int irq
+      1 int idx
+      1 int end
+      1 enum iommu_cap cap
+      1 dma_addr_t va
+      1 bool leaf

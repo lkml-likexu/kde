@@ -1,5 +1,6 @@
 
 EXPORT_SYMBOL_GPL(perf_guest_get_msrs);
+\n
 static u64 intel_perfmon_event_map[PERF_COUNT_HW_MAX] __read_mostly = static struct event_constraint intel_core_event_constraints[] __read_mostly = static struct event_constraint intel_core2_event_constraints[] __read_mostly = static struct event_constraint intel_nehalem_event_constraints[] __read_mostly = static struct extra_reg intel_nehalem_extra_regs[] __read_mostly = static struct event_constraint intel_westmere_event_constraints[] __read_mostly = static struct event_constraint intel_snb_event_constraints[] __read_mostly = static struct event_constraint intel_ivb_event_constraints[] __read_mostly = static struct extra_reg intel_westmere_extra_regs[] __read_mostly = static struct event_constraint intel_v1_event_constraints[] __read_mostly = static struct event_constraint intel_gen_event_constraints[] __read_mostly = static struct event_constraint intel_slm_event_constraints[] __read_mostly = static u64 intel_pmu_event_map(int hw_event)
 static __initconst const u64 skl_hw_cache_event_ids [PERF_COUNT_HW_CACHE_MAX] [PERF_COUNT_HW_CACHE_OP_MAX] [PERF_COUNT_HW_CACHE_RESULT_MAX] = static __initconst const u64 skl_hw_cache_extra_regs [PERF_COUNT_HW_CACHE_MAX] [PERF_COUNT_HW_CACHE_OP_MAX] [PERF_COUNT_HW_CACHE_RESULT_MAX] = static __initconst const u64 snb_hw_cache_extra_regs [PERF_COUNT_HW_CACHE_MAX] [PERF_COUNT_HW_CACHE_OP_MAX] [PERF_COUNT_HW_CACHE_RESULT_MAX] = static __initconst const u64 snb_hw_cache_event_ids [PERF_COUNT_HW_CACHE_MAX] [PERF_COUNT_HW_CACHE_OP_MAX] [PERF_COUNT_HW_CACHE_RESULT_MAX] = static __initconst const u64 hsw_hw_cache_event_ids [PERF_COUNT_HW_CACHE_MAX] [PERF_COUNT_HW_CACHE_OP_MAX] [PERF_COUNT_HW_CACHE_RESULT_MAX] = static __initconst const u64 hsw_hw_cache_extra_regs [PERF_COUNT_HW_CACHE_MAX] [PERF_COUNT_HW_CACHE_OP_MAX] [PERF_COUNT_HW_CACHE_RESULT_MAX] = static __initconst const u64 westmere_hw_cache_event_ids [PERF_COUNT_HW_CACHE_MAX] [PERF_COUNT_HW_CACHE_OP_MAX] [PERF_COUNT_HW_CACHE_RESULT_MAX] = static __initconst const u64 nehalem_hw_cache_extra_regs [PERF_COUNT_HW_CACHE_MAX] [PERF_COUNT_HW_CACHE_OP_MAX] [PERF_COUNT_HW_CACHE_RESULT_MAX] = static __initconst const u64 nehalem_hw_cache_event_ids [PERF_COUNT_HW_CACHE_MAX] [PERF_COUNT_HW_CACHE_OP_MAX] [PERF_COUNT_HW_CACHE_RESULT_MAX] = static __initconst const u64 core2_hw_cache_event_ids [PERF_COUNT_HW_CACHE_MAX] [PERF_COUNT_HW_CACHE_OP_MAX] [PERF_COUNT_HW_CACHE_RESULT_MAX] = static __initconst const u64 atom_hw_cache_event_ids [PERF_COUNT_HW_CACHE_MAX] [PERF_COUNT_HW_CACHE_OP_MAX] [PERF_COUNT_HW_CACHE_RESULT_MAX] = static struct extra_reg intel_slm_extra_regs[] __read_mostly = static __initconst const u64 slm_hw_cache_extra_regs [PERF_COUNT_HW_CACHE_MAX] [PERF_COUNT_HW_CACHE_OP_MAX] [PERF_COUNT_HW_CACHE_RESULT_MAX] = static __initconst const u64 slm_hw_cache_event_ids [PERF_COUNT_HW_CACHE_MAX] [PERF_COUNT_HW_CACHE_OP_MAX] [PERF_COUNT_HW_CACHE_RESULT_MAX] =static void __intel_pmu_disable_all(void)
 static void intel_pmu_disable_all(void)
@@ -22,7 +23,7 @@ static void intel_pmu_add_event(struct perf_event *event)
 int intel_pmu_save_and_restart(struct perf_event *event)
 static void intel_pmu_reset(void)
 static int handle_pmi_common(struct pt_regs *regs, u64 status)
-static bool disable_counter_freezing; static int __init intel_perf_counter_freezing_setup(char *s)
+static bool disable_counter_freezing = true; static int __init intel_perf_counter_freezing_setup(char *s)
 static int intel_pmu_handle_irq_v4(struct pt_regs *regs)
 static int intel_pmu_handle_irq(struct pt_regs *regs)
 static struct event_constraint * intel_bts_constraints(struct perf_event *event)
@@ -47,6 +48,8 @@ static void intel_pebs_aliases_precdist(struct perf_event *event)
 static void intel_pebs_aliases_ivb(struct perf_event *event)
 static void intel_pebs_aliases_skl(struct perf_event *event)
 static unsigned long intel_pmu_large_pebs_flags(struct perf_event *event)
+static int intel_pmu_bts_config(struct perf_event *event)
+static int core_pmu_hw_config(struct perf_event *event)
 static int intel_pmu_hw_config(struct perf_event *event)
 struct perf_guest_switch_msr *perf_guest_get_msrs(int *nr)
 static struct perf_guest_switch_msr *intel_guest_get_msrs(int *nr)
@@ -65,7 +68,9 @@ static void flip_smm_bit(void *data)
 static void intel_pmu_cpu_starting(int cpu)
 static void free_excl_cntrs(int cpu)
 static void intel_pmu_cpu_dying(int cpu)
+static void intel_pmu_cpu_dead(int cpu)
 static void intel_pmu_sched_task(struct perf_event_context *ctx, bool sched_in)
+static int intel_pmu_check_period(struct perf_event *event, u64 value)
 static __init void intel_clovertown_quirk(void)
 static int intel_snb_pebs_broken(int cpu)
 static void intel_snb_check_microcode(void)
@@ -84,37 +89,39 @@ static ssize_t pmu_name_show(struct device *cdev, struct device_attribute *attr,
 static __init struct attribute ** get_events_attrs(struct attribute **base, struct attribute **mem, struct attribute **tsx)
 __init int intel_pmu_init(void)
 static __init int fixup_ht_bug(void)
-  31 struct perf_event *event
-  16 void
-  15 struct cpu_hw_events *cpuc
-   9 int idx
-   8 int cpu
-   4 struct device_attribute *attr
-   4 struct device *cdev
-   4 int added
-   3 struct pt_regs *regs
-   3 int *nr
-   3 char *buf
-   2 unsigned long msr
-   2 u64 config
-   2 struct hw_perf_event_extra *reg
-   1 void *data
-   1 u64 status
-   1 u64 mask
-   1 u64 left
-   1 u64 ack
-   1 struct perf_event_context *ctx
-   1 struct hw_perf_event *hwc
-   1 struct event_constraint *c
-   1 struct attribute **tsx
-   1 struct attribute **mem
-   1 struct attribute **base
-   1 size_t count
-   1 perf_guest_get_msrs
-   1 int hw_event
-   1 int cntr
-   1 const char *buf
-   1 char *s
-   1 char *page
-   1 bool sched_in
-   1 bool pmi
+\n
+     34 struct perf_event *event
+     16 void
+     15 struct cpu_hw_events *cpuc
+      9 int idx
+      9 int cpu
+      4 struct device *cdev
+      4 struct device_attribute *attr
+      4 int added
+      3 struct pt_regs *regs
+      3 int *nr
+      3 char *buf
+      2 unsigned long msr
+      2 u64 config
+      2 struct hw_perf_event_extra *reg
+      1 void *data
+      1 u64 value
+      1 u64 status
+      1 u64 mask
+      1 u64 left
+      1 u64 ack
+      1 struct perf_event_context *ctx
+      1 struct hw_perf_event *hwc
+      1 struct event_constraint *c
+      1 struct attribute **tsx
+      1 struct attribute **mem
+      1 struct attribute **base
+      1 size_t count
+      1 perf_guest_get_msrs
+      1 int hw_event
+      1 int cntr
+      1 const char *buf
+      1 char *s
+      1 char *page
+      1 bool sched_in
+      1 bool pmi

@@ -1,5 +1,6 @@
 
 EXPORT_SYMBOL_GPL(__supported_pte_mask);
+\n
 static int __init nonx32_setup(char *str)
 static void sync_global_pgds_l5(unsigned long start, unsigned long end)
 static void sync_global_pgds_l4(unsigned long start, unsigned long end)
@@ -41,7 +42,7 @@ static void __meminit remove_p4d_table(p4d_t *p4d_start, unsigned long addr, uns
 static void __meminit remove_pagetable(unsigned long start, unsigned long end, bool direct, struct vmem_altmap *altmap)
 void __ref vmemmap_free(unsigned long start, unsigned long end, struct vmem_altmap *altmap)
 static void __meminit kernel_physical_mapping_remove(unsigned long start, unsigned long end)
-int __ref arch_remove_memory(u64 start, u64 size, struct vmem_altmap *altmap)
+int __ref arch_remove_memory(int nid, u64 start, u64 size, struct vmem_altmap *altmap)
 static void __init register_page_bootmem_info(void)
 void __init mem_init(void)
 void set_kernel_text_rw(void)
@@ -55,46 +56,47 @@ static int __meminit vmemmap_populate_hugepages(unsigned long start, unsigned lo
 int __meminit vmemmap_populate(unsigned long start, unsigned long end, int node, struct vmem_altmap *altmap)
 void register_page_bootmem_memmap(unsigned long section_nr, struct page *start_page, unsigned long nr_pages)
 void __meminit vmemmap_populate_print_last(void)
-  12 void
-  12 unsigned long end
-  11 struct vmem_altmap *altmap
-  10 unsigned long vaddr
-   8 unsigned long start
-   5 unsigned long paddr_end
-   5 unsigned long addr
-   5 bool direct
-   4 unsigned long page_size_mask
-   4 unsigned long paddr
-   3 unsigned long size
-   3 unsigned long phys
-   3 u64 start
-   3 u64 size
-   3 pud_t *pud
-   3 pte_t new_pte
-   2 unsigned long nr_pages
-   2 struct page *page
-   2 pud_t *pud_start
-   2 pud_t *pud_page
-   2 pte_t *pte_start
-   2 pmd_t *pmd_start
-   2 pmd_t *pmd
-   2 pgprot_t prot
-   2 p4d_t *p4d_page
-   2 p4d_t *p4d
-   2 int node
-   2 int nid
-   2 bool want_memblock
-   1 unsigned long start_pfn
-   1 unsigned long section_nr
-   1 unsigned long paddr_start
-   1 unsigned int order
-   1 struct page *start_page
-   1 pte_t pteval
-   1 pte_t *pte_page
-   1 pmd_t *pmd_page
-   1 pgd_t *pgd
-   1 p4d_t *p4d_start
-   1 int order
-   1 enum page_cache_mode cache
-   1 char *str
-   1 __supported_pte_mask
+\n
+     12 void
+     12 unsigned long end
+     11 struct vmem_altmap *altmap
+     10 unsigned long vaddr
+      8 unsigned long start
+      5 unsigned long paddr_end
+      5 unsigned long addr
+      5 bool direct
+      4 unsigned long page_size_mask
+      4 unsigned long paddr
+      3 unsigned long size
+      3 unsigned long phys
+      3 u64 start
+      3 u64 size
+      3 pud_t *pud
+      3 pte_t new_pte
+      3 int nid
+      2 unsigned long nr_pages
+      2 struct page *page
+      2 pud_t *pud_start
+      2 pud_t *pud_page
+      2 pte_t *pte_start
+      2 pmd_t *pmd_start
+      2 pmd_t *pmd
+      2 pgprot_t prot
+      2 p4d_t *p4d_page
+      2 p4d_t *p4d
+      2 int node
+      2 bool want_memblock
+      1 unsigned long start_pfn
+      1 unsigned long section_nr
+      1 unsigned long paddr_start
+      1 unsigned int order
+      1 __supported_pte_mask
+      1 struct page *start_page
+      1 pte_t pteval
+      1 pte_t *pte_page
+      1 pmd_t *pmd_page
+      1 pgd_t *pgd
+      1 p4d_t *p4d_start
+      1 int order
+      1 enum page_cache_mode cache
+      1 char *str

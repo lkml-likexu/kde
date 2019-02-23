@@ -3,16 +3,21 @@ EXPORT_SYMBOL_GPL(of_modalias_node);
 EXPORT_SYMBOL_GPL(of_phandle_iterator_init);
 EXPORT_SYMBOL_GPL(of_phandle_iterator_next);
 EXPORT_SYMBOL_GPL(of_alias_get_id);
+EXPORT_SYMBOL_GPL(of_alias_get_alias_list);
 EXPORT_SYMBOL_GPL(of_alias_get_highest_id);
 EXPORT_SYMBOL_GPL(of_console_check);
 EXPORT_SYMBOL_GPL(of_map_rid);
+\n
 bool of_node_name_eq(const struct device_node *np, const char *name)
 bool of_node_name_prefix(const struct device_node *np, const char *prefix)
+static bool __of_node_is_type(const struct device_node *np, const char *type)
 int of_n_addr_cells(struct device_node *np)
 int of_n_size_cells(struct device_node *np)
 int __weak of_node_to_nid(struct device_node *np)
-void of_populate_phandle_cache(void)
+static void __of_free_phandle_cache(void)
 int of_free_phandle_cache(void)
+void __of_free_phandle_cache_entry(phandle handle)
+void of_populate_phandle_cache(void)
 void __init of_core_init(void)
 static struct property *__of_find_property(const struct device_node *np, const char *name, int *lenp)
 struct property *of_find_property(const struct device_node *np, const char *name, int *lenp)
@@ -73,76 +78,81 @@ void of_alias_scan(void * (*dt_alloc)
 (u64 size, u64 align)
 )
 int of_alias_get_id(struct device_node *np, const char *stem)
+int of_alias_get_alias_list(const struct of_device_id *matches, const char *stem, unsigned long *bitmap, unsigned int nbits)
 int of_alias_get_highest_id(const char *stem)
 bool of_console_check(struct device_node *dn, char *name, int index)
 struct device_node *of_find_next_cache_node(const struct device_node *np)
 int of_find_last_cache_level(unsigned int cpu)
 int of_map_rid(struct device_node *np, u32 rid, const char *map_name, const char *map_mask_name, struct device_node **target, u32 *id_out)
-  14 const struct device_node *np
-  12 struct device_node *np
-   8 const char *name
-   7 const struct device_node *node
-   6 struct device_node *prev
-   6 int index
-   6 const char *list_name
-   5 struct device_node *from
-   5 const struct device_node *device
-   4 struct property *prop
-   4 struct of_phandle_args *out_args
-   4 int cpu
-   4 int *lenp
-   4 const char *cells_name
-   3 void
-   3 unsigned int *thread
-   3 struct of_phandle_iterator *it
-   3 struct device_node *node
-   3 int cell_count
-   3 const struct of_device_id *matches
-   3 const char *type
-   3 const char *stem
-   3 const char *path
-   3 const char *compat
-   2 struct property *newprop
-   2 struct device_node *cpun
-   2 const char *prop_name
-   2 const char *compatible
-   1 void * *dt_alloc
-   1 unsigned int cpu
-   1 uint32_t *args
-   1 u64 size
-   1 u64 phys_id
-   1 u64 align
-   1 u32 rid
-   1 u32 *id_out
-   1 struct property **oldpropp
-   1 struct device_node *parent
-   1 struct device_node *dn
-   1 struct device_node *device
-   1 struct device_node *cpu_node
-   1 struct device_node **target
-   1 struct alias_prop *ap
-   1 phandle handle
-   1 of_phandle_iterator_next
-   1 of_phandle_iterator_init
-   1 of_modalias_node
-   1 of_map_rid
-   1 of_console_check
-   1 of_alias_get_id
-   1 of_alias_get_highest_id
-   1 int stem_len
-   1 int size
-   1 int len
-   1 int id
-   1 const struct of_phandle_args *args
-   1 const struct of_device_id **match
-   1 const struct device_node *parent
-   1 const char *stem_name
-   1 const char *prefix
-   1 const char *phandle_name
-   1 const char *msg
-   1 const char *map_name
-   1 const char *map_mask_name
-   1 const char *const *compat
-   1 const char **opts
-   1 char *name
-   1 char *modalias
+\n
+     15 const struct device_node *np
+     12 struct device_node *np
+      8 const char *name
+      7 const struct device_node *node
+      6 struct device_node *prev
+      6 int index
+      6 const char *list_name
+      5 struct device_node *from
+      5 const struct device_node *device
+      4 void
+      4 struct property *prop
+      4 struct of_phandle_args *out_args
+      4 int *lenp
+      4 int cpu
+      4 const struct of_device_id *matches
+      4 const char *type
+      4 const char *stem
+      4 const char *cells_name
+      3 unsigned int *thread
+      3 struct of_phandle_iterator *it
+      3 struct device_node *node
+      3 int cell_count
+      3 const char *path
+      3 const char *compat
+      2 struct property *newprop
+      2 struct device_node *cpun
+      2 phandle handle
+      2 const char *prop_name
+      2 const char *compatible
+      1 void * *dt_alloc
+      1 unsigned long *bitmap
+      1 unsigned int nbits
+      1 unsigned int cpu
+      1 uint32_t *args
+      1 u64 size
+      1 u64 phys_id
+      1 u64 align
+      1 u32 rid
+      1 u32 *id_out
+      1 struct property **oldpropp
+      1 struct device_node **target
+      1 struct device_node *parent
+      1 struct device_node *dn
+      1 struct device_node *device
+      1 struct device_node *cpu_node
+      1 struct alias_prop *ap
+      1 of_phandle_iterator_next
+      1 of_phandle_iterator_init
+      1 of_modalias_node
+      1 of_map_rid
+      1 of_console_check
+      1 of_alias_get_id
+      1 of_alias_get_highest_id
+      1 of_alias_get_alias_list
+      1 int stem_len
+      1 int size
+      1 int len
+      1 int id
+      1 const struct of_phandle_args *args
+      1 const struct of_device_id **match
+      1 const struct device_node *parent
+      1 const char *stem_name
+      1 const char *prefix
+      1 const char *phandle_name
+      1 const char **opts
+      1 const char *msg
+      1 const char *map_name
+      1 const char *map_mask_name
+      1 const char *const *compat
+      1 char *name
+      1 char *modalias

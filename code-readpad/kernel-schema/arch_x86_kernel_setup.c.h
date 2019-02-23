@@ -1,5 +1,6 @@
 
 EXPORT_SYMBOL_GPL(edid_info);
+\n
 struct edd edd; EXPORT_SYMBOL(edd)
 ;endifstatic inline void __init copy_edd(void)
 struct edd edd; EXPORT_SYMBOL(edd)
@@ -41,29 +42,29 @@ memblock_reserve(0, ALIGN(reserve_low, PAGE_SIZE)
 )
 ; }static int dump_kernel_offset(struct notifier_block *self, unsigned long v, void *p)
 void __init setup_arch(char **cmdline_p)
-void __init x86_verify_bootdata_version(void)
 void __init i386_reserve_resources(void)
 static int __init register_kernel_offset_dumper(void)
-  30 void
-   2 edd
-   1 void *p
-   1 unsigned long v
-   1 struct notifier_block *self
-   1 sizeofedd.mbr_signature
-   1 sizeofedd.edd_info
-   1 size_t size
-   1 size_t align
-   1 ramdisk_image
-   1 ramdisk_end - ramdisk_image
-   1 edid_info
-   1 edd.mbr_signature
-   1 edd.edd_info
-   1 char *p
-   1 char **cmdline_p
-   1 boot_params.eddbuf
-   1 boot_params.edd_mbr_sig_buffer
-   1 PAGE_SIZE
-   1 ALIGNreserve_low
-   1 0
-   1 &iomem_resource
-   1 &crashk_res
+\n
+     29 void
+      2 edd
+      1 void *p
+      1 unsigned long v
+      1 struct notifier_block *self
+      1 size_t size
+      1 size_t align
+      1 sizeofedd.mbr_signature
+      1 sizeofedd.edd_info
+      1 ramdisk_image
+      1 ramdisk_end - ramdisk_image
+      1 PAGE_SIZE
+      1 &iomem_resource
+      1 edid_info
+      1 edd.mbr_signature
+      1 edd.edd_info
+      1 &crashk_res
+      1 char *p
+      1 char **cmdline_p
+      1 boot_params.edd_mbr_sig_buffer
+      1 boot_params.eddbuf
+      1 ALIGNreserve_low
+      1 0

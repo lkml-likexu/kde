@@ -3,6 +3,7 @@ EXPORT_SYMBOL_GPL(vfio_platform_probe_common);
 EXPORT_SYMBOL_GPL(vfio_platform_remove_common);
 EXPORT_SYMBOL_GPL(__vfio_platform_register_reset);
 EXPORT_SYMBOL_GPL(vfio_platform_unregister_reset);
+\n
 static vfio_platform_reset_fn_t vfio_platform_lookup_reset(const char *compat, struct module **module)
 static int vfio_platform_acpi_probe(struct vfio_platform_device *vdev, struct device *dev)
 static int vfio_platform_acpi_call_reset(struct vfio_platform_device *vdev, const char **extra_dbg)
@@ -27,25 +28,26 @@ int vfio_platform_probe_common(struct vfio_platform_device *vdev, struct device 
 struct vfio_platform_device *vfio_platform_remove_common(struct device *dev)
 void __vfio_platform_register_reset(struct vfio_platform_reset_node *node)
 void vfio_platform_unregister_reset(const char *compat, vfio_platform_reset_fn_t fn)
-  11 struct vfio_platform_device *vdev
-   6 void *device_data
-   4 struct device *dev
-   4 size_t count
-   2 struct vm_area_struct *vma
-   2 struct vfio_platform_region *reg
-   2 loff_t off
-   2 loff_t *ppos
-   2 const char __user *buf
-   2 const char *compat
-   2 const char **extra_dbg
-   2 char __user *buf
-   1 vfio_platform_unregister_reset
-   1 vfio_platform_reset_fn_t fn
-   1 vfio_platform_remove_common
-   1 vfio_platform_probe_common
-   1 unsigned long arg
-   1 unsigned int cmd
-   1 struct vfio_platform_reset_node *node
-   1 struct vfio_platform_region region
-   1 struct module **module
-   1 __vfio_platform_register_reset
+\n
+     11 struct vfio_platform_device *vdev
+      6 void *device_data
+      4 struct device *dev
+      4 size_t count
+      2 struct vm_area_struct *vma
+      2 struct vfio_platform_region *reg
+      2 loff_t *ppos
+      2 loff_t off
+      2 const char __user *buf
+      2 const char **extra_dbg
+      2 const char *compat
+      2 char __user *buf
+      1 vfio_platform_unregister_reset
+      1 vfio_platform_reset_fn_t fn
+      1 vfio_platform_remove_common
+      1 __vfio_platform_register_reset
+      1 vfio_platform_probe_common
+      1 unsigned long arg
+      1 unsigned int cmd
+      1 struct vfio_platform_reset_node *node
+      1 struct vfio_platform_region region
+      1 struct module **module

@@ -1,4 +1,5 @@
 
+\n
 define SEQ_PUT_DEC(str, val)
 \ seq_put_decimal_ull_width(m, str, (val)
 << (PAGE_SHIFT-10)
@@ -41,7 +42,7 @@ static void show_vma_header_prefix(struct seq_file *m, unsigned long start, unsi
 static void show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
 static int show_map(struct seq_file *m, void *v)
 static int pid_maps_open(struct inode *inode, struct file *file)
-static void smaps_account(struct mem_size_stats *mss, struct page *page, bool compound, bool young, bool dirty)
+static void smaps_account(struct mem_size_stats *mss, struct page *page, bool compound, bool young, bool dirty, bool locked)
 static int smaps_pte_hole(unsigned long addr, unsigned long end, struct mm_walk *walk)
 static void smaps_pte_entry(pte_t *pte, unsigned long addr, struct mm_walk *walk)
 static void smaps_pmd_entry(pmd_t *pmd, unsigned long addr, struct mm_walk *walk)
@@ -57,7 +58,7 @@ mss->shmem_thp += HPAGE_PMD_SIZE;else if (is_zone_device_page(page)
 ;else VM_BUG_ON_PAGE(1, page)
 ;smaps_account(mss, page, true, pmd_young(*pmd)
 , pmd_dirty(*pmd)
-)
+, locked)
 ; } static void smaps_pmd_entry(pmd_t *pmd, unsigned long addr, struct mm_walk *walk)
 static int smaps_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end, struct mm_walk *walk)
 static void show_smap_vma_flags(struct seq_file *m, struct vm_area_struct *vma)
@@ -105,78 +106,81 @@ static int gather_pte_stats(pmd_t *pmd, unsigned long addr, unsigned long end, s
 static int gather_hugetlb_stats(pte_t *pte, unsigned long hmask, unsigned long addr, unsigned long end, struct mm_walk *walk)
 static int show_numa_map(struct seq_file *m, void *v)
 static int pid_numa_maps_open(struct inode *inode, struct file *file)
-  20 unsigned long addr
-  14 struct mm_walk *walk
-  13 struct vm_area_struct *vma
-  13 struct seq_file *m
-  12 unsigned long end
-  12 struct file *file
-  10 struct inode *inode
-   9 task
-   9 struct proc_maps_private *priv
-   6 void *v
-   6 pte_t *pte
-   6 addr
-   5 vma->vm_mm
-   5 ptent
-   5 priv->task_mempolicy
-   5 pmd_t *pmd
-   4 unsigned long hmask
-   4 pmd
-   3 unsigned long start
-   3 struct mm_struct *mm
-   3 pte
-   3 pmd_t *pmdp
-   3 loff_t *ppos
-   2 val
-   2 struct pagemapread *pm
-   2 struct page *page
-   2 struct mem_size_stats *mss
-   2 str
-   2 size_t count
-   2 pte_t pte
-   2 pmdp
-   2 page
-   2 const struct seq_operations *ops
-   1 vma
-   1 vm_flags_t flags
-   1 unsigned long nr_pages
-   1 unsigned long long pgoff
-   1 unsigned long ino
-   1 unsigned long *text
-   1 unsigned long *shared
-   1 unsigned long *resident
-   1 unsigned long *data
-   1 u64 frame
-   1 u64 flags
-   1 true
-   1 struct numa_maps *md
-   1 ptl
-   1 pte_t *ptep
-   1 pte++
-   1 pmd_young*pmd
-   1 pmd_t pmd
-   1 pagemap_entry_t *pme
-   1 orig_pte
-   1 mss
-   1 m
-   1 loff_t *pos
-   1 is_zone_device_pagepage
-   1 int pte_dirty
-   1 int psize
-   1 dev_t dev
-   1 const struct mem_size_stats *mss
-   1 const char __user *buf
-   1 char __user *buf
-   1 bool young
-   1 bool dirty
-   1 bool compound
-   1 addr += PAGE_SIZE
-   1 addr != end
-   1 PageSwapBackedpage
-   1 PageAnonpage
-   1 PAGE_SHIFT-10
-   1 IS_ERR_OR_NULLpage
-   1 FOLL_DUMP
-   1 1
-   1 *pmd
+\n
+     20 unsigned long addr
+     14 struct mm_walk *walk
+     13 struct vm_area_struct *vma
+     13 struct seq_file *m
+     12 unsigned long end
+     12 struct file *file
+     10 struct inode *inode
+      9 task
+      9 struct proc_maps_private *priv
+      6 void *v
+      6 pte_t *pte
+      6 addr
+      5 vma->vm_mm
+      5 ptent
+      5 priv->task_mempolicy
+      5 pmd_t *pmd
+      4 unsigned long hmask
+      4 pmd
+      3 unsigned long start
+      3 struct mm_struct *mm
+      3 pte
+      3 pmd_t *pmdp
+      3 loff_t *ppos
+      2 val
+      2 struct page *page
+      2 struct pagemapread *pm
+      2 struct mem_size_stats *mss
+      2 str
+      2 size_t count
+      2 pte_t pte
+      2 pmdp
+      2 page
+      2 const struct seq_operations *ops
+      1 vm_flags_t flags
+      1 vma
+      1 unsigned long *text
+      1 unsigned long *shared
+      1 unsigned long *resident
+      1 unsigned long nr_pages
+      1 unsigned long long pgoff
+      1 unsigned long ino
+      1 unsigned long *data
+      1 u64 frame
+      1 u64 flags
+      1 true
+      1 struct numa_maps *md
+      1 ptl
+      1 pte_t *ptep
+      1 pte++
+      1 pmd_young*pmd
+      1 pmd_t pmd
+      1 *pmd
+      1 PageSwapBackedpage
+      1 PAGE_SHIFT-10
+      1 pagemap_entry_t *pme
+      1 PageAnonpage
+      1 orig_pte
+      1 mss
+      1 m
+      1 loff_t *pos
+      1 is_zone_device_pagepage
+      1 IS_ERR_OR_NULLpage
+      1 int pte_dirty
+      1 int psize
+      1 FOLL_DUMP
+      1 dev_t dev
+      1 const struct mem_size_stats *mss
+      1 const char __user *buf
+      1 char __user *buf
+      1 bool young
+      1 bool locked
+      1 bool dirty
+      1 bool compound
+      1 addr += PAGE_SIZE
+      1 addr != end
+      1 1
+      1 

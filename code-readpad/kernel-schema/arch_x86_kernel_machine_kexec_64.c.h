@@ -1,4 +1,5 @@
 
+\n
 static void free_transition_pgtable(struct kimage *image)
 static int init_transition_pgtable(struct kimage *image, pgd_t *pgd)
 static void *alloc_pgt_page(void *data)
@@ -20,21 +21,22 @@ void arch_kexec_protect_crashkres(void)
 void arch_kexec_unprotect_crashkres(void)
 int arch_kexec_post_alloc_pages(void *vaddr, unsigned int pages, gfp_t gfp)
 void arch_kexec_pre_free_pages(void *vaddr, unsigned int pages)
-   9 struct kimage *image
-   4 void
-   2 void *vaddr
-   2 unsigned int pages
-   2 u16 limit
-   2 bool protect
-   1 void *newidt
-   1 void *newgdt
-   1 void *data
-   1 unsigned long start_pgtable
-   1 unsigned long start
-   1 unsigned long end
-   1 struct purgatory_info *pi
-   1 pgd_t *pgd
-   1 gfp_t gfp
-   1 const Elf_Shdr *symtabsec
-   1 const Elf_Shdr *relsec
-   1 Elf_Shdr *section
+\n
+      9 struct kimage *image
+      4 void
+      2 void *vaddr
+      2 unsigned int pages
+      2 u16 limit
+      2 bool protect
+      1 void *newidt
+      1 void *newgdt
+      1 void *data
+      1 unsigned long start_pgtable
+      1 unsigned long start
+      1 unsigned long end
+      1 struct purgatory_info *pi
+      1 pgd_t *pgd
+      1 gfp_t gfp
+      1 Elf_Shdr *section
+      1 const Elf_Shdr *symtabsec
+      1 const Elf_Shdr *relsec

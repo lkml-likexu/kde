@@ -23,6 +23,10 @@ EXPORT_SYMBOL_GPL(kvm_disable_tdp);
 EXPORT_SYMBOL_GPL(kvm_mmu_slot_leaf_clear_dirty);
 EXPORT_SYMBOL_GPL(kvm_mmu_slot_largepage_remove_write_access);
 EXPORT_SYMBOL_GPL(kvm_mmu_slot_set_dirty);
+\n
+static inline bool kvm_available_flush_tlb_with_range(void)
+static void kvm_flush_remote_tlbs_with_range(struct kvm *kvm, struct kvm_tlb_range *range)
+static void kvm_flush_remote_tlbs_with_address(struct kvm *kvm, u64 start_gfn, u64 pages)
 void kvm_mmu_set_mmio_spte_mask(u64 mmio_mask, u64 mmio_value)
 static inline bool sp_ad_disabled(struct kvm_mmu_page *sp)
 static inline bool spte_ad_enabled(u64 spte)
@@ -137,7 +141,7 @@ static int kvm_handle_hva(struct kvm *kvm, unsigned long hva, unsigned long data
 (struct kvm *kvm, struct kvm_rmap_head *rmap_head, struct kvm_memory_slot *slot, gfn_t gfn, int level, unsigned long data)
 )
 int kvm_unmap_hva_range(struct kvm *kvm, unsigned long start, unsigned long end)
-void kvm_set_spte_hva(struct kvm *kvm, unsigned long hva, pte_t pte)
+int kvm_set_spte_hva(struct kvm *kvm, unsigned long hva, pte_t pte)
 static int kvm_age_rmapp(struct kvm *kvm, struct kvm_rmap_head *rmap_head, struct kvm_memory_slot *slot, gfn_t gfn, int level, unsigned long data)
 static int kvm_test_age_rmapp(struct kvm *kvm, struct kvm_rmap_head *rmap_head, struct kvm_memory_slot *slot, gfn_t gfn, int level, unsigned long data)
 static void rmap_recycle(struct kvm_vcpu *vcpu, u64 *spte, gfn_t gfn)
@@ -274,7 +278,7 @@ int kvm_mmu_load(struct kvm_vcpu *vcpu)
 void kvm_mmu_unload(struct kvm_vcpu *vcpu)
 static void mmu_pte_write_new_pte(struct kvm_vcpu *vcpu, struct kvm_mmu_page *sp, u64 *spte, const void *new)
 static bool need_remote_flush(u64 old, u64 new)
-static u64 mmu_pte_write_fetch_gpte(struct kvm_vcpu *vcpu, gpa_t *gpa, const u8 *new, int *bytes)
+static u64 mmu_pte_write_fetch_gpte(struct kvm_vcpu *vcpu, gpa_t *gpa, int *bytes)
 static bool detect_write_flooding(struct kvm_mmu_page *sp)
 static bool detect_write_misaligned(struct kvm_mmu_page *sp, gpa_t gpa, int bytes)
 static u64 *get_written_sptes(struct kvm_mmu_page *sp, gpa_t gpa, int *nspte)
@@ -316,183 +320,187 @@ int kvm_mmu_module_init(void)
 unsigned int kvm_mmu_calculate_mmu_pages(struct kvm *kvm)
 void kvm_mmu_destroy(struct kvm_vcpu *vcpu)
 void kvm_mmu_module_exit(void)
- 118 struct kvm_vcpu *vcpu
-  61 struct kvm *kvm
-  37 gfn_t gfn
-  35 u64 *sptep
-  35 struct kvm_mmu_page *sp
-  26 u64 spte
-  22 int level
-  19 struct kvm_memory_slot *slot
-  17 struct kvm_rmap_head *rmap_head
-  11 u64 *spte
-  10 struct kvm_mmu *context
-   9 struct list_head *invalid_list
-   9 struct kvm_memory_slot *memslot
-   9 gva_t gva
-   8 void
-   8 unsigned long data
-   7 struct kvm_mmu *mmu
-   7 kvm_pfn_t pfn
-   6 u32 error_code
-   5 unsigned access
-   5 u64 pte
-   5 u64 addr
-   5 struct kvm_shadow_walk_iterator *iterator
-   5 struct kvm_mmu_pages *pvec
-   5 slot_level_handler fn
-   5 bool prefault
-   5 bool lock_flush_tlb
-   5 bool execonly
-   4 u64 new_spte
-   4 struct slot_rmap_walk_iterator *iterator
-   4 gpa_t new_cr3
-   3 unsigned long start
-   3 unsigned long mask
-   3 unsigned long hva
-   3 unsigned long end
-   3 union kvm_mmu_page_role new_role
-   3 u64 gfn
-   3 u64 *parent_pte
-   3 struct rsvd_bits_validate *rsvd_check
-   3 struct mmu_page_path *parents
-   3 struct kvm_mmu_memory_cache *mc
-   3 struct kvm_mmu_memory_cache *cache
-   3 int start_level
-   3 int end_level
-   3 gpa_t gpa
-   3 gfn_t gfn_offset
-   3 bool skip_tlb_flush
-   3 bool no_dirty_log
-   3 bool base_only
-   2 unsigned pte_access
-   2 unsigned level
-   2 u64 error_code
-   2 u32 access
-   2 struct x86_exception *exception
-   2 struct shrinker *shrink
-   2 struct shrink_control *sc
-   2 struct rmap_iterator *iter
-   2 struct kvm_page_track_notifier_node *node
-   2 struct kvm_mmu_page *parent
-   2 int min
-   2 int maxphyaddr
-   2 int insn_len
-   2 int index
-   2 int idx
-   2 int i
-   2 int direct
-   2 int bytes
-   2 int *handler
-   2 hpa_t root
-   2 gva_t vaddr
-   2 gfn_t start_gfn
-   2 gfn_t end_gfn
-   2 const u8 *new
-   2 bool speculative
-   2 bool pt_protect
-   2 bool host_writable
-   2 bool ept
-   2 bool direct
-   2 bool can_unsync
-   2 bool accessed_dirty
-   1 void *insn
-   1 unsigned long pcid
-   1 unsigned long address
-   1 unsigned int goal_nr_mmu_pages
-   1 unsigned int gen
-   1 unsigned gpte
-   1 unsigned direct_access
-   1 ulong roots_to_free
-   1 u64 x_mask
-   1 u64 user_mask
-   1 u64 p_mask
-   1 u64 old_spte
-   1 u64 old
-   1 u64 nx_mask
-   1 u64 new
-   1 u64 mmio_value
-   1 u64 mmio_mask
-   1 u64 me_mask
-   1 u64 gpte
-   1 u64 fault_address
-   1 u64 dirty_mask
-   1 u64 accessed_mask
-   1 u64 acc_track_mask
-   1 u64 *start
-   1 u64 *spt
-   1 u64 *end
-   1 u32 gpte
-   1 u32 fault_err_code
-   1 struct x86_exception *fault
-   1 struct task_struct *tsk
-   1 struct pte_list_desc *pte_list_desc
-   1 struct pte_list_desc *prev_desc
-   1 struct pte_list_desc *desc
-   1 struct kvm_memslots *slots
-   1 struct kmem_cache *cache
-   1 struct kmem_cache *base_cache
-   1 reset_shadow_zero_bits_mask
-   1 pte_t pte
-   1 kvm_pfn_t *pfnp
-   1 kvm_pfn_t *pfn
-   1 kvm_mmu_unprotect_page_virt
-   1 kvm_mmu_unprotect_page
-   1 kvm_mmu_unload
-   1 kvm_mmu_sync_roots
-   1 kvm_mmu_slot_set_dirty
-   1 kvm_mmu_slot_leaf_clear_dirty
-   1 kvm_mmu_slot_largepage_remove_write_access
-   1 kvm_mmu_set_mmio_spte_mask
-   1 kvm_mmu_set_mask_ptes
-   1 kvm_mmu_reset_context
-   1 kvm_mmu_page_fault
-   1 kvm_mmu_new_cr3
-   1 kvm_mmu_load
-   1 kvm_mmu_invpcid_gva
-   1 kvm_mmu_invlpg
-   1 kvm_mmu_free_roots
-   1 kvm_mmu_clear_dirty_pt_masked
-   1 kvm_init_shadow_mmu
-   1 kvm_init_shadow_ept_mmu
-   1 kvm_init_mmu
-   1 kvm_handle_page_fault
-   1 kvm_enable_tdp
-   1 kvm_disable_tdp
-   1 int write_fault
-   1 int write
-   1 int nr
-   1 int map_writable
-   1 int count
-   1 int *ret_val
-   1 int *nspte
-   1 int *nr_present
-   1 int *levelp
-   1 int *bytes
-   1 hpa_t *root_hpa
-   1 gva_t v
-   1 gva_t gpa
-   1 gva_t gaddr
-   1 gva_t cr2
-   1 gva_t addr
-   1 gpa_t new_eptp
-   1 gpa_t *gpa
-   1 gfn_t root_gfn
-   1 gfn_t large_gfn
-   1 gfn_t gfn_start
-   1 gfn_t gfn_end
-   1 gfn_t *gfnp
-   1 const void *pte
-   1 const void *new
-   1 const struct kvm_memory_slot *memslot
-   1 char *insn
-   1 bool write
-   1 bool reset_roots
-   1 bool remote_flush
-   1 bool pse
-   1 bool nx
-   1 bool local_flush
-   1 bool gbpages
-   1 bool amd
-   1 bool *writable
-   1 bool *force_pt_level
+\n
+    118 struct kvm_vcpu *vcpu
+     63 struct kvm *kvm
+     37 gfn_t gfn
+     35 u64 *sptep
+     35 struct kvm_mmu_page *sp
+     26 u64 spte
+     22 int level
+     19 struct kvm_memory_slot *slot
+     17 struct kvm_rmap_head *rmap_head
+     11 u64 *spte
+     10 struct kvm_mmu *context
+      9 void
+      9 struct list_head *invalid_list
+      9 struct kvm_memory_slot *memslot
+      9 gva_t gva
+      8 unsigned long data
+      7 struct kvm_mmu *mmu
+      7 kvm_pfn_t pfn
+      6 u32 error_code
+      5 unsigned access
+      5 u64 pte
+      5 u64 addr
+      5 struct kvm_shadow_walk_iterator *iterator
+      5 struct kvm_mmu_pages *pvec
+      5 slot_level_handler fn
+      5 bool prefault
+      5 bool lock_flush_tlb
+      5 bool execonly
+      4 u64 new_spte
+      4 struct slot_rmap_walk_iterator *iterator
+      4 gpa_t new_cr3
+      3 unsigned long start
+      3 unsigned long mask
+      3 unsigned long hva
+      3 unsigned long end
+      3 union kvm_mmu_page_role new_role
+      3 u64 *parent_pte
+      3 u64 gfn
+      3 struct rsvd_bits_validate *rsvd_check
+      3 struct mmu_page_path *parents
+      3 struct kvm_mmu_memory_cache *mc
+      3 struct kvm_mmu_memory_cache *cache
+      3 int start_level
+      3 int end_level
+      3 gpa_t gpa
+      3 gfn_t gfn_offset
+      3 bool skip_tlb_flush
+      3 bool no_dirty_log
+      3 bool base_only
+      2 unsigned pte_access
+      2 unsigned level
+      2 u64 error_code
+      2 u32 access
+      2 struct x86_exception *exception
+      2 struct shrinker *shrink
+      2 struct shrink_control *sc
+      2 struct rmap_iterator *iter
+      2 struct kvm_page_track_notifier_node *node
+      2 struct kvm_mmu_page *parent
+      2 int min
+      2 int maxphyaddr
+      2 int insn_len
+      2 int index
+      2 int idx
+      2 int i
+      2 int *handler
+      2 int direct
+      2 int bytes
+      2 hpa_t root
+      2 gva_t vaddr
+      2 gfn_t start_gfn
+      2 gfn_t end_gfn
+      2 bool speculative
+      2 bool pt_protect
+      2 bool host_writable
+      2 bool ept
+      2 bool direct
+      2 bool can_unsync
+      2 bool accessed_dirty
+      1 void *insn
+      1 unsigned long pcid
+      1 unsigned long address
+      1 unsigned int goal_nr_mmu_pages
+      1 unsigned int gen
+      1 unsigned gpte
+      1 unsigned direct_access
+      1 ulong roots_to_free
+      1 u64 x_mask
+      1 u64 user_mask
+      1 u64 start_gfn
+      1 u64 *start
+      1 u64 *spt
+      1 u64 p_mask
+      1 u64 pages
+      1 u64 old_spte
+      1 u64 old
+      1 u64 nx_mask
+      1 u64 new
+      1 u64 mmio_value
+      1 u64 mmio_mask
+      1 u64 me_mask
+      1 u64 gpte
+      1 u64 fault_address
+      1 u64 *end
+      1 u64 dirty_mask
+      1 u64 acc_track_mask
+      1 u64 accessed_mask
+      1 u32 gpte
+      1 u32 fault_err_code
+      1 struct x86_exception *fault
+      1 struct task_struct *tsk
+      1 struct pte_list_desc *pte_list_desc
+      1 struct pte_list_desc *prev_desc
+      1 struct pte_list_desc *desc
+      1 struct kvm_tlb_range *range
+      1 struct kvm_memslots *slots
+      1 struct kmem_cache *cache
+      1 struct kmem_cache *base_cache
+      1 reset_shadow_zero_bits_mask
+      1 pte_t pte
+      1 kvm_pfn_t *pfnp
+      1 kvm_pfn_t *pfn
+      1 kvm_mmu_unprotect_page_virt
+      1 kvm_mmu_unprotect_page
+      1 kvm_mmu_unload
+      1 kvm_mmu_sync_roots
+      1 kvm_mmu_slot_set_dirty
+      1 kvm_mmu_slot_leaf_clear_dirty
+      1 kvm_mmu_slot_largepage_remove_write_access
+      1 kvm_mmu_set_mmio_spte_mask
+      1 kvm_mmu_set_mask_ptes
+      1 kvm_mmu_reset_context
+      1 kvm_mmu_page_fault
+      1 kvm_mmu_new_cr3
+      1 kvm_mmu_load
+      1 kvm_mmu_invpcid_gva
+      1 kvm_mmu_invlpg
+      1 kvm_mmu_free_roots
+      1 kvm_mmu_clear_dirty_pt_masked
+      1 kvm_init_shadow_mmu
+      1 kvm_init_shadow_ept_mmu
+      1 kvm_init_mmu
+      1 kvm_handle_page_fault
+      1 kvm_enable_tdp
+      1 kvm_disable_tdp
+      1 int write_fault
+      1 int write
+      1 int *ret_val
+      1 int *nspte
+      1 int *nr_present
+      1 int nr
+      1 int map_writable
+      1 int *levelp
+      1 int count
+      1 int *bytes
+      1 hpa_t *root_hpa
+      1 gva_t v
+      1 gva_t gpa
+      1 gva_t gaddr
+      1 gva_t cr2
+      1 gva_t addr
+      1 gpa_t new_eptp
+      1 gpa_t *gpa
+      1 gfn_t root_gfn
+      1 gfn_t large_gfn
+      1 gfn_t gfn_start
+      1 gfn_t *gfnp
+      1 gfn_t gfn_end
+      1 const void *pte
+      1 const void *new
+      1 const u8 *new
+      1 const struct kvm_memory_slot *memslot
+      1 char *insn
+      1 bool write
+      1 bool *writable
+      1 bool reset_roots
+      1 bool remote_flush
+      1 bool pse
+      1 bool nx
+      1 bool local_flush
+      1 bool gbpages
+      1 bool *force_pt_level
+      1 bool amd

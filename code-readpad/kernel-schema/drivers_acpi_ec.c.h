@@ -1,6 +1,7 @@
 
 EXPORT_SYMBOL_GPL(acpi_ec_add_query_handler);
 EXPORT_SYMBOL_GPL(acpi_ec_remove_query_handler);
+\n
 static bool acpi_ec_started(struct acpi_ec *ec)
 static bool acpi_ec_event_enabled(struct acpi_ec *ec)
 static bool acpi_ec_flushed(struct acpi_ec *ec)
@@ -52,6 +53,8 @@ static void acpi_ec_enter_noirq(struct acpi_ec *ec)
 static void acpi_ec_leave_noirq(struct acpi_ec *ec)
 void acpi_ec_block_transactions(void)
 void acpi_ec_unblock_transactions(void)
+void acpi_ec_mark_gpe_for_wake(void)
+void acpi_ec_set_gpe_wake_mask(u8 action)
 void acpi_ec_dispatch_gpe(void)
 static struct acpi_ec_query_handler * acpi_ec_get_query_handler(struct acpi_ec_query_handler *handler)
 static struct acpi_ec_query_handler * acpi_ec_get_query_handler_by_value(struct acpi_ec *ec, u8 value)
@@ -97,59 +100,61 @@ static inline int acpi_ec_query_init(void)
 static inline void acpi_ec_query_exit(void)
 int __init acpi_ec_init(void)
 static void __exit acpi_ec_exit(void)
-  55 struct acpi_ec *ec
-  13 void
-   4 struct device *dev
-   4 acpi_handle handle
-   3 void *context
-   3 u8 query_bit
-   3 const struct dmi_system_id *id
-   3 bool handle_events
-   2 void *data
-   2 u8 data
-   2 u8 command
-   2 u8 address
-   2 u8 addr
-   2 u8 *data
-   2 struct work_struct *work
-   2 struct transaction *t
-   2 struct acpi_ec_query_handler *handler
-   2 struct acpi_device *device
-   2 const struct kernel_param *kp
-   1 void *region_context
-   1 void *handler_context
-   1 void **retval
-   1 void **return_value
-   1 unsigned wdata_len
-   1 unsigned rdata_len
-   1 unsigned long flag
-   1 u8 value
-   1 u8 val
-   1 u8 cmd
-   1 u8 *val
-   1 u8 *rdata
-   1 u8 *pval
-   1 u64 *value64
-   1 u32 level
-   1 u32 gpe_number
-   1 u32 function
-   1 u32 bits
-   1 u32 Level
-   1 struct kref *kref
-   1 struct acpi_resource *resource
-   1 struct acpi_ec_query *q
-   1 const u8 *wdata
-   1 const char *val
-   1 char *buffer
-   1 bool suspending
-   1 bool resuming
-   1 bool remove_all
-   1 bool open
-   1 bool is_ecdt
-   1 bool close
-   1 acpi_physical_address address
-   1 acpi_handle gpe_device
-   1 acpi_handle *phandle
-   1 acpi_ec_remove_query_handler
-   1 acpi_ec_query_func func
-   1 acpi_ec_add_query_handler
+\n
+     55 struct acpi_ec *ec
+     14 void
+      4 struct device *dev
+      4 acpi_handle handle
+      3 void *context
+      3 u8 query_bit
+      3 const struct dmi_system_id *id
+      3 bool handle_events
+      2 void *data
+      2 u8 *data
+      2 u8 data
+      2 u8 command
+      2 u8 address
+      2 u8 addr
+      2 struct work_struct *work
+      2 struct transaction *t
+      2 struct acpi_ec_query_handler *handler
+      2 struct acpi_device *device
+      2 const struct kernel_param *kp
+      1 void **retval
+      1 void **return_value
+      1 void *region_context
+      1 void *handler_context
+      1 unsigned wdata_len
+      1 unsigned rdata_len
+      1 unsigned long flag
+      1 u8 value
+      1 u8 *val
+      1 u8 val
+      1 u8 *rdata
+      1 u8 *pval
+      1 u8 cmd
+      1 u8 action
+      1 u64 *value64
+      1 u32 Level
+      1 u32 level
+      1 u32 gpe_number
+      1 u32 function
+      1 u32 bits
+      1 struct kref *kref
+      1 struct acpi_resource *resource
+      1 struct acpi_ec_query *q
+      1 const u8 *wdata
+      1 const char *val
+      1 char *buffer
+      1 bool suspending
+      1 bool resuming
+      1 bool remove_all
+      1 bool open
+      1 bool is_ecdt
+      1 bool close
+      1 acpi_physical_address address
+      1 acpi_handle *phandle
+      1 acpi_handle gpe_device
+      1 acpi_ec_remove_query_handler
+      1 acpi_ec_query_func func
+      1 acpi_ec_add_query_handler
