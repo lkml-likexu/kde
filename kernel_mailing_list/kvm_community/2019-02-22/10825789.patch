@@ -1,0 +1,131 @@
+From patchwork Fri Feb 22 12:18:16 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 10825789
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 21046139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 22 Feb 2019 12:18:30 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 0EA70289BE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 22 Feb 2019 12:18:30 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 02FE429064; Fri, 22 Feb 2019 12:18:30 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 8CA05289BE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 22 Feb 2019 12:18:29 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727101AbfBVMS2 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 22 Feb 2019 07:18:28 -0500
+Received: from foss.arm.com ([217.140.101.70]:58784 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725942AbfBVMS2 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 22 Feb 2019 07:18:28 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 2A6D7A78;
+        Fri, 22 Feb 2019 04:18:28 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.197.44])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ C785B3F690;
+        Fri, 22 Feb 2019 04:18:26 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Marc Zyngier <marc.zyngier@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>
+Cc: kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org,
+        linux-arm-kernel@lists.infradead.org,
+        Dave Martin <dave.martin@arm.com>,
+        Steven Price <steven.price@arm.com>
+Subject: [PATCH v3 0/2] KVM: arm/arm64: Add VCPU workarounds firmware register
+Date: Fri, 22 Feb 2019 12:18:16 +0000
+Message-Id: <20190222121818.30164-1-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Hi,
+
+Aside from a rebase against kvm-arm/next, this update introduces a new
+UNAFFECTED value for WORKAROUND_1, which is not used at the moment, but
+will become useful with some patches extending the host kernel workaround
+code [1]. We add the value to the ABI already.
+Also we now require an exact match for the two WORKAROUND_1 levels, as
+we can't allow a guest to migrate from a system with an effectively
+unknown workaround state to a system which requires an active guest
+workaround.
+Now tested with actual migration, see below.
+
+Cheers,
+Andre
+
+-----------------------------
+Workarounds for Spectre variant 2 or 4 vulnerabilities require some help
+from the firmware, so KVM implements an interface to provide that for
+guests. When such a guest is migrated, we want to make sure we don't
+loose the protection the guest relies on.
+
+This introduces two new firmware registers in KVM's GET/SET_ONE_REG
+interface, so userland can save the level of protection implemented by
+the hypervisor and used by the guest. Upon restoring these registers,
+we make sure we don't downgrade and reject any values that would mean
+weaker protection.
+The protection level is encoding in the lower 4 bits, with smaller
+values indicating weaker protection.
+
+Patch 1 implements the two firmware registers, patch 2 adds the
+documentation.
+
+ARM(32) is a bit of a pain (again), as the firmware register interface
+is shared, but 32-bit does not implement all the workarounds.
+For now I stuffed two wrappers into kvm_emulate.h, which doesn't sound
+like the best solution. Happy to hear about better solutions.
+
+This has been tested with migration between two Juno systems. Out of the
+box they advertise identical workaround levels, and migration succeeds.
+However when disabling the A57 cluster on one system, WORKAROUND_1 is
+not needed and the host kernel disables this. Migration between the two
+now fails, as expected.
+
+Please have a look and comment!
+
+Cheers,
+Andre
+
+[1] http://lists.infradead.org/pipermail/linux-arm-kernel/2019-January/627791.html
+
+Changelog:
+v1 .. v2:
+- complete rework of WORKAROUND_2 presentation to use a linear scale,
+  dropping the complicated comparison routine
+
+v2 .. v3:
+- rebase against latest kvm-arm/next
+- introduce UNAFFECTED value for WORKAROUND_1
+- require exact match for WORKAROUND_1 levels
+
+Andre Przywara (2):
+  KVM: arm/arm64: Add save/restore support for firmware workaround state
+  KVM: doc: add API documentation on the KVM_REG_ARM_WORKAROUNDS
+    register
+
+ Documentation/virtual/kvm/arm/psci.txt |  24 +++++
+ arch/arm/include/asm/kvm_emulate.h     |  10 +++
+ arch/arm/include/uapi/asm/kvm.h        |  10 +++
+ arch/arm64/include/asm/kvm_emulate.h   |  14 +++
+ arch/arm64/include/uapi/asm/kvm.h      |   9 ++
+ virt/kvm/arm/psci.c                    | 119 +++++++++++++++++++++----
+ 6 files changed, 170 insertions(+), 16 deletions(-)

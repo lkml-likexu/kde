@@ -40,6 +40,8 @@ Let us start with enabling the subfunction interface.
 
 Signed-off-by: Christian Borntraeger <borntraeger@de.ibm.com>
 Reviewed-by: David Hildenbrand <david@redhat.com>
+Reviewed-by: Cornelia Huck <cohuck@redhat.com>
+Reviewed-by: Janosch Frank <frankja@linux.vnet.ibm.com>
 ---
  arch/s390/include/asm/kvm_host.h |  1 +
  arch/s390/kvm/kvm-s390.c         | 34 +++++++++++++++++++++-----------
