@@ -1,0 +1,1770 @@
+From patchwork Fri Mar  1 09:38:57 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Cornelia Huck <cohuck@redhat.com>
+X-Patchwork-Id: 10834849
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D17011399
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:16 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id BC85129DCA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:16 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id AE5232CF3B; Fri,  1 Mar 2019 09:39:16 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3D82529DCA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:16 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2387476AbfCAJjP (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 1 Mar 2019 04:39:15 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:40326 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1733255AbfCAJjP (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 1 Mar 2019 04:39:15 -0500
+Received: from smtp.corp.redhat.com (int-mx07.intmail.prod.int.phx2.redhat.com
+ [10.5.11.22])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id F32AE6516E;
+        Fri,  1 Mar 2019 09:39:14 +0000 (UTC)
+Received: from localhost (ovpn-117-66.ams2.redhat.com [10.36.117.66])
+        by smtp.corp.redhat.com (Postfix) with ESMTPS id 889421001DFD;
+        Fri,  1 Mar 2019 09:39:12 +0000 (UTC)
+From: Cornelia Huck <cohuck@redhat.com>
+To: Halil Pasic <pasic@linux.ibm.com>,
+        Eric Farman <farman@linux.ibm.com>,
+        Farhan Ali <alifm@linux.ibm.com>,
+        Pierre Morel <pmorel@linux.ibm.com>
+Cc: linux-s390@vger.kernel.org, kvm@vger.kernel.org,
+        qemu-devel@nongnu.org, qemu-s390x@nongnu.org,
+        Alex Williamson <alex.williamson@redhat.com>,
+        Cornelia Huck <cohuck@redhat.com>
+Subject: [PATCH v4 1/6] vfio-ccw: make it safe to access channel programs
+Date: Fri,  1 Mar 2019 10:38:57 +0100
+Message-Id: <20190301093902.27799-2-cohuck@redhat.com>
+In-Reply-To: <20190301093902.27799-1-cohuck@redhat.com>
+References: <20190301093902.27799-1-cohuck@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.22
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.26]);
+ Fri, 01 Mar 2019 09:39:15 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+When we get a solicited interrupt, the start function may have
+been cleared by a csch, but we still have a channel program
+structure allocated. Make it safe to call the cp accessors in
+any case, so we can call them unconditionally.
+
+While at it, also make sure that functions called from other parts
+of the code return gracefully if the channel program structure
+has not been initialized (even though that is a bug in the caller).
+
+Reviewed-by: Eric Farman <farman@linux.ibm.com>
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>
+---
+ drivers/s390/cio/vfio_ccw_cp.c  | 21 ++++++++++++++++++++-
+ drivers/s390/cio/vfio_ccw_cp.h  |  2 ++
+ drivers/s390/cio/vfio_ccw_fsm.c |  5 +++++
+ 3 files changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/s390/cio/vfio_ccw_cp.c b/drivers/s390/cio/vfio_ccw_cp.c
+index 384b3987eeb4..0e79799e9a71 100644
+--- a/drivers/s390/cio/vfio_ccw_cp.c
++++ b/drivers/s390/cio/vfio_ccw_cp.c
+@@ -362,6 +362,7 @@ static void cp_unpin_free(struct channel_program *cp)
+ 	struct ccwchain *chain, *temp;
+ 	int i;
+ 
++	cp->initialized = false;
+ 	list_for_each_entry_safe(chain, temp, &cp->ccwchain_list, next) {
+ 		for (i = 0; i < chain->ch_len; i++) {
+ 			pfn_array_table_unpin_free(chain->ch_pat + i,
+@@ -732,6 +733,9 @@ int cp_init(struct channel_program *cp, struct device *mdev, union orb *orb)
+ 	 */
+ 	cp->orb.cmd.c64 = 1;
+ 
++	if (!ret)
++		cp->initialized = true;
++
+ 	return ret;
+ }
+ 
+@@ -746,7 +750,8 @@ int cp_init(struct channel_program *cp, struct device *mdev, union orb *orb)
+  */
+ void cp_free(struct channel_program *cp)
+ {
+-	cp_unpin_free(cp);
++	if (cp->initialized)
++		cp_unpin_free(cp);
+ }
+ 
+ /**
+@@ -791,6 +796,10 @@ int cp_prefetch(struct channel_program *cp)
+ 	struct ccwchain *chain;
+ 	int len, idx, ret;
+ 
++	/* this is an error in the caller */
++	if (!cp->initialized)
++		return -EINVAL;
++
+ 	list_for_each_entry(chain, &cp->ccwchain_list, next) {
+ 		len = chain->ch_len;
+ 		for (idx = 0; idx < len; idx++) {
+@@ -826,6 +835,10 @@ union orb *cp_get_orb(struct channel_program *cp, u32 intparm, u8 lpm)
+ 	struct ccwchain *chain;
+ 	struct ccw1 *cpa;
+ 
++	/* this is an error in the caller */
++	if (!cp->initialized)
++		return NULL;
++
+ 	orb = &cp->orb;
+ 
+ 	orb->cmd.intparm = intparm;
+@@ -862,6 +875,9 @@ void cp_update_scsw(struct channel_program *cp, union scsw *scsw)
+ 	u32 cpa = scsw->cmd.cpa;
+ 	u32 ccw_head;
+ 
++	if (!cp->initialized)
++		return;
++
+ 	/*
+ 	 * LATER:
+ 	 * For now, only update the cmd.cpa part. We may need to deal with
+@@ -898,6 +914,9 @@ bool cp_iova_pinned(struct channel_program *cp, u64 iova)
+ 	struct ccwchain *chain;
+ 	int i;
+ 
++	if (!cp->initialized)
++		return false;
++
+ 	list_for_each_entry(chain, &cp->ccwchain_list, next) {
+ 		for (i = 0; i < chain->ch_len; i++)
+ 			if (pfn_array_table_iova_pinned(chain->ch_pat + i,
+diff --git a/drivers/s390/cio/vfio_ccw_cp.h b/drivers/s390/cio/vfio_ccw_cp.h
+index a4b74fb1aa57..3c20cd208da5 100644
+--- a/drivers/s390/cio/vfio_ccw_cp.h
++++ b/drivers/s390/cio/vfio_ccw_cp.h
+@@ -21,6 +21,7 @@
+  * @ccwchain_list: list head of ccwchains
+  * @orb: orb for the currently processed ssch request
+  * @mdev: the mediated device to perform page pinning/unpinning
++ * @initialized: whether this instance is actually initialized
+  *
+  * @ccwchain_list is the head of a ccwchain list, that contents the
+  * translated result of the guest channel program that pointed out by
+@@ -30,6 +31,7 @@ struct channel_program {
+ 	struct list_head ccwchain_list;
+ 	union orb orb;
+ 	struct device *mdev;
++	bool initialized;
+ };
+ 
+ extern int cp_init(struct channel_program *cp, struct device *mdev,
+diff --git a/drivers/s390/cio/vfio_ccw_fsm.c b/drivers/s390/cio/vfio_ccw_fsm.c
+index cab17865aafe..e7c9877c9f1e 100644
+--- a/drivers/s390/cio/vfio_ccw_fsm.c
++++ b/drivers/s390/cio/vfio_ccw_fsm.c
+@@ -31,6 +31,10 @@ static int fsm_io_helper(struct vfio_ccw_private *private)
+ 	private->state = VFIO_CCW_STATE_BUSY;
+ 
+ 	orb = cp_get_orb(&private->cp, (u32)(addr_t)sch, sch->lpm);
++	if (!orb) {
++		ret = -EIO;
++		goto out;
++	}
+ 
+ 	/* Issue "Start Subchannel" */
+ 	ccode = ssch(sch->schid, orb);
+@@ -64,6 +68,7 @@ static int fsm_io_helper(struct vfio_ccw_private *private)
+ 	default:
+ 		ret = ccode;
+ 	}
++out:
+ 	spin_unlock_irqrestore(sch->lock, flags);
+ 	return ret;
+ }
+
+From patchwork Fri Mar  1 09:38:58 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Cornelia Huck <cohuck@redhat.com>
+X-Patchwork-Id: 10834851
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C2E081805
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:21 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B107A2CF3B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:21 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id A266E2CF98; Fri,  1 Mar 2019 09:39:21 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 28C8A2CF3B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:21 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2387510AbfCAJjU (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 1 Mar 2019 04:39:20 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:48506 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1733213AbfCAJjU (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 1 Mar 2019 04:39:20 -0500
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 1A979A12CF;
+        Fri,  1 Mar 2019 09:39:20 +0000 (UTC)
+Received: from localhost (ovpn-117-66.ams2.redhat.com [10.36.117.66])
+        by smtp.corp.redhat.com (Postfix) with ESMTPS id 106385D9E1;
+        Fri,  1 Mar 2019 09:39:16 +0000 (UTC)
+From: Cornelia Huck <cohuck@redhat.com>
+To: Halil Pasic <pasic@linux.ibm.com>,
+        Eric Farman <farman@linux.ibm.com>,
+        Farhan Ali <alifm@linux.ibm.com>,
+        Pierre Morel <pmorel@linux.ibm.com>
+Cc: linux-s390@vger.kernel.org, kvm@vger.kernel.org,
+        qemu-devel@nongnu.org, qemu-s390x@nongnu.org,
+        Alex Williamson <alex.williamson@redhat.com>,
+        Cornelia Huck <cohuck@redhat.com>
+Subject: [PATCH v4 2/6] vfio-ccw: rework ssch state handling
+Date: Fri,  1 Mar 2019 10:38:58 +0100
+Message-Id: <20190301093902.27799-3-cohuck@redhat.com>
+In-Reply-To: <20190301093902.27799-1-cohuck@redhat.com>
+References: <20190301093902.27799-1-cohuck@redhat.com>
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.28]);
+ Fri, 01 Mar 2019 09:39:20 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+The flow for processing ssch requests can be improved by splitting
+the BUSY state:
+
+- CP_PROCESSING: We reject any user space requests while we are in
+  the process of translating a channel program and submitting it to
+  the hardware. Use -EAGAIN to signal user space that it should
+  retry the request.
+- CP_PENDING: We have successfully submitted a request with ssch and
+  are now expecting an interrupt. As we can't handle more than one
+  channel program being processed, reject any further requests with
+  -EBUSY. A final interrupt will move us out of this state; this also
+  fixes a latent bug where a non-final interrupt might have freed up
+  a channel program that still was in progress.
+  By making this a separate state, we make it possible to issue a
+  halt or a clear while we're still waiting for the final interrupt
+  for the ssch (in a follow-on patch).
+
+It also makes a lot of sense not to preemptively filter out writes to
+the io_region if we're in an incorrect state: the state machine will
+handle this correctly.
+
+Reviewed-by: Eric Farman <farman@linux.ibm.com>
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>
+---
+ drivers/s390/cio/vfio_ccw_drv.c     |  8 ++++++--
+ drivers/s390/cio/vfio_ccw_fsm.c     | 19 ++++++++++++++-----
+ drivers/s390/cio/vfio_ccw_ops.c     |  2 --
+ drivers/s390/cio/vfio_ccw_private.h |  3 ++-
+ 4 files changed, 22 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/s390/cio/vfio_ccw_drv.c b/drivers/s390/cio/vfio_ccw_drv.c
+index a10cec0e86eb..0b3b9de45c60 100644
+--- a/drivers/s390/cio/vfio_ccw_drv.c
++++ b/drivers/s390/cio/vfio_ccw_drv.c
+@@ -72,20 +72,24 @@ static void vfio_ccw_sch_io_todo(struct work_struct *work)
+ {
+ 	struct vfio_ccw_private *private;
+ 	struct irb *irb;
++	bool is_final;
+ 
+ 	private = container_of(work, struct vfio_ccw_private, io_work);
+ 	irb = &private->irb;
+ 
++	is_final = !(scsw_actl(&irb->scsw) &
++		     (SCSW_ACTL_DEVACT | SCSW_ACTL_SCHACT));
+ 	if (scsw_is_solicited(&irb->scsw)) {
+ 		cp_update_scsw(&private->cp, &irb->scsw);
+-		cp_free(&private->cp);
++		if (is_final)
++			cp_free(&private->cp);
+ 	}
+ 	memcpy(private->io_region->irb_area, irb, sizeof(*irb));
+ 
+ 	if (private->io_trigger)
+ 		eventfd_signal(private->io_trigger, 1);
+ 
+-	if (private->mdev)
++	if (private->mdev && is_final)
+ 		private->state = VFIO_CCW_STATE_IDLE;
+ }
+ 
+diff --git a/drivers/s390/cio/vfio_ccw_fsm.c b/drivers/s390/cio/vfio_ccw_fsm.c
+index e7c9877c9f1e..b4a141fbd1a8 100644
+--- a/drivers/s390/cio/vfio_ccw_fsm.c
++++ b/drivers/s390/cio/vfio_ccw_fsm.c
+@@ -28,7 +28,6 @@ static int fsm_io_helper(struct vfio_ccw_private *private)
+ 	sch = private->sch;
+ 
+ 	spin_lock_irqsave(sch->lock, flags);
+-	private->state = VFIO_CCW_STATE_BUSY;
+ 
+ 	orb = cp_get_orb(&private->cp, (u32)(addr_t)sch, sch->lpm);
+ 	if (!orb) {
+@@ -46,6 +45,7 @@ static int fsm_io_helper(struct vfio_ccw_private *private)
+ 		 */
+ 		sch->schib.scsw.cmd.actl |= SCSW_ACTL_START_PEND;
+ 		ret = 0;
++		private->state = VFIO_CCW_STATE_CP_PENDING;
+ 		break;
+ 	case 1:		/* Status pending */
+ 	case 2:		/* Busy */
+@@ -107,6 +107,12 @@ static void fsm_io_busy(struct vfio_ccw_private *private,
+ 	private->io_region->ret_code = -EBUSY;
+ }
+ 
++static void fsm_io_retry(struct vfio_ccw_private *private,
++			 enum vfio_ccw_event event)
++{
++	private->io_region->ret_code = -EAGAIN;
++}
++
+ static void fsm_disabled_irq(struct vfio_ccw_private *private,
+ 			     enum vfio_ccw_event event)
+ {
+@@ -135,8 +141,7 @@ static void fsm_io_request(struct vfio_ccw_private *private,
+ 	struct mdev_device *mdev = private->mdev;
+ 	char *errstr = "request";
+ 
+-	private->state = VFIO_CCW_STATE_BUSY;
+-
++	private->state = VFIO_CCW_STATE_CP_PROCESSING;
+ 	memcpy(scsw, io_region->scsw_area, sizeof(*scsw));
+ 
+ 	if (scsw->cmd.fctl & SCSW_FCTL_START_FUNC) {
+@@ -181,7 +186,6 @@ static void fsm_io_request(struct vfio_ccw_private *private,
+ 	}
+ 
+ err_out:
+-	private->state = VFIO_CCW_STATE_IDLE;
+ 	trace_vfio_ccw_io_fctl(scsw->cmd.fctl, get_schid(private),
+ 			       io_region->ret_code, errstr);
+ }
+@@ -221,7 +225,12 @@ fsm_func_t *vfio_ccw_jumptable[NR_VFIO_CCW_STATES][NR_VFIO_CCW_EVENTS] = {
+ 		[VFIO_CCW_EVENT_IO_REQ]		= fsm_io_request,
+ 		[VFIO_CCW_EVENT_INTERRUPT]	= fsm_irq,
+ 	},
+-	[VFIO_CCW_STATE_BUSY] = {
++	[VFIO_CCW_STATE_CP_PROCESSING] = {
++		[VFIO_CCW_EVENT_NOT_OPER]	= fsm_notoper,
++		[VFIO_CCW_EVENT_IO_REQ]		= fsm_io_retry,
++		[VFIO_CCW_EVENT_INTERRUPT]	= fsm_irq,
++	},
++	[VFIO_CCW_STATE_CP_PENDING] = {
+ 		[VFIO_CCW_EVENT_NOT_OPER]	= fsm_notoper,
+ 		[VFIO_CCW_EVENT_IO_REQ]		= fsm_io_busy,
+ 		[VFIO_CCW_EVENT_INTERRUPT]	= fsm_irq,
+diff --git a/drivers/s390/cio/vfio_ccw_ops.c b/drivers/s390/cio/vfio_ccw_ops.c
+index f673e106c041..3fdcc6dfe0bf 100644
+--- a/drivers/s390/cio/vfio_ccw_ops.c
++++ b/drivers/s390/cio/vfio_ccw_ops.c
+@@ -193,8 +193,6 @@ static ssize_t vfio_ccw_mdev_write(struct mdev_device *mdev,
+ 		return -EINVAL;
+ 
+ 	private = dev_get_drvdata(mdev_parent_dev(mdev));
+-	if (private->state != VFIO_CCW_STATE_IDLE)
+-		return -EACCES;
+ 
+ 	region = private->io_region;
+ 	if (copy_from_user((void *)region + *ppos, buf, count))
+diff --git a/drivers/s390/cio/vfio_ccw_private.h b/drivers/s390/cio/vfio_ccw_private.h
+index 08e9a7dc9176..50c52efb4fcb 100644
+--- a/drivers/s390/cio/vfio_ccw_private.h
++++ b/drivers/s390/cio/vfio_ccw_private.h
+@@ -63,7 +63,8 @@ enum vfio_ccw_state {
+ 	VFIO_CCW_STATE_NOT_OPER,
+ 	VFIO_CCW_STATE_STANDBY,
+ 	VFIO_CCW_STATE_IDLE,
+-	VFIO_CCW_STATE_BUSY,
++	VFIO_CCW_STATE_CP_PROCESSING,
++	VFIO_CCW_STATE_CP_PENDING,
+ 	/* last element! */
+ 	NR_VFIO_CCW_STATES
+ };
+
+From patchwork Fri Mar  1 09:38:59 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Cornelia Huck <cohuck@redhat.com>
+X-Patchwork-Id: 10834853
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id DB6551805
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:26 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C97102CF3B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:26 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id BD49F2F069; Fri,  1 Mar 2019 09:39:26 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 48C1F2CF3B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:26 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2387538AbfCAJjZ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 1 Mar 2019 04:39:25 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:47967 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1733251AbfCAJjZ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 1 Mar 2019 04:39:25 -0500
+Received: from smtp.corp.redhat.com (int-mx01.intmail.prod.int.phx2.redhat.com
+ [10.5.11.11])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id CAD2BC074EEB;
+        Fri,  1 Mar 2019 09:39:24 +0000 (UTC)
+Received: from localhost (ovpn-117-66.ams2.redhat.com [10.36.117.66])
+        by smtp.corp.redhat.com (Postfix) with ESMTPS id 2DD1618B5E;
+        Fri,  1 Mar 2019 09:39:22 +0000 (UTC)
+From: Cornelia Huck <cohuck@redhat.com>
+To: Halil Pasic <pasic@linux.ibm.com>,
+        Eric Farman <farman@linux.ibm.com>,
+        Farhan Ali <alifm@linux.ibm.com>,
+        Pierre Morel <pmorel@linux.ibm.com>
+Cc: linux-s390@vger.kernel.org, kvm@vger.kernel.org,
+        qemu-devel@nongnu.org, qemu-s390x@nongnu.org,
+        Alex Williamson <alex.williamson@redhat.com>,
+        Cornelia Huck <cohuck@redhat.com>
+Subject: [PATCH v4 3/6] vfio-ccw: protect the I/O region
+Date: Fri,  1 Mar 2019 10:38:59 +0100
+Message-Id: <20190301093902.27799-4-cohuck@redhat.com>
+In-Reply-To: <20190301093902.27799-1-cohuck@redhat.com>
+References: <20190301093902.27799-1-cohuck@redhat.com>
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.11
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.31]);
+ Fri, 01 Mar 2019 09:39:24 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Introduce a mutex to disallow concurrent reads or writes to the
+I/O region. This makes sure that the data the kernel or user
+space see is always consistent.
+
+The same mutex will be used to protect the async region as well.
+
+Reviewed-by: Eric Farman <farman@linux.ibm.com>
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>
+---
+ drivers/s390/cio/vfio_ccw_drv.c     |  3 +++
+ drivers/s390/cio/vfio_ccw_ops.c     | 28 +++++++++++++++++++---------
+ drivers/s390/cio/vfio_ccw_private.h |  2 ++
+ 3 files changed, 24 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/s390/cio/vfio_ccw_drv.c b/drivers/s390/cio/vfio_ccw_drv.c
+index 0b3b9de45c60..5ea0da1dd954 100644
+--- a/drivers/s390/cio/vfio_ccw_drv.c
++++ b/drivers/s390/cio/vfio_ccw_drv.c
+@@ -84,7 +84,9 @@ static void vfio_ccw_sch_io_todo(struct work_struct *work)
+ 		if (is_final)
+ 			cp_free(&private->cp);
+ 	}
++	mutex_lock(&private->io_mutex);
+ 	memcpy(private->io_region->irb_area, irb, sizeof(*irb));
++	mutex_unlock(&private->io_mutex);
+ 
+ 	if (private->io_trigger)
+ 		eventfd_signal(private->io_trigger, 1);
+@@ -129,6 +131,7 @@ static int vfio_ccw_sch_probe(struct subchannel *sch)
+ 
+ 	private->sch = sch;
+ 	dev_set_drvdata(&sch->dev, private);
++	mutex_init(&private->io_mutex);
+ 
+ 	spin_lock_irq(sch->lock);
+ 	private->state = VFIO_CCW_STATE_NOT_OPER;
+diff --git a/drivers/s390/cio/vfio_ccw_ops.c b/drivers/s390/cio/vfio_ccw_ops.c
+index 3fdcc6dfe0bf..025c8a832bc8 100644
+--- a/drivers/s390/cio/vfio_ccw_ops.c
++++ b/drivers/s390/cio/vfio_ccw_ops.c
+@@ -169,16 +169,20 @@ static ssize_t vfio_ccw_mdev_read(struct mdev_device *mdev,
+ {
+ 	struct vfio_ccw_private *private;
+ 	struct ccw_io_region *region;
++	int ret;
+ 
+ 	if (*ppos + count > sizeof(*region))
+ 		return -EINVAL;
+ 
+ 	private = dev_get_drvdata(mdev_parent_dev(mdev));
++	mutex_lock(&private->io_mutex);
+ 	region = private->io_region;
+ 	if (copy_to_user(buf, (void *)region + *ppos, count))
+-		return -EFAULT;
+-
+-	return count;
++		ret = -EFAULT;
++	else
++		ret = count;
++	mutex_unlock(&private->io_mutex);
++	return ret;
+ }
+ 
+ static ssize_t vfio_ccw_mdev_write(struct mdev_device *mdev,
+@@ -188,23 +192,29 @@ static ssize_t vfio_ccw_mdev_write(struct mdev_device *mdev,
+ {
+ 	struct vfio_ccw_private *private;
+ 	struct ccw_io_region *region;
++	int ret;
+ 
+ 	if (*ppos + count > sizeof(*region))
+ 		return -EINVAL;
+ 
+ 	private = dev_get_drvdata(mdev_parent_dev(mdev));
++	if (!mutex_trylock(&private->io_mutex))
++		return -EAGAIN;
+ 
+ 	region = private->io_region;
+-	if (copy_from_user((void *)region + *ppos, buf, count))
+-		return -EFAULT;
++	if (copy_from_user((void *)region + *ppos, buf, count)) {
++		ret = -EFAULT;
++		goto out_unlock;
++	}
+ 
+ 	vfio_ccw_fsm_event(private, VFIO_CCW_EVENT_IO_REQ);
+-	if (region->ret_code != 0) {
++	if (region->ret_code != 0)
+ 		private->state = VFIO_CCW_STATE_IDLE;
+-		return region->ret_code;
+-	}
++	ret = (region->ret_code != 0) ? region->ret_code : count;
+ 
+-	return count;
++out_unlock:
++	mutex_unlock(&private->io_mutex);
++	return ret;
+ }
+ 
+ static int vfio_ccw_mdev_get_device_info(struct vfio_device_info *info)
+diff --git a/drivers/s390/cio/vfio_ccw_private.h b/drivers/s390/cio/vfio_ccw_private.h
+index 50c52efb4fcb..32173cbd838d 100644
+--- a/drivers/s390/cio/vfio_ccw_private.h
++++ b/drivers/s390/cio/vfio_ccw_private.h
+@@ -28,6 +28,7 @@
+  * @mdev: pointer to the mediated device
+  * @nb: notifier for vfio events
+  * @io_region: MMIO region to input/output I/O arguments/results
++ * @io_mutex: protect against concurrent update of I/O regions
+  * @cp: channel program for the current I/O operation
+  * @irb: irb info received from interrupt
+  * @scsw: scsw info
+@@ -42,6 +43,7 @@ struct vfio_ccw_private {
+ 	struct mdev_device	*mdev;
+ 	struct notifier_block	nb;
+ 	struct ccw_io_region	*io_region;
++	struct mutex		io_mutex;
+ 
+ 	struct channel_program	cp;
+ 	struct irb		irb;
+
+From patchwork Fri Mar  1 09:39:00 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Cornelia Huck <cohuck@redhat.com>
+X-Patchwork-Id: 10834855
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 54B9C1399
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:31 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3F4212F064
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:31 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 3295E2F0A7; Fri,  1 Mar 2019 09:39:31 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4FF932F064
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:30 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2387556AbfCAJj3 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 1 Mar 2019 04:39:29 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:46698 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1732086AbfCAJj3 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 1 Mar 2019 04:39:29 -0500
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 600E2C0AC910;
+        Fri,  1 Mar 2019 09:39:27 +0000 (UTC)
+Received: from localhost (ovpn-117-66.ams2.redhat.com [10.36.117.66])
+        by smtp.corp.redhat.com (Postfix) with ESMTPS id C1FF619C58;
+        Fri,  1 Mar 2019 09:39:26 +0000 (UTC)
+From: Cornelia Huck <cohuck@redhat.com>
+To: Halil Pasic <pasic@linux.ibm.com>,
+        Eric Farman <farman@linux.ibm.com>,
+        Farhan Ali <alifm@linux.ibm.com>,
+        Pierre Morel <pmorel@linux.ibm.com>
+Cc: linux-s390@vger.kernel.org, kvm@vger.kernel.org,
+        qemu-devel@nongnu.org, qemu-s390x@nongnu.org,
+        Alex Williamson <alex.williamson@redhat.com>,
+        Cornelia Huck <cohuck@redhat.com>
+Subject: [PATCH v4 4/6] vfio-ccw: add capabilities chain
+Date: Fri,  1 Mar 2019 10:39:00 +0100
+Message-Id: <20190301093902.27799-5-cohuck@redhat.com>
+In-Reply-To: <20190301093902.27799-1-cohuck@redhat.com>
+References: <20190301093902.27799-1-cohuck@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.31]);
+ Fri, 01 Mar 2019 09:39:27 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Allow to extend the regions used by vfio-ccw. The first user will be
+handling of halt and clear subchannel.
+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>
+---
+ drivers/s390/cio/vfio_ccw_ops.c     | 186 ++++++++++++++++++++++++----
+ drivers/s390/cio/vfio_ccw_private.h |  38 ++++++
+ include/uapi/linux/vfio.h           |   2 +
+ 3 files changed, 200 insertions(+), 26 deletions(-)
+
+diff --git a/drivers/s390/cio/vfio_ccw_ops.c b/drivers/s390/cio/vfio_ccw_ops.c
+index 025c8a832bc8..3fd663320bbf 100644
+--- a/drivers/s390/cio/vfio_ccw_ops.c
++++ b/drivers/s390/cio/vfio_ccw_ops.c
+@@ -3,13 +3,16 @@
+  * Physical device callbacks for vfio_ccw
+  *
+  * Copyright IBM Corp. 2017
++ * Copyright Red Hat, Inc. 2019
+  *
+  * Author(s): Dong Jia Shi <bjsdjshi@linux.vnet.ibm.com>
+  *            Xiao Feng Ren <renxiaof@linux.vnet.ibm.com>
++ *            Cornelia Huck <cohuck@redhat.com>
+  */
+ 
+ #include <linux/vfio.h>
+ #include <linux/mdev.h>
++#include <linux/nospec.h>
+ 
+ #include "vfio_ccw_private.h"
+ 
+@@ -157,27 +160,33 @@ static void vfio_ccw_mdev_release(struct mdev_device *mdev)
+ {
+ 	struct vfio_ccw_private *private =
+ 		dev_get_drvdata(mdev_parent_dev(mdev));
++	int i;
+ 
+ 	vfio_unregister_notifier(mdev_dev(mdev), VFIO_IOMMU_NOTIFY,
+ 				 &private->nb);
++
++	for (i = 0; i < private->num_regions; i++)
++		private->region[i].ops->release(private, &private->region[i]);
++
++	private->num_regions = 0;
++	kfree(private->region);
++	private->region = NULL;
+ }
+ 
+-static ssize_t vfio_ccw_mdev_read(struct mdev_device *mdev,
+-				  char __user *buf,
+-				  size_t count,
+-				  loff_t *ppos)
++static ssize_t vfio_ccw_mdev_read_io_region(struct vfio_ccw_private *private,
++					    char __user *buf, size_t count,
++					    loff_t *ppos)
+ {
+-	struct vfio_ccw_private *private;
++	loff_t pos = *ppos & VFIO_CCW_OFFSET_MASK;
+ 	struct ccw_io_region *region;
+ 	int ret;
+ 
+-	if (*ppos + count > sizeof(*region))
++	if (pos + count > sizeof(*region))
+ 		return -EINVAL;
+ 
+-	private = dev_get_drvdata(mdev_parent_dev(mdev));
+ 	mutex_lock(&private->io_mutex);
+ 	region = private->io_region;
+-	if (copy_to_user(buf, (void *)region + *ppos, count))
++	if (copy_to_user(buf, (void *)region + pos, count))
+ 		ret = -EFAULT;
+ 	else
+ 		ret = count;
+@@ -185,24 +194,47 @@ static ssize_t vfio_ccw_mdev_read(struct mdev_device *mdev,
+ 	return ret;
+ }
+ 
+-static ssize_t vfio_ccw_mdev_write(struct mdev_device *mdev,
+-				   const char __user *buf,
+-				   size_t count,
+-				   loff_t *ppos)
++static ssize_t vfio_ccw_mdev_read(struct mdev_device *mdev,
++				  char __user *buf,
++				  size_t count,
++				  loff_t *ppos)
+ {
++	unsigned int index = VFIO_CCW_OFFSET_TO_INDEX(*ppos);
+ 	struct vfio_ccw_private *private;
++
++	private = dev_get_drvdata(mdev_parent_dev(mdev));
++
++	if (index >= VFIO_CCW_NUM_REGIONS + private->num_regions)
++		return -EINVAL;
++
++	switch (index) {
++	case VFIO_CCW_CONFIG_REGION_INDEX:
++		return vfio_ccw_mdev_read_io_region(private, buf, count, ppos);
++	default:
++		index -= VFIO_CCW_NUM_REGIONS;
++		return private->region[index].ops->read(private, buf, count,
++							ppos);
++	}
++
++	return -EINVAL;
++}
++
++static ssize_t vfio_ccw_mdev_write_io_region(struct vfio_ccw_private *private,
++					     const char __user *buf,
++					     size_t count, loff_t *ppos)
++{
++	loff_t pos = *ppos & VFIO_CCW_OFFSET_MASK;
+ 	struct ccw_io_region *region;
+ 	int ret;
+ 
+-	if (*ppos + count > sizeof(*region))
++	if (pos + count > sizeof(*region))
+ 		return -EINVAL;
+ 
+-	private = dev_get_drvdata(mdev_parent_dev(mdev));
+ 	if (!mutex_trylock(&private->io_mutex))
+ 		return -EAGAIN;
+ 
+ 	region = private->io_region;
+-	if (copy_from_user((void *)region + *ppos, buf, count)) {
++	if (copy_from_user((void *)region + pos, buf, count)) {
+ 		ret = -EFAULT;
+ 		goto out_unlock;
+ 	}
+@@ -217,19 +249,52 @@ static ssize_t vfio_ccw_mdev_write(struct mdev_device *mdev,
+ 	return ret;
+ }
+ 
+-static int vfio_ccw_mdev_get_device_info(struct vfio_device_info *info)
++static ssize_t vfio_ccw_mdev_write(struct mdev_device *mdev,
++				   const char __user *buf,
++				   size_t count,
++				   loff_t *ppos)
+ {
++	unsigned int index = VFIO_CCW_OFFSET_TO_INDEX(*ppos);
++	struct vfio_ccw_private *private;
++
++	private = dev_get_drvdata(mdev_parent_dev(mdev));
++
++	if (index >= VFIO_CCW_NUM_REGIONS + private->num_regions)
++		return -EINVAL;
++
++	switch (index) {
++	case VFIO_CCW_CONFIG_REGION_INDEX:
++		return vfio_ccw_mdev_write_io_region(private, buf, count, ppos);
++	default:
++		index -= VFIO_CCW_NUM_REGIONS;
++		return private->region[index].ops->write(private, buf, count,
++							 ppos);
++	}
++
++	return -EINVAL;
++}
++
++static int vfio_ccw_mdev_get_device_info(struct vfio_device_info *info,
++					 struct mdev_device *mdev)
++{
++	struct vfio_ccw_private *private;
++
++	private = dev_get_drvdata(mdev_parent_dev(mdev));
+ 	info->flags = VFIO_DEVICE_FLAGS_CCW | VFIO_DEVICE_FLAGS_RESET;
+-	info->num_regions = VFIO_CCW_NUM_REGIONS;
++	info->num_regions = VFIO_CCW_NUM_REGIONS + private->num_regions;
+ 	info->num_irqs = VFIO_CCW_NUM_IRQS;
+ 
+ 	return 0;
+ }
+ 
+ static int vfio_ccw_mdev_get_region_info(struct vfio_region_info *info,
+-					 u16 *cap_type_id,
+-					 void **cap_type)
++					 struct mdev_device *mdev,
++					 unsigned long arg)
+ {
++	struct vfio_ccw_private *private;
++	int i;
++
++	private = dev_get_drvdata(mdev_parent_dev(mdev));
+ 	switch (info->index) {
+ 	case VFIO_CCW_CONFIG_REGION_INDEX:
+ 		info->offset = 0;
+@@ -237,9 +302,55 @@ static int vfio_ccw_mdev_get_region_info(struct vfio_region_info *info,
+ 		info->flags = VFIO_REGION_INFO_FLAG_READ
+ 			      | VFIO_REGION_INFO_FLAG_WRITE;
+ 		return 0;
+-	default:
+-		return -EINVAL;
++	default: /* all other regions are handled via capability chain */
++	{
++		struct vfio_info_cap caps = { .buf = NULL, .size = 0 };
++		struct vfio_region_info_cap_type cap_type = {
++			.header.id = VFIO_REGION_INFO_CAP_TYPE,
++			.header.version = 1 };
++		int ret;
++
++		if (info->index >=
++		    VFIO_CCW_NUM_REGIONS + private->num_regions)
++			return -EINVAL;
++
++		info->index = array_index_nospec(info->index,
++						 VFIO_CCW_NUM_REGIONS +
++						 private->num_regions);
++
++		i = info->index - VFIO_CCW_NUM_REGIONS;
++
++		info->offset = VFIO_CCW_INDEX_TO_OFFSET(info->index);
++		info->size = private->region[i].size;
++		info->flags = private->region[i].flags;
++
++		cap_type.type = private->region[i].type;
++		cap_type.subtype = private->region[i].subtype;
++
++		ret = vfio_info_add_capability(&caps, &cap_type.header,
++					       sizeof(cap_type));
++		if (ret)
++			return ret;
++
++		info->flags |= VFIO_REGION_INFO_FLAG_CAPS;
++		if (info->argsz < sizeof(*info) + caps.size) {
++			info->argsz = sizeof(*info) + caps.size;
++			info->cap_offset = 0;
++		} else {
++			vfio_info_cap_shift(&caps, sizeof(*info));
++			if (copy_to_user((void __user *)arg + sizeof(*info),
++					 caps.buf, caps.size)) {
++				kfree(caps.buf);
++				return -EFAULT;
++			}
++			info->cap_offset = sizeof(*info);
++		}
++
++		kfree(caps.buf);
++
++	}
+ 	}
++	return 0;
+ }
+ 
+ static int vfio_ccw_mdev_get_irq_info(struct vfio_irq_info *info)
+@@ -316,6 +427,32 @@ static int vfio_ccw_mdev_set_irqs(struct mdev_device *mdev,
+ 	}
+ }
+ 
++int vfio_ccw_register_dev_region(struct vfio_ccw_private *private,
++				 unsigned int subtype,
++				 const struct vfio_ccw_regops *ops,
++				 size_t size, u32 flags, void *data)
++{
++	struct vfio_ccw_region *region;
++
++	region = krealloc(private->region,
++			  (private->num_regions + 1) * sizeof(*region),
++			  GFP_KERNEL);
++	if (!region)
++		return -ENOMEM;
++
++	private->region = region;
++	private->region[private->num_regions].type = VFIO_REGION_TYPE_CCW;
++	private->region[private->num_regions].subtype = subtype;
++	private->region[private->num_regions].ops = ops;
++	private->region[private->num_regions].size = size;
++	private->region[private->num_regions].flags = flags;
++	private->region[private->num_regions].data = data;
++
++	private->num_regions++;
++
++	return 0;
++}
++
+ static ssize_t vfio_ccw_mdev_ioctl(struct mdev_device *mdev,
+ 				   unsigned int cmd,
+ 				   unsigned long arg)
+@@ -336,7 +473,7 @@ static ssize_t vfio_ccw_mdev_ioctl(struct mdev_device *mdev,
+ 		if (info.argsz < minsz)
+ 			return -EINVAL;
+ 
+-		ret = vfio_ccw_mdev_get_device_info(&info);
++		ret = vfio_ccw_mdev_get_device_info(&info, mdev);
+ 		if (ret)
+ 			return ret;
+ 
+@@ -345,8 +482,6 @@ static ssize_t vfio_ccw_mdev_ioctl(struct mdev_device *mdev,
+ 	case VFIO_DEVICE_GET_REGION_INFO:
+ 	{
+ 		struct vfio_region_info info;
+-		u16 cap_type_id = 0;
+-		void *cap_type = NULL;
+ 
+ 		minsz = offsetofend(struct vfio_region_info, offset);
+ 
+@@ -356,8 +491,7 @@ static ssize_t vfio_ccw_mdev_ioctl(struct mdev_device *mdev,
+ 		if (info.argsz < minsz)
+ 			return -EINVAL;
+ 
+-		ret = vfio_ccw_mdev_get_region_info(&info, &cap_type_id,
+-						    &cap_type);
++		ret = vfio_ccw_mdev_get_region_info(&info, mdev, arg);
+ 		if (ret)
+ 			return ret;
+ 
+diff --git a/drivers/s390/cio/vfio_ccw_private.h b/drivers/s390/cio/vfio_ccw_private.h
+index 32173cbd838d..d888a2573470 100644
+--- a/drivers/s390/cio/vfio_ccw_private.h
++++ b/drivers/s390/cio/vfio_ccw_private.h
+@@ -3,9 +3,11 @@
+  * Private stuff for vfio_ccw driver
+  *
+  * Copyright IBM Corp. 2017
++ * Copyright Red Hat, Inc. 2019
+  *
+  * Author(s): Dong Jia Shi <bjsdjshi@linux.vnet.ibm.com>
+  *            Xiao Feng Ren <renxiaof@linux.vnet.ibm.com>
++ *            Cornelia Huck <cohuck@redhat.com>
+  */
+ 
+ #ifndef _VFIO_CCW_PRIVATE_H_
+@@ -19,6 +21,38 @@
+ #include "css.h"
+ #include "vfio_ccw_cp.h"
+ 
++#define VFIO_CCW_OFFSET_SHIFT   10
++#define VFIO_CCW_OFFSET_TO_INDEX(off)	(off >> VFIO_CCW_OFFSET_SHIFT)
++#define VFIO_CCW_INDEX_TO_OFFSET(index)	((u64)(index) << VFIO_CCW_OFFSET_SHIFT)
++#define VFIO_CCW_OFFSET_MASK	(((u64)(1) << VFIO_CCW_OFFSET_SHIFT) - 1)
++
++/* capability chain handling similar to vfio-pci */
++struct vfio_ccw_private;
++struct vfio_ccw_region;
++
++struct vfio_ccw_regops {
++	ssize_t	(*read)(struct vfio_ccw_private *private, char __user *buf,
++			size_t count, loff_t *ppos);
++	ssize_t	(*write)(struct vfio_ccw_private *private,
++			 const char __user *buf, size_t count, loff_t *ppos);
++	void	(*release)(struct vfio_ccw_private *private,
++			   struct vfio_ccw_region *region);
++};
++
++struct vfio_ccw_region {
++	u32				type;
++	u32				subtype;
++	const struct vfio_ccw_regops	*ops;
++	void				*data;
++	size_t				size;
++	u32				flags;
++};
++
++int vfio_ccw_register_dev_region(struct vfio_ccw_private *private,
++				 unsigned int subtype,
++				 const struct vfio_ccw_regops *ops,
++				 size_t size, u32 flags, void *data);
++
+ /**
+  * struct vfio_ccw_private
+  * @sch: pointer to the subchannel
+@@ -29,6 +63,8 @@
+  * @nb: notifier for vfio events
+  * @io_region: MMIO region to input/output I/O arguments/results
+  * @io_mutex: protect against concurrent update of I/O regions
++ * @region: additional regions for other subchannel operations
++ * @num_regions: number of additional regions
+  * @cp: channel program for the current I/O operation
+  * @irb: irb info received from interrupt
+  * @scsw: scsw info
+@@ -44,6 +80,8 @@ struct vfio_ccw_private {
+ 	struct notifier_block	nb;
+ 	struct ccw_io_region	*io_region;
+ 	struct mutex		io_mutex;
++	struct vfio_ccw_region *region;
++	int num_regions;
+ 
+ 	struct channel_program	cp;
+ 	struct irb		irb;
+diff --git a/include/uapi/linux/vfio.h b/include/uapi/linux/vfio.h
+index 02bb7ad6e986..56e2413d3e00 100644
+--- a/include/uapi/linux/vfio.h
++++ b/include/uapi/linux/vfio.h
+@@ -353,6 +353,8 @@ struct vfio_region_gfx_edid {
+ #define VFIO_DEVICE_GFX_LINK_STATE_DOWN  2
+ };
+ 
++#define VFIO_REGION_TYPE_CCW			(2)
++
+ /*
+  * 10de vendor sub-type
+  *
+
+From patchwork Fri Mar  1 09:39:01 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Cornelia Huck <cohuck@redhat.com>
+X-Patchwork-Id: 10834857
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 0B1FA1399
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:32 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id EECBD2F064
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:31 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id E34952F0A7; Fri,  1 Mar 2019 09:39:31 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 883212F064
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:31 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2387557AbfCAJja (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 1 Mar 2019 04:39:30 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:20856 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1732086AbfCAJj3 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 1 Mar 2019 04:39:29 -0500
+Received: from smtp.corp.redhat.com (int-mx07.intmail.prod.int.phx2.redhat.com
+ [10.5.11.22])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id CD51A8F2F1;
+        Fri,  1 Mar 2019 09:39:29 +0000 (UTC)
+Received: from localhost (ovpn-117-66.ams2.redhat.com [10.36.117.66])
+        by smtp.corp.redhat.com (Postfix) with ESMTPS id 68F2D1001E63;
+        Fri,  1 Mar 2019 09:39:29 +0000 (UTC)
+From: Cornelia Huck <cohuck@redhat.com>
+To: Halil Pasic <pasic@linux.ibm.com>,
+        Eric Farman <farman@linux.ibm.com>,
+        Farhan Ali <alifm@linux.ibm.com>,
+        Pierre Morel <pmorel@linux.ibm.com>
+Cc: linux-s390@vger.kernel.org, kvm@vger.kernel.org,
+        qemu-devel@nongnu.org, qemu-s390x@nongnu.org,
+        Alex Williamson <alex.williamson@redhat.com>,
+        Cornelia Huck <cohuck@redhat.com>
+Subject: [PATCH v4 5/6] s390/cio: export hsch to modules
+Date: Fri,  1 Mar 2019 10:39:01 +0100
+Message-Id: <20190301093902.27799-6-cohuck@redhat.com>
+In-Reply-To: <20190301093902.27799-1-cohuck@redhat.com>
+References: <20190301093902.27799-1-cohuck@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.22
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.28]);
+ Fri, 01 Mar 2019 09:39:29 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+The vfio-ccw code will need this, and it matches treatment of ssch
+and csch.
+
+Reviewed-by: Pierre Morel <pmorel@linux.ibm.com>
+Reviewed-by: Halil Pasic <pasic@linux.ibm.com>
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>
+---
+ drivers/s390/cio/ioasm.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/s390/cio/ioasm.c b/drivers/s390/cio/ioasm.c
+index 14d328338ce2..08eb10283b18 100644
+--- a/drivers/s390/cio/ioasm.c
++++ b/drivers/s390/cio/ioasm.c
+@@ -233,6 +233,7 @@ int hsch(struct subchannel_id schid)
+ 
+ 	return ccode;
+ }
++EXPORT_SYMBOL(hsch);
+ 
+ static inline int __xsch(struct subchannel_id schid)
+ {
+
+From patchwork Fri Mar  1 09:39:02 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Cornelia Huck <cohuck@redhat.com>
+X-Patchwork-Id: 10834859
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 76D821805
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:35 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5A5CC2F064
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:35 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4EB462F0A7; Fri,  1 Mar 2019 09:39:35 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 450112F064
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  1 Mar 2019 09:39:34 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2387586AbfCAJjd (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 1 Mar 2019 04:39:33 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:58067 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2387599AbfCAJjd (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 1 Mar 2019 04:39:33 -0500
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id A801BC0AD43E;
+        Fri,  1 Mar 2019 09:39:32 +0000 (UTC)
+Received: from localhost (ovpn-117-66.ams2.redhat.com [10.36.117.66])
+        by smtp.corp.redhat.com (Postfix) with ESMTPS id DFC4919C58;
+        Fri,  1 Mar 2019 09:39:31 +0000 (UTC)
+From: Cornelia Huck <cohuck@redhat.com>
+To: Halil Pasic <pasic@linux.ibm.com>,
+        Eric Farman <farman@linux.ibm.com>,
+        Farhan Ali <alifm@linux.ibm.com>,
+        Pierre Morel <pmorel@linux.ibm.com>
+Cc: linux-s390@vger.kernel.org, kvm@vger.kernel.org,
+        qemu-devel@nongnu.org, qemu-s390x@nongnu.org,
+        Alex Williamson <alex.williamson@redhat.com>,
+        Cornelia Huck <cohuck@redhat.com>
+Subject: [PATCH v4 6/6] vfio-ccw: add handling for async channel instructions
+Date: Fri,  1 Mar 2019 10:39:02 +0100
+Message-Id: <20190301093902.27799-7-cohuck@redhat.com>
+In-Reply-To: <20190301093902.27799-1-cohuck@redhat.com>
+References: <20190301093902.27799-1-cohuck@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.31]);
+ Fri, 01 Mar 2019 09:39:32 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Add a region to the vfio-ccw device that can be used to submit
+asynchronous I/O instructions. ssch continues to be handled by the
+existing I/O region; the new region handles hsch and csch.
+
+Interrupt status continues to be reported through the same channels
+as for ssch.
+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>
+---
+ drivers/s390/cio/Makefile           |   3 +-
+ drivers/s390/cio/vfio_ccw_async.c   |  88 ++++++++++++++++++++
+ drivers/s390/cio/vfio_ccw_drv.c     |  46 ++++++++---
+ drivers/s390/cio/vfio_ccw_fsm.c     | 119 +++++++++++++++++++++++++++-
+ drivers/s390/cio/vfio_ccw_ops.c     |  13 ++-
+ drivers/s390/cio/vfio_ccw_private.h |   5 ++
+ include/uapi/linux/vfio.h           |   2 +
+ include/uapi/linux/vfio_ccw.h       |  12 +++
+ 8 files changed, 270 insertions(+), 18 deletions(-)
+ create mode 100644 drivers/s390/cio/vfio_ccw_async.c
+
+diff --git a/drivers/s390/cio/Makefile b/drivers/s390/cio/Makefile
+index f230516abb96..f6a8db04177c 100644
+--- a/drivers/s390/cio/Makefile
++++ b/drivers/s390/cio/Makefile
+@@ -20,5 +20,6 @@ obj-$(CONFIG_CCWGROUP) += ccwgroup.o
+ qdio-objs := qdio_main.o qdio_thinint.o qdio_debug.o qdio_setup.o
+ obj-$(CONFIG_QDIO) += qdio.o
+ 
+-vfio_ccw-objs += vfio_ccw_drv.o vfio_ccw_cp.o vfio_ccw_ops.o vfio_ccw_fsm.o
++vfio_ccw-objs += vfio_ccw_drv.o vfio_ccw_cp.o vfio_ccw_ops.o vfio_ccw_fsm.o \
++	vfio_ccw_async.o
+ obj-$(CONFIG_VFIO_CCW) += vfio_ccw.o
+diff --git a/drivers/s390/cio/vfio_ccw_async.c b/drivers/s390/cio/vfio_ccw_async.c
+new file mode 100644
+index 000000000000..8c1d2357ef5b
+--- /dev/null
++++ b/drivers/s390/cio/vfio_ccw_async.c
+@@ -0,0 +1,88 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Async I/O region for vfio_ccw
++ *
++ * Copyright Red Hat, Inc. 2019
++ *
++ * Author(s): Cornelia Huck <cohuck@redhat.com>
++ */
++
++#include <linux/vfio.h>
++#include <linux/mdev.h>
++
++#include "vfio_ccw_private.h"
++
++static ssize_t vfio_ccw_async_region_read(struct vfio_ccw_private *private,
++					  char __user *buf, size_t count,
++					  loff_t *ppos)
++{
++	unsigned int i = VFIO_CCW_OFFSET_TO_INDEX(*ppos) - VFIO_CCW_NUM_REGIONS;
++	loff_t pos = *ppos & VFIO_CCW_OFFSET_MASK;
++	struct ccw_cmd_region *region;
++	int ret;
++
++	if (pos + count > sizeof(*region))
++		return -EINVAL;
++
++	mutex_lock(&private->io_mutex);
++	region = private->region[i].data;
++	if (copy_to_user(buf, (void *)region + pos, count))
++		ret = -EFAULT;
++	else
++		ret = count;
++	mutex_unlock(&private->io_mutex);
++	return ret;
++}
++
++static ssize_t vfio_ccw_async_region_write(struct vfio_ccw_private *private,
++					   const char __user *buf, size_t count,
++					   loff_t *ppos)
++{
++	unsigned int i = VFIO_CCW_OFFSET_TO_INDEX(*ppos) - VFIO_CCW_NUM_REGIONS;
++	loff_t pos = *ppos & VFIO_CCW_OFFSET_MASK;
++	struct ccw_cmd_region *region;
++	int ret;
++
++	if (pos + count > sizeof(*region))
++		return -EINVAL;
++
++	if (!mutex_trylock(&private->io_mutex))
++		return -EAGAIN;
++
++	region = private->region[i].data;
++	if (copy_from_user((void *)region + pos, buf, count)) {
++		ret = -EFAULT;
++		goto out_unlock;
++	}
++
++	vfio_ccw_fsm_event(private, VFIO_CCW_EVENT_ASYNC_REQ);
++
++	ret = region->ret_code ? region->ret_code : count;
++
++out_unlock:
++	mutex_unlock(&private->io_mutex);
++	return ret;
++}
++
++static void vfio_ccw_async_region_release(struct vfio_ccw_private *private,
++					  struct vfio_ccw_region *region)
++{
++
++}
++
++const struct vfio_ccw_regops vfio_ccw_async_region_ops = {
++	.read = vfio_ccw_async_region_read,
++	.write = vfio_ccw_async_region_write,
++	.release = vfio_ccw_async_region_release,
++};
++
++int vfio_ccw_register_async_dev_regions(struct vfio_ccw_private *private)
++{
++	return vfio_ccw_register_dev_region(private,
++					    VFIO_REGION_SUBTYPE_CCW_ASYNC_CMD,
++					    &vfio_ccw_async_region_ops,
++					    sizeof(struct ccw_cmd_region),
++					    VFIO_REGION_INFO_FLAG_READ |
++					    VFIO_REGION_INFO_FLAG_WRITE,
++					    private->cmd_region);
++}
+diff --git a/drivers/s390/cio/vfio_ccw_drv.c b/drivers/s390/cio/vfio_ccw_drv.c
+index 5ea0da1dd954..c39d01943a6a 100644
+--- a/drivers/s390/cio/vfio_ccw_drv.c
++++ b/drivers/s390/cio/vfio_ccw_drv.c
+@@ -3,9 +3,11 @@
+  * VFIO based Physical Subchannel device driver
+  *
+  * Copyright IBM Corp. 2017
++ * Copyright Red Hat, Inc. 2019
+  *
+  * Author(s): Dong Jia Shi <bjsdjshi@linux.vnet.ibm.com>
+  *            Xiao Feng Ren <renxiaof@linux.vnet.ibm.com>
++ *            Cornelia Huck <cohuck@redhat.com>
+  */
+ 
+ #include <linux/module.h>
+@@ -23,6 +25,7 @@
+ 
+ struct workqueue_struct *vfio_ccw_work_q;
+ static struct kmem_cache *vfio_ccw_io_region;
++static struct kmem_cache *vfio_ccw_cmd_region;
+ 
+ /*
+  * Helpers
+@@ -110,7 +113,7 @@ static int vfio_ccw_sch_probe(struct subchannel *sch)
+ {
+ 	struct pmcw *pmcw = &sch->schib.pmcw;
+ 	struct vfio_ccw_private *private;
+-	int ret;
++	int ret = -ENOMEM;
+ 
+ 	if (pmcw->qf) {
+ 		dev_warn(&sch->dev, "vfio: ccw: does not support QDIO: %s\n",
+@@ -124,10 +127,13 @@ static int vfio_ccw_sch_probe(struct subchannel *sch)
+ 
+ 	private->io_region = kmem_cache_zalloc(vfio_ccw_io_region,
+ 					       GFP_KERNEL | GFP_DMA);
+-	if (!private->io_region) {
+-		kfree(private);
+-		return -ENOMEM;
+-	}
++	if (!private->io_region)
++		goto out_free;
++
++	private->cmd_region = kmem_cache_zalloc(vfio_ccw_cmd_region,
++						GFP_KERNEL | GFP_DMA);
++	if (!private->cmd_region)
++		goto out_free;
+ 
+ 	private->sch = sch;
+ 	dev_set_drvdata(&sch->dev, private);
+@@ -155,7 +161,10 @@ static int vfio_ccw_sch_probe(struct subchannel *sch)
+ 	cio_disable_subchannel(sch);
+ out_free:
+ 	dev_set_drvdata(&sch->dev, NULL);
+-	kmem_cache_free(vfio_ccw_io_region, private->io_region);
++	if (private->cmd_region)
++		kmem_cache_free(vfio_ccw_cmd_region, private->cmd_region);
++	if (private->io_region)
++		kmem_cache_free(vfio_ccw_io_region, private->io_region);
+ 	kfree(private);
+ 	return ret;
+ }
+@@ -170,6 +179,7 @@ static int vfio_ccw_sch_remove(struct subchannel *sch)
+ 
+ 	dev_set_drvdata(&sch->dev, NULL);
+ 
++	kmem_cache_free(vfio_ccw_cmd_region, private->cmd_region);
+ 	kmem_cache_free(vfio_ccw_io_region, private->io_region);
+ 	kfree(private);
+ 
+@@ -244,7 +254,7 @@ static struct css_driver vfio_ccw_sch_driver = {
+ 
+ static int __init vfio_ccw_sch_init(void)
+ {
+-	int ret;
++	int ret = -ENOMEM;
+ 
+ 	vfio_ccw_work_q = create_singlethread_workqueue("vfio-ccw");
+ 	if (!vfio_ccw_work_q)
+@@ -254,20 +264,30 @@ static int __init vfio_ccw_sch_init(void)
+ 					sizeof(struct ccw_io_region), 0,
+ 					SLAB_ACCOUNT, 0,
+ 					sizeof(struct ccw_io_region), NULL);
+-	if (!vfio_ccw_io_region) {
+-		destroy_workqueue(vfio_ccw_work_q);
+-		return -ENOMEM;
+-	}
++	if (!vfio_ccw_io_region)
++		goto out_err;
++
++	vfio_ccw_cmd_region = kmem_cache_create_usercopy("vfio_ccw_cmd_region",
++					sizeof(struct ccw_cmd_region), 0,
++					SLAB_ACCOUNT, 0,
++					sizeof(struct ccw_cmd_region), NULL);
++	if (!vfio_ccw_cmd_region)
++		goto out_err;
+ 
+ 	isc_register(VFIO_CCW_ISC);
+ 	ret = css_driver_register(&vfio_ccw_sch_driver);
+ 	if (ret) {
+ 		isc_unregister(VFIO_CCW_ISC);
+-		kmem_cache_destroy(vfio_ccw_io_region);
+-		destroy_workqueue(vfio_ccw_work_q);
++		goto out_err;
+ 	}
+ 
+ 	return ret;
++
++out_err:
++	kmem_cache_destroy(vfio_ccw_cmd_region);
++	kmem_cache_destroy(vfio_ccw_io_region);
++	destroy_workqueue(vfio_ccw_work_q);
++	return ret;
+ }
+ 
+ static void __exit vfio_ccw_sch_exit(void)
+diff --git a/drivers/s390/cio/vfio_ccw_fsm.c b/drivers/s390/cio/vfio_ccw_fsm.c
+index b4a141fbd1a8..49d9d3da0282 100644
+--- a/drivers/s390/cio/vfio_ccw_fsm.c
++++ b/drivers/s390/cio/vfio_ccw_fsm.c
+@@ -3,8 +3,10 @@
+  * Finite state machine for vfio-ccw device handling
+  *
+  * Copyright IBM Corp. 2017
++ * Copyright Red Hat, Inc. 2019
+  *
+  * Author(s): Dong Jia Shi <bjsdjshi@linux.vnet.ibm.com>
++ *            Cornelia Huck <cohuck@redhat.com>
+  */
+ 
+ #include <linux/vfio.h>
+@@ -73,6 +75,75 @@ static int fsm_io_helper(struct vfio_ccw_private *private)
+ 	return ret;
+ }
+ 
++static int fsm_do_halt(struct vfio_ccw_private *private)
++{
++	struct subchannel *sch;
++	unsigned long flags;
++	int ccode;
++	int ret;
++
++	sch = private->sch;
++
++	spin_lock_irqsave(sch->lock, flags);
++
++	/* Issue "Halt Subchannel" */
++	ccode = hsch(sch->schid);
++
++	switch (ccode) {
++	case 0:
++		/*
++		 * Initialize device status information
++		 */
++		sch->schib.scsw.cmd.actl |= SCSW_ACTL_HALT_PEND;
++		ret = 0;
++		break;
++	case 1:		/* Status pending */
++	case 2:		/* Busy */
++		ret = -EBUSY;
++		break;
++	case 3:		/* Device not operational */
++		ret = -ENODEV;
++		break;
++	default:
++		ret = ccode;
++	}
++	spin_unlock_irqrestore(sch->lock, flags);
++	return ret;
++}
++
++static int fsm_do_clear(struct vfio_ccw_private *private)
++{
++	struct subchannel *sch;
++	unsigned long flags;
++	int ccode;
++	int ret;
++
++	sch = private->sch;
++
++	spin_lock_irqsave(sch->lock, flags);
++
++	/* Issue "Clear Subchannel" */
++	ccode = csch(sch->schid);
++
++	switch (ccode) {
++	case 0:
++		/*
++		 * Initialize device status information
++		 */
++		sch->schib.scsw.cmd.actl = SCSW_ACTL_CLEAR_PEND;
++		/* TODO: check what else we might need to clear */
++		ret = 0;
++		break;
++	case 3:		/* Device not operational */
++		ret = -ENODEV;
++		break;
++	default:
++		ret = ccode;
++	}
++	spin_unlock_irqrestore(sch->lock, flags);
++	return ret;
++}
++
+ static void fsm_notoper(struct vfio_ccw_private *private,
+ 			enum vfio_ccw_event event)
+ {
+@@ -113,6 +184,24 @@ static void fsm_io_retry(struct vfio_ccw_private *private,
+ 	private->io_region->ret_code = -EAGAIN;
+ }
+ 
++static void fsm_async_error(struct vfio_ccw_private *private,
++			    enum vfio_ccw_event event)
++{
++	struct ccw_cmd_region *cmd_region = private->cmd_region;
++
++	pr_err("vfio-ccw: FSM: %s request from state:%d\n",
++	       cmd_region->command == VFIO_CCW_ASYNC_CMD_HSCH ? "halt" :
++	       cmd_region->command == VFIO_CCW_ASYNC_CMD_CSCH ? "clear" :
++	       "<unknown>", private->state);
++	cmd_region->ret_code = -EIO;
++}
++
++static void fsm_async_retry(struct vfio_ccw_private *private,
++			    enum vfio_ccw_event event)
++{
++	private->cmd_region->ret_code = -EAGAIN;
++}
++
+ static void fsm_disabled_irq(struct vfio_ccw_private *private,
+ 			     enum vfio_ccw_event event)
+ {
+@@ -176,11 +265,11 @@ static void fsm_io_request(struct vfio_ccw_private *private,
+ 		}
+ 		return;
+ 	} else if (scsw->cmd.fctl & SCSW_FCTL_HALT_FUNC) {
+-		/* XXX: Handle halt. */
++		/* halt is handled via the async cmd region */
+ 		io_region->ret_code = -EOPNOTSUPP;
+ 		goto err_out;
+ 	} else if (scsw->cmd.fctl & SCSW_FCTL_CLEAR_FUNC) {
+-		/* XXX: Handle clear. */
++		/* clear is handled via the async cmd region */
+ 		io_region->ret_code = -EOPNOTSUPP;
+ 		goto err_out;
+ 	}
+@@ -190,6 +279,27 @@ static void fsm_io_request(struct vfio_ccw_private *private,
+ 			       io_region->ret_code, errstr);
+ }
+ 
++/*
++ * Deal with an async request from userspace.
++ */
++static void fsm_async_request(struct vfio_ccw_private *private,
++			      enum vfio_ccw_event event)
++{
++	struct ccw_cmd_region *cmd_region = private->cmd_region;
++
++	switch (cmd_region->command) {
++	case VFIO_CCW_ASYNC_CMD_HSCH:
++		cmd_region->ret_code = fsm_do_halt(private);
++		break;
++	case VFIO_CCW_ASYNC_CMD_CSCH:
++		cmd_region->ret_code = fsm_do_clear(private);
++		break;
++	default:
++		/* should not happen? */
++		cmd_region->ret_code = -EINVAL;
++	}
++}
++
+ /*
+  * Got an interrupt for a normal io (state busy).
+  */
+@@ -213,26 +323,31 @@ fsm_func_t *vfio_ccw_jumptable[NR_VFIO_CCW_STATES][NR_VFIO_CCW_EVENTS] = {
+ 	[VFIO_CCW_STATE_NOT_OPER] = {
+ 		[VFIO_CCW_EVENT_NOT_OPER]	= fsm_nop,
+ 		[VFIO_CCW_EVENT_IO_REQ]		= fsm_io_error,
++		[VFIO_CCW_EVENT_ASYNC_REQ]	= fsm_async_error,
+ 		[VFIO_CCW_EVENT_INTERRUPT]	= fsm_disabled_irq,
+ 	},
+ 	[VFIO_CCW_STATE_STANDBY] = {
+ 		[VFIO_CCW_EVENT_NOT_OPER]	= fsm_notoper,
+ 		[VFIO_CCW_EVENT_IO_REQ]		= fsm_io_error,
++		[VFIO_CCW_EVENT_ASYNC_REQ]	= fsm_async_error,
+ 		[VFIO_CCW_EVENT_INTERRUPT]	= fsm_irq,
+ 	},
+ 	[VFIO_CCW_STATE_IDLE] = {
+ 		[VFIO_CCW_EVENT_NOT_OPER]	= fsm_notoper,
+ 		[VFIO_CCW_EVENT_IO_REQ]		= fsm_io_request,
++		[VFIO_CCW_EVENT_ASYNC_REQ]	= fsm_async_request,
+ 		[VFIO_CCW_EVENT_INTERRUPT]	= fsm_irq,
+ 	},
+ 	[VFIO_CCW_STATE_CP_PROCESSING] = {
+ 		[VFIO_CCW_EVENT_NOT_OPER]	= fsm_notoper,
+ 		[VFIO_CCW_EVENT_IO_REQ]		= fsm_io_retry,
++		[VFIO_CCW_EVENT_ASYNC_REQ]	= fsm_async_retry,
+ 		[VFIO_CCW_EVENT_INTERRUPT]	= fsm_irq,
+ 	},
+ 	[VFIO_CCW_STATE_CP_PENDING] = {
+ 		[VFIO_CCW_EVENT_NOT_OPER]	= fsm_notoper,
+ 		[VFIO_CCW_EVENT_IO_REQ]		= fsm_io_busy,
++		[VFIO_CCW_EVENT_ASYNC_REQ]	= fsm_async_request,
+ 		[VFIO_CCW_EVENT_INTERRUPT]	= fsm_irq,
+ 	},
+ };
+diff --git a/drivers/s390/cio/vfio_ccw_ops.c b/drivers/s390/cio/vfio_ccw_ops.c
+index 3fd663320bbf..ec2f796c70fe 100644
+--- a/drivers/s390/cio/vfio_ccw_ops.c
++++ b/drivers/s390/cio/vfio_ccw_ops.c
+@@ -149,11 +149,20 @@ static int vfio_ccw_mdev_open(struct mdev_device *mdev)
+ 	struct vfio_ccw_private *private =
+ 		dev_get_drvdata(mdev_parent_dev(mdev));
+ 	unsigned long events = VFIO_IOMMU_NOTIFY_DMA_UNMAP;
++	int ret;
+ 
+ 	private->nb.notifier_call = vfio_ccw_mdev_notifier;
+ 
+-	return vfio_register_notifier(mdev_dev(mdev), VFIO_IOMMU_NOTIFY,
+-				      &events, &private->nb);
++	ret = vfio_register_notifier(mdev_dev(mdev), VFIO_IOMMU_NOTIFY,
++				     &events, &private->nb);
++	if (ret)
++		return ret;
++
++	ret = vfio_ccw_register_async_dev_regions(private);
++	if (ret)
++		vfio_unregister_notifier(mdev_dev(mdev), VFIO_IOMMU_NOTIFY,
++					 &private->nb);
++	return ret;
+ }
+ 
+ static void vfio_ccw_mdev_release(struct mdev_device *mdev)
+diff --git a/drivers/s390/cio/vfio_ccw_private.h b/drivers/s390/cio/vfio_ccw_private.h
+index d888a2573470..f1092c3dc1b1 100644
+--- a/drivers/s390/cio/vfio_ccw_private.h
++++ b/drivers/s390/cio/vfio_ccw_private.h
+@@ -53,6 +53,8 @@ int vfio_ccw_register_dev_region(struct vfio_ccw_private *private,
+ 				 const struct vfio_ccw_regops *ops,
+ 				 size_t size, u32 flags, void *data);
+ 
++int vfio_ccw_register_async_dev_regions(struct vfio_ccw_private *private);
++
+ /**
+  * struct vfio_ccw_private
+  * @sch: pointer to the subchannel
+@@ -64,6 +66,7 @@ int vfio_ccw_register_dev_region(struct vfio_ccw_private *private,
+  * @io_region: MMIO region to input/output I/O arguments/results
+  * @io_mutex: protect against concurrent update of I/O regions
+  * @region: additional regions for other subchannel operations
++ * @cmd_region: MMIO region for asynchronous I/O commands other than START
+  * @num_regions: number of additional regions
+  * @cp: channel program for the current I/O operation
+  * @irb: irb info received from interrupt
+@@ -81,6 +84,7 @@ struct vfio_ccw_private {
+ 	struct ccw_io_region	*io_region;
+ 	struct mutex		io_mutex;
+ 	struct vfio_ccw_region *region;
++	struct ccw_cmd_region	*cmd_region;
+ 	int num_regions;
+ 
+ 	struct channel_program	cp;
+@@ -116,6 +120,7 @@ enum vfio_ccw_event {
+ 	VFIO_CCW_EVENT_NOT_OPER,
+ 	VFIO_CCW_EVENT_IO_REQ,
+ 	VFIO_CCW_EVENT_INTERRUPT,
++	VFIO_CCW_EVENT_ASYNC_REQ,
+ 	/* last element! */
+ 	NR_VFIO_CCW_EVENTS
+ };
+diff --git a/include/uapi/linux/vfio.h b/include/uapi/linux/vfio.h
+index 56e2413d3e00..8f10748dac79 100644
+--- a/include/uapi/linux/vfio.h
++++ b/include/uapi/linux/vfio.h
+@@ -354,6 +354,8 @@ struct vfio_region_gfx_edid {
+ };
+ 
+ #define VFIO_REGION_TYPE_CCW			(2)
++/* ccw sub-types */
++#define VFIO_REGION_SUBTYPE_CCW_ASYNC_CMD	(1)
+ 
+ /*
+  * 10de vendor sub-type
+diff --git a/include/uapi/linux/vfio_ccw.h b/include/uapi/linux/vfio_ccw.h
+index 2ec5f367ff78..cbecbf0cd54f 100644
+--- a/include/uapi/linux/vfio_ccw.h
++++ b/include/uapi/linux/vfio_ccw.h
+@@ -12,6 +12,7 @@
+ 
+ #include <linux/types.h>
+ 
++/* used for START SUBCHANNEL, always present */
+ struct ccw_io_region {
+ #define ORB_AREA_SIZE 12
+ 	__u8	orb_area[ORB_AREA_SIZE];
+@@ -22,4 +23,15 @@ struct ccw_io_region {
+ 	__u32	ret_code;
+ } __packed;
+ 
++/*
++ * used for processing commands that trigger asynchronous actions
++ * Note: this is controlled by a capability
++ */
++#define VFIO_CCW_ASYNC_CMD_HSCH (1 << 0)
++#define VFIO_CCW_ASYNC_CMD_CSCH (1 << 1)
++struct ccw_cmd_region {
++	__u32 command;
++	__u32 ret_code;
++} __packed;
++
+ #endif
