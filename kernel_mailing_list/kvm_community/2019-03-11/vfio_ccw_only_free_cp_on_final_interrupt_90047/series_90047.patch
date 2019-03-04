@@ -1,0 +1,117 @@
+From patchwork Mon Mar 11 10:20:25 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Cornelia Huck <cohuck@redhat.com>
+X-Patchwork-Id: 10847219
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id CD6BE1390
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 11 Mar 2019 10:20:36 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B176629027
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 11 Mar 2019 10:20:36 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id AE20B2904E; Mon, 11 Mar 2019 10:20:36 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 8287929027
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 11 Mar 2019 10:20:35 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727081AbfCKKUe (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 11 Mar 2019 06:20:34 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:38540 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726932AbfCKKUd (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Mar 2019 06:20:33 -0400
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 6F27B3092648;
+        Mon, 11 Mar 2019 10:20:33 +0000 (UTC)
+Received: from localhost (ovpn-117-96.ams2.redhat.com [10.36.117.96])
+        by smtp.corp.redhat.com (Postfix) with ESMTPS id 11A025DD6B;
+        Mon, 11 Mar 2019 10:20:32 +0000 (UTC)
+From: Cornelia Huck <cohuck@redhat.com>
+To: Eric Farman <farman@linux.ibm.com>,
+        Farhan Ali <alifm@linux.ibm.com>
+Cc: Halil Pasic <pasic@linux.ibm.com>, linux-s390@vger.kernel.org,
+        kvm@vger.kernel.org, Cornelia Huck <cohuck@redhat.com>,
+        stable@vger.kernel.org
+Subject: [PATCH] vfio: ccw: only free cp on final interrupt
+Date: Mon, 11 Mar 2019 11:20:25 +0100
+Message-Id: <20190311102025.23941-1-cohuck@redhat.com>
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.43]);
+ Mon, 11 Mar 2019 10:20:33 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+When we get an interrupt for a channel program, it is not
+necessarily the final interrupt; for example, the issuing
+guest may request an intermediate interrupt by specifying
+the program-controlled-interrupt flag on a ccw.
+
+We must not switch the state to idle if the interrupt is not
+yet final; even more importantly, we must not free the translated
+channel program if the interrupt is not yet final, or the host
+can crash during cp rewind.
+
+Fixes: e5f84dbaea59 ("vfio: ccw: return I/O results asynchronously")
+Cc: stable@vger.kernel.org # v4.12+
+Signed-off-by: Cornelia Huck <cohuck@redhat.com>
+Reviewed-by: Eric Farman <farman@linux.ibm.com>
+---
+
+Previously part of "vfio-ccw: rework ssch state handling". Please review,
+I plan to send a pull req asap.
+
+---
+ drivers/s390/cio/vfio_ccw_drv.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/s390/cio/vfio_ccw_drv.c b/drivers/s390/cio/vfio_ccw_drv.c
+index a10cec0e86eb..0b3b9de45c60 100644
+--- a/drivers/s390/cio/vfio_ccw_drv.c
++++ b/drivers/s390/cio/vfio_ccw_drv.c
+@@ -72,20 +72,24 @@ static void vfio_ccw_sch_io_todo(struct work_struct *work)
+ {
+ 	struct vfio_ccw_private *private;
+ 	struct irb *irb;
++	bool is_final;
+ 
+ 	private = container_of(work, struct vfio_ccw_private, io_work);
+ 	irb = &private->irb;
+ 
++	is_final = !(scsw_actl(&irb->scsw) &
++		     (SCSW_ACTL_DEVACT | SCSW_ACTL_SCHACT));
+ 	if (scsw_is_solicited(&irb->scsw)) {
+ 		cp_update_scsw(&private->cp, &irb->scsw);
+-		cp_free(&private->cp);
++		if (is_final)
++			cp_free(&private->cp);
+ 	}
+ 	memcpy(private->io_region->irb_area, irb, sizeof(*irb));
+ 
+ 	if (private->io_trigger)
+ 		eventfd_signal(private->io_trigger, 1);
+ 
+-	if (private->mdev)
++	if (private->mdev && is_final)
+ 		private->state = VFIO_CCW_STATE_IDLE;
+ }
+ 

@@ -1,0 +1,364 @@
+From patchwork Mon Mar 18 11:43:23 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Xiaoyao Li <xiaoyao.li@linux.intel.com>
+X-Patchwork-Id: 10857483
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D0E5F922
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 18 Mar 2019 11:44:04 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B5E7C293CF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 18 Mar 2019 11:44:04 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id A4516293D4; Mon, 18 Mar 2019 11:44:04 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2E46C293CF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 18 Mar 2019 11:44:04 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727246AbfCRLnw (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 18 Mar 2019 07:43:52 -0400
+Received: from mga01.intel.com ([192.55.52.88]:2097 "EHLO mga01.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727220AbfCRLnw (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 18 Mar 2019 07:43:52 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga101.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 18 Mar 2019 04:43:51 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.58,493,1544515200";
+   d="scan'208";a="126363914"
+Received: from lxy-server.sh.intel.com ([10.239.48.11])
+  by orsmga008.jf.intel.com with ESMTP; 18 Mar 2019 04:43:49 -0700
+From: Xiaoyao Li <xiaoyao.li@linux.intel.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>, =?utf-8?b?UmFk?=
+	=?utf-8?b?aW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Xiaoyao Li <xiaoyao.li@linux.intel.com>,
+        Thomas Gleixner <tglx@linutronix.de>,
+        Ingo Molnar <mingo@redhat.com>, Borislav Petkov <bp@alien8.de>,
+        "H. Peter Anvin" <hpa@zytor.com>, linux-kernel@vger.kernel.org,
+        chao.gao@intel.com
+Subject: [PATCH v2 1/2] kvm/vmx: avoid CPUID faulting leaking to guest
+Date: Mon, 18 Mar 2019 19:43:23 +0800
+Message-Id: <20190318114324.14198-2-xiaoyao.li@linux.intel.com>
+X-Mailer: git-send-email 2.19.1
+In-Reply-To: <20190318114324.14198-1-xiaoyao.li@linux.intel.com>
+References: <20190318114324.14198-1-xiaoyao.li@linux.intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+cpuid faulting is a feature about CPUID instruction. When cpuif faulting
+is enabled, all execution of the CPUID instruction outside system-management
+mode (SMM) cause a general-protection (#GP) if the CPL > 0.
+
+About this feature, detailed information can be found at
+https://www.intel.com/content/dam/www/public/us/en/documents/application-notes/virtualization-technology-flexmigration-application-note.pdf
+
+Current KVM provides software emulation of this feature for guest.
+However, because cpuid faulting takes higher priority over CPUID vm exit (Intel
+SDM vol3.25.1.1), there is a risk of leaking cpuid faulting to guest when host
+enables it. If host enables cpuid faulting by setting the bit 0 of
+MSR_MISC_FEATURES_ENABLES, it will pass to guest since there is no handling of
+MSR_MISC_FEATURES_ENABLES yet. As a result, when guest calls CPUID instruction
+in CPL > 0, it will generate a #GP instead of CPUID vm eixt.
+
+This issue will cause guest boot failure when guest uses *modprobe*
+to load modules. *modprobe* calls CPUID instruction, thus causing #GP in
+guest. Since there is no handling of cpuid faulting in #GP handler, guest
+fails boot.
+
+To fix this issue, we should switch cpuid faulting bit between host and guest.
+Since MSR_MISC_FEATURES_ENABLES is intel-specific, this patch implement the
+switching only in vmx. It clears the cpuid faulting bit and save host's
+value before switching to guest, and restores the cpuid faulting settings of
+host before switching to host.
+
+Because kvm provides the software emulation of cpuid faulting, we can
+just clear the cpuid faulting bit in hardware MSR when switching to
+guest.
+
+Signed-off-by: Xiaoyao Li <xiaoyao.li@linux.intel.com>
+---
+Changes in v2:
+- move the save/restore of cpuid faulting bit to
+vmx_prepare_swich_to_guest/vmx_prepare_swich_to_host to avoid every
+vmentry RDMSR, based on Paolo's comment.
+
+---
+ arch/x86/kvm/vmx/vmx.c | 34 ++++++++++++++++++++++++++++++++++
+ arch/x86/kvm/vmx/vmx.h |  2 ++
+ 2 files changed, 36 insertions(+)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 541d442edd4e..2c59e0209e36 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -1035,6 +1035,23 @@ static void pt_guest_exit(struct vcpu_vmx *vmx)
+ 	wrmsrl(MSR_IA32_RTIT_CTL, vmx->pt_desc.host.ctl);
+ }
+ 
++static void vmx_save_host_cpuid_fault(struct vcpu_vmx *vmx)
++{
++	u64 host_val;
++
++	if (!boot_cpu_has(X86_FEATURE_CPUID_FAULT))
++		return;
++
++	rdmsrl(MSR_MISC_FEATURES_ENABLES, host_val);
++	vmx->host_msr_misc_features_enables = host_val;
++
++	/* clear cpuid fault bit to avoid it leak to guest */
++	if (host_val & MSR_MISC_FEATURES_ENABLES_CPUID_FAULT) {
++		wrmsrl(MSR_MISC_FEATURES_ENABLES,
++		       host_val & ~MSR_MISC_FEATURES_ENABLES_CPUID_FAULT);
++	}
++}
++
+ void vmx_prepare_switch_to_guest(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+@@ -1068,6 +1085,8 @@ void vmx_prepare_switch_to_guest(struct kvm_vcpu *vcpu)
+ 	vmx->loaded_cpu_state = vmx->loaded_vmcs;
+ 	host_state = &vmx->loaded_cpu_state->host_state;
+ 
++	vmx_save_host_cpuid_fault(vmx);
++
+ 	/*
+ 	 * Set host fs and gs selectors.  Unfortunately, 22.2.3 does not
+ 	 * allow segment selectors with cpl > 0 or ti == 1.
+@@ -1124,6 +1143,19 @@ void vmx_prepare_switch_to_guest(struct kvm_vcpu *vcpu)
+ 	}
+ }
+ 
++static void vmx_restore_host_cpuid_fault(struct vcpu_vmx *vmx)
++{
++	u64 msrval;
++
++	if (!boot_cpu_has(X86_FEATURE_CPUID_FAULT))
++		return;
++
++	rdmsrl(MSR_MISC_FEATURES_ENABLES, msrval);
++	msrval |= vmx->host_msr_misc_features_enables &
++		MSR_MISC_FEATURES_ENABLES_CPUID_FAULT;
++	wrmsrl(MSR_MISC_FEATURES_ENABLES, msrval);
++}
++
+ static void vmx_prepare_switch_to_host(struct vcpu_vmx *vmx)
+ {
+ 	struct vmcs_host_state *host_state;
+@@ -1137,6 +1169,8 @@ static void vmx_prepare_switch_to_host(struct vcpu_vmx *vmx)
+ 	++vmx->vcpu.stat.host_state_reload;
+ 	vmx->loaded_cpu_state = NULL;
+ 
++	vmx_restore_host_cpuid_fault(vmx);
++
+ #ifdef CONFIG_X86_64
+ 	rdmsrl(MSR_KERNEL_GS_BASE, vmx->msr_guest_kernel_gs_base);
+ #endif
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index 5df73b36fa49..ba867bbc5676 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -268,6 +268,8 @@ struct vcpu_vmx {
+ 	u64 msr_ia32_feature_control_valid_bits;
+ 	u64 ept_pointer;
+ 
++	u64 host_msr_misc_features_enables;
++
+ 	struct pt_desc pt_desc;
+ };
+ 
+
+From patchwork Mon Mar 18 11:43:24 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Xiaoyao Li <xiaoyao.li@linux.intel.com>
+X-Patchwork-Id: 10857481
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id A91A01575
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 18 Mar 2019 11:44:02 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 8EE91293CF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 18 Mar 2019 11:44:02 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 82F6B293D4; Mon, 18 Mar 2019 11:44:02 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 15A5F293CF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 18 Mar 2019 11:44:02 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727381AbfCRLn4 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 18 Mar 2019 07:43:56 -0400
+Received: from mga01.intel.com ([192.55.52.88]:2097 "EHLO mga01.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727357AbfCRLnz (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 18 Mar 2019 07:43:55 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga101.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 18 Mar 2019 04:43:54 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.58,493,1544515200";
+   d="scan'208";a="126363924"
+Received: from lxy-server.sh.intel.com ([10.239.48.11])
+  by orsmga008.jf.intel.com with ESMTP; 18 Mar 2019 04:43:52 -0700
+From: Xiaoyao Li <xiaoyao.li@linux.intel.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>, =?utf-8?b?UmFk?=
+	=?utf-8?b?aW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Xiaoyao Li <xiaoyao.li@linux.intel.com>,
+        Thomas Gleixner <tglx@linutronix.de>,
+        Ingo Molnar <mingo@redhat.com>, Borislav Petkov <bp@alien8.de>,
+        "H. Peter Anvin" <hpa@zytor.com>, linux-kernel@vger.kernel.org,
+        chao.gao@intel.com
+Subject: [PATCH v2 2/2] kvm/vmx: Using hardware cpuid faulting to avoid
+ emulation overhead
+Date: Mon, 18 Mar 2019 19:43:24 +0800
+Message-Id: <20190318114324.14198-3-xiaoyao.li@linux.intel.com>
+X-Mailer: git-send-email 2.19.1
+In-Reply-To: <20190318114324.14198-1-xiaoyao.li@linux.intel.com>
+References: <20190318114324.14198-1-xiaoyao.li@linux.intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Current cpuid faulting of guest is purely emulated in kvm, which exploits
+CPUID vm exit to inject #GP to guest. However, if host hardware cpu has
+X86_FEATURE_CPUID_FAULT, we can just use the hardware cpuid faulting for
+guest to avoid the vm exit overhead.
+
+Note: cpuid faulting takes higher priority over CPUID instruction vm
+exit (Intel SDM vol3.25.1.1).
+
+Since cpuid faulting only exists on some Intel's cpu, just apply this
+optimization to vmx.
+
+Signed-off-by: Xiaoyao Li <xiaoyao.li@linux.intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  2 ++
+ arch/x86/kvm/vmx/vmx.c          | 19 +++++++++++++++----
+ arch/x86/kvm/x86.c              | 15 ++++++++++++---
+ 3 files changed, 29 insertions(+), 7 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index ce79d7bfe1fd..14cad587b804 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1339,6 +1339,8 @@ void kvm_lmsw(struct kvm_vcpu *vcpu, unsigned long msw);
+ void kvm_get_cs_db_l_bits(struct kvm_vcpu *vcpu, int *db, int *l);
+ int kvm_set_xcr(struct kvm_vcpu *vcpu, u32 index, u64 xcr);
+ 
++int kvm_supported_msr_misc_features_enables(struct kvm_vcpu *vcpu, u64 data);
++
+ int kvm_get_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr);
+ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr);
+ 
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 2c59e0209e36..6b413e471dca 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -1037,7 +1037,7 @@ static void pt_guest_exit(struct vcpu_vmx *vmx)
+ 
+ static void vmx_save_host_cpuid_fault(struct vcpu_vmx *vmx)
+ {
+-	u64 host_val;
++	u64 host_val, guest_val;
+ 
+ 	if (!boot_cpu_has(X86_FEATURE_CPUID_FAULT))
+ 		return;
+@@ -1045,10 +1045,12 @@ static void vmx_save_host_cpuid_fault(struct vcpu_vmx *vmx)
+ 	rdmsrl(MSR_MISC_FEATURES_ENABLES, host_val);
+ 	vmx->host_msr_misc_features_enables = host_val;
+ 
+-	/* clear cpuid fault bit to avoid it leak to guest */
+-	if (host_val & MSR_MISC_FEATURES_ENABLES_CPUID_FAULT) {
++	guest_val = vmx->vcpu.arch.msr_misc_features_enables;
++
++	/* we can use the hardware cpuid faulting to avoid emulation overhead */
++	if ((host_val ^ guest_val) & MSR_MISC_FEATURES_ENABLES_CPUID_FAULT) {
+ 		wrmsrl(MSR_MISC_FEATURES_ENABLES,
+-		       host_val & ~MSR_MISC_FEATURES_ENABLES_CPUID_FAULT);
++		       host_val ^ MSR_MISC_FEATURES_ENABLES_CPUID_FAULT);
+ 	}
+ }
+ 
+@@ -2057,6 +2059,15 @@ static int vmx_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 		else
+ 			vmx->pt_desc.guest.addr_a[index / 2] = data;
+ 		break;
++	case MSR_MISC_FEATURES_ENABLES:
++		if (!kvm_supported_msr_misc_features_enables(vcpu, data))
++			return 1;
++		if (boot_cpu_has(X86_FEATURE_CPUID_FAULT)) {
++			if (vmx->loaded_cpu_state)
++				wrmsrl(MSR_MISC_FEATURES_ENABLES, data);
++		}
++		vcpu->arch.msr_misc_features_enables = data;
++		break;
+ 	case MSR_TSC_AUX:
+ 		if (!msr_info->host_initiated &&
+ 		    !guest_cpuid_has(vcpu, X86_FEATURE_RDTSCP))
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 434ec113cc79..33a8c95b2f2e 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -2449,6 +2449,17 @@ static void record_steal_time(struct kvm_vcpu *vcpu)
+ 		&vcpu->arch.st.steal, sizeof(struct kvm_steal_time));
+ }
+ 
++int kvm_supported_msr_misc_features_enables(struct kvm_vcpu *vcpu, u64 data)
++{
++	if (data & ~MSR_MISC_FEATURES_ENABLES_CPUID_FAULT ||
++	    (data & MSR_MISC_FEATURES_ENABLES_CPUID_FAULT &&
++	     !supports_cpuid_fault(vcpu)))
++		return 0;
++	else
++		return 1;
++}
++EXPORT_SYMBOL_GPL(kvm_supported_msr_misc_features_enables);
++
+ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ {
+ 	bool pr = false;
+@@ -2669,9 +2680,7 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 		vcpu->arch.msr_platform_info = data;
+ 		break;
+ 	case MSR_MISC_FEATURES_ENABLES:
+-		if (data & ~MSR_MISC_FEATURES_ENABLES_CPUID_FAULT ||
+-		    (data & MSR_MISC_FEATURES_ENABLES_CPUID_FAULT &&
+-		     !supports_cpuid_fault(vcpu)))
++		if (!kvm_supported_msr_misc_features_enables(vcpu, data))
+ 			return 1;
+ 		vcpu->arch.msr_misc_features_enables = data;
+ 		break;

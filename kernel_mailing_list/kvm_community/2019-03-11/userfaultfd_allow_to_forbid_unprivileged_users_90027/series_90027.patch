@@ -1,0 +1,562 @@
+From patchwork Mon Mar 11 09:36:59 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Peter Xu <peterx@redhat.com>
+X-Patchwork-Id: 10847127
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 5059814DE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 11 Mar 2019 09:37:29 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3DC1928F79
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 11 Mar 2019 09:37:29 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 31C6528FB6; Mon, 11 Mar 2019 09:37:29 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A618F28F79
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 11 Mar 2019 09:37:28 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727245AbfCKJhX (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 11 Mar 2019 05:37:23 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:40352 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726969AbfCKJhX (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Mar 2019 05:37:23 -0400
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 71CFD30821E2;
+        Mon, 11 Mar 2019 09:37:22 +0000 (UTC)
+Received: from xz-x1.nay.redhat.com (dhcp-14-116.nay.redhat.com
+ [10.66.14.116])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 595225D706;
+        Mon, 11 Mar 2019 09:37:15 +0000 (UTC)
+From: Peter Xu <peterx@redhat.com>
+To: linux-kernel@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Hugh Dickins <hughd@google.com>,
+        Luis Chamberlain <mcgrof@kernel.org>,
+        Maxime Coquelin <maxime.coquelin@redhat.com>,
+        kvm@vger.kernel.org, Jerome Glisse <jglisse@redhat.com>,
+        Pavel Emelyanov <xemul@virtuozzo.com>,
+        Johannes Weiner <hannes@cmpxchg.org>, peterx@redhat.com,
+        Martin Cracauer <cracauer@cons.org>,
+        Denis Plotnikov <dplotnikov@virtuozzo.com>, linux-mm@kvack.org,
+        Marty McFadden <mcfadden8@llnl.gov>,
+        Maya Gokhale <gokhale2@llnl.gov>,
+        Mike Kravetz <mike.kravetz@oracle.com>,
+        Andrea Arcangeli <aarcange@redhat.com>,
+        Mike Rapoport <rppt@linux.vnet.ibm.com>,
+        Kees Cook <keescook@chromium.org>,
+        Mel Gorman <mgorman@suse.de>,
+        "Kirill A . Shutemov" <kirill@shutemov.name>,
+        linux-fsdevel@vger.kernel.org,
+        "Dr . David Alan Gilbert" <dgilbert@redhat.com>,
+        Andrew Morton <akpm@linux-foundation.org>
+Subject: [PATCH 1/3] userfaultfd/sysctl: introduce unprivileged_userfaultfd
+Date: Mon, 11 Mar 2019 17:36:59 +0800
+Message-Id: <20190311093701.15734-2-peterx@redhat.com>
+In-Reply-To: <20190311093701.15734-1-peterx@redhat.com>
+References: <20190311093701.15734-1-peterx@redhat.com>
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.47]);
+ Mon, 11 Mar 2019 09:37:22 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Introduce a new sysctl called "vm.unprivileged_userfaultfd" that can
+be used to decide whether userfaultfd syscalls are allowed by
+unprivileged users.  It'll allow three modes:
+
+  - disabled: disallow unprivileged users to use uffd
+
+  - enabled:  allow unprivileged users to use uffd
+
+  - kvm:      allow unprivileged users to use uffd only if the user
+              had enough permission to open /dev/kvm (this option only
+              exists if the kernel turned on KVM).
+
+This patch only introduce the new interface but not yet applied it to
+the userfaultfd syscalls, which will be done in the follow up patch.
+
+Signed-off-by: Peter Xu <peterx@redhat.com>
+---
+ fs/userfaultfd.c              | 96 +++++++++++++++++++++++++++++++++++
+ include/linux/userfaultfd_k.h |  5 ++
+ init/Kconfig                  | 11 ++++
+ kernel/sysctl.c               | 11 ++++
+ 4 files changed, 123 insertions(+)
+
+diff --git a/fs/userfaultfd.c b/fs/userfaultfd.c
+index 89800fc7dc9d..c2188464555a 100644
+--- a/fs/userfaultfd.c
++++ b/fs/userfaultfd.c
+@@ -29,6 +29,8 @@
+ #include <linux/ioctl.h>
+ #include <linux/security.h>
+ #include <linux/hugetlb.h>
++#include <linux/sysctl.h>
++#include <linux/string.h>
+ 
+ static struct kmem_cache *userfaultfd_ctx_cachep __read_mostly;
+ 
+@@ -93,6 +95,95 @@ struct userfaultfd_wake_range {
+ 	unsigned long len;
+ };
+ 
++enum unprivileged_userfaultfd {
++	/* Disallow unprivileged users to use userfaultfd syscalls */
++	UFFD_UNPRIV_DISABLED = 0,
++	/* Allow unprivileged users to use userfaultfd syscalls */
++	UFFD_UNPRIV_ENABLED,
++#if IS_ENABLED(CONFIG_KVM)
++	/*
++	 * Allow unprivileged users to use userfaultfd syscalls only
++	 * if the user had enough permission to open /dev/kvm
++	 */
++	UFFD_UNPRIV_KVM,
++#endif
++	UFFD_UNPRIV_NUM,
++};
++
++static int unprivileged_userfaultfd __read_mostly;
++static const char *unprivileged_userfaultfd_str[UFFD_UNPRIV_NUM] = {
++	"disabled", "enabled",
++#if IS_ENABLED(CONFIG_KVM)
++	"kvm",
++#endif
++};
++
++static int unprivileged_uffd_parse(char *buf, size_t size)
++{
++	int i;
++
++	for (i = 0; i < UFFD_UNPRIV_NUM; i++) {
++		if (!strncmp(unprivileged_userfaultfd_str[i], buf, size)) {
++			unprivileged_userfaultfd = i;
++			return 0;
++		}
++	}
++
++	return -EFAULT;
++}
++
++static void unprivileged_uffd_dump(char *buf, size_t size)
++{
++	int i;
++
++	*buf = 0x00;
++	for (i = 0; i < UFFD_UNPRIV_NUM; i++) {
++		if (i == unprivileged_userfaultfd)
++			strncat(buf, "[", size - strlen(buf));
++		strncat(buf, unprivileged_userfaultfd_str[i],
++			size - strlen(buf));
++		if (i == unprivileged_userfaultfd)
++			strncat(buf, "]", size - strlen(buf));
++		strncat(buf, " ", size - strlen(buf));
++	}
++
++}
++
++int proc_unprivileged_userfaultfd(struct ctl_table *table, int write,
++				  void __user *buffer, size_t *lenp,
++				  loff_t *ppos)
++{
++	struct ctl_table tmp_table = { .maxlen = 0 };
++	int ret;
++
++	if (write) {
++		tmp_table.maxlen = UFFD_UNPRIV_STRLEN;
++		tmp_table.data = kmalloc(UFFD_UNPRIV_STRLEN, GFP_KERNEL);
++
++		ret = proc_dostring(&tmp_table, write, buffer, lenp, ppos);
++		if (ret)
++			goto out;
++
++		ret = unprivileged_uffd_parse(tmp_table.data,
++					      UFFD_UNPRIV_STRLEN);
++	} else {
++		/* Leave space for "[]" */
++		int len = UFFD_UNPRIV_STRLEN * UFFD_UNPRIV_NUM + 2;
++
++		tmp_table.maxlen = len;
++		tmp_table.data = kmalloc(len, GFP_KERNEL);
++
++		unprivileged_uffd_dump(tmp_table.data, len);
++
++		ret = proc_dostring(&tmp_table, write, buffer, lenp, ppos);
++	}
++
++out:
++	if (tmp_table.data)
++		kfree(tmp_table.data);
++	return ret;
++}
++
+ static int userfaultfd_wake_function(wait_queue_entry_t *wq, unsigned mode,
+ 				     int wake_flags, void *key)
+ {
+@@ -1955,6 +2046,11 @@ SYSCALL_DEFINE1(userfaultfd, int, flags)
+ 
+ static int __init userfaultfd_init(void)
+ {
++	char unpriv_uffd[UFFD_UNPRIV_STRLEN] =
++	    CONFIG_USERFAULTFD_UNPRIVILEGED_DEFAULT;
++
++	unprivileged_uffd_parse(unpriv_uffd, sizeof(unpriv_uffd));
++
+ 	userfaultfd_ctx_cachep = kmem_cache_create("userfaultfd_ctx_cache",
+ 						sizeof(struct userfaultfd_ctx),
+ 						0,
+diff --git a/include/linux/userfaultfd_k.h b/include/linux/userfaultfd_k.h
+index 37c9eba75c98..f53bc02ccffc 100644
+--- a/include/linux/userfaultfd_k.h
++++ b/include/linux/userfaultfd_k.h
+@@ -28,6 +28,11 @@
+ #define UFFD_SHARED_FCNTL_FLAGS (O_CLOEXEC | O_NONBLOCK)
+ #define UFFD_FLAGS_SET (EFD_SHARED_FCNTL_FLAGS)
+ 
++#define UFFD_UNPRIV_STRLEN 16
++int proc_unprivileged_userfaultfd(struct ctl_table *table, int write,
++				  void __user *buffer, size_t *lenp,
++				  loff_t *ppos);
++
+ extern vm_fault_t handle_userfault(struct vm_fault *vmf, unsigned long reason);
+ 
+ extern ssize_t mcopy_atomic(struct mm_struct *dst_mm, unsigned long dst_start,
+diff --git a/init/Kconfig b/init/Kconfig
+index c9386a365eea..d90caa4fed17 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -1512,6 +1512,17 @@ config USERFAULTFD
+ 	  Enable the userfaultfd() system call that allows to intercept and
+ 	  handle page faults in userland.
+ 
++config USERFAULTFD_UNPRIVILEGED_DEFAULT
++        string "Default behavior for unprivileged userfault syscalls"
++        depends on USERFAULTFD
++        default "disabled"
++        help
++          Set this to "enabled" to allow userfaultfd syscalls from
++          unprivileged users.  Set this to "disabled" to forbid
++          userfaultfd syscalls from unprivileged users.  Set this to
++          "kvm" to forbid unpriviledged users but still allow users
++          who had enough permission to open /dev/kvm.
++
+ config ARCH_HAS_MEMBARRIER_CALLBACKS
+ 	bool
+ 
+diff --git a/kernel/sysctl.c b/kernel/sysctl.c
+index 7578e21a711b..5dc9f3d283dd 100644
+--- a/kernel/sysctl.c
++++ b/kernel/sysctl.c
+@@ -96,6 +96,9 @@
+ #ifdef CONFIG_LOCKUP_DETECTOR
+ #include <linux/nmi.h>
+ #endif
++#ifdef CONFIG_USERFAULTFD
++#include <linux/userfaultfd_k.h>
++#endif
+ 
+ #if defined(CONFIG_SYSCTL)
+ 
+@@ -1704,6 +1707,14 @@ static struct ctl_table vm_table[] = {
+ 		.extra1		= (void *)&mmap_rnd_compat_bits_min,
+ 		.extra2		= (void *)&mmap_rnd_compat_bits_max,
+ 	},
++#endif
++#ifdef CONFIG_USERFAULTFD
++	{
++		.procname	= "unprivileged_userfaultfd",
++		.maxlen		= UFFD_UNPRIV_STRLEN,
++		.mode		= 0644,
++		.proc_handler	= proc_unprivileged_userfaultfd,
++	},
+ #endif
+ 	{ }
+ };
+
+From patchwork Mon Mar 11 09:37:00 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Peter Xu <peterx@redhat.com>
+X-Patchwork-Id: 10847139
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3D66F1823
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 11 Mar 2019 09:37:53 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 29C5428FBD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 11 Mar 2019 09:37:53 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 1C26428FD3; Mon, 11 Mar 2019 09:37:53 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id BB46E28FBD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 11 Mar 2019 09:37:52 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727321AbfCKJhf (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 11 Mar 2019 05:37:35 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:51420 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727263AbfCKJhe (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Mar 2019 05:37:34 -0400
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 399093086265;
+        Mon, 11 Mar 2019 09:37:34 +0000 (UTC)
+Received: from xz-x1.nay.redhat.com (dhcp-14-116.nay.redhat.com
+ [10.66.14.116])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id EAB725D705;
+        Mon, 11 Mar 2019 09:37:22 +0000 (UTC)
+From: Peter Xu <peterx@redhat.com>
+To: linux-kernel@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Hugh Dickins <hughd@google.com>,
+        Luis Chamberlain <mcgrof@kernel.org>,
+        Maxime Coquelin <maxime.coquelin@redhat.com>,
+        kvm@vger.kernel.org, Jerome Glisse <jglisse@redhat.com>,
+        Pavel Emelyanov <xemul@virtuozzo.com>,
+        Johannes Weiner <hannes@cmpxchg.org>, peterx@redhat.com,
+        Martin Cracauer <cracauer@cons.org>,
+        Denis Plotnikov <dplotnikov@virtuozzo.com>, linux-mm@kvack.org,
+        Marty McFadden <mcfadden8@llnl.gov>,
+        Maya Gokhale <gokhale2@llnl.gov>,
+        Mike Kravetz <mike.kravetz@oracle.com>,
+        Andrea Arcangeli <aarcange@redhat.com>,
+        Mike Rapoport <rppt@linux.vnet.ibm.com>,
+        Kees Cook <keescook@chromium.org>,
+        Mel Gorman <mgorman@suse.de>,
+        "Kirill A . Shutemov" <kirill@shutemov.name>,
+        linux-fsdevel@vger.kernel.org,
+        "Dr . David Alan Gilbert" <dgilbert@redhat.com>,
+        Andrew Morton <akpm@linux-foundation.org>
+Subject: [PATCH 2/3] kvm/mm: introduce MMF_USERFAULTFD_ALLOW flag
+Date: Mon, 11 Mar 2019 17:37:00 +0800
+Message-Id: <20190311093701.15734-3-peterx@redhat.com>
+In-Reply-To: <20190311093701.15734-1-peterx@redhat.com>
+References: <20190311093701.15734-1-peterx@redhat.com>
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.49]);
+ Mon, 11 Mar 2019 09:37:34 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Introduce a new MMF_USERFAULTFD_ALLOW flag and tag it upon the process
+memory address space as long as the process opened the /dev/kvm once.
+It'll be dropped automatically when fork() by MMF_INIT_TASK to reset
+the userfaultfd permission.
+
+Detecting the flag gives us a chance to open the green light for kvm
+upon using userfaultfd when we want to make sure all the existing kvm
+users will still be able to run their userspace programs without being
+affected by the new unprivileged userfaultfd switch.
+
+Suggested-by: Andrea Arcangeli <aarcange@redhat.com>
+Signed-off-by: Peter Xu <peterx@redhat.com>
+---
+ include/linux/sched/coredump.h | 1 +
+ virt/kvm/kvm_main.c            | 7 +++++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/include/linux/sched/coredump.h b/include/linux/sched/coredump.h
+index ecdc6542070f..9f6e71182892 100644
+--- a/include/linux/sched/coredump.h
++++ b/include/linux/sched/coredump.h
+@@ -72,6 +72,7 @@ static inline int get_dumpable(struct mm_struct *mm)
+ #define MMF_DISABLE_THP		24	/* disable THP for all VMAs */
+ #define MMF_OOM_VICTIM		25	/* mm is the oom victim */
+ #define MMF_OOM_REAP_QUEUED	26	/* mm was queued for oom_reaper */
++#define MMF_USERFAULTFD_ALLOW	27	/* allow userfaultfd syscall */
+ #define MMF_DISABLE_THP_MASK	(1 << MMF_DISABLE_THP)
+ 
+ #define MMF_INIT_MASK		(MMF_DUMPABLE_MASK | MMF_DUMP_FILTER_MASK |\
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index d237d3350a99..079f6ac00c36 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -3403,7 +3403,14 @@ static long kvm_dev_ioctl(struct file *filp,
+ 	return r;
+ }
+ 
++static int kvm_dev_open(struct inode *inode, struct file *file)
++{
++	set_bit(MMF_USERFAULTFD_ALLOW, &current->mm->flags);
++	return 0;
++}
++
+ static struct file_operations kvm_chardev_ops = {
++	.open		= kvm_dev_open,
+ 	.unlocked_ioctl = kvm_dev_ioctl,
+ 	.llseek		= noop_llseek,
+ 	KVM_COMPAT(kvm_dev_ioctl),
+
+From patchwork Mon Mar 11 09:37:01 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Peter Xu <peterx@redhat.com>
+X-Patchwork-Id: 10847135
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 5E9F61823
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 11 Mar 2019 09:37:48 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4C9BD28FBD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 11 Mar 2019 09:37:48 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4039128FD3; Mon, 11 Mar 2019 09:37:48 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D778628FBD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 11 Mar 2019 09:37:47 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727399AbfCKJhm (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 11 Mar 2019 05:37:42 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:42232 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727323AbfCKJhl (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Mar 2019 05:37:41 -0400
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id A7D2EC002965;
+        Mon, 11 Mar 2019 09:37:41 +0000 (UTC)
+Received: from xz-x1.nay.redhat.com (dhcp-14-116.nay.redhat.com
+ [10.66.14.116])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id B3B195D705;
+        Mon, 11 Mar 2019 09:37:34 +0000 (UTC)
+From: Peter Xu <peterx@redhat.com>
+To: linux-kernel@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Hugh Dickins <hughd@google.com>,
+        Luis Chamberlain <mcgrof@kernel.org>,
+        Maxime Coquelin <maxime.coquelin@redhat.com>,
+        kvm@vger.kernel.org, Jerome Glisse <jglisse@redhat.com>,
+        Pavel Emelyanov <xemul@virtuozzo.com>,
+        Johannes Weiner <hannes@cmpxchg.org>, peterx@redhat.com,
+        Martin Cracauer <cracauer@cons.org>,
+        Denis Plotnikov <dplotnikov@virtuozzo.com>, linux-mm@kvack.org,
+        Marty McFadden <mcfadden8@llnl.gov>,
+        Maya Gokhale <gokhale2@llnl.gov>,
+        Mike Kravetz <mike.kravetz@oracle.com>,
+        Andrea Arcangeli <aarcange@redhat.com>,
+        Mike Rapoport <rppt@linux.vnet.ibm.com>,
+        Kees Cook <keescook@chromium.org>,
+        Mel Gorman <mgorman@suse.de>,
+        "Kirill A . Shutemov" <kirill@shutemov.name>,
+        linux-fsdevel@vger.kernel.org,
+        "Dr . David Alan Gilbert" <dgilbert@redhat.com>,
+        Andrew Morton <akpm@linux-foundation.org>
+Subject: [PATCH 3/3] userfaultfd: apply unprivileged_userfaultfd check
+Date: Mon, 11 Mar 2019 17:37:01 +0800
+Message-Id: <20190311093701.15734-4-peterx@redhat.com>
+In-Reply-To: <20190311093701.15734-1-peterx@redhat.com>
+References: <20190311093701.15734-1-peterx@redhat.com>
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.31]);
+ Mon, 11 Mar 2019 09:37:41 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Apply the unprivileged_userfaultfd check when doing userfaultfd
+syscall.  We didn't check it in other paths of userfaultfd (e.g., the
+ioctl() path) because we don't want to drag down the fast path of
+userfaultfd, as suggested by Andrea.
+
+Suggested-by: Andrea Arcangeli <aarcange@redhat.com>
+Suggested-by: Mike Rapoport <rppt@linux.vnet.ibm.com>
+Signed-off-by: Peter Xu <peterx@redhat.com>
+---
+ fs/userfaultfd.c | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/fs/userfaultfd.c b/fs/userfaultfd.c
+index c2188464555a..effdcfc88629 100644
+--- a/fs/userfaultfd.c
++++ b/fs/userfaultfd.c
+@@ -951,6 +951,28 @@ void userfaultfd_unmap_complete(struct mm_struct *mm, struct list_head *uf)
+ 	}
+ }
+ 
++/* Whether current process allows to use userfaultfd syscalls */
++static bool userfaultfd_allowed(void)
++{
++	bool allowed = false;
++
++	switch (unprivileged_userfaultfd) {
++	case UFFD_UNPRIV_ENABLED:
++		allowed = true;
++		break;
++	case UFFD_UNPRIV_KVM:
++		allowed = !!test_bit(MMF_USERFAULTFD_ALLOW,
++				     &current->mm->flags);
++		/* Fall through */
++	case UFFD_UNPRIV_DISABLED:
++		allowed = allowed || ns_capable(current_user_ns(),
++						CAP_SYS_PTRACE);
++		break;
++	}
++
++	return allowed;
++}
++
+ static int userfaultfd_release(struct inode *inode, struct file *file)
+ {
+ 	struct userfaultfd_ctx *ctx = file->private_data;
+@@ -2018,6 +2040,9 @@ SYSCALL_DEFINE1(userfaultfd, int, flags)
+ 	BUILD_BUG_ON(UFFD_CLOEXEC != O_CLOEXEC);
+ 	BUILD_BUG_ON(UFFD_NONBLOCK != O_NONBLOCK);
+ 
++	if (!userfaultfd_allowed())
++		return -EPERM;
++
+ 	if (flags & ~UFFD_SHARED_FCNTL_FLAGS)
+ 		return -EINVAL;
+ 

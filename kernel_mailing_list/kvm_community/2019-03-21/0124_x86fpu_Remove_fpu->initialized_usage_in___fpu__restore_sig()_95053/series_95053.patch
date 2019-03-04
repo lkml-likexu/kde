@@ -1,0 +1,4679 @@
+From patchwork Thu Mar 21 20:26:09 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864297
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3B40314DE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:03 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1D3EE2A48C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:03 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 0C8B52A498; Thu, 21 Mar 2019 20:28:03 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7B8C62A48C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:02 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728838AbfCUU14 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:27:56 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39416 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1729003AbfCUU06 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:58 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74Gs-00057y-AI; Thu, 21 Mar 2019 21:26:38 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>,
+ Borislav Petkov <bp@suse.de>
+Subject: [PATCH 01/24] x86/fpu: Remove fpu->initialized usage in
+ __fpu__restore_sig()
+Date: Thu, 21 Mar 2019 21:26:09 +0100
+Message-Id: <20190321202632.16810-2-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+This is a preparation for the removal of the ->initialized member in the
+fpu struct.
+__fpu__restore_sig() is deactivating the FPU via fpu__drop() and then
+setting manually ->initialized followed by fpu__restore(). The result is
+that it is possible to manipulate fpu->state and the state of registers
+won't be saved/restored on a context switch which would overwrite
+fpu->state.
+
+Don't access the fpu->state while the content is read from user space
+and examined / sanitized. Use a temporary kmalloc() buffer for the
+preparation of the FPU registers and once the state is considered okay,
+load it. Should something go wrong, return with an error and without
+altering the original FPU registers.
+
+The removal of "fpu__initialize()" is a nop because fpu->initialized is
+already set for the user task.
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Acked-by: Borislav Petkov <bp@suse.de>
+---
+ arch/x86/include/asm/fpu/signal.h |  2 +-
+ arch/x86/kernel/fpu/regset.c      |  5 ++--
+ arch/x86/kernel/fpu/signal.c      | 40 ++++++++++++-------------------
+ 3 files changed, 18 insertions(+), 29 deletions(-)
+
+diff --git a/arch/x86/include/asm/fpu/signal.h b/arch/x86/include/asm/fpu/signal.h
+index 44bbc39a57b30..7fb516b6893a8 100644
+--- a/arch/x86/include/asm/fpu/signal.h
++++ b/arch/x86/include/asm/fpu/signal.h
+@@ -22,7 +22,7 @@ int ia32_setup_frame(int sig, struct ksignal *ksig,
+ 
+ extern void convert_from_fxsr(struct user_i387_ia32_struct *env,
+ 			      struct task_struct *tsk);
+-extern void convert_to_fxsr(struct task_struct *tsk,
++extern void convert_to_fxsr(struct fxregs_state *fxsave,
+ 			    const struct user_i387_ia32_struct *env);
+ 
+ unsigned long
+diff --git a/arch/x86/kernel/fpu/regset.c b/arch/x86/kernel/fpu/regset.c
+index bc02f5144b958..5dbc099178a88 100644
+--- a/arch/x86/kernel/fpu/regset.c
++++ b/arch/x86/kernel/fpu/regset.c
+@@ -269,11 +269,10 @@ convert_from_fxsr(struct user_i387_ia32_struct *env, struct task_struct *tsk)
+ 		memcpy(&to[i], &from[i], sizeof(to[0]));
+ }
+ 
+-void convert_to_fxsr(struct task_struct *tsk,
++void convert_to_fxsr(struct fxregs_state *fxsave,
+ 		     const struct user_i387_ia32_struct *env)
+ 
+ {
+-	struct fxregs_state *fxsave = &tsk->thread.fpu.state.fxsave;
+ 	struct _fpreg *from = (struct _fpreg *) &env->st_space[0];
+ 	struct _fpxreg *to = (struct _fpxreg *) &fxsave->st_space[0];
+ 	int i;
+@@ -350,7 +349,7 @@ int fpregs_set(struct task_struct *target, const struct user_regset *regset,
+ 
+ 	ret = user_regset_copyin(&pos, &count, &kbuf, &ubuf, &env, 0, -1);
+ 	if (!ret)
+-		convert_to_fxsr(target, &env);
++		convert_to_fxsr(&target->thread.fpu.state.fxsave, &env);
+ 
+ 	/*
+ 	 * update the header bit in the xsave header, indicating the
+diff --git a/arch/x86/kernel/fpu/signal.c b/arch/x86/kernel/fpu/signal.c
+index f6a1d299627c5..a874931edf6a9 100644
+--- a/arch/x86/kernel/fpu/signal.c
++++ b/arch/x86/kernel/fpu/signal.c
+@@ -207,11 +207,11 @@ int copy_fpstate_to_sigframe(void __user *buf, void __user *buf_fx, int size)
+ }
+ 
+ static inline void
+-sanitize_restored_xstate(struct task_struct *tsk,
++sanitize_restored_xstate(union fpregs_state *state,
+ 			 struct user_i387_ia32_struct *ia32_env,
+ 			 u64 xfeatures, int fx_only)
+ {
+-	struct xregs_state *xsave = &tsk->thread.fpu.state.xsave;
++	struct xregs_state *xsave = &state->xsave;
+ 	struct xstate_header *header = &xsave->header;
+ 
+ 	if (use_xsave()) {
+@@ -238,7 +238,7 @@ sanitize_restored_xstate(struct task_struct *tsk,
+ 		 */
+ 		xsave->i387.mxcsr &= mxcsr_feature_mask;
+ 
+-		convert_to_fxsr(tsk, ia32_env);
++		convert_to_fxsr(&state->fxsave, ia32_env);
+ 	}
+ }
+ 
+@@ -284,8 +284,6 @@ static int __fpu__restore_sig(void __user *buf, void __user *buf_fx, int size)
+ 	if (!access_ok(buf, size))
+ 		return -EACCES;
+ 
+-	fpu__initialize(fpu);
+-
+ 	if (!static_cpu_has(X86_FEATURE_FPU))
+ 		return fpregs_soft_set(current, NULL,
+ 				       0, sizeof(struct user_i387_ia32_struct),
+@@ -315,40 +313,32 @@ static int __fpu__restore_sig(void __user *buf, void __user *buf_fx, int size)
+ 		 * header. Validate and sanitize the copied state.
+ 		 */
+ 		struct user_i387_ia32_struct env;
++		union fpregs_state *state;
+ 		int err = 0;
++		void *tmp;
+ 
+-		/*
+-		 * Drop the current fpu which clears fpu->initialized. This ensures
+-		 * that any context-switch during the copy of the new state,
+-		 * avoids the intermediate state from getting restored/saved.
+-		 * Thus avoiding the new restored state from getting corrupted.
+-		 * We will be ready to restore/save the state only after
+-		 * fpu->initialized is again set.
+-		 */
+-		fpu__drop(fpu);
++		tmp = kzalloc(sizeof(*state) + fpu_kernel_xstate_size + 64, GFP_KERNEL);
++		if (!tmp)
++			return -ENOMEM;
++		state = PTR_ALIGN(tmp, 64);
+ 
+ 		if (using_compacted_format()) {
+-			err = copy_user_to_xstate(&fpu->state.xsave, buf_fx);
++			err = copy_user_to_xstate(&state->xsave, buf_fx);
+ 		} else {
+-			err = __copy_from_user(&fpu->state.xsave, buf_fx, state_size);
++			err = __copy_from_user(&state->xsave, buf_fx, state_size);
+ 
+ 			if (!err && state_size > offsetof(struct xregs_state, header))
+-				err = validate_xstate_header(&fpu->state.xsave.header);
++				err = validate_xstate_header(&state->xsave.header);
+ 		}
+ 
+ 		if (err || __copy_from_user(&env, buf, sizeof(env))) {
+-			fpstate_init(&fpu->state);
+-			trace_x86_fpu_init_state(fpu);
+ 			err = -1;
+ 		} else {
+-			sanitize_restored_xstate(tsk, &env, xfeatures, fx_only);
++			sanitize_restored_xstate(state, &env, xfeatures, fx_only);
++			copy_kernel_to_fpregs(state);
+ 		}
+ 
+-		local_bh_disable();
+-		fpu->initialized = 1;
+-		fpu__restore(fpu);
+-		local_bh_enable();
+-
++		kfree(tmp);
+ 		return err;
+ 	} else {
+ 		/*
+
+From patchwork Thu Mar 21 20:26:10 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864313
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id BED241515
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:55 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A48CA2A499
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:55 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 98DF42A49D; Thu, 21 Mar 2019 20:28:55 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 299982A499
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:55 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729093AbfCUU2y (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:28:54 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39367 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728670AbfCUU0w (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:52 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74Gs-00057y-QB; Thu, 21 Mar 2019 21:26:38 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 02/24] x86/fpu: Remove fpu__restore()
+Date: Thu, 21 Mar 2019 21:26:10 +0100
+Message-Id: <20190321202632.16810-3-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+There are no users of fpu__restore() so it is time to remove it.
+The comment regarding fpu__restore() and TS bit is stale since commit
+  b3b0870ef3ffe ("i387: do not preload FPU state at task switch time")
+and has no meaning since.
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ Documentation/preempt-locking.txt   |  1 -
+ arch/x86/include/asm/fpu/internal.h |  1 -
+ arch/x86/kernel/fpu/core.c          | 24 ------------------------
+ arch/x86/kernel/process_32.c        |  4 +---
+ arch/x86/kernel/process_64.c        |  4 +---
+ 5 files changed, 2 insertions(+), 32 deletions(-)
+
+diff --git a/Documentation/preempt-locking.txt b/Documentation/preempt-locking.txt
+index 509f5a422d571..dce336134e54a 100644
+--- a/Documentation/preempt-locking.txt
++++ b/Documentation/preempt-locking.txt
+@@ -52,7 +52,6 @@ preemption must be disabled around such regions.
+ 
+ Note, some FPU functions are already explicitly preempt safe.  For example,
+ kernel_fpu_begin and kernel_fpu_end will disable and enable preemption.
+-However, fpu__restore() must be called with preemption disabled.
+ 
+ 
+ RULE #3: Lock acquire and release must be performed by same task
+diff --git a/arch/x86/include/asm/fpu/internal.h b/arch/x86/include/asm/fpu/internal.h
+index fb04a3ded7ddb..75a1d5f712ee7 100644
+--- a/arch/x86/include/asm/fpu/internal.h
++++ b/arch/x86/include/asm/fpu/internal.h
+@@ -28,7 +28,6 @@ extern void fpu__initialize(struct fpu *fpu);
+ extern void fpu__prepare_read(struct fpu *fpu);
+ extern void fpu__prepare_write(struct fpu *fpu);
+ extern void fpu__save(struct fpu *fpu);
+-extern void fpu__restore(struct fpu *fpu);
+ extern int  fpu__restore_sig(void __user *buf, int ia32_frame);
+ extern void fpu__drop(struct fpu *fpu);
+ extern int  fpu__copy(struct fpu *dst_fpu, struct fpu *src_fpu);
+diff --git a/arch/x86/kernel/fpu/core.c b/arch/x86/kernel/fpu/core.c
+index 2e5003fef51a9..1d3ae7988f7f2 100644
+--- a/arch/x86/kernel/fpu/core.c
++++ b/arch/x86/kernel/fpu/core.c
+@@ -303,30 +303,6 @@ void fpu__prepare_write(struct fpu *fpu)
+ 	}
+ }
+ 
+-/*
+- * 'fpu__restore()' is called to copy FPU registers from
+- * the FPU fpstate to the live hw registers and to activate
+- * access to the hardware registers, so that FPU instructions
+- * can be used afterwards.
+- *
+- * Must be called with kernel preemption disabled (for example
+- * with local interrupts disabled, as it is in the case of
+- * do_device_not_available()).
+- */
+-void fpu__restore(struct fpu *fpu)
+-{
+-	fpu__initialize(fpu);
+-
+-	/* Avoid __kernel_fpu_begin() right after fpregs_activate() */
+-	kernel_fpu_disable();
+-	trace_x86_fpu_before_restore(fpu);
+-	fpregs_activate(fpu);
+-	copy_kernel_to_fpregs(&fpu->state);
+-	trace_x86_fpu_after_restore(fpu);
+-	kernel_fpu_enable();
+-}
+-EXPORT_SYMBOL_GPL(fpu__restore);
+-
+ /*
+  * Drops current FPU state: deactivates the fpregs and
+  * the fpstate. NOTE: it still leaves previous contents
+diff --git a/arch/x86/kernel/process_32.c b/arch/x86/kernel/process_32.c
+index e471d8e6f0b24..7888a41a03cdb 100644
+--- a/arch/x86/kernel/process_32.c
++++ b/arch/x86/kernel/process_32.c
+@@ -267,9 +267,7 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
+ 	/*
+ 	 * Leave lazy mode, flushing any hypercalls made here.
+ 	 * This must be done before restoring TLS segments so
+-	 * the GDT and LDT are properly updated, and must be
+-	 * done before fpu__restore(), so the TS bit is up
+-	 * to date.
++	 * the GDT and LDT are properly updated.
+ 	 */
+ 	arch_end_context_switch(next_p);
+ 
+diff --git a/arch/x86/kernel/process_64.c b/arch/x86/kernel/process_64.c
+index 6a62f4af9fcf7..e1983b3a16c43 100644
+--- a/arch/x86/kernel/process_64.c
++++ b/arch/x86/kernel/process_64.c
+@@ -538,9 +538,7 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
+ 	/*
+ 	 * Leave lazy mode, flushing any hypercalls made here.  This
+ 	 * must be done after loading TLS entries in the GDT but before
+-	 * loading segments that might reference them, and and it must
+-	 * be done before fpu__restore(), so the TS bit is up to
+-	 * date.
++	 * loading segments that might reference them.
+ 	 */
+ 	arch_end_context_switch(next_p);
+ 
+
+From patchwork Thu Mar 21 20:26:11 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864301
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9F39614DE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:14 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 8738C2A499
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:14 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 7B4CA2A49B; Thu, 21 Mar 2019 20:28:14 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 200B92A499
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:14 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729012AbfCUU05 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:26:57 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39397 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728975AbfCUU0z (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:55 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74Gt-00057y-9r; Thu, 21 Mar 2019 21:26:39 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>,
+ Borislav Petkov <bp@suse.de>
+Subject: [PATCH 03/24] x86/fpu: Remove preempt_disable() in fpu__clear()
+Date: Thu, 21 Mar 2019 21:26:11 +0100
+Message-Id: <20190321202632.16810-4-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+The preempt_disable() section was introduced in commit
+
+  a10b6a16cdad8 ("x86/fpu: Make the fpu state change in fpu__clear() scheduler-atomic")
+
+and it was said to be temporary.
+
+fpu__initialize() initializes the FPU struct to its "init" value and
+then sets ->initialized to 1. The last part is the important one.
+The content of the `state' does not matter because it gets set via
+copy_init_fpstate_to_fpregs().
+A preemption here has little meaning because the registers will always be
+set to the same content after copy_init_fpstate_to_fpregs(). A softirq
+with a kernel_fpu_begin() could also force to save FPU's registers after
+fpu__initialize() without changing the outcome here.
+
+Remove the preempt_disable() section in fpu__clear(), preemption here
+does not hurt.
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Reviewed-by: Borislav Petkov <bp@suse.de>
+---
+ arch/x86/kernel/fpu/core.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/arch/x86/kernel/fpu/core.c b/arch/x86/kernel/fpu/core.c
+index 1d3ae7988f7f2..1940319268aef 100644
+--- a/arch/x86/kernel/fpu/core.c
++++ b/arch/x86/kernel/fpu/core.c
+@@ -366,11 +366,9 @@ void fpu__clear(struct fpu *fpu)
+ 	 * Make sure fpstate is cleared and initialized.
+ 	 */
+ 	if (static_cpu_has(X86_FEATURE_FPU)) {
+-		preempt_disable();
+ 		fpu__initialize(fpu);
+ 		user_fpu_begin();
+ 		copy_init_fpstate_to_fpregs();
+-		preempt_enable();
+ 	}
+ }
+ 
+
+From patchwork Thu Mar 21 20:26:12 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864331
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id EB83014DE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:53 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D2B392A1DA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:53 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C6CDB2A38A; Thu, 21 Mar 2019 20:29:53 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E1C2B2A1DA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:51 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728825AbfCUU0q (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:26:46 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39308 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728744AbfCUU0q (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:46 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74Gt-00057y-QS; Thu, 21 Mar 2019 21:26:39 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>,
+ Borislav Petkov <bp@suse.de>
+Subject: [PATCH 04/24] x86/fpu: Always init the `state' in fpu__clear()
+Date: Thu, 21 Mar 2019 21:26:12 +0100
+Message-Id: <20190321202632.16810-5-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+fpu__clear() only initializes the `state' if the FPU is present. This
+initialisation is also required for the FPU-less system and takes place
+in math_emulate(). Since fpu__initialize() only performs the
+initialization if ->initialized is zero it does not matter that it is
+invoked each time an opcode is emulated. It makes the removal of
+->initialized easier if the struct is also initialized in the FPU-less
+case at the same time.
+
+Move fpu__initialize() before the FPU check so it is also performed in
+the FPU-less case.
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Reviewed-by: Borislav Petkov <bp@suse.de>
+---
+ arch/x86/include/asm/fpu/internal.h | 1 -
+ arch/x86/kernel/fpu/core.c          | 5 ++---
+ arch/x86/math-emu/fpu_entry.c       | 3 ---
+ 3 files changed, 2 insertions(+), 7 deletions(-)
+
+diff --git a/arch/x86/include/asm/fpu/internal.h b/arch/x86/include/asm/fpu/internal.h
+index 75a1d5f712ee7..70ecb7c032cb4 100644
+--- a/arch/x86/include/asm/fpu/internal.h
++++ b/arch/x86/include/asm/fpu/internal.h
+@@ -24,7 +24,6 @@
+ /*
+  * High level FPU state handling functions:
+  */
+-extern void fpu__initialize(struct fpu *fpu);
+ extern void fpu__prepare_read(struct fpu *fpu);
+ extern void fpu__prepare_write(struct fpu *fpu);
+ extern void fpu__save(struct fpu *fpu);
+diff --git a/arch/x86/kernel/fpu/core.c b/arch/x86/kernel/fpu/core.c
+index 1940319268aef..e43296854e379 100644
+--- a/arch/x86/kernel/fpu/core.c
++++ b/arch/x86/kernel/fpu/core.c
+@@ -223,7 +223,7 @@ int fpu__copy(struct fpu *dst_fpu, struct fpu *src_fpu)
+  * Activate the current task's in-memory FPU context,
+  * if it has not been used before:
+  */
+-void fpu__initialize(struct fpu *fpu)
++static void fpu__initialize(struct fpu *fpu)
+ {
+ 	WARN_ON_FPU(fpu != &current->thread.fpu);
+ 
+@@ -236,7 +236,6 @@ void fpu__initialize(struct fpu *fpu)
+ 		fpu->initialized = 1;
+ 	}
+ }
+-EXPORT_SYMBOL_GPL(fpu__initialize);
+ 
+ /*
+  * This function must be called before we read a task's fpstate.
+@@ -365,8 +364,8 @@ void fpu__clear(struct fpu *fpu)
+ 	/*
+ 	 * Make sure fpstate is cleared and initialized.
+ 	 */
++	fpu__initialize(fpu);
+ 	if (static_cpu_has(X86_FEATURE_FPU)) {
+-		fpu__initialize(fpu);
+ 		user_fpu_begin();
+ 		copy_init_fpstate_to_fpregs();
+ 	}
+diff --git a/arch/x86/math-emu/fpu_entry.c b/arch/x86/math-emu/fpu_entry.c
+index 9e2ba7e667f61..a873da6b46d6b 100644
+--- a/arch/x86/math-emu/fpu_entry.c
++++ b/arch/x86/math-emu/fpu_entry.c
+@@ -113,9 +113,6 @@ void math_emulate(struct math_emu_info *info)
+ 	unsigned long code_base = 0;
+ 	unsigned long code_limit = 0;	/* Initialized to stop compiler warnings */
+ 	struct desc_struct code_descriptor;
+-	struct fpu *fpu = &current->thread.fpu;
+-
+-	fpu__initialize(fpu);
+ 
+ #ifdef RE_ENTRANT_CHECKING
+ 	if (emulating) {
+
+From patchwork Thu Mar 21 20:26:13 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864311
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D3DC314DE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:54 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id BA12D2A499
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:54 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id AE6172A49D; Thu, 21 Mar 2019 20:28:54 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 41A4F2A499
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:54 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728950AbfCUU0w (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:26:52 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39336 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728566AbfCUU0s (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:48 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74Gu-00057y-9j; Thu, 21 Mar 2019 21:26:40 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 05/24] x86/fpu: Remove fpu->initialized usage in
+ copy_fpstate_to_sigframe()
+Date: Thu, 21 Mar 2019 21:26:13 +0100
+Message-Id: <20190321202632.16810-6-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+With lazy-FPU support the (now named variable) ->initialized was set to true if
+the CPU's FPU registers were holding the a valid state of the FPU registers for
+the active process. If it was set to false then the FPU state was saved in
+fpu->state and the FPU was deactivated.
+With lazy-FPU gone, ->initialized is always true for user threads and kernel
+threads never this function so ->initialized is always true in
+copy_fpstate_to_sigframe().
+The using_compacted_format() check is also a leftover from the lazy-FPU time.
+In the `->initialized == false' case copy_to_user() would copy the compacted
+buffer while userland would expect the non-compacted format instead. So in
+order to save the FPU state in the non-compacted form it issues the xsave
+opcode to save the *current* FPU state.
+The FPU is not enabled so the attempt raises the FPU trap, the trap restores
+the FPU content and re-enables the FPU and the xsave opcode is invoked again and
+succeeds. *This* does not longer work since commit
+
+  bef8b6da9522 ("x86/fpu: Handle #NM without FPU emulation as an error")
+
+Remove check for ->initialized because it is always true and remove the
+false condition. Update the comment to reflect that the "state is always live".
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/kernel/fpu/signal.c | 35 ++++++++---------------------------
+ 1 file changed, 8 insertions(+), 27 deletions(-)
+
+diff --git a/arch/x86/kernel/fpu/signal.c b/arch/x86/kernel/fpu/signal.c
+index a874931edf6a9..de83d0ed9e14e 100644
+--- a/arch/x86/kernel/fpu/signal.c
++++ b/arch/x86/kernel/fpu/signal.c
+@@ -144,9 +144,8 @@ static inline int copy_fpregs_to_sigframe(struct xregs_state __user *buf)
+  *	buf == buf_fx for 64-bit frames and 32-bit fsave frame.
+  *	buf != buf_fx for 32-bit frames with fxstate.
+  *
+- * If the fpu, extended register state is live, save the state directly
+- * to the user frame pointed by the aligned pointer 'buf_fx'. Otherwise,
+- * copy the thread's fpu state to the user frame starting at 'buf_fx'.
++ * Save the state directly to the user frame pointed by the aligned pointer
++ * 'buf_fx'.
+  *
+  * If this is a 32-bit frame with fxstate, put a fsave header before
+  * the aligned state at 'buf_fx'.
+@@ -157,7 +156,6 @@ static inline int copy_fpregs_to_sigframe(struct xregs_state __user *buf)
+ int copy_fpstate_to_sigframe(void __user *buf, void __user *buf_fx, int size)
+ {
+ 	struct fpu *fpu = &current->thread.fpu;
+-	struct xregs_state *xsave = &fpu->state.xsave;
+ 	struct task_struct *tsk = current;
+ 	int ia32_fxstate = (buf != buf_fx);
+ 
+@@ -172,29 +170,12 @@ int copy_fpstate_to_sigframe(void __user *buf, void __user *buf_fx, int size)
+ 			sizeof(struct user_i387_ia32_struct), NULL,
+ 			(struct _fpstate_32 __user *) buf) ? -1 : 1;
+ 
+-	if (fpu->initialized || using_compacted_format()) {
+-		/* Save the live register state to the user directly. */
+-		if (copy_fpregs_to_sigframe(buf_fx))
+-			return -1;
+-		/* Update the thread's fxstate to save the fsave header. */
+-		if (ia32_fxstate)
+-			copy_fxregs_to_kernel(fpu);
+-	} else {
+-		/*
+-		 * It is a *bug* if kernel uses compacted-format for xsave
+-		 * area and we copy it out directly to a signal frame. It
+-		 * should have been handled above by saving the registers
+-		 * directly.
+-		 */
+-		if (boot_cpu_has(X86_FEATURE_XSAVES)) {
+-			WARN_ONCE(1, "x86/fpu: saving compacted-format xsave area to a signal frame!\n");
+-			return -1;
+-		}
+-
+-		fpstate_sanitize_xstate(fpu);
+-		if (__copy_to_user(buf_fx, xsave, fpu_user_xstate_size))
+-			return -1;
+-	}
++	/* Save the live register state to the user directly. */
++	if (copy_fpregs_to_sigframe(buf_fx))
++		return -1;
++	/* Update the thread's fxstate to save the fsave header. */
++	if (ia32_fxstate)
++		copy_fxregs_to_kernel(fpu);
+ 
+ 	/* Save the fsave header for the 32-bit frames. */
+ 	if ((ia32_fxstate || !use_fxsr()) && save_fsave_header(tsk, buf))
+
+From patchwork Thu Mar 21 20:26:14 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864287
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 2D55714DE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:22 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 130992A48C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:22 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 06F662A498; Thu, 21 Mar 2019 20:27:22 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 8139C2A48C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:21 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729115AbfCUU1U (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:27:20 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39445 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1729054AbfCUU1C (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:27:02 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74Gu-00057y-Pz; Thu, 21 Mar 2019 21:26:40 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 06/24] x86/fpu: Don't save fxregs for ia32 frames in
+ copy_fpstate_to_sigframe()
+Date: Thu, 21 Mar 2019 21:26:14 +0100
+Message-Id: <20190321202632.16810-7-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+In commit
+
+  72a671ced66db ("x86, fpu: Unify signal handling code paths for x86 and x86_64 kernels")
+
+the 32bit and 64bit path of the signal delivery code were merged. The 32bit version:
+|int save_i387_xstate_ia32(void __user *buf)
+|…
+|       if (cpu_has_xsave)
+|               return save_i387_xsave(fp);
+|       if (cpu_has_fxsr)
+|               return save_i387_fxsave(fp);
+
+The 64bit version:
+|int save_i387_xstate(void __user *buf)
+|…
+|       if (user_has_fpu()) {
+|               if (use_xsave())
+|                       err = xsave_user(buf);
+|               else
+|                       err = fxsave_user(buf);
+|
+|               if (unlikely(err)) {
+|                       __clear_user(buf, xstate_size);
+|                       return err;
+
+The merge:
+|int save_xstate_sig(void __user *buf, void __user *buf_fx, int size)
+|…
+|       if (user_has_fpu()) {
+|               /* Save the live register state to the user directly. */
+|               if (save_user_xstate(buf_fx))
+|                       return -1;
+|               /* Update the thread's fxstate to save the fsave header. */
+|               if (ia32_fxstate)
+|                       fpu_fxsave(&tsk->thread.fpu);
+
+I don't think that we needed to save the FPU registers to ->thread.fpu because
+the registers were stored in `buf_fx'. Today the state will be restored from
+`buf_fx' after the signal was handled (I assume that this was also the case
+with lazy-FPU). Since commit
+
+  66463db4fc560 ("x86, fpu: shift drop_init_fpu() from save_xstate_sig() to handle_signal()")
+
+it is ensured that the signal handler starts with clear/fresh set of FPU
+registers which means that the previous store is futile.
+
+Remove copy_fxregs_to_kernel() because task's FPU state is cleared later in
+handle_signal() via fpu__clear().
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/kernel/fpu/signal.c | 4 ----
+ 1 file changed, 4 deletions(-)
+
+diff --git a/arch/x86/kernel/fpu/signal.c b/arch/x86/kernel/fpu/signal.c
+index de83d0ed9e14e..2f044021fde2b 100644
+--- a/arch/x86/kernel/fpu/signal.c
++++ b/arch/x86/kernel/fpu/signal.c
+@@ -155,7 +155,6 @@ static inline int copy_fpregs_to_sigframe(struct xregs_state __user *buf)
+  */
+ int copy_fpstate_to_sigframe(void __user *buf, void __user *buf_fx, int size)
+ {
+-	struct fpu *fpu = &current->thread.fpu;
+ 	struct task_struct *tsk = current;
+ 	int ia32_fxstate = (buf != buf_fx);
+ 
+@@ -173,9 +172,6 @@ int copy_fpstate_to_sigframe(void __user *buf, void __user *buf_fx, int size)
+ 	/* Save the live register state to the user directly. */
+ 	if (copy_fpregs_to_sigframe(buf_fx))
+ 		return -1;
+-	/* Update the thread's fxstate to save the fsave header. */
+-	if (ia32_fxstate)
+-		copy_fxregs_to_kernel(fpu);
+ 
+ 	/* Save the fsave header for the 32-bit frames. */
+ 	if ((ia32_fxstate || !use_fxsr()) && save_fsave_header(tsk, buf))
+
+From patchwork Thu Mar 21 20:26:15 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864281
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 291FB1515
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:26:56 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 00BCF2A487
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:26:56 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id E7E1E2A493; Thu, 21 Mar 2019 20:26:55 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A2E8E2A487
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:26:54 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728965AbfCUU0x (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:26:53 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39374 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728779AbfCUU0x (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:53 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74Gv-00057y-9h; Thu, 21 Mar 2019 21:26:41 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 07/24] x86/fpu: Remove fpu->initialized
+Date: Thu, 21 Mar 2019 21:26:15 +0100
+Message-Id: <20190321202632.16810-8-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+The `initialized' member of the fpu struct is always set to one for user
+tasks and zero for kernel tasks. This avoids saving/restoring the FPU
+registers for kernel threads.
+
+The ->initialized = 0 case for user tasks has been removed in previous changes
+for instance by always an explicit init at fork() time for FPU-less system which
+was otherwise delayed until the emulated opcode.
+
+The context switch code (switch_fpu_prepare() + switch_fpu_finish())
+can't unconditionally save/restore registers for kernel threads. Not only would
+it slow down switch but also load a zeroed xcomp_bv for the XSAVES.
+
+For kernel_fpu_begin() (+end) the situation is similar: EFI with runtime
+services uses this before alternatives_patched is true. Which means that this
+function is used too early and it wasn't the case before.
+
+For those two cases current->mm is used to determine between user &
+kernel thread. For kernel_fpu_begin() we skip save/restore of the FPU
+registers.
+During the context switch into a kernel thread we don't do anything.
+There is no reason to save the FPU state of a kernel thread.
+The reordering in __switch_to() is important because the current() pointer
+needs to be valid before switch_fpu_finish() is invoked so ->mm is seen of the
+new task instead the old one.
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/ia32/ia32_signal.c         | 17 +++----
+ arch/x86/include/asm/fpu/internal.h | 18 ++++----
+ arch/x86/include/asm/fpu/types.h    |  9 ----
+ arch/x86/include/asm/trace/fpu.h    |  5 +--
+ arch/x86/kernel/fpu/core.c          | 70 +++++++++--------------------
+ arch/x86/kernel/fpu/init.c          |  2 -
+ arch/x86/kernel/fpu/regset.c        | 19 ++------
+ arch/x86/kernel/fpu/xstate.c        |  2 -
+ arch/x86/kernel/process_32.c        |  4 +-
+ arch/x86/kernel/process_64.c        |  4 +-
+ arch/x86/kernel/signal.c            | 17 +++----
+ arch/x86/mm/pkeys.c                 |  7 +--
+ 12 files changed, 53 insertions(+), 121 deletions(-)
+
+diff --git a/arch/x86/ia32/ia32_signal.c b/arch/x86/ia32/ia32_signal.c
+index 321fe5f5d0e96..6eeb3249f22ff 100644
+--- a/arch/x86/ia32/ia32_signal.c
++++ b/arch/x86/ia32/ia32_signal.c
+@@ -216,8 +216,7 @@ static void __user *get_sigframe(struct ksignal *ksig, struct pt_regs *regs,
+ 				 size_t frame_size,
+ 				 void __user **fpstate)
+ {
+-	struct fpu *fpu = &current->thread.fpu;
+-	unsigned long sp;
++	unsigned long sp, fx_aligned, math_size;
+ 
+ 	/* Default to using normal stack */
+ 	sp = regs->sp;
+@@ -231,15 +230,11 @@ static void __user *get_sigframe(struct ksignal *ksig, struct pt_regs *regs,
+ 		 ksig->ka.sa.sa_restorer)
+ 		sp = (unsigned long) ksig->ka.sa.sa_restorer;
+ 
+-	if (fpu->initialized) {
+-		unsigned long fx_aligned, math_size;
+-
+-		sp = fpu__alloc_mathframe(sp, 1, &fx_aligned, &math_size);
+-		*fpstate = (struct _fpstate_32 __user *) sp;
+-		if (copy_fpstate_to_sigframe(*fpstate, (void __user *)fx_aligned,
+-				    math_size) < 0)
+-			return (void __user *) -1L;
+-	}
++	sp = fpu__alloc_mathframe(sp, 1, &fx_aligned, &math_size);
++	*fpstate = (struct _fpstate_32 __user *) sp;
++	if (copy_fpstate_to_sigframe(*fpstate, (void __user *)fx_aligned,
++				     math_size) < 0)
++		return (void __user *) -1L;
+ 
+ 	sp -= frame_size;
+ 	/* Align the stack pointer according to the i386 ABI,
+diff --git a/arch/x86/include/asm/fpu/internal.h b/arch/x86/include/asm/fpu/internal.h
+index 70ecb7c032cb4..fd95f1411eb5c 100644
+--- a/arch/x86/include/asm/fpu/internal.h
++++ b/arch/x86/include/asm/fpu/internal.h
+@@ -494,11 +494,14 @@ static inline void fpregs_activate(struct fpu *fpu)
+  *
+  *  - switch_fpu_finish() restores the new state as
+  *    necessary.
++ *
++ * The FPU context is only stored/restore for user task and ->mm is used to
++ * distinguish between kernel and user threads.
+  */
+ static inline void
+ switch_fpu_prepare(struct fpu *old_fpu, int cpu)
+ {
+-	if (static_cpu_has(X86_FEATURE_FPU) && old_fpu->initialized) {
++	if (static_cpu_has(X86_FEATURE_FPU) && current->mm) {
+ 		if (!copy_fpregs_to_fpstate(old_fpu))
+ 			old_fpu->last_cpu = -1;
+ 		else
+@@ -506,8 +509,7 @@ switch_fpu_prepare(struct fpu *old_fpu, int cpu)
+ 
+ 		/* But leave fpu_fpregs_owner_ctx! */
+ 		trace_x86_fpu_regs_deactivated(old_fpu);
+-	} else
+-		old_fpu->last_cpu = -1;
++	}
+ }
+ 
+ /*
+@@ -520,12 +522,12 @@ switch_fpu_prepare(struct fpu *old_fpu, int cpu)
+  */
+ static inline void switch_fpu_finish(struct fpu *new_fpu, int cpu)
+ {
+-	bool preload = static_cpu_has(X86_FEATURE_FPU) &&
+-		       new_fpu->initialized;
++	if (static_cpu_has(X86_FEATURE_FPU)) {
++		if (!fpregs_state_valid(new_fpu, cpu)) {
++			if (current->mm)
++				copy_kernel_to_fpregs(&new_fpu->state);
++		}
+ 
+-	if (preload) {
+-		if (!fpregs_state_valid(new_fpu, cpu))
+-			copy_kernel_to_fpregs(&new_fpu->state);
+ 		fpregs_activate(new_fpu);
+ 	}
+ }
+diff --git a/arch/x86/include/asm/fpu/types.h b/arch/x86/include/asm/fpu/types.h
+index 2e32e178e0645..f098f6cab94bf 100644
+--- a/arch/x86/include/asm/fpu/types.h
++++ b/arch/x86/include/asm/fpu/types.h
+@@ -293,15 +293,6 @@ struct fpu {
+ 	 */
+ 	unsigned int			last_cpu;
+ 
+-	/*
+-	 * @initialized:
+-	 *
+-	 * This flag indicates whether this context is initialized: if the task
+-	 * is not running then we can restore from this context, if the task
+-	 * is running then we should save into this context.
+-	 */
+-	unsigned char			initialized;
+-
+ 	/*
+ 	 * @avx512_timestamp:
+ 	 *
+diff --git a/arch/x86/include/asm/trace/fpu.h b/arch/x86/include/asm/trace/fpu.h
+index 069c04be15076..bd65f6ba950f8 100644
+--- a/arch/x86/include/asm/trace/fpu.h
++++ b/arch/x86/include/asm/trace/fpu.h
+@@ -13,22 +13,19 @@ DECLARE_EVENT_CLASS(x86_fpu,
+ 
+ 	TP_STRUCT__entry(
+ 		__field(struct fpu *, fpu)
+-		__field(bool, initialized)
+ 		__field(u64, xfeatures)
+ 		__field(u64, xcomp_bv)
+ 		),
+ 
+ 	TP_fast_assign(
+ 		__entry->fpu		= fpu;
+-		__entry->initialized	= fpu->initialized;
+ 		if (boot_cpu_has(X86_FEATURE_OSXSAVE)) {
+ 			__entry->xfeatures = fpu->state.xsave.header.xfeatures;
+ 			__entry->xcomp_bv  = fpu->state.xsave.header.xcomp_bv;
+ 		}
+ 	),
+-	TP_printk("x86/fpu: %p initialized: %d xfeatures: %llx xcomp_bv: %llx",
++	TP_printk("x86/fpu: %p xfeatures: %llx xcomp_bv: %llx",
+ 			__entry->fpu,
+-			__entry->initialized,
+ 			__entry->xfeatures,
+ 			__entry->xcomp_bv
+ 	)
+diff --git a/arch/x86/kernel/fpu/core.c b/arch/x86/kernel/fpu/core.c
+index e43296854e379..97e27de2b7c05 100644
+--- a/arch/x86/kernel/fpu/core.c
++++ b/arch/x86/kernel/fpu/core.c
+@@ -101,7 +101,7 @@ static void __kernel_fpu_begin(void)
+ 
+ 	kernel_fpu_disable();
+ 
+-	if (fpu->initialized) {
++	if (current->mm) {
+ 		/*
+ 		 * Ignore return value -- we don't care if reg state
+ 		 * is clobbered.
+@@ -116,7 +116,7 @@ static void __kernel_fpu_end(void)
+ {
+ 	struct fpu *fpu = &current->thread.fpu;
+ 
+-	if (fpu->initialized)
++	if (current->mm)
+ 		copy_kernel_to_fpregs(&fpu->state);
+ 
+ 	kernel_fpu_enable();
+@@ -147,11 +147,10 @@ void fpu__save(struct fpu *fpu)
+ 
+ 	preempt_disable();
+ 	trace_x86_fpu_before_save(fpu);
+-	if (fpu->initialized) {
+-		if (!copy_fpregs_to_fpstate(fpu)) {
+-			copy_kernel_to_fpregs(&fpu->state);
+-		}
+-	}
++
++	if (!copy_fpregs_to_fpstate(fpu))
++		copy_kernel_to_fpregs(&fpu->state);
++
+ 	trace_x86_fpu_after_save(fpu);
+ 	preempt_enable();
+ }
+@@ -190,7 +189,7 @@ int fpu__copy(struct fpu *dst_fpu, struct fpu *src_fpu)
+ {
+ 	dst_fpu->last_cpu = -1;
+ 
+-	if (!src_fpu->initialized || !static_cpu_has(X86_FEATURE_FPU))
++	if (!static_cpu_has(X86_FEATURE_FPU))
+ 		return 0;
+ 
+ 	WARN_ON_FPU(src_fpu != &current->thread.fpu);
+@@ -227,14 +226,10 @@ static void fpu__initialize(struct fpu *fpu)
+ {
+ 	WARN_ON_FPU(fpu != &current->thread.fpu);
+ 
+-	if (!fpu->initialized) {
+-		fpstate_init(&fpu->state);
+-		trace_x86_fpu_init_state(fpu);
++	fpstate_init(&fpu->state);
++	trace_x86_fpu_init_state(fpu);
+ 
+-		trace_x86_fpu_activate_state(fpu);
+-		/* Safe to do for the current task: */
+-		fpu->initialized = 1;
+-	}
++	trace_x86_fpu_activate_state(fpu);
+ }
+ 
+ /*
+@@ -247,32 +242,20 @@ static void fpu__initialize(struct fpu *fpu)
+  *
+  * - or it's called for stopped tasks (ptrace), in which case the
+  *   registers were already saved by the context-switch code when
+- *   the task scheduled out - we only have to initialize the registers
+- *   if they've never been initialized.
++ *   the task scheduled out.
+  *
+  * If the task has used the FPU before then save it.
+  */
+ void fpu__prepare_read(struct fpu *fpu)
+ {
+-	if (fpu == &current->thread.fpu) {
++	if (fpu == &current->thread.fpu)
+ 		fpu__save(fpu);
+-	} else {
+-		if (!fpu->initialized) {
+-			fpstate_init(&fpu->state);
+-			trace_x86_fpu_init_state(fpu);
+-
+-			trace_x86_fpu_activate_state(fpu);
+-			/* Safe to do for current and for stopped child tasks: */
+-			fpu->initialized = 1;
+-		}
+-	}
+ }
+ 
+ /*
+  * This function must be called before we write a task's fpstate.
+  *
+- * If the task has used the FPU before then invalidate any cached FPU registers.
+- * If the task has not used the FPU before then initialize its fpstate.
++ * Invalidate any cached FPU registers.
+  *
+  * After this function call, after registers in the fpstate are
+  * modified and the child task has woken up, the child task will
+@@ -289,17 +272,8 @@ void fpu__prepare_write(struct fpu *fpu)
+ 	 */
+ 	WARN_ON_FPU(fpu == &current->thread.fpu);
+ 
+-	if (fpu->initialized) {
+-		/* Invalidate any cached state: */
+-		__fpu_invalidate_fpregs_state(fpu);
+-	} else {
+-		fpstate_init(&fpu->state);
+-		trace_x86_fpu_init_state(fpu);
+-
+-		trace_x86_fpu_activate_state(fpu);
+-		/* Safe to do for stopped child tasks: */
+-		fpu->initialized = 1;
+-	}
++	/* Invalidate any cached state: */
++	__fpu_invalidate_fpregs_state(fpu);
+ }
+ 
+ /*
+@@ -316,17 +290,13 @@ void fpu__drop(struct fpu *fpu)
+ 	preempt_disable();
+ 
+ 	if (fpu == &current->thread.fpu) {
+-		if (fpu->initialized) {
+-			/* Ignore delayed exceptions from user space */
+-			asm volatile("1: fwait\n"
+-				     "2:\n"
+-				     _ASM_EXTABLE(1b, 2b));
+-			fpregs_deactivate(fpu);
+-		}
++		/* Ignore delayed exceptions from user space */
++		asm volatile("1: fwait\n"
++			     "2:\n"
++			     _ASM_EXTABLE(1b, 2b));
++		fpregs_deactivate(fpu);
+ 	}
+ 
+-	fpu->initialized = 0;
+-
+ 	trace_x86_fpu_dropped(fpu);
+ 
+ 	preempt_enable();
+diff --git a/arch/x86/kernel/fpu/init.c b/arch/x86/kernel/fpu/init.c
+index 6abd83572b016..20d8fa7124c77 100644
+--- a/arch/x86/kernel/fpu/init.c
++++ b/arch/x86/kernel/fpu/init.c
+@@ -239,8 +239,6 @@ static void __init fpu__init_system_ctx_switch(void)
+ 
+ 	WARN_ON_FPU(!on_boot_cpu);
+ 	on_boot_cpu = 0;
+-
+-	WARN_ON_FPU(current->thread.fpu.initialized);
+ }
+ 
+ /*
+diff --git a/arch/x86/kernel/fpu/regset.c b/arch/x86/kernel/fpu/regset.c
+index 5dbc099178a88..d652b939ccfb5 100644
+--- a/arch/x86/kernel/fpu/regset.c
++++ b/arch/x86/kernel/fpu/regset.c
+@@ -15,16 +15,12 @@
+  */
+ int regset_fpregs_active(struct task_struct *target, const struct user_regset *regset)
+ {
+-	struct fpu *target_fpu = &target->thread.fpu;
+-
+-	return target_fpu->initialized ? regset->n : 0;
++	return regset->n;
+ }
+ 
+ int regset_xregset_fpregs_active(struct task_struct *target, const struct user_regset *regset)
+ {
+-	struct fpu *target_fpu = &target->thread.fpu;
+-
+-	if (boot_cpu_has(X86_FEATURE_FXSR) && target_fpu->initialized)
++	if (boot_cpu_has(X86_FEATURE_FXSR))
+ 		return regset->n;
+ 	else
+ 		return 0;
+@@ -370,16 +366,9 @@ int fpregs_set(struct task_struct *target, const struct user_regset *regset,
+ int dump_fpu(struct pt_regs *regs, struct user_i387_struct *ufpu)
+ {
+ 	struct task_struct *tsk = current;
+-	struct fpu *fpu = &tsk->thread.fpu;
+-	int fpvalid;
+ 
+-	fpvalid = fpu->initialized;
+-	if (fpvalid)
+-		fpvalid = !fpregs_get(tsk, NULL,
+-				      0, sizeof(struct user_i387_ia32_struct),
+-				      ufpu, NULL);
+-
+-	return fpvalid;
++	return !fpregs_get(tsk, NULL, 0, sizeof(struct user_i387_ia32_struct),
++			   ufpu, NULL);
+ }
+ EXPORT_SYMBOL(dump_fpu);
+ 
+diff --git a/arch/x86/kernel/fpu/xstate.c b/arch/x86/kernel/fpu/xstate.c
+index d7432c2b10514..8bfcc5b9e04b7 100644
+--- a/arch/x86/kernel/fpu/xstate.c
++++ b/arch/x86/kernel/fpu/xstate.c
+@@ -892,8 +892,6 @@ const void *get_xsave_field_ptr(int xsave_state)
+ {
+ 	struct fpu *fpu = &current->thread.fpu;
+ 
+-	if (!fpu->initialized)
+-		return NULL;
+ 	/*
+ 	 * fpu__save() takes the CPU's xstate registers
+ 	 * and saves them off to the 'fpu memory buffer.
+diff --git a/arch/x86/kernel/process_32.c b/arch/x86/kernel/process_32.c
+index 7888a41a03cdb..77d9eb43ccac8 100644
+--- a/arch/x86/kernel/process_32.c
++++ b/arch/x86/kernel/process_32.c
+@@ -288,10 +288,10 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
+ 	if (prev->gs | next->gs)
+ 		lazy_load_gs(next->gs);
+ 
+-	switch_fpu_finish(next_fpu, cpu);
+-
+ 	this_cpu_write(current_task, next_p);
+ 
++	switch_fpu_finish(next_fpu, cpu);
++
+ 	/* Load the Intel cache allocation PQR MSR. */
+ 	resctrl_sched_in();
+ 
+diff --git a/arch/x86/kernel/process_64.c b/arch/x86/kernel/process_64.c
+index e1983b3a16c43..ffea7c557963a 100644
+--- a/arch/x86/kernel/process_64.c
++++ b/arch/x86/kernel/process_64.c
+@@ -566,14 +566,14 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
+ 
+ 	x86_fsgsbase_load(prev, next);
+ 
+-	switch_fpu_finish(next_fpu, cpu);
+-
+ 	/*
+ 	 * Switch the PDA and FPU contexts.
+ 	 */
+ 	this_cpu_write(current_task, next_p);
+ 	this_cpu_write(cpu_current_top_of_stack, task_top_of_stack(next_p));
+ 
++	switch_fpu_finish(next_fpu, cpu);
++
+ 	/* Reload sp0. */
+ 	update_task_stack(next_p);
+ 
+diff --git a/arch/x86/kernel/signal.c b/arch/x86/kernel/signal.c
+index 08dfd4c1a4f95..6f45f795690f6 100644
+--- a/arch/x86/kernel/signal.c
++++ b/arch/x86/kernel/signal.c
+@@ -246,7 +246,7 @@ get_sigframe(struct k_sigaction *ka, struct pt_regs *regs, size_t frame_size,
+ 	unsigned long sp = regs->sp;
+ 	unsigned long buf_fx = 0;
+ 	int onsigstack = on_sig_stack(sp);
+-	struct fpu *fpu = &current->thread.fpu;
++	int ret;
+ 
+ 	/* redzone */
+ 	if (IS_ENABLED(CONFIG_X86_64))
+@@ -265,11 +265,9 @@ get_sigframe(struct k_sigaction *ka, struct pt_regs *regs, size_t frame_size,
+ 		sp = (unsigned long) ka->sa.sa_restorer;
+ 	}
+ 
+-	if (fpu->initialized) {
+-		sp = fpu__alloc_mathframe(sp, IS_ENABLED(CONFIG_X86_32),
+-					  &buf_fx, &math_size);
+-		*fpstate = (void __user *)sp;
+-	}
++	sp = fpu__alloc_mathframe(sp, IS_ENABLED(CONFIG_X86_32),
++				  &buf_fx, &math_size);
++	*fpstate = (void __user *)sp;
+ 
+ 	sp = align_sigframe(sp - frame_size);
+ 
+@@ -281,8 +279,8 @@ get_sigframe(struct k_sigaction *ka, struct pt_regs *regs, size_t frame_size,
+ 		return (void __user *)-1L;
+ 
+ 	/* save i387 and extended state */
+-	if (fpu->initialized &&
+-	    copy_fpstate_to_sigframe(*fpstate, (void __user *)buf_fx, math_size) < 0)
++	ret = copy_fpstate_to_sigframe(*fpstate, (void __user *)buf_fx, math_size);
++	if (ret < 0)
+ 		return (void __user *)-1L;
+ 
+ 	return (void __user *)sp;
+@@ -763,8 +761,7 @@ handle_signal(struct ksignal *ksig, struct pt_regs *regs)
+ 		/*
+ 		 * Ensure the signal handler starts with the new fpu state.
+ 		 */
+-		if (fpu->initialized)
+-			fpu__clear(fpu);
++		fpu__clear(fpu);
+ 	}
+ 	signal_setup_done(failed, ksig, stepping);
+ }
+diff --git a/arch/x86/mm/pkeys.c b/arch/x86/mm/pkeys.c
+index 047a77f6a10cb..05bb9a44eb1c3 100644
+--- a/arch/x86/mm/pkeys.c
++++ b/arch/x86/mm/pkeys.c
+@@ -39,17 +39,12 @@ int __execute_only_pkey(struct mm_struct *mm)
+ 	 * dance to set PKRU if we do not need to.  Check it
+ 	 * first and assume that if the execute-only pkey is
+ 	 * write-disabled that we do not have to set it
+-	 * ourselves.  We need preempt off so that nobody
+-	 * can make fpregs inactive.
++	 * ourselves.
+ 	 */
+-	preempt_disable();
+ 	if (!need_to_set_mm_pkey &&
+-	    current->thread.fpu.initialized &&
+ 	    !__pkru_allows_read(read_pkru(), execute_only_pkey)) {
+-		preempt_enable();
+ 		return execute_only_pkey;
+ 	}
+-	preempt_enable();
+ 
+ 	/*
+ 	 * Set up PKRU so that it denies access for everything
+
+From patchwork Thu Mar 21 20:26:16 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864327
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 41AE91515
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:38 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 265482A386
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:38 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 1A72B2A38A; Thu, 21 Mar 2019 20:29:38 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id AAA6B2A1DA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:37 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729225AbfCUU31 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:29:27 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39312 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728759AbfCUU0r (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:47 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74Gv-00057y-Um; Thu, 21 Mar 2019 21:26:42 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>,
+ Borislav Petkov <bp@suse.de>
+Subject: [PATCH 08/24] x86/fpu: Remove user_fpu_begin()
+Date: Thu, 21 Mar 2019 21:26:16 +0100
+Message-Id: <20190321202632.16810-9-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+user_fpu_begin() sets fpu_fpregs_owner_ctx to task's fpu struct. This is
+always the case since there is no lazy FPU anymore.
+
+fpu_fpregs_owner_ctx is used during context switch to decide if it needs
+to load the saved registers or if the currently loaded registers are
+valid. It could be skipped during
+	taskA -> kernel thread -> taskA
+
+because the switch to kernel thread would not alter the CPU's FPU state.
+
+Since this field is always updated during context switch and never
+invalidated, setting it manually (in user context) makes no difference.
+A kernel thread with kernel_fpu_begin() block could set
+fpu_fpregs_owner_ctx to NULL but a kernel thread does not use
+user_fpu_begin().
+This is a leftover from the lazy-FPU time.
+
+Remove user_fpu_begin(), it does not change fpu_fpregs_owner_ctx's
+content.
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Reviewed-by: Borislav Petkov <bp@suse.de>
+---
+ arch/x86/include/asm/fpu/internal.h | 17 -----------------
+ arch/x86/kernel/fpu/core.c          |  4 +---
+ arch/x86/kernel/fpu/signal.c        |  1 -
+ 3 files changed, 1 insertion(+), 21 deletions(-)
+
+diff --git a/arch/x86/include/asm/fpu/internal.h b/arch/x86/include/asm/fpu/internal.h
+index fd95f1411eb5c..df98bc7f1c8d8 100644
+--- a/arch/x86/include/asm/fpu/internal.h
++++ b/arch/x86/include/asm/fpu/internal.h
+@@ -532,23 +532,6 @@ static inline void switch_fpu_finish(struct fpu *new_fpu, int cpu)
+ 	}
+ }
+ 
+-/*
+- * Needs to be preemption-safe.
+- *
+- * NOTE! user_fpu_begin() must be used only immediately before restoring
+- * the save state. It does not do any saving/restoring on its own. In
+- * lazy FPU mode, it is just an optimization to avoid a #NM exception,
+- * the task can lose the FPU right after preempt_enable().
+- */
+-static inline void user_fpu_begin(void)
+-{
+-	struct fpu *fpu = &current->thread.fpu;
+-
+-	preempt_disable();
+-	fpregs_activate(fpu);
+-	preempt_enable();
+-}
+-
+ /*
+  * MXCSR and XCR definitions:
+  */
+diff --git a/arch/x86/kernel/fpu/core.c b/arch/x86/kernel/fpu/core.c
+index 97e27de2b7c05..739ca3ae2bdcd 100644
+--- a/arch/x86/kernel/fpu/core.c
++++ b/arch/x86/kernel/fpu/core.c
+@@ -335,10 +335,8 @@ void fpu__clear(struct fpu *fpu)
+ 	 * Make sure fpstate is cleared and initialized.
+ 	 */
+ 	fpu__initialize(fpu);
+-	if (static_cpu_has(X86_FEATURE_FPU)) {
+-		user_fpu_begin();
++	if (static_cpu_has(X86_FEATURE_FPU))
+ 		copy_init_fpstate_to_fpregs();
+-	}
+ }
+ 
+ /*
+diff --git a/arch/x86/kernel/fpu/signal.c b/arch/x86/kernel/fpu/signal.c
+index 2f044021fde2b..6475320939ce3 100644
+--- a/arch/x86/kernel/fpu/signal.c
++++ b/arch/x86/kernel/fpu/signal.c
+@@ -322,7 +322,6 @@ static int __fpu__restore_sig(void __user *buf, void __user *buf_fx, int size)
+ 		 * For 64-bit frames and 32-bit fsave frames, restore the user
+ 		 * state to the registers directly (with exceptions handled).
+ 		 */
+-		user_fpu_begin();
+ 		if (copy_user_to_fpregs_zeroing(buf_fx, xfeatures, fx_only)) {
+ 			fpu__clear(fpu);
+ 			return -1;
+
+From patchwork Thu Mar 21 20:26:17 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864325
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3644A14DE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:37 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 17F932A001
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:37 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 08B622A1D1; Thu, 21 Mar 2019 20:29:37 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 26B5C2A001
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:35 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729242AbfCUU31 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:29:27 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39317 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728769AbfCUU0r (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:47 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74Gw-00057y-I5; Thu, 21 Mar 2019 21:26:42 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 09/24] x86/fpu: Add (__)make_fpregs_active helpers
+Date: Thu, 21 Mar 2019 21:26:17 +0100
+Message-Id: <20190321202632.16810-10-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Rik van Riel <riel@surriel.com>
+
+Add helper function that ensures the floating point registers for
+the current task are active. Use with preemption disabled.
+
+Signed-off-by: Rik van Riel <riel@surriel.com>
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/include/asm/fpu/api.h      | 11 +++++++++++
+ arch/x86/include/asm/fpu/internal.h | 19 +++++++++++--------
+ 2 files changed, 22 insertions(+), 8 deletions(-)
+
+diff --git a/arch/x86/include/asm/fpu/api.h b/arch/x86/include/asm/fpu/api.h
+index b56d504af6545..73e684160f354 100644
+--- a/arch/x86/include/asm/fpu/api.h
++++ b/arch/x86/include/asm/fpu/api.h
+@@ -10,6 +10,7 @@
+ 
+ #ifndef _ASM_X86_FPU_API_H
+ #define _ASM_X86_FPU_API_H
++#include <linux/preempt.h>
+ 
+ /*
+  * Use kernel_fpu_begin/end() if you intend to use FPU in kernel context. It
+@@ -22,6 +23,16 @@ extern void kernel_fpu_begin(void);
+ extern void kernel_fpu_end(void);
+ extern bool irq_fpu_usable(void);
+ 
++static inline void fpregs_lock(void)
++{
++	preempt_disable();
++}
++
++static inline void fpregs_unlock(void)
++{
++	preempt_enable();
++}
++
+ /*
+  * Query the presence of one or more xfeatures. Works on any legacy CPU as well.
+  *
+diff --git a/arch/x86/include/asm/fpu/internal.h b/arch/x86/include/asm/fpu/internal.h
+index df98bc7f1c8d8..237ff8dc8559b 100644
+--- a/arch/x86/include/asm/fpu/internal.h
++++ b/arch/x86/include/asm/fpu/internal.h
+@@ -484,6 +484,15 @@ static inline void fpregs_activate(struct fpu *fpu)
+ 	trace_x86_fpu_regs_activated(fpu);
+ }
+ 
++static inline void __fpregs_load_activate(struct fpu *fpu, int cpu)
++{
++	if (!fpregs_state_valid(fpu, cpu)) {
++		if (current->mm)
++			copy_kernel_to_fpregs(&fpu->state);
++		fpregs_activate(fpu);
++	}
++}
++
+ /*
+  * FPU state switching for scheduling.
+  *
+@@ -522,14 +531,8 @@ switch_fpu_prepare(struct fpu *old_fpu, int cpu)
+  */
+ static inline void switch_fpu_finish(struct fpu *new_fpu, int cpu)
+ {
+-	if (static_cpu_has(X86_FEATURE_FPU)) {
+-		if (!fpregs_state_valid(new_fpu, cpu)) {
+-			if (current->mm)
+-				copy_kernel_to_fpregs(&new_fpu->state);
+-		}
+-
+-		fpregs_activate(new_fpu);
+-	}
++	if (static_cpu_has(X86_FEATURE_FPU))
++		__fpregs_load_activate(new_fpu, cpu);
+ }
+ 
+ /*
+
+From patchwork Thu Mar 21 20:26:18 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864309
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 55FDA1515
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:53 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3E4D72A499
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:53 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 325C72A49D; Thu, 21 Mar 2019 20:28:53 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C1A422A499
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:52 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728959AbfCUU0x (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:26:53 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39321 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728843AbfCUU0r (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:47 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74Gx-00057y-4l; Thu, 21 Mar 2019 21:26:43 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>,
+ Borislav Petkov <bp@suse.de>
+Subject: [PATCH 10/24] x86/fpu: Make __raw_xsave_addr() use feature number
+ instead of mask
+Date: Thu, 21 Mar 2019 21:26:18 +0100
+Message-Id: <20190321202632.16810-11-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Most users of __raw_xsave_addr() use a feature number, shift it to a
+mask and then __raw_xsave_addr() shifts it back to the feature number.
+
+Make __raw_xsave_addr() use the feature number as an argument.
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Reviewed-by: Borislav Petkov <bp@suse.de>
+---
+ arch/x86/kernel/fpu/xstate.c | 22 +++++++++++-----------
+ 1 file changed, 11 insertions(+), 11 deletions(-)
+
+diff --git a/arch/x86/kernel/fpu/xstate.c b/arch/x86/kernel/fpu/xstate.c
+index 8bfcc5b9e04b7..4f7f3c5d0d0cf 100644
+--- a/arch/x86/kernel/fpu/xstate.c
++++ b/arch/x86/kernel/fpu/xstate.c
+@@ -805,20 +805,18 @@ void fpu__resume_cpu(void)
+ }
+ 
+ /*
+- * Given an xstate feature mask, calculate where in the xsave
++ * Given an xstate feature nr, calculate where in the xsave
+  * buffer the state is.  Callers should ensure that the buffer
+  * is valid.
+  */
+-static void *__raw_xsave_addr(struct xregs_state *xsave, int xstate_feature_mask)
++static void *__raw_xsave_addr(struct xregs_state *xsave, int xfeature_nr)
+ {
+-	int feature_nr = fls64(xstate_feature_mask) - 1;
+-
+-	if (!xfeature_enabled(feature_nr)) {
++	if (!xfeature_enabled(xfeature_nr)) {
+ 		WARN_ON_FPU(1);
+ 		return NULL;
+ 	}
+ 
+-	return (void *)xsave + xstate_comp_offsets[feature_nr];
++	return (void *)xsave + xstate_comp_offsets[xfeature_nr];
+ }
+ /*
+  * Given the xsave area and a state inside, this function returns the
+@@ -840,6 +838,7 @@ static void *__raw_xsave_addr(struct xregs_state *xsave, int xstate_feature_mask
+  */
+ void *get_xsave_addr(struct xregs_state *xsave, int xstate_feature)
+ {
++	int xfeature_nr;
+ 	/*
+ 	 * Do we even *have* xsave state?
+ 	 */
+@@ -867,7 +866,8 @@ void *get_xsave_addr(struct xregs_state *xsave, int xstate_feature)
+ 	if (!(xsave->header.xfeatures & xstate_feature))
+ 		return NULL;
+ 
+-	return __raw_xsave_addr(xsave, xstate_feature);
++	xfeature_nr = fls64(xstate_feature) - 1;
++	return __raw_xsave_addr(xsave, xfeature_nr);
+ }
+ EXPORT_SYMBOL_GPL(get_xsave_addr);
+ 
+@@ -1014,7 +1014,7 @@ int copy_xstate_to_kernel(void *kbuf, struct xregs_state *xsave, unsigned int of
+ 		 * Copy only in-use xstates:
+ 		 */
+ 		if ((header.xfeatures >> i) & 1) {
+-			void *src = __raw_xsave_addr(xsave, 1 << i);
++			void *src = __raw_xsave_addr(xsave, i);
+ 
+ 			offset = xstate_offsets[i];
+ 			size = xstate_sizes[i];
+@@ -1100,7 +1100,7 @@ int copy_xstate_to_user(void __user *ubuf, struct xregs_state *xsave, unsigned i
+ 		 * Copy only in-use xstates:
+ 		 */
+ 		if ((header.xfeatures >> i) & 1) {
+-			void *src = __raw_xsave_addr(xsave, 1 << i);
++			void *src = __raw_xsave_addr(xsave, i);
+ 
+ 			offset = xstate_offsets[i];
+ 			size = xstate_sizes[i];
+@@ -1157,7 +1157,7 @@ int copy_kernel_to_xstate(struct xregs_state *xsave, const void *kbuf)
+ 		u64 mask = ((u64)1 << i);
+ 
+ 		if (hdr.xfeatures & mask) {
+-			void *dst = __raw_xsave_addr(xsave, 1 << i);
++			void *dst = __raw_xsave_addr(xsave, i);
+ 
+ 			offset = xstate_offsets[i];
+ 			size = xstate_sizes[i];
+@@ -1211,7 +1211,7 @@ int copy_user_to_xstate(struct xregs_state *xsave, const void __user *ubuf)
+ 		u64 mask = ((u64)1 << i);
+ 
+ 		if (hdr.xfeatures & mask) {
+-			void *dst = __raw_xsave_addr(xsave, 1 << i);
++			void *dst = __raw_xsave_addr(xsave, i);
+ 
+ 			offset = xstate_offsets[i];
+ 			size = xstate_sizes[i];
+
+From patchwork Thu Mar 21 20:26:19 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864321
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 015841515
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:19 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id DCB422A001
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:18 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id D12142A1D1; Thu, 21 Mar 2019 20:29:18 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 0036C2A001
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:17 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728941AbfCUU0u (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:26:50 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39331 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728927AbfCUU0s (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:48 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74Gx-00057y-NX; Thu, 21 Mar 2019 21:26:43 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 11/24] x86/fpu: Make get_xsave_field_ptr() and
+ get_xsave_addr() use feature number instead of mask
+Date: Thu, 21 Mar 2019 21:26:19 +0100
+Message-Id: <20190321202632.16810-12-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+After changing the argument of __raw_xsave_addr() from a mask to number
+Dave suggested to check if it makes sense to do the same for
+get_xsave_addr(). As it turns out it does. Only get_xsave_addr() needs
+the mask to check if the requested feature is part of what is
+support/saved and then uses the number again. The shift operation is
+cheaper compared to "find last bit set". Also, the feature number uses
+less opcode space compared to the mask :)
+
+Make get_xsave_addr() argument a xfeature number instead of mask and fix
+up its callers.
+As part of this use xfeature_nr and xfeature_mask consistently.
+This results in changes to the kvm code as:
+	feature -> xfeature_mask
+	index -> xfeature_nr
+
+Suggested-by: Dave Hansen <dave.hansen@linux.intel.com>
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/include/asm/fpu/xstate.h |  4 ++--
+ arch/x86/kernel/fpu/xstate.c      | 22 ++++++++++------------
+ arch/x86/kernel/traps.c           |  2 +-
+ arch/x86/kvm/x86.c                | 28 ++++++++++++++--------------
+ arch/x86/mm/mpx.c                 |  6 +++---
+ 5 files changed, 30 insertions(+), 32 deletions(-)
+
+diff --git a/arch/x86/include/asm/fpu/xstate.h b/arch/x86/include/asm/fpu/xstate.h
+index 48581988d78c7..fbe41f808e5d8 100644
+--- a/arch/x86/include/asm/fpu/xstate.h
++++ b/arch/x86/include/asm/fpu/xstate.h
+@@ -46,8 +46,8 @@ extern void __init update_regset_xstate_info(unsigned int size,
+ 					     u64 xstate_mask);
+ 
+ void fpu__xstate_clear_all_cpu_caps(void);
+-void *get_xsave_addr(struct xregs_state *xsave, int xstate);
+-const void *get_xsave_field_ptr(int xstate_field);
++void *get_xsave_addr(struct xregs_state *xsave, int xfeature_nr);
++const void *get_xsave_field_ptr(int xfeature_nr);
+ int using_compacted_format(void);
+ int copy_xstate_to_kernel(void *kbuf, struct xregs_state *xsave, unsigned int offset, unsigned int size);
+ int copy_xstate_to_user(void __user *ubuf, struct xregs_state *xsave, unsigned int offset, unsigned int size);
+diff --git a/arch/x86/kernel/fpu/xstate.c b/arch/x86/kernel/fpu/xstate.c
+index 4f7f3c5d0d0cf..9c459fd1d38e6 100644
+--- a/arch/x86/kernel/fpu/xstate.c
++++ b/arch/x86/kernel/fpu/xstate.c
+@@ -830,15 +830,14 @@ static void *__raw_xsave_addr(struct xregs_state *xsave, int xfeature_nr)
+  *
+  * Inputs:
+  *	xstate: the thread's storage area for all FPU data
+- *	xstate_feature: state which is defined in xsave.h (e.g.
+- *	XFEATURE_MASK_FP, XFEATURE_MASK_SSE, etc...)
++ *	xfeature_nr: state which is defined in xsave.h (e.g. XFEATURE_FP,
++ *	XFEATURE_SSE, etc...)
+  * Output:
+  *	address of the state in the xsave area, or NULL if the
+  *	field is not present in the xsave buffer.
+  */
+-void *get_xsave_addr(struct xregs_state *xsave, int xstate_feature)
++void *get_xsave_addr(struct xregs_state *xsave, int xfeature_nr)
+ {
+-	int xfeature_nr;
+ 	/*
+ 	 * Do we even *have* xsave state?
+ 	 */
+@@ -850,11 +849,11 @@ void *get_xsave_addr(struct xregs_state *xsave, int xstate_feature)
+ 	 * have not enabled.  Remember that pcntxt_mask is
+ 	 * what we write to the XCR0 register.
+ 	 */
+-	WARN_ONCE(!(xfeatures_mask & xstate_feature),
++	WARN_ONCE(!(xfeatures_mask & BIT_ULL(xfeature_nr)),
+ 		  "get of unsupported state");
+ 	/*
+ 	 * This assumes the last 'xsave*' instruction to
+-	 * have requested that 'xstate_feature' be saved.
++	 * have requested that 'xfeature_nr' be saved.
+ 	 * If it did not, we might be seeing and old value
+ 	 * of the field in the buffer.
+ 	 *
+@@ -863,10 +862,9 @@ void *get_xsave_addr(struct xregs_state *xsave, int xstate_feature)
+ 	 * or because the "init optimization" caused it
+ 	 * to not be saved.
+ 	 */
+-	if (!(xsave->header.xfeatures & xstate_feature))
++	if (!(xsave->header.xfeatures & BIT_ULL(xfeature_nr)))
+ 		return NULL;
+ 
+-	xfeature_nr = fls64(xstate_feature) - 1;
+ 	return __raw_xsave_addr(xsave, xfeature_nr);
+ }
+ EXPORT_SYMBOL_GPL(get_xsave_addr);
+@@ -882,13 +880,13 @@ EXPORT_SYMBOL_GPL(get_xsave_addr);
+  * Note that this only works on the current task.
+  *
+  * Inputs:
+- *	@xsave_state: state which is defined in xsave.h (e.g. XFEATURE_MASK_FP,
+- *	XFEATURE_MASK_SSE, etc...)
++ *	@xfeature_nr: state which is defined in xsave.h (e.g. XFEATURE_FP,
++ *	XFEATURE_SSE, etc...)
+  * Output:
+  *	address of the state in the xsave area or NULL if the state
+  *	is not present or is in its 'init state'.
+  */
+-const void *get_xsave_field_ptr(int xsave_state)
++const void *get_xsave_field_ptr(int xfeature_nr)
+ {
+ 	struct fpu *fpu = &current->thread.fpu;
+ 
+@@ -898,7 +896,7 @@ const void *get_xsave_field_ptr(int xsave_state)
+ 	 */
+ 	fpu__save(fpu);
+ 
+-	return get_xsave_addr(&fpu->state.xsave, xsave_state);
++	return get_xsave_addr(&fpu->state.xsave, xfeature_nr);
+ }
+ 
+ #ifdef CONFIG_ARCH_HAS_PKEYS
+diff --git a/arch/x86/kernel/traps.c b/arch/x86/kernel/traps.c
+index d26f9e9c3d830..8b6d03e55d2f7 100644
+--- a/arch/x86/kernel/traps.c
++++ b/arch/x86/kernel/traps.c
+@@ -456,7 +456,7 @@ dotraplinkage void do_bounds(struct pt_regs *regs, long error_code)
+ 	 * which is all zeros which indicates MPX was not
+ 	 * responsible for the exception.
+ 	 */
+-	bndcsr = get_xsave_field_ptr(XFEATURE_MASK_BNDCSR);
++	bndcsr = get_xsave_field_ptr(XFEATURE_BNDCSR);
+ 	if (!bndcsr)
+ 		goto exit_trap;
+ 
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 65e4559eef2fc..aa5fe360df50b 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -3662,15 +3662,15 @@ static void fill_xsave(u8 *dest, struct kvm_vcpu *vcpu)
+ 	 */
+ 	valid = xstate_bv & ~XFEATURE_MASK_FPSSE;
+ 	while (valid) {
+-		u64 feature = valid & -valid;
+-		int index = fls64(feature) - 1;
+-		void *src = get_xsave_addr(xsave, feature);
++		u64 xfeature_mask = valid & -valid;
++		int xfeature_nr = fls64(xfeature_mask) - 1;
++		void *src = get_xsave_addr(xsave, xfeature_nr);
+ 
+ 		if (src) {
+ 			u32 size, offset, ecx, edx;
+-			cpuid_count(XSTATE_CPUID, index,
++			cpuid_count(XSTATE_CPUID, xfeature_nr,
+ 				    &size, &offset, &ecx, &edx);
+-			if (feature == XFEATURE_MASK_PKRU)
++			if (xfeature_nr == XFEATURE_PKRU)
+ 				memcpy(dest + offset, &vcpu->arch.pkru,
+ 				       sizeof(vcpu->arch.pkru));
+ 			else
+@@ -3678,7 +3678,7 @@ static void fill_xsave(u8 *dest, struct kvm_vcpu *vcpu)
+ 
+ 		}
+ 
+-		valid -= feature;
++		valid -= xfeature_mask;
+ 	}
+ }
+ 
+@@ -3705,22 +3705,22 @@ static void load_xsave(struct kvm_vcpu *vcpu, u8 *src)
+ 	 */
+ 	valid = xstate_bv & ~XFEATURE_MASK_FPSSE;
+ 	while (valid) {
+-		u64 feature = valid & -valid;
+-		int index = fls64(feature) - 1;
+-		void *dest = get_xsave_addr(xsave, feature);
++		u64 xfeature_mask = valid & -valid;
++		int xfeature_nr = fls64(xfeature_mask) - 1;
++		void *dest = get_xsave_addr(xsave, xfeature_nr);
+ 
+ 		if (dest) {
+ 			u32 size, offset, ecx, edx;
+-			cpuid_count(XSTATE_CPUID, index,
++			cpuid_count(XSTATE_CPUID, xfeature_nr,
+ 				    &size, &offset, &ecx, &edx);
+-			if (feature == XFEATURE_MASK_PKRU)
++			if (xfeature_nr == XFEATURE_PKRU)
+ 				memcpy(&vcpu->arch.pkru, src + offset,
+ 				       sizeof(vcpu->arch.pkru));
+ 			else
+ 				memcpy(dest, src + offset, size);
+ 		}
+ 
+-		valid -= feature;
++		valid -= xfeature_mask;
+ 	}
+ }
+ 
+@@ -8821,11 +8821,11 @@ void kvm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
+ 		if (init_event)
+ 			kvm_put_guest_fpu(vcpu);
+ 		mpx_state_buffer = get_xsave_addr(&vcpu->arch.guest_fpu->state.xsave,
+-					XFEATURE_MASK_BNDREGS);
++					XFEATURE_BNDREGS);
+ 		if (mpx_state_buffer)
+ 			memset(mpx_state_buffer, 0, sizeof(struct mpx_bndreg_state));
+ 		mpx_state_buffer = get_xsave_addr(&vcpu->arch.guest_fpu->state.xsave,
+-					XFEATURE_MASK_BNDCSR);
++					XFEATURE_BNDCSR);
+ 		if (mpx_state_buffer)
+ 			memset(mpx_state_buffer, 0, sizeof(struct mpx_bndcsr));
+ 		if (init_event)
+diff --git a/arch/x86/mm/mpx.c b/arch/x86/mm/mpx.c
+index c805db6236b47..59726aaf46713 100644
+--- a/arch/x86/mm/mpx.c
++++ b/arch/x86/mm/mpx.c
+@@ -142,7 +142,7 @@ int mpx_fault_info(struct mpx_fault_info *info, struct pt_regs *regs)
+ 		goto err_out;
+ 	}
+ 	/* get bndregs field from current task's xsave area */
+-	bndregs = get_xsave_field_ptr(XFEATURE_MASK_BNDREGS);
++	bndregs = get_xsave_field_ptr(XFEATURE_BNDREGS);
+ 	if (!bndregs) {
+ 		err = -EINVAL;
+ 		goto err_out;
+@@ -190,7 +190,7 @@ static __user void *mpx_get_bounds_dir(void)
+ 	 * The bounds directory pointer is stored in a register
+ 	 * only accessible if we first do an xsave.
+ 	 */
+-	bndcsr = get_xsave_field_ptr(XFEATURE_MASK_BNDCSR);
++	bndcsr = get_xsave_field_ptr(XFEATURE_BNDCSR);
+ 	if (!bndcsr)
+ 		return MPX_INVALID_BOUNDS_DIR;
+ 
+@@ -376,7 +376,7 @@ static int do_mpx_bt_fault(void)
+ 	const struct mpx_bndcsr *bndcsr;
+ 	struct mm_struct *mm = current->mm;
+ 
+-	bndcsr = get_xsave_field_ptr(XFEATURE_MASK_BNDCSR);
++	bndcsr = get_xsave_field_ptr(XFEATURE_BNDCSR);
+ 	if (!bndcsr)
+ 		return -EINVAL;
+ 	/*
+
+From patchwork Thu Mar 21 20:26:20 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864323
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D5DCF1515
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:25 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id BE74A2A001
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:25 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id B29B52A1D1; Thu, 21 Mar 2019 20:29:25 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 546E72A001
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:25 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729117AbfCUU3T (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:29:19 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39344 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728920AbfCUU0t (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:49 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74Gy-00057y-D3; Thu, 21 Mar 2019 21:26:44 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>,
+ Dave Hansen <dave.hansen@intel.com>
+Subject: [PATCH 12/24] x86/pkru: Provide .*_pkru_ins() functions
+Date: Thu, 21 Mar 2019 21:26:20 +0100
+Message-Id: <20190321202632.16810-13-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Dave Hansen has asked for __read_pkru() and __write_pkru() to be symmetrical.
+As part of the series __write_pkru() will read back the value and only write it
+if it is different.
+In order to make both functions symmetrical move the function containing only
+the opcode into a function with _isn() suffix. __write_pkru() will just invoke
+__write_pkru_isn() but in a flowup patch will also read back the value.
+
+Suggested-by: Dave Hansen <dave.hansen@intel.com>
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/include/asm/pgtable.h       |  2 +-
+ arch/x86/include/asm/special_insns.h | 12 +++++++++---
+ arch/x86/kvm/vmx/vmx.c               |  2 +-
+ 3 files changed, 11 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/include/asm/pgtable.h b/arch/x86/include/asm/pgtable.h
+index 2779ace16d23f..64333e5222cd9 100644
+--- a/arch/x86/include/asm/pgtable.h
++++ b/arch/x86/include/asm/pgtable.h
+@@ -127,7 +127,7 @@ static inline int pte_dirty(pte_t pte)
+ static inline u32 read_pkru(void)
+ {
+ 	if (boot_cpu_has(X86_FEATURE_OSPKE))
+-		return __read_pkru();
++		return __read_pkru_ins();
+ 	return 0;
+ }
+ 
+diff --git a/arch/x86/include/asm/special_insns.h b/arch/x86/include/asm/special_insns.h
+index 43c029cdc3fe8..27328606ff687 100644
+--- a/arch/x86/include/asm/special_insns.h
++++ b/arch/x86/include/asm/special_insns.h
+@@ -92,7 +92,7 @@ static inline void native_write_cr8(unsigned long val)
+ #endif
+ 
+ #ifdef CONFIG_X86_INTEL_MEMORY_PROTECTION_KEYS
+-static inline u32 __read_pkru(void)
++static inline u32 __read_pkru_ins(void)
+ {
+ 	u32 ecx = 0;
+ 	u32 edx, pkru;
+@@ -107,7 +107,7 @@ static inline u32 __read_pkru(void)
+ 	return pkru;
+ }
+ 
+-static inline void __write_pkru(u32 pkru)
++static inline void __write_pkru_ins(u32 pkru)
+ {
+ 	u32 ecx = 0, edx = 0;
+ 
+@@ -118,8 +118,14 @@ static inline void __write_pkru(u32 pkru)
+ 	asm volatile(".byte 0x0f,0x01,0xef\n\t"
+ 		     : : "a" (pkru), "c"(ecx), "d"(edx));
+ }
++
++static inline void __write_pkru(u32 pkru)
++{
++	__write_pkru_ins(pkru);
++}
++
+ #else
+-static inline u32 __read_pkru(void)
++static inline u32 __read_pkru_ins(void)
+ {
+ 	return 0;
+ }
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index c73375e01ab8c..0753b3967423a 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6514,7 +6514,7 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ 	 */
+ 	if (static_cpu_has(X86_FEATURE_PKU) &&
+ 	    kvm_read_cr4_bits(vcpu, X86_CR4_PKE)) {
+-		vcpu->arch.pkru = __read_pkru();
++		vcpu->arch.pkru = __read_pkru_ins();
+ 		if (vcpu->arch.pkru != vmx->host_pkru)
+ 			__write_pkru(vmx->host_pkru);
+ 	}
+
+From patchwork Thu Mar 21 20:26:21 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864319
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 4538814DE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:16 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2E32F2A001
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:16 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 1FCEE2A1CF; Thu, 21 Mar 2019 20:29:16 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C514D2A001
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:15 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729072AbfCUU3D (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:29:03 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39346 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728931AbfCUU0u (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:50 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74Gz-00057y-Bx; Thu, 21 Mar 2019 21:26:45 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 13/24] x86/fpu: Only write PKRU if it is different from
+ current
+Date: Thu, 21 Mar 2019 21:26:21 +0100
+Message-Id: <20190321202632.16810-14-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Dave Hansen says that the `wrpkru' is more expensive than `rdpkru'. It
+has a higher cycle cost and it's also practically a (light) speculation
+barrier.
+
+As an optimisation read the current PKRU value and only write the new
+one if it is different.
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/include/asm/special_insns.h | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/arch/x86/include/asm/special_insns.h b/arch/x86/include/asm/special_insns.h
+index 27328606ff687..28ffdf0c1add4 100644
+--- a/arch/x86/include/asm/special_insns.h
++++ b/arch/x86/include/asm/special_insns.h
+@@ -121,6 +121,12 @@ static inline void __write_pkru_ins(u32 pkru)
+ 
+ static inline void __write_pkru(u32 pkru)
+ {
++	/*
++	 * WRPKRU is relatively expensive compared to RDPKRU.
++	 * Avoid WRPKRU when it would not change the value.
++	 */
++	if (pkru == __read_pkru_ins())
++		return;
+ 	__write_pkru_ins(pkru);
+ }
+ 
+
+From patchwork Thu Mar 21 20:26:22 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864317
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6A35614DE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:13 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4D6CF2A001
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:13 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 3D40F2A1CF; Thu, 21 Mar 2019 20:29:13 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E4F872A001
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:29:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729198AbfCUU3E (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:29:04 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39355 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728932AbfCUU0u (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:50 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74H0-00057y-7C; Thu, 21 Mar 2019 21:26:46 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 14/24] x86/pkeys: Don't check if PKRU is zero before writting
+ it
+Date: Thu, 21 Mar 2019 21:26:22 +0100
+Message-Id: <20190321202632.16810-15-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+write_pkru() checks if the current value is the same as the expected
+value. So instead just checking if the current and new value is zero
+(and skip the write in such a case) we can benefit from that.
+
+Remove the zero check of PKRU, write_pkru() provides a similar check.
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/mm/pkeys.c | 7 -------
+ 1 file changed, 7 deletions(-)
+
+diff --git a/arch/x86/mm/pkeys.c b/arch/x86/mm/pkeys.c
+index 05bb9a44eb1c3..50f65fc1b9a3f 100644
+--- a/arch/x86/mm/pkeys.c
++++ b/arch/x86/mm/pkeys.c
+@@ -142,13 +142,6 @@ u32 init_pkru_value = PKRU_AD_KEY( 1) | PKRU_AD_KEY( 2) | PKRU_AD_KEY( 3) |
+ void copy_init_pkru_to_fpregs(void)
+ {
+ 	u32 init_pkru_value_snapshot = READ_ONCE(init_pkru_value);
+-	/*
+-	 * Any write to PKRU takes it out of the XSAVE 'init
+-	 * state' which increases context switch cost.  Avoid
+-	 * writing 0 when PKRU was already 0.
+-	 */
+-	if (!init_pkru_value_snapshot && !read_pkru())
+-		return;
+ 	/*
+ 	 * Override the PKRU state that came from 'init_fpstate'
+ 	 * with the baseline from the process.
+
+From patchwork Thu Mar 21 20:26:23 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864285
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 557BE14DE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:18 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 399A02A48C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:18 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 2D2FC2A497; Thu, 21 Mar 2019 20:27:18 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id ADAA32A48C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:17 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729081AbfCUU1E (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:27:04 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39459 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728778AbfCUU1E (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:27:04 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74H1-00057y-1P; Thu, 21 Mar 2019 21:26:47 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 15/24] x86/fpu: Eager switch PKRU state
+Date: Thu, 21 Mar 2019 21:26:23 +0100
+Message-Id: <20190321202632.16810-16-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Rik van Riel <riel@surriel.com>
+
+While most of a task's FPU state is only needed in user space, the
+protection keys need to be in place immediately after a context switch.
+
+The reason is that any access to userspace memory while running in
+kernel mode also need to abide by the memory permissions specified in
+the protection keys.
+
+The "eager switch" is a preparation for loading the FPU state on return
+to userland. Instead of decoupling PKRU state from xstate I update PKRU
+within xstate on write operations by the kernel.
+
+The read/write_pkru() is moved to another header file so it can easily
+accessed from pgtable.h and fpu/internal.h.
+
+For user tasks we should always get the PKRU from the xsave area and it
+should not change anything because the PKRU value was loaded as part of
+FPU restore.
+For kernel threads we now will have the default "init_pkru_value"
+written. Before this commit the kernel thread would end up with a
+random value which it inherited from the previous user task.
+
+Signed-off-by: Rik van Riel <riel@surriel.com>
+[bigeasy: save pkru to xstate, no cache, don't use __raw_xsave_addr()]
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/include/asm/fpu/internal.h | 24 ++++++++++++++++++++++--
+ arch/x86/include/asm/fpu/xstate.h   |  1 +
+ arch/x86/include/asm/pgtable.h      |  6 ++++++
+ arch/x86/mm/pkeys.c                 |  1 -
+ 4 files changed, 29 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/include/asm/fpu/internal.h b/arch/x86/include/asm/fpu/internal.h
+index 237ff8dc8559b..82ff84a4c4ab7 100644
+--- a/arch/x86/include/asm/fpu/internal.h
++++ b/arch/x86/include/asm/fpu/internal.h
+@@ -14,6 +14,7 @@
+ #include <linux/compat.h>
+ #include <linux/sched.h>
+ #include <linux/slab.h>
++#include <linux/mm.h>
+ 
+ #include <asm/user.h>
+ #include <asm/fpu/api.h>
+@@ -531,8 +532,27 @@ switch_fpu_prepare(struct fpu *old_fpu, int cpu)
+  */
+ static inline void switch_fpu_finish(struct fpu *new_fpu, int cpu)
+ {
+-	if (static_cpu_has(X86_FEATURE_FPU))
+-		__fpregs_load_activate(new_fpu, cpu);
++	struct pkru_state *pk;
++	u32 pkru_val = init_pkru_value;
++
++	if (!static_cpu_has(X86_FEATURE_FPU))
++		return;
++
++	__fpregs_load_activate(new_fpu, cpu);
++
++	if (!cpu_feature_enabled(X86_FEATURE_OSPKE))
++		return;
++
++	/*
++	 * PKRU state is switched eagerly because it needs to be valid before we
++	 * return to userland e.g. for a copy_to_user() operation.
++	 */
++	if (current->mm) {
++		pk = get_xsave_addr(&new_fpu->state.xsave, XFEATURE_PKRU);
++		if (pk)
++			pkru_val = pk->pkru;
++	}
++	__write_pkru(pkru_val);
+ }
+ 
+ /*
+diff --git a/arch/x86/include/asm/fpu/xstate.h b/arch/x86/include/asm/fpu/xstate.h
+index fbe41f808e5d8..4e18a837223ff 100644
+--- a/arch/x86/include/asm/fpu/xstate.h
++++ b/arch/x86/include/asm/fpu/xstate.h
+@@ -5,6 +5,7 @@
+ #include <linux/types.h>
+ #include <asm/processor.h>
+ #include <linux/uaccess.h>
++#include <asm/user.h>
+ 
+ /* Bit 63 of XCR0 is reserved for future expansion */
+ #define XFEATURE_MASK_EXTEND	(~(XFEATURE_MASK_FPSSE | (1ULL << 63)))
+diff --git a/arch/x86/include/asm/pgtable.h b/arch/x86/include/asm/pgtable.h
+index 64333e5222cd9..1df90feeea5c6 100644
+--- a/arch/x86/include/asm/pgtable.h
++++ b/arch/x86/include/asm/pgtable.h
+@@ -1355,6 +1355,12 @@ static inline pmd_t pmd_swp_clear_soft_dirty(pmd_t pmd)
+ #define PKRU_WD_BIT 0x2
+ #define PKRU_BITS_PER_PKEY 2
+ 
++#ifdef CONFIG_X86_INTEL_MEMORY_PROTECTION_KEYS
++extern u32 init_pkru_value;
++#else
++#define init_pkru_value	0
++#endif
++
+ static inline bool __pkru_allows_read(u32 pkru, u16 pkey)
+ {
+ 	int pkru_pkey_bits = pkey * PKRU_BITS_PER_PKEY;
+diff --git a/arch/x86/mm/pkeys.c b/arch/x86/mm/pkeys.c
+index 50f65fc1b9a3f..2ecbf4155f98f 100644
+--- a/arch/x86/mm/pkeys.c
++++ b/arch/x86/mm/pkeys.c
+@@ -126,7 +126,6 @@ int __arch_override_mprotect_pkey(struct vm_area_struct *vma, int prot, int pkey
+  * in the process's lifetime will not accidentally get access
+  * to data which is pkey-protected later on.
+  */
+-static
+ u32 init_pkru_value = PKRU_AD_KEY( 1) | PKRU_AD_KEY( 2) | PKRU_AD_KEY( 3) |
+ 		      PKRU_AD_KEY( 4) | PKRU_AD_KEY( 5) | PKRU_AD_KEY( 6) |
+ 		      PKRU_AD_KEY( 7) | PKRU_AD_KEY( 8) | PKRU_AD_KEY( 9) |
+
+From patchwork Thu Mar 21 20:26:24 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864307
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 776B21515
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:50 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5B8942A49B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:50 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4F33F2A49E; Thu, 21 Mar 2019 20:28:50 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E50BD2A49B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:49 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728887AbfCUU2p (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:28:45 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39380 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728947AbfCUU0x (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:53 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74H1-00057y-Qf; Thu, 21 Mar 2019 21:26:48 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 16/24] x86/entry: Add TIF_NEED_FPU_LOAD
+Date: Thu, 21 Mar 2019 21:26:24 +0100
+Message-Id: <20190321202632.16810-17-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Add TIF_NEED_FPU_LOAD. This is reserved for loading the FPU registers
+before returning to userland. This flag must not be set for systems
+without a FPU.
+If this flag is cleared, the CPU's FPU register hold the current content
+of current()'s FPU register. The in-memory copy (union fpregs_state) is
+not valid.
+If this flag is set, then all of CPU's FPU register may hold a random
+value (except for PKRU) and it is required to load the content of the
+FPU register on return to userland.
+
+It is introduced now, so we can add code handling it now before adding
+the main feature.
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/include/asm/fpu/internal.h | 6 ++++++
+ arch/x86/include/asm/thread_info.h  | 2 ++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/arch/x86/include/asm/fpu/internal.h b/arch/x86/include/asm/fpu/internal.h
+index 82ff84a4c4ab7..b12874b7cf0cf 100644
+--- a/arch/x86/include/asm/fpu/internal.h
++++ b/arch/x86/include/asm/fpu/internal.h
+@@ -507,6 +507,12 @@ static inline void __fpregs_load_activate(struct fpu *fpu, int cpu)
+  *
+  * The FPU context is only stored/restore for user task and ->mm is used to
+  * distinguish between kernel and user threads.
++ *
++ * If TIF_NEED_FPU_LOAD is cleared then the CPU's FPU registers are saved in
++ * the current thread's FPU registers state.
++ * If TIF_NEED_FPU_LOAD is set then CPU's FPU registers may not hold current()'s
++ * FPU registers. It is required to load the registers before returning to
++ * userland or using the content otherwise.
+  */
+ static inline void
+ switch_fpu_prepare(struct fpu *old_fpu, int cpu)
+diff --git a/arch/x86/include/asm/thread_info.h b/arch/x86/include/asm/thread_info.h
+index e0eccbcb8447d..f9453536f9bbc 100644
+--- a/arch/x86/include/asm/thread_info.h
++++ b/arch/x86/include/asm/thread_info.h
+@@ -88,6 +88,7 @@ struct thread_info {
+ #define TIF_USER_RETURN_NOTIFY	11	/* notify kernel of userspace return */
+ #define TIF_UPROBE		12	/* breakpointed or singlestepping */
+ #define TIF_PATCH_PENDING	13	/* pending live patching update */
++#define TIF_NEED_FPU_LOAD	14	/* load FPU on return to userspace */
+ #define TIF_NOCPUID		15	/* CPUID is not accessible in userland */
+ #define TIF_NOTSC		16	/* TSC is not accessible in userland */
+ #define TIF_IA32		17	/* IA32 compatibility process */
+@@ -117,6 +118,7 @@ struct thread_info {
+ #define _TIF_USER_RETURN_NOTIFY	(1 << TIF_USER_RETURN_NOTIFY)
+ #define _TIF_UPROBE		(1 << TIF_UPROBE)
+ #define _TIF_PATCH_PENDING	(1 << TIF_PATCH_PENDING)
++#define _TIF_NEED_FPU_LOAD	(1 << TIF_NEED_FPU_LOAD)
+ #define _TIF_NOCPUID		(1 << TIF_NOCPUID)
+ #define _TIF_NOTSC		(1 << TIF_NOTSC)
+ #define _TIF_IA32		(1 << TIF_IA32)
+
+From patchwork Thu Mar 21 20:26:25 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864303
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 258A91515
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:16 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 079162A499
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:16 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id F03BB2A49B; Thu, 21 Mar 2019 20:28:15 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 75AD92A499
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:15 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729000AbfCUU04 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:26:56 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39386 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728957AbfCUU0z (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:55 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74H2-00057y-Sz; Thu, 21 Mar 2019 21:26:49 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 17/24] x86/fpu: Always store the registers in
+ copy_fpstate_to_sigframe()
+Date: Thu, 21 Mar 2019 21:26:25 +0100
+Message-Id: <20190321202632.16810-18-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Rik van Riel <riel@surriel.com>
+
+copy_fpstate_to_sigframe() stores the registers directly to user space.
+This is okay because the FPU register are valid and saving it directly
+avoids saving it into kernel memory and making a copy.
+However… We can't keep doing this if we are going to restore the FPU
+registers on the return to userland. It is possible that the FPU
+registers will be invalidated in the middle of the save operation and
+this should be done with disabled preemption / BH.
+
+Save the FPU registers to task's FPU struct and copy them to the user
+memory later on.
+
+This code is extracted from an earlier version of the patchset while
+there still was lazy-FPU on x86.
+
+Signed-off-by: Rik van Riel <riel@surriel.com>
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/include/asm/fpu/internal.h | 43 -----------------------------
+ arch/x86/kernel/fpu/signal.c        | 34 +++++++++--------------
+ 2 files changed, 13 insertions(+), 64 deletions(-)
+
+diff --git a/arch/x86/include/asm/fpu/internal.h b/arch/x86/include/asm/fpu/internal.h
+index b12874b7cf0cf..18f78be133f3a 100644
+--- a/arch/x86/include/asm/fpu/internal.h
++++ b/arch/x86/include/asm/fpu/internal.h
+@@ -127,20 +127,6 @@ extern void fpstate_sanitize_xstate(struct fpu *fpu);
+ 		     _ASM_EXTABLE_HANDLE(1b, 2b, ex_handler_fprestore)	\
+ 		     : output : input)
+ 
+-static inline int copy_fregs_to_user(struct fregs_state __user *fx)
+-{
+-	return user_insn(fnsave %[fx]; fwait,  [fx] "=m" (*fx), "m" (*fx));
+-}
+-
+-static inline int copy_fxregs_to_user(struct fxregs_state __user *fx)
+-{
+-	if (IS_ENABLED(CONFIG_X86_32))
+-		return user_insn(fxsave %[fx], [fx] "=m" (*fx), "m" (*fx));
+-	else
+-		return user_insn(fxsaveq %[fx], [fx] "=m" (*fx), "m" (*fx));
+-
+-}
+-
+ static inline void copy_kernel_to_fxregs(struct fxregs_state *fx)
+ {
+ 	if (IS_ENABLED(CONFIG_X86_32))
+@@ -315,35 +301,6 @@ static inline void copy_kernel_to_xregs(struct xregs_state *xstate, u64 mask)
+ 	XSTATE_XRESTORE(xstate, lmask, hmask);
+ }
+ 
+-/*
+- * Save xstate to user space xsave area.
+- *
+- * We don't use modified optimization because xrstor/xrstors might track
+- * a different application.
+- *
+- * We don't use compacted format xsave area for
+- * backward compatibility for old applications which don't understand
+- * compacted format of xsave area.
+- */
+-static inline int copy_xregs_to_user(struct xregs_state __user *buf)
+-{
+-	int err;
+-
+-	/*
+-	 * Clear the xsave header first, so that reserved fields are
+-	 * initialized to zero.
+-	 */
+-	err = __clear_user(&buf->header, sizeof(buf->header));
+-	if (unlikely(err))
+-		return -EFAULT;
+-
+-	stac();
+-	XSTATE_OP(XSAVE, buf, -1, -1, err);
+-	clac();
+-
+-	return err;
+-}
+-
+ /*
+  * Restore xstate from user space xsave area.
+  */
+diff --git a/arch/x86/kernel/fpu/signal.c b/arch/x86/kernel/fpu/signal.c
+index 6475320939ce3..f55f16d9e7e4e 100644
+--- a/arch/x86/kernel/fpu/signal.c
++++ b/arch/x86/kernel/fpu/signal.c
+@@ -118,22 +118,6 @@ static inline int save_xstate_epilog(void __user *buf, int ia32_frame)
+ 	return err;
+ }
+ 
+-static inline int copy_fpregs_to_sigframe(struct xregs_state __user *buf)
+-{
+-	int err;
+-
+-	if (use_xsave())
+-		err = copy_xregs_to_user(buf);
+-	else if (use_fxsr())
+-		err = copy_fxregs_to_user((struct fxregs_state __user *) buf);
+-	else
+-		err = copy_fregs_to_user((struct fregs_state __user *) buf);
+-
+-	if (unlikely(err) && __clear_user(buf, fpu_user_xstate_size))
+-		err = -EFAULT;
+-	return err;
+-}
+-
+ /*
+  * Save the fpu, extended register state to the user signal frame.
+  *
+@@ -144,8 +128,8 @@ static inline int copy_fpregs_to_sigframe(struct xregs_state __user *buf)
+  *	buf == buf_fx for 64-bit frames and 32-bit fsave frame.
+  *	buf != buf_fx for 32-bit frames with fxstate.
+  *
+- * Save the state directly to the user frame pointed by the aligned pointer
+- * 'buf_fx'.
++ * Save the state to task's fpu->state and then copy it to the user frame
++ * pointed by the aligned pointer 'buf_fx'.
+  *
+  * If this is a 32-bit frame with fxstate, put a fsave header before
+  * the aligned state at 'buf_fx'.
+@@ -155,6 +139,8 @@ static inline int copy_fpregs_to_sigframe(struct xregs_state __user *buf)
+  */
+ int copy_fpstate_to_sigframe(void __user *buf, void __user *buf_fx, int size)
+ {
++	struct fpu *fpu = &current->thread.fpu;
++	struct xregs_state *xsave = &fpu->state.xsave;
+ 	struct task_struct *tsk = current;
+ 	int ia32_fxstate = (buf != buf_fx);
+ 
+@@ -169,9 +155,15 @@ int copy_fpstate_to_sigframe(void __user *buf, void __user *buf_fx, int size)
+ 			sizeof(struct user_i387_ia32_struct), NULL,
+ 			(struct _fpstate_32 __user *) buf) ? -1 : 1;
+ 
+-	/* Save the live register state to the user directly. */
+-	if (copy_fpregs_to_sigframe(buf_fx))
+-		return -1;
++	copy_fpregs_to_fpstate(fpu);
++
++	if (using_compacted_format()) {
++		copy_xstate_to_user(buf_fx, xsave, 0, size);
++	} else {
++		fpstate_sanitize_xstate(fpu);
++		if (__copy_to_user(buf_fx, xsave, fpu_user_xstate_size))
++			return -1;
++	}
+ 
+ 	/* Save the fsave header for the 32-bit frames. */
+ 	if ((ia32_fxstate || !use_fxsr()) && save_fsave_header(tsk, buf))
+
+From patchwork Thu Mar 21 20:26:26 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864289
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 399D41515
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:34 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1F0A52A498
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:34 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 1289A2A49B; Thu, 21 Mar 2019 20:27:34 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7B6282A498
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:33 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729019AbfCUU1B (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:27:01 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39448 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1729015AbfCUU1B (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:27:01 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74H4-00057y-1a; Thu, 21 Mar 2019 21:26:50 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 18/24] x86/fpu: Prepare copy_fpstate_to_sigframe() for
+ TIF_NEED_FPU_LOAD
+Date: Thu, 21 Mar 2019 21:26:26 +0100
+Message-Id: <20190321202632.16810-19-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Rik van Riel <riel@surriel.com>
+
+The FPU registers need only to be saved if TIF_NEED_FPU_LOAD is not set.
+Otherwise this has been already done and can be skipped.
+
+Signed-off-by: Rik van Riel <riel@surriel.com>
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/kernel/fpu/signal.c | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kernel/fpu/signal.c b/arch/x86/kernel/fpu/signal.c
+index f55f16d9e7e4e..97ea6909ede1f 100644
+--- a/arch/x86/kernel/fpu/signal.c
++++ b/arch/x86/kernel/fpu/signal.c
+@@ -155,7 +155,16 @@ int copy_fpstate_to_sigframe(void __user *buf, void __user *buf_fx, int size)
+ 			sizeof(struct user_i387_ia32_struct), NULL,
+ 			(struct _fpstate_32 __user *) buf) ? -1 : 1;
+ 
+-	copy_fpregs_to_fpstate(fpu);
++	fpregs_lock();
++	/*
++	 * If we do not need to load the FPU registers at return to userspace
++	 * then the CPU has the current state and we need to save it. Otherwise
++	 * it is already done and we can skip it.
++	 */
++	if (!test_thread_flag(TIF_NEED_FPU_LOAD))
++		copy_fpregs_to_fpstate(fpu);
++
++	fpregs_unlock();
+ 
+ 	if (using_compacted_format()) {
+ 		copy_xstate_to_user(buf_fx, xsave, 0, size);
+
+From patchwork Thu Mar 21 20:26:27 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864305
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 48B541823
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:22 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 309912A499
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:22 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 2399F2A49B; Thu, 21 Mar 2019 20:28:22 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C665C2A499
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:21 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729165AbfCUU2P (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:28:15 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39408 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728991AbfCUU04 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:56 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74H5-00057y-1U; Thu, 21 Mar 2019 21:26:51 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 19/24] x86/fpu: Update xstate's PKRU value on write_pkru()
+Date: Thu, 21 Mar 2019 21:26:27 +0100
+Message-Id: <20190321202632.16810-20-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+During the context switch the xstate is loaded which also includes the
+PKRU value.
+If xstate is restored on return to userland it is required that the
+PKRU value in xstate is the same as the one in the CPU.
+
+Save the PKRU in xstate during modification.
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/include/asm/pgtable.h | 20 ++++++++++++++++++--
+ 1 file changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/include/asm/pgtable.h b/arch/x86/include/asm/pgtable.h
+index 1df90feeea5c6..58a3a68e1f114 100644
+--- a/arch/x86/include/asm/pgtable.h
++++ b/arch/x86/include/asm/pgtable.h
+@@ -23,6 +23,8 @@
+ 
+ #ifndef __ASSEMBLY__
+ #include <asm/x86_init.h>
++#include <asm/fpu/xstate.h>
++#include <asm/fpu/api.h>
+ 
+ extern pgd_t early_top_pgt[PTRS_PER_PGD];
+ int __init __early_make_pgtable(unsigned long address, pmdval_t pmd);
+@@ -133,8 +135,22 @@ static inline u32 read_pkru(void)
+ 
+ static inline void write_pkru(u32 pkru)
+ {
+-	if (boot_cpu_has(X86_FEATURE_OSPKE))
+-		__write_pkru(pkru);
++	struct pkru_state *pk;
++
++	if (!boot_cpu_has(X86_FEATURE_OSPKE))
++		return;
++
++	pk = get_xsave_addr(&current->thread.fpu.state.xsave, XFEATURE_PKRU);
++	/*
++	 * The PKRU value in xstate needs to be in sync with the value that is
++	 * written to the CPU. The FPU restore on return to userland would
++	 * otherwise load the previous value again.
++	 */
++	fpregs_lock();
++	if (pk)
++		pk->pkru = pkru;
++	__write_pkru(pkru);
++	fpregs_unlock();
+ }
+ 
+ static inline int pte_young(pte_t pte)
+
+From patchwork Thu Mar 21 20:26:28 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864299
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1C9B314DE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:13 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 03E322A499
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:13 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id EC1C22A49B; Thu, 21 Mar 2019 20:28:12 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 963C92A499
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:28:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729159AbfCUU2F (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:28:05 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39411 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728999AbfCUU05 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:57 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74H5-00057y-W8; Thu, 21 Mar 2019 21:26:52 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 20/24] x86/fpu: Inline copy_user_to_fpregs_zeroing()
+Date: Thu, 21 Mar 2019 21:26:28 +0100
+Message-Id: <20190321202632.16810-21-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Start refactoring __fpu__restore_sig() by inlining
+copy_user_to_fpregs_zeroing().
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/kernel/fpu/signal.c | 42 ++++++++++++++++--------------------
+ 1 file changed, 19 insertions(+), 23 deletions(-)
+
+diff --git a/arch/x86/kernel/fpu/signal.c b/arch/x86/kernel/fpu/signal.c
+index 97ea6909ede1f..5a467a381245c 100644
+--- a/arch/x86/kernel/fpu/signal.c
++++ b/arch/x86/kernel/fpu/signal.c
+@@ -220,28 +220,6 @@ sanitize_restored_xstate(union fpregs_state *state,
+ 	}
+ }
+ 
+-/*
+- * Restore the extended state if present. Otherwise, restore the FP/SSE state.
+- */
+-static inline int copy_user_to_fpregs_zeroing(void __user *buf, u64 xbv, int fx_only)
+-{
+-	if (use_xsave()) {
+-		if ((unsigned long)buf % 64 || fx_only) {
+-			u64 init_bv = xfeatures_mask & ~XFEATURE_MASK_FPSSE;
+-			copy_kernel_to_xregs(&init_fpstate.xsave, init_bv);
+-			return copy_user_to_fxregs(buf);
+-		} else {
+-			u64 init_bv = xfeatures_mask & ~xbv;
+-			if (unlikely(init_bv))
+-				copy_kernel_to_xregs(&init_fpstate.xsave, init_bv);
+-			return copy_user_to_xregs(buf, xbv);
+-		}
+-	} else if (use_fxsr()) {
+-		return copy_user_to_fxregs(buf);
+-	} else
+-		return copy_user_to_fregs(buf);
+-}
+-
+ static int __fpu__restore_sig(void __user *buf, void __user *buf_fx, int size)
+ {
+ 	int ia32_fxstate = (buf != buf_fx);
+@@ -319,11 +297,29 @@ static int __fpu__restore_sig(void __user *buf, void __user *buf_fx, int size)
+ 		kfree(tmp);
+ 		return err;
+ 	} else {
++		int ret;
++
+ 		/*
+ 		 * For 64-bit frames and 32-bit fsave frames, restore the user
+ 		 * state to the registers directly (with exceptions handled).
+ 		 */
+-		if (copy_user_to_fpregs_zeroing(buf_fx, xfeatures, fx_only)) {
++		if (use_xsave()) {
++			if ((unsigned long)buf_fx % 64 || fx_only) {
++				u64 init_bv = xfeatures_mask & ~XFEATURE_MASK_FPSSE;
++				copy_kernel_to_xregs(&init_fpstate.xsave, init_bv);
++				ret = copy_user_to_fxregs(buf_fx);
++			} else {
++				u64 init_bv = xfeatures_mask & ~xfeatures;
++				if (unlikely(init_bv))
++					copy_kernel_to_xregs(&init_fpstate.xsave, init_bv);
++				ret = copy_user_to_xregs(buf_fx, xfeatures);
++			}
++		} else if (use_fxsr()) {
++			ret = copy_user_to_fxregs(buf_fx);
++		} else
++			ret = copy_user_to_fregs(buf_fx);
++
++		if (ret) {
+ 			fpu__clear(fpu);
+ 			return -1;
+ 		}
+
+From patchwork Thu Mar 21 20:26:29 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864293
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8F08614DE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:44 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7629C2A48C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:44 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 6A7592A498; Thu, 21 Mar 2019 20:27:44 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id CD4882A48C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:43 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729086AbfCUU1h (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:27:37 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39418 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1729010AbfCUU07 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:59 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74H6-00057y-Tu; Thu, 21 Mar 2019 21:26:53 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 21/24] x86/fpu: Let __fpu__restore_sig() restore the
+ !32bit+fxsr frame from kernel memory
+Date: Thu, 21 Mar 2019 21:26:29 +0100
+Message-Id: <20190321202632.16810-22-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+The !32bit+fxsr case loads the new state from user memory. In case we
+restore the FPU state on return to userland we can't do this. It would
+be required to disable preemption in order to avoid a context switch
+which would set TIF_NEED_FPU_LOAD. If this happens before the "restore"
+operation then the loaded registers would become volatile.
+
+Disabling preemption while accessing user memory requires to disable the
+pagefault handler. An error during XRSTOR would then mean that either a
+page fault occured (and we have to retry with enabled page fault
+handler) or a #GP occured because the xstate is bogus (after all the
+sig-handler can modify it).
+
+In order to avoid that mess, copy the FPU state from userland, validate
+it and then load it. The copy_users_…() helper are basically the old
+helper except that they operate on kernel memory and the fault handler
+just sets the error value and the caller handles it.
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/include/asm/fpu/internal.h | 33 ++++++++++-----
+ arch/x86/kernel/fpu/signal.c        | 62 +++++++++++++++++++++++------
+ 2 files changed, 72 insertions(+), 23 deletions(-)
+
+diff --git a/arch/x86/include/asm/fpu/internal.h b/arch/x86/include/asm/fpu/internal.h
+index 18f78be133f3a..1d0e59c8f920e 100644
+--- a/arch/x86/include/asm/fpu/internal.h
++++ b/arch/x86/include/asm/fpu/internal.h
+@@ -121,6 +121,21 @@ extern void fpstate_sanitize_xstate(struct fpu *fpu);
+ 	err;								\
+ })
+ 
++#define kernel_insn_norestore(insn, output, input...)			\
++({									\
++	int err;							\
++	asm volatile("1:" #insn "\n\t"					\
++		     "2:\n"						\
++		     ".section .fixup,\"ax\"\n"				\
++		     "3:  movl $-1,%[err]\n"				\
++		     "    jmp  2b\n"					\
++		     ".previous\n"					\
++		     _ASM_EXTABLE(1b, 3b)				\
++		     : [err] "=r" (err), output				\
++		     : "0"(0), input);					\
++	err;								\
++})
++
+ #define kernel_insn(insn, output, input...)				\
+ 	asm volatile("1:" #insn "\n\t"					\
+ 		     "2:\n"						\
+@@ -135,12 +150,12 @@ static inline void copy_kernel_to_fxregs(struct fxregs_state *fx)
+ 		kernel_insn(fxrstorq %[fx], "=m" (*fx), [fx] "m" (*fx));
+ }
+ 
+-static inline int copy_user_to_fxregs(struct fxregs_state __user *fx)
++static inline int copy_users_to_fxregs(struct fxregs_state *fx)
+ {
+ 	if (IS_ENABLED(CONFIG_X86_32))
+-		return user_insn(fxrstor %[fx], "=m" (*fx), [fx] "m" (*fx));
++		return kernel_insn_norestore(fxrstor %[fx], "=m" (*fx), [fx] "m" (*fx));
+ 	else
+-		return user_insn(fxrstorq %[fx], "=m" (*fx), [fx] "m" (*fx));
++		return kernel_insn_norestore(fxrstorq %[fx], "=m" (*fx), [fx] "m" (*fx));
+ }
+ 
+ static inline void copy_kernel_to_fregs(struct fregs_state *fx)
+@@ -148,9 +163,9 @@ static inline void copy_kernel_to_fregs(struct fregs_state *fx)
+ 	kernel_insn(frstor %[fx], "=m" (*fx), [fx] "m" (*fx));
+ }
+ 
+-static inline int copy_user_to_fregs(struct fregs_state __user *fx)
++static inline int copy_users_to_fregs(struct fregs_state *fx)
+ {
+-	return user_insn(frstor %[fx], "=m" (*fx), [fx] "m" (*fx));
++	return kernel_insn_norestore(frstor %[fx], "=m" (*fx), [fx] "m" (*fx));
+ }
+ 
+ static inline void copy_fxregs_to_kernel(struct fpu *fpu)
+@@ -302,18 +317,16 @@ static inline void copy_kernel_to_xregs(struct xregs_state *xstate, u64 mask)
+ }
+ 
+ /*
+- * Restore xstate from user space xsave area.
++ * Restore xstate from kernel space xsave area, return an error code instead an
++ * exception.
+  */
+-static inline int copy_user_to_xregs(struct xregs_state __user *buf, u64 mask)
++static inline int copy_users_to_xregs(struct xregs_state *xstate, u64 mask)
+ {
+-	struct xregs_state *xstate = ((__force struct xregs_state *)buf);
+ 	u32 lmask = mask;
+ 	u32 hmask = mask >> 32;
+ 	int err;
+ 
+-	stac();
+ 	XSTATE_OP(XRSTOR, xstate, lmask, hmask, err);
+-	clac();
+ 
+ 	return err;
+ }
+diff --git a/arch/x86/kernel/fpu/signal.c b/arch/x86/kernel/fpu/signal.c
+index 5a467a381245c..052a16c96218f 100644
+--- a/arch/x86/kernel/fpu/signal.c
++++ b/arch/x86/kernel/fpu/signal.c
+@@ -216,7 +216,8 @@ sanitize_restored_xstate(union fpregs_state *state,
+ 		 */
+ 		xsave->i387.mxcsr &= mxcsr_feature_mask;
+ 
+-		convert_to_fxsr(&state->fxsave, ia32_env);
++		if (ia32_env)
++			convert_to_fxsr(&state->fxsave, ia32_env);
+ 	}
+ }
+ 
+@@ -297,28 +298,63 @@ static int __fpu__restore_sig(void __user *buf, void __user *buf_fx, int size)
+ 		kfree(tmp);
+ 		return err;
+ 	} else {
++		union fpregs_state *state;
++		void *tmp;
+ 		int ret;
+ 
++		tmp = kzalloc(sizeof(*state) + fpu_kernel_xstate_size + 64, GFP_KERNEL);
++		if (!tmp)
++			return -ENOMEM;
++		state = PTR_ALIGN(tmp, 64);
++
+ 		/*
+ 		 * For 64-bit frames and 32-bit fsave frames, restore the user
+ 		 * state to the registers directly (with exceptions handled).
+ 		 */
+-		if (use_xsave()) {
+-			if ((unsigned long)buf_fx % 64 || fx_only) {
++		if ((unsigned long)buf_fx % 64)
++			fx_only = 1;
++
++		if (use_xsave() && !fx_only) {
++			u64 init_bv = xfeatures_mask & ~xfeatures;
++
++			if (using_compacted_format()) {
++				ret = copy_user_to_xstate(&state->xsave, buf_fx);
++			} else {
++				ret = __copy_from_user(&state->xsave, buf_fx, state_size);
++
++				if (!ret && state_size > offsetof(struct xregs_state, header))
++					ret = validate_xstate_header(&state->xsave.header);
++			}
++			if (ret)
++				goto err_out;
++			sanitize_restored_xstate(state, NULL, xfeatures,
++						 fx_only);
++
++			if (unlikely(init_bv))
++				copy_kernel_to_xregs(&init_fpstate.xsave, init_bv);
++			ret = copy_users_to_xregs(&state->xsave, xfeatures);
++
++		} else if (use_fxsr()) {
++			ret = __copy_from_user(&state->fxsave, buf_fx, state_size);
++			if (ret)
++				goto err_out;
++
++			if (use_xsave()) {
+ 				u64 init_bv = xfeatures_mask & ~XFEATURE_MASK_FPSSE;
+ 				copy_kernel_to_xregs(&init_fpstate.xsave, init_bv);
+-				ret = copy_user_to_fxregs(buf_fx);
+-			} else {
+-				u64 init_bv = xfeatures_mask & ~xfeatures;
+-				if (unlikely(init_bv))
+-					copy_kernel_to_xregs(&init_fpstate.xsave, init_bv);
+-				ret = copy_user_to_xregs(buf_fx, xfeatures);
+ 			}
+-		} else if (use_fxsr()) {
+-			ret = copy_user_to_fxregs(buf_fx);
+-		} else
+-			ret = copy_user_to_fregs(buf_fx);
++			state->fxsave.mxcsr &= mxcsr_feature_mask;
+ 
++			ret = copy_users_to_fxregs(&state->fxsave);
++		} else {
++			ret = __copy_from_user(&state->fsave, buf_fx, state_size);
++			if (ret)
++				goto err_out;
++			ret = copy_users_to_fregs(buf_fx);
++		}
++
++err_out:
++		kfree(tmp);
+ 		if (ret) {
+ 			fpu__clear(fpu);
+ 			return -1;
+
+From patchwork Thu Mar 21 20:26:30 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864295
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 54F6B1515
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:46 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3B8D82A48C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:46 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 2FC702A498; Thu, 21 Mar 2019 20:27:46 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A6D3F2A48C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:45 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729045AbfCUU07 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:26:59 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39422 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1729015AbfCUU07 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:26:59 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74H8-00057y-0D; Thu, 21 Mar 2019 21:26:54 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 22/24] x86/fpu: Merge the two code paths in
+ __fpu__restore_sig()
+Date: Thu, 21 Mar 2019 21:26:30 +0100
+Message-Id: <20190321202632.16810-23-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+The ia32_fxstate case (32bit with fxsr) and the other (64bit, 32bit
+without fxsr) restore both from kernel memory and sanitize the content.
+The !ia32_fxstate version restores missing xstates from "init state"
+while the ia32_fxstate doesn't and skips it.
+
+Merge the two code paths and keep the !ia32_fxstate version. Copy only
+the user_i387_ia32_struct data structure in the ia32_fxstate.
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/kernel/fpu/signal.c | 146 ++++++++++++++---------------------
+ 1 file changed, 57 insertions(+), 89 deletions(-)
+
+diff --git a/arch/x86/kernel/fpu/signal.c b/arch/x86/kernel/fpu/signal.c
+index 052a16c96218f..5f8ce0285f641 100644
+--- a/arch/x86/kernel/fpu/signal.c
++++ b/arch/x86/kernel/fpu/signal.c
+@@ -223,12 +223,17 @@ sanitize_restored_xstate(union fpregs_state *state,
+ 
+ static int __fpu__restore_sig(void __user *buf, void __user *buf_fx, int size)
+ {
++	struct user_i387_ia32_struct *envp = NULL;
+ 	int ia32_fxstate = (buf != buf_fx);
+ 	struct task_struct *tsk = current;
+ 	struct fpu *fpu = &tsk->thread.fpu;
+ 	int state_size = fpu_kernel_xstate_size;
++	struct user_i387_ia32_struct env;
++	union fpregs_state *state;
+ 	u64 xfeatures = 0;
+ 	int fx_only = 0;
++	int ret = 0;
++	void *tmp;
+ 
+ 	ia32_fxstate &= (IS_ENABLED(CONFIG_X86_32) ||
+ 			 IS_ENABLED(CONFIG_IA32_EMULATION));
+@@ -263,105 +268,68 @@ static int __fpu__restore_sig(void __user *buf, void __user *buf_fx, int size)
+ 		}
+ 	}
+ 
+-	if (ia32_fxstate) {
+-		/*
+-		 * For 32-bit frames with fxstate, copy the user state to the
+-		 * thread's fpu state, reconstruct fxstate from the fsave
+-		 * header. Validate and sanitize the copied state.
+-		 */
+-		struct user_i387_ia32_struct env;
+-		union fpregs_state *state;
+-		int err = 0;
+-		void *tmp;
++	tmp = kzalloc(sizeof(*state) + fpu_kernel_xstate_size + 64, GFP_KERNEL);
++	if (!tmp)
++		return -ENOMEM;
++	state = PTR_ALIGN(tmp, 64);
+ 
+-		tmp = kzalloc(sizeof(*state) + fpu_kernel_xstate_size + 64, GFP_KERNEL);
+-		if (!tmp)
+-			return -ENOMEM;
+-		state = PTR_ALIGN(tmp, 64);
++	if ((unsigned long)buf_fx % 64)
++		fx_only = 1;
++
++	/*
++	 * For 32-bit frames with fxstate, copy the fxstate so it can be
++	 * reconstructed later.
++	 */
++	if (ia32_fxstate) {
++		ret = __copy_from_user(&env, buf, sizeof(env));
++		if (ret)
++			goto err_out;
++		envp = &env;
++	}
++	if (use_xsave() && !fx_only) {
++		u64 init_bv = xfeatures_mask & ~xfeatures;
+ 
+ 		if (using_compacted_format()) {
+-			err = copy_user_to_xstate(&state->xsave, buf_fx);
++			ret = copy_user_to_xstate(&state->xsave, buf_fx);
+ 		} else {
+-			err = __copy_from_user(&state->xsave, buf_fx, state_size);
++			ret = __copy_from_user(&state->xsave, buf_fx, state_size);
+ 
+-			if (!err && state_size > offsetof(struct xregs_state, header))
+-				err = validate_xstate_header(&state->xsave.header);
++			if (!ret && state_size > offsetof(struct xregs_state, header))
++				ret = validate_xstate_header(&state->xsave.header);
++		}
++		if (ret)
++			goto err_out;
++
++		sanitize_restored_xstate(state, envp, xfeatures, fx_only);
++
++		if (unlikely(init_bv))
++			copy_kernel_to_xregs(&init_fpstate.xsave, init_bv);
++		ret = copy_users_to_xregs(&state->xsave, xfeatures);
++
++	} else if (use_fxsr()) {
++		ret = __copy_from_user(&state->fxsave, buf_fx, state_size);
++		if (ret)
++			goto err_out;
++
++		sanitize_restored_xstate(state, envp, xfeatures, fx_only);
++		if (use_xsave()) {
++			u64 init_bv = xfeatures_mask & ~XFEATURE_MASK_FPSSE;
++			copy_kernel_to_xregs(&init_fpstate.xsave, init_bv);
+ 		}
+ 
+-		if (err || __copy_from_user(&env, buf, sizeof(env))) {
+-			err = -1;
+-		} else {
+-			sanitize_restored_xstate(state, &env, xfeatures, fx_only);
+-			copy_kernel_to_fpregs(state);
+-		}
+-
+-		kfree(tmp);
+-		return err;
++		ret = copy_users_to_fxregs(&state->fxsave);
+ 	} else {
+-		union fpregs_state *state;
+-		void *tmp;
+-		int ret;
+-
+-		tmp = kzalloc(sizeof(*state) + fpu_kernel_xstate_size + 64, GFP_KERNEL);
+-		if (!tmp)
+-			return -ENOMEM;
+-		state = PTR_ALIGN(tmp, 64);
+-
+-		/*
+-		 * For 64-bit frames and 32-bit fsave frames, restore the user
+-		 * state to the registers directly (with exceptions handled).
+-		 */
+-		if ((unsigned long)buf_fx % 64)
+-			fx_only = 1;
+-
+-		if (use_xsave() && !fx_only) {
+-			u64 init_bv = xfeatures_mask & ~xfeatures;
+-
+-			if (using_compacted_format()) {
+-				ret = copy_user_to_xstate(&state->xsave, buf_fx);
+-			} else {
+-				ret = __copy_from_user(&state->xsave, buf_fx, state_size);
+-
+-				if (!ret && state_size > offsetof(struct xregs_state, header))
+-					ret = validate_xstate_header(&state->xsave.header);
+-			}
+-			if (ret)
+-				goto err_out;
+-			sanitize_restored_xstate(state, NULL, xfeatures,
+-						 fx_only);
+-
+-			if (unlikely(init_bv))
+-				copy_kernel_to_xregs(&init_fpstate.xsave, init_bv);
+-			ret = copy_users_to_xregs(&state->xsave, xfeatures);
+-
+-		} else if (use_fxsr()) {
+-			ret = __copy_from_user(&state->fxsave, buf_fx, state_size);
+-			if (ret)
+-				goto err_out;
+-
+-			if (use_xsave()) {
+-				u64 init_bv = xfeatures_mask & ~XFEATURE_MASK_FPSSE;
+-				copy_kernel_to_xregs(&init_fpstate.xsave, init_bv);
+-			}
+-			state->fxsave.mxcsr &= mxcsr_feature_mask;
+-
+-			ret = copy_users_to_fxregs(&state->fxsave);
+-		} else {
+-			ret = __copy_from_user(&state->fsave, buf_fx, state_size);
+-			if (ret)
+-				goto err_out;
+-			ret = copy_users_to_fregs(buf_fx);
+-		}
+-
+-err_out:
+-		kfree(tmp);
+-		if (ret) {
+-			fpu__clear(fpu);
+-			return -1;
+-		}
++		ret = __copy_from_user(&state->fsave, buf_fx, state_size);
++		if (ret)
++			goto err_out;
++		ret = copy_users_to_fregs(buf_fx);
+ 	}
+ 
+-	return 0;
++err_out:
++	kfree(tmp);
++	if (ret)
++		fpu__clear(fpu);
++	return ret;
+ }
+ 
+ static inline int xstate_sigframe_size(void)
+
+From patchwork Thu Mar 21 20:26:31 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864291
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 064151515
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:35 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D55CC2A48C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:34 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C98B92A499; Thu, 21 Mar 2019 20:27:34 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 0AE9C2A48C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:32 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729099AbfCUU1U (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:27:20 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39440 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1729040AbfCUU1D (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:27:03 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74H8-00057y-P8; Thu, 21 Mar 2019 21:26:55 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 23/24] x86/fpu: Defer FPU state load until return to userspace
+Date: Thu, 21 Mar 2019 21:26:31 +0100
+Message-Id: <20190321202632.16810-24-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Rik van Riel <riel@surriel.com>
+
+Defer loading of FPU state until return to userspace. This gives
+the kernel the potential to skip loading FPU state for tasks that
+stay in kernel mode, or for tasks that end up with repeated
+invocations of kernel_fpu_begin() & kernel_fpu_end().
+
+The __fpregs_changes_{begin|end}() section ensures that the register
+remain unchanged. Otherwise a context switch or a BH could save the
+registers to its FPU context and processor's FPU register would became
+random if beeing modified at the same time.
+
+KVM swaps the host/guest register on entry/exit path. I kept the flow as
+is. First it ensures that the registers are loaded and then saves the
+current (host) state before it loads the guest's register. The swap is
+done at the very end with disabled interrupts so it should not change
+anymore before theg guest is entered. The read/save version seems to be
+cheaper compared to memcpy() in a micro benchmark.
+
+Each thread gets TIF_NEED_FPU_LOAD set as part of fork() / fpu__copy().
+For kernel threads, this flag gets never cleared which avoids saving /
+restoring the FPU state for kernel threads and during in-kernel usage of
+the FPU register.
+
+Signed-off-by: Rik van Riel <riel@surriel.com>
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/entry/common.c             |   8 +++
+ arch/x86/include/asm/fpu/api.h      |  22 +++++-
+ arch/x86/include/asm/fpu/internal.h |  27 ++++---
+ arch/x86/include/asm/trace/fpu.h    |   5 +-
+ arch/x86/kernel/fpu/core.c          | 105 +++++++++++++++++++++-------
+ arch/x86/kernel/fpu/signal.c        |  46 +++++++-----
+ arch/x86/kernel/process.c           |   2 +-
+ arch/x86/kernel/process_32.c        |   5 +-
+ arch/x86/kernel/process_64.c        |   5 +-
+ arch/x86/kvm/x86.c                  |  20 ++++--
+ 10 files changed, 180 insertions(+), 65 deletions(-)
+
+diff --git a/arch/x86/entry/common.c b/arch/x86/entry/common.c
+index 7bc105f47d21a..13e8e29af6ab7 100644
+--- a/arch/x86/entry/common.c
++++ b/arch/x86/entry/common.c
+@@ -31,6 +31,7 @@
+ #include <asm/vdso.h>
+ #include <linux/uaccess.h>
+ #include <asm/cpufeature.h>
++#include <asm/fpu/api.h>
+ 
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/syscalls.h>
+@@ -196,6 +197,13 @@ __visible inline void prepare_exit_to_usermode(struct pt_regs *regs)
+ 	if (unlikely(cached_flags & EXIT_TO_USERMODE_LOOP_FLAGS))
+ 		exit_to_usermode_loop(regs, cached_flags);
+ 
++	/* Reload ti->flags; we may have rescheduled above. */
++	cached_flags = READ_ONCE(ti->flags);
++
++	fpregs_assert_state_consistent();
++	if (unlikely(cached_flags & _TIF_NEED_FPU_LOAD))
++		switch_fpu_return();
++
+ #ifdef CONFIG_COMPAT
+ 	/*
+ 	 * Compat syscalls set TS_COMPAT.  Make sure we clear it before
+diff --git a/arch/x86/include/asm/fpu/api.h b/arch/x86/include/asm/fpu/api.h
+index 73e684160f354..fc3dd044e16dd 100644
+--- a/arch/x86/include/asm/fpu/api.h
++++ b/arch/x86/include/asm/fpu/api.h
+@@ -10,7 +10,7 @@
+ 
+ #ifndef _ASM_X86_FPU_API_H
+ #define _ASM_X86_FPU_API_H
+-#include <linux/preempt.h>
++#include <linux/bottom_half.h>
+ 
+ /*
+  * Use kernel_fpu_begin/end() if you intend to use FPU in kernel context. It
+@@ -22,17 +22,37 @@
+ extern void kernel_fpu_begin(void);
+ extern void kernel_fpu_end(void);
+ extern bool irq_fpu_usable(void);
++extern void fpregs_mark_activate(void);
+ 
++/*
++ * Use fpregs_lock() while editing CPU's FPU registers or fpu->state.
++ * A context switch will (and softirq might) save CPU's FPU register to
++ * fpu->state and set TIF_NEED_FPU_LOAD leaving CPU's FPU registers in a random
++ * state.
++ */
+ static inline void fpregs_lock(void)
+ {
+ 	preempt_disable();
++	local_bh_disable();
+ }
+ 
+ static inline void fpregs_unlock(void)
+ {
++	local_bh_enable();
+ 	preempt_enable();
+ }
+ 
++#ifdef CONFIG_X86_DEBUG_FPU
++extern void fpregs_assert_state_consistent(void);
++#else
++static inline void fpregs_assert_state_consistent(void) { }
++#endif
++
++/*
++ * Load the task FPU state before returning to userspace.
++ */
++extern void switch_fpu_return(void);
++
+ /*
+  * Query the presence of one or more xfeatures. Works on any legacy CPU as well.
+  *
+diff --git a/arch/x86/include/asm/fpu/internal.h b/arch/x86/include/asm/fpu/internal.h
+index 1d0e59c8f920e..43465eea4dc54 100644
+--- a/arch/x86/include/asm/fpu/internal.h
++++ b/arch/x86/include/asm/fpu/internal.h
+@@ -30,7 +30,7 @@ extern void fpu__prepare_write(struct fpu *fpu);
+ extern void fpu__save(struct fpu *fpu);
+ extern int  fpu__restore_sig(void __user *buf, int ia32_frame);
+ extern void fpu__drop(struct fpu *fpu);
+-extern int  fpu__copy(struct fpu *dst_fpu, struct fpu *src_fpu);
++extern int  fpu__copy(struct task_struct *dst, struct task_struct *src);
+ extern void fpu__clear(struct fpu *fpu);
+ extern int  fpu__exception_code(struct fpu *fpu, int trap_nr);
+ extern int  dump_fpu(struct pt_regs *ptregs, struct user_i387_struct *fpstate);
+@@ -455,13 +455,20 @@ static inline void fpregs_activate(struct fpu *fpu)
+ 	trace_x86_fpu_regs_activated(fpu);
+ }
+ 
+-static inline void __fpregs_load_activate(struct fpu *fpu, int cpu)
++static inline void __fpregs_load_activate(void)
+ {
++	struct fpu *fpu = &current->thread.fpu;
++	int cpu = smp_processor_id();
++
++	if (WARN_ON_ONCE(current->mm == NULL))
++		return;
++
+ 	if (!fpregs_state_valid(fpu, cpu)) {
+-		if (current->mm)
+-			copy_kernel_to_fpregs(&fpu->state);
++		copy_kernel_to_fpregs(&fpu->state);
+ 		fpregs_activate(fpu);
++		fpu->last_cpu = cpu;
+ 	}
++	clear_thread_flag(TIF_NEED_FPU_LOAD);
+ }
+ 
+ /*
+@@ -472,8 +479,8 @@ static inline void __fpregs_load_activate(struct fpu *fpu, int cpu)
+  *  - switch_fpu_prepare() saves the old state.
+  *    This is done within the context of the old process.
+  *
+- *  - switch_fpu_finish() restores the new state as
+- *    necessary.
++ *  - switch_fpu_finish() sets TIF_NEED_FPU_LOAD; the floating point state
++ *    will get loaded on return to userspace, or when the kernel needs it.
+  *
+  * The FPU context is only stored/restore for user task and ->mm is used to
+  * distinguish between kernel and user threads.
+@@ -503,10 +510,10 @@ switch_fpu_prepare(struct fpu *old_fpu, int cpu)
+  */
+ 
+ /*
+- * Set up the userspace FPU context for the new task, if the task
+- * has used the FPU.
++ * Load PKRU from the FPU context if available. Delay loading the loading of the
++ * complete FPU state until the return to userland.
+  */
+-static inline void switch_fpu_finish(struct fpu *new_fpu, int cpu)
++static inline void switch_fpu_finish(struct fpu *new_fpu)
+ {
+ 	struct pkru_state *pk;
+ 	u32 pkru_val = init_pkru_value;
+@@ -514,7 +521,7 @@ static inline void switch_fpu_finish(struct fpu *new_fpu, int cpu)
+ 	if (!static_cpu_has(X86_FEATURE_FPU))
+ 		return;
+ 
+-	__fpregs_load_activate(new_fpu, cpu);
++	set_thread_flag(TIF_NEED_FPU_LOAD);
+ 
+ 	if (!cpu_feature_enabled(X86_FEATURE_OSPKE))
+ 		return;
+diff --git a/arch/x86/include/asm/trace/fpu.h b/arch/x86/include/asm/trace/fpu.h
+index bd65f6ba950f8..91a1422091ceb 100644
+--- a/arch/x86/include/asm/trace/fpu.h
++++ b/arch/x86/include/asm/trace/fpu.h
+@@ -13,19 +13,22 @@ DECLARE_EVENT_CLASS(x86_fpu,
+ 
+ 	TP_STRUCT__entry(
+ 		__field(struct fpu *, fpu)
++		__field(bool, load_fpu)
+ 		__field(u64, xfeatures)
+ 		__field(u64, xcomp_bv)
+ 		),
+ 
+ 	TP_fast_assign(
+ 		__entry->fpu		= fpu;
++		__entry->load_fpu	= test_thread_flag(TIF_NEED_FPU_LOAD);
+ 		if (boot_cpu_has(X86_FEATURE_OSXSAVE)) {
+ 			__entry->xfeatures = fpu->state.xsave.header.xfeatures;
+ 			__entry->xcomp_bv  = fpu->state.xsave.header.xcomp_bv;
+ 		}
+ 	),
+-	TP_printk("x86/fpu: %p xfeatures: %llx xcomp_bv: %llx",
++	TP_printk("x86/fpu: %p load: %d xfeatures: %llx xcomp_bv: %llx",
+ 			__entry->fpu,
++			__entry->load_fpu,
+ 			__entry->xfeatures,
+ 			__entry->xcomp_bv
+ 	)
+diff --git a/arch/x86/kernel/fpu/core.c b/arch/x86/kernel/fpu/core.c
+index 739ca3ae2bdcd..7d68404a88d52 100644
+--- a/arch/x86/kernel/fpu/core.c
++++ b/arch/x86/kernel/fpu/core.c
+@@ -102,23 +102,20 @@ static void __kernel_fpu_begin(void)
+ 	kernel_fpu_disable();
+ 
+ 	if (current->mm) {
+-		/*
+-		 * Ignore return value -- we don't care if reg state
+-		 * is clobbered.
+-		 */
+-		copy_fpregs_to_fpstate(fpu);
+-	} else {
+-		__cpu_invalidate_fpregs_state();
++		if (!test_thread_flag(TIF_NEED_FPU_LOAD)) {
++			set_thread_flag(TIF_NEED_FPU_LOAD);
++			/*
++			 * Ignore return value -- we don't care if reg state
++			 * is clobbered.
++			 */
++			copy_fpregs_to_fpstate(fpu);
++		}
+ 	}
++	__cpu_invalidate_fpregs_state();
+ }
+ 
+ static void __kernel_fpu_end(void)
+ {
+-	struct fpu *fpu = &current->thread.fpu;
+-
+-	if (current->mm)
+-		copy_kernel_to_fpregs(&fpu->state);
+-
+ 	kernel_fpu_enable();
+ }
+ 
+@@ -145,14 +142,17 @@ void fpu__save(struct fpu *fpu)
+ {
+ 	WARN_ON_FPU(fpu != &current->thread.fpu);
+ 
+-	preempt_disable();
++	fpregs_lock();
+ 	trace_x86_fpu_before_save(fpu);
+ 
+-	if (!copy_fpregs_to_fpstate(fpu))
+-		copy_kernel_to_fpregs(&fpu->state);
++	if (!test_thread_flag(TIF_NEED_FPU_LOAD)) {
++		if (!copy_fpregs_to_fpstate(fpu)) {
++			copy_kernel_to_fpregs(&fpu->state);
++		}
++	}
+ 
+ 	trace_x86_fpu_after_save(fpu);
+-	preempt_enable();
++	fpregs_unlock();
+ }
+ EXPORT_SYMBOL_GPL(fpu__save);
+ 
+@@ -185,8 +185,11 @@ void fpstate_init(union fpregs_state *state)
+ }
+ EXPORT_SYMBOL_GPL(fpstate_init);
+ 
+-int fpu__copy(struct fpu *dst_fpu, struct fpu *src_fpu)
++int fpu__copy(struct task_struct *dst, struct task_struct *src)
+ {
++	struct fpu *dst_fpu = &dst->thread.fpu;
++	struct fpu *src_fpu = &src->thread.fpu;
++
+ 	dst_fpu->last_cpu = -1;
+ 
+ 	if (!static_cpu_has(X86_FEATURE_FPU))
+@@ -201,16 +204,23 @@ int fpu__copy(struct fpu *dst_fpu, struct fpu *src_fpu)
+ 	memset(&dst_fpu->state.xsave, 0, fpu_kernel_xstate_size);
+ 
+ 	/*
+-	 * Save current FPU registers directly into the child
+-	 * FPU context, without any memory-to-memory copying.
++	 * If the FPU registers are not current just memcpy() the state.
++	 * Otherwise save current FPU registers directly into the child's FPU
++	 * context, without any memory-to-memory copying.
+ 	 *
+ 	 * ( The function 'fails' in the FNSAVE case, which destroys
+-	 *   register contents so we have to copy them back. )
++	 *   register contents so we have to load them back. )
+ 	 */
+-	if (!copy_fpregs_to_fpstate(dst_fpu)) {
+-		memcpy(&src_fpu->state, &dst_fpu->state, fpu_kernel_xstate_size);
+-		copy_kernel_to_fpregs(&src_fpu->state);
+-	}
++	fpregs_lock();
++	if (test_thread_flag(TIF_NEED_FPU_LOAD))
++		memcpy(&dst_fpu->state, &src_fpu->state, fpu_kernel_xstate_size);
++
++	else if (!copy_fpregs_to_fpstate(dst_fpu))
++		copy_kernel_to_fpregs(&dst_fpu->state);
++
++	fpregs_unlock();
++
++	set_tsk_thread_flag(dst, TIF_NEED_FPU_LOAD);
+ 
+ 	trace_x86_fpu_copy_src(src_fpu);
+ 	trace_x86_fpu_copy_dst(dst_fpu);
+@@ -226,10 +236,9 @@ static void fpu__initialize(struct fpu *fpu)
+ {
+ 	WARN_ON_FPU(fpu != &current->thread.fpu);
+ 
++	set_thread_flag(TIF_NEED_FPU_LOAD);
+ 	fpstate_init(&fpu->state);
+ 	trace_x86_fpu_init_state(fpu);
+-
+-	trace_x86_fpu_activate_state(fpu);
+ }
+ 
+ /*
+@@ -308,6 +317,8 @@ void fpu__drop(struct fpu *fpu)
+  */
+ static inline void copy_init_fpstate_to_fpregs(void)
+ {
++	fpregs_lock();
++
+ 	if (use_xsave())
+ 		copy_kernel_to_xregs(&init_fpstate.xsave, -1);
+ 	else if (static_cpu_has(X86_FEATURE_FXSR))
+@@ -317,6 +328,9 @@ static inline void copy_init_fpstate_to_fpregs(void)
+ 
+ 	if (boot_cpu_has(X86_FEATURE_OSPKE))
+ 		copy_init_pkru_to_fpregs();
++
++	fpregs_mark_activate();
++	fpregs_unlock();
+ }
+ 
+ /*
+@@ -339,6 +353,45 @@ void fpu__clear(struct fpu *fpu)
+ 		copy_init_fpstate_to_fpregs();
+ }
+ 
++/*
++ * Load FPU context before returning to userspace.
++ */
++void switch_fpu_return(void)
++{
++	if (!static_cpu_has(X86_FEATURE_FPU))
++		return;
++
++	__fpregs_load_activate();
++}
++EXPORT_SYMBOL_GPL(switch_fpu_return);
++
++#ifdef CONFIG_X86_DEBUG_FPU
++/*
++ * If current FPU state according to its tracking (loaded FPU ctx on this CPU)
++ * is not valid then we must have TIF_NEED_FPU_LOAD set so the context is loaded on
++ * return to userland.
++ */
++void fpregs_assert_state_consistent(void)
++{
++       struct fpu *fpu = &current->thread.fpu;
++
++       if (test_thread_flag(TIF_NEED_FPU_LOAD))
++               return;
++       WARN_ON_FPU(!fpregs_state_valid(fpu, smp_processor_id()));
++}
++EXPORT_SYMBOL_GPL(fpregs_assert_state_consistent);
++#endif
++
++void fpregs_mark_activate(void)
++{
++	struct fpu *fpu = &current->thread.fpu;
++
++	fpregs_activate(fpu);
++	fpu->last_cpu = smp_processor_id();
++	clear_thread_flag(TIF_NEED_FPU_LOAD);
++}
++EXPORT_SYMBOL_GPL(fpregs_mark_activate);
++
+ /*
+  * x87 math exception handling:
+  */
+diff --git a/arch/x86/kernel/fpu/signal.c b/arch/x86/kernel/fpu/signal.c
+index 5f8ce0285f641..589fb27515e08 100644
+--- a/arch/x86/kernel/fpu/signal.c
++++ b/arch/x86/kernel/fpu/signal.c
+@@ -229,11 +229,9 @@ static int __fpu__restore_sig(void __user *buf, void __user *buf_fx, int size)
+ 	struct fpu *fpu = &tsk->thread.fpu;
+ 	int state_size = fpu_kernel_xstate_size;
+ 	struct user_i387_ia32_struct env;
+-	union fpregs_state *state;
+ 	u64 xfeatures = 0;
+ 	int fx_only = 0;
+ 	int ret = 0;
+-	void *tmp;
+ 
+ 	ia32_fxstate &= (IS_ENABLED(CONFIG_X86_32) ||
+ 			 IS_ENABLED(CONFIG_IA32_EMULATION));
+@@ -268,14 +266,18 @@ static int __fpu__restore_sig(void __user *buf, void __user *buf_fx, int size)
+ 		}
+ 	}
+ 
+-	tmp = kzalloc(sizeof(*state) + fpu_kernel_xstate_size + 64, GFP_KERNEL);
+-	if (!tmp)
+-		return -ENOMEM;
+-	state = PTR_ALIGN(tmp, 64);
++	/*
++	 * The current state of the FPU registers does not matter. By setting
++	 * TIF_NEED_FPU_LOAD unconditionally it is ensured that the our xstate
++	 * is not modified on context switch and that the xstate is considered
++	 * to loaded again on return to userland (overriding last_cpu avoids the
++	 * optimisation).
++	 */
++	set_thread_flag(TIF_NEED_FPU_LOAD);
++	__fpu_invalidate_fpregs_state(fpu);
+ 
+ 	if ((unsigned long)buf_fx % 64)
+ 		fx_only = 1;
+-
+ 	/*
+ 	 * For 32-bit frames with fxstate, copy the fxstate so it can be
+ 	 * reconstructed later.
+@@ -290,43 +292,51 @@ static int __fpu__restore_sig(void __user *buf, void __user *buf_fx, int size)
+ 		u64 init_bv = xfeatures_mask & ~xfeatures;
+ 
+ 		if (using_compacted_format()) {
+-			ret = copy_user_to_xstate(&state->xsave, buf_fx);
++			ret = copy_user_to_xstate(&fpu->state.xsave, buf_fx);
+ 		} else {
+-			ret = __copy_from_user(&state->xsave, buf_fx, state_size);
++			ret = __copy_from_user(&fpu->state.xsave, buf_fx, state_size);
+ 
+ 			if (!ret && state_size > offsetof(struct xregs_state, header))
+-				ret = validate_xstate_header(&state->xsave.header);
++				ret = validate_xstate_header(&fpu->state.xsave.header);
+ 		}
+ 		if (ret)
+ 			goto err_out;
+ 
+-		sanitize_restored_xstate(state, envp, xfeatures, fx_only);
++		sanitize_restored_xstate(&fpu->state, envp, xfeatures, fx_only);
+ 
++		fpregs_lock();
+ 		if (unlikely(init_bv))
+ 			copy_kernel_to_xregs(&init_fpstate.xsave, init_bv);
+-		ret = copy_users_to_xregs(&state->xsave, xfeatures);
++		ret = copy_users_to_xregs(&fpu->state.xsave, xfeatures);
+ 
+ 	} else if (use_fxsr()) {
+-		ret = __copy_from_user(&state->fxsave, buf_fx, state_size);
+-		if (ret)
++		ret = __copy_from_user(&fpu->state.fxsave, buf_fx, state_size);
++		if (ret) {
++			ret = -EFAULT;
+ 			goto err_out;
++		}
+ 
+-		sanitize_restored_xstate(state, envp, xfeatures, fx_only);
++		sanitize_restored_xstate(&fpu->state, envp, xfeatures, fx_only);
++
++		fpregs_lock();
+ 		if (use_xsave()) {
+ 			u64 init_bv = xfeatures_mask & ~XFEATURE_MASK_FPSSE;
+ 			copy_kernel_to_xregs(&init_fpstate.xsave, init_bv);
+ 		}
+ 
+-		ret = copy_users_to_fxregs(&state->fxsave);
++		ret = copy_users_to_fxregs(&fpu->state.fxsave);
+ 	} else {
+-		ret = __copy_from_user(&state->fsave, buf_fx, state_size);
++		ret = __copy_from_user(&fpu->state.fsave, buf_fx, state_size);
+ 		if (ret)
+ 			goto err_out;
++		fpregs_lock();
+ 		ret = copy_users_to_fregs(buf_fx);
+ 	}
++	if (!ret)
++		fpregs_mark_activate();
++	fpregs_unlock();
+ 
+ err_out:
+-	kfree(tmp);
+ 	if (ret)
+ 		fpu__clear(fpu);
+ 	return ret;
+diff --git a/arch/x86/kernel/process.c b/arch/x86/kernel/process.c
+index 58ac7be52c7a6..b9b8e6eb74f27 100644
+--- a/arch/x86/kernel/process.c
++++ b/arch/x86/kernel/process.c
+@@ -101,7 +101,7 @@ int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
+ 	dst->thread.vm86 = NULL;
+ #endif
+ 
+-	return fpu__copy(&dst->thread.fpu, &src->thread.fpu);
++	return fpu__copy(dst, src);
+ }
+ 
+ /*
+diff --git a/arch/x86/kernel/process_32.c b/arch/x86/kernel/process_32.c
+index 77d9eb43ccac8..1bc47f3a48854 100644
+--- a/arch/x86/kernel/process_32.c
++++ b/arch/x86/kernel/process_32.c
+@@ -234,7 +234,8 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
+ 
+ 	/* never put a printk in __switch_to... printk() calls wake_up*() indirectly */
+ 
+-	switch_fpu_prepare(prev_fpu, cpu);
++	if (!test_thread_flag(TIF_NEED_FPU_LOAD))
++		switch_fpu_prepare(prev_fpu, cpu);
+ 
+ 	/*
+ 	 * Save away %gs. No need to save %fs, as it was saved on the
+@@ -290,7 +291,7 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
+ 
+ 	this_cpu_write(current_task, next_p);
+ 
+-	switch_fpu_finish(next_fpu, cpu);
++	switch_fpu_finish(next_fpu);
+ 
+ 	/* Load the Intel cache allocation PQR MSR. */
+ 	resctrl_sched_in();
+diff --git a/arch/x86/kernel/process_64.c b/arch/x86/kernel/process_64.c
+index ffea7c557963a..37b2ecef041e6 100644
+--- a/arch/x86/kernel/process_64.c
++++ b/arch/x86/kernel/process_64.c
+@@ -520,7 +520,8 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
+ 	WARN_ON_ONCE(IS_ENABLED(CONFIG_DEBUG_ENTRY) &&
+ 		     this_cpu_read(irq_count) != -1);
+ 
+-	switch_fpu_prepare(prev_fpu, cpu);
++	if (!test_thread_flag(TIF_NEED_FPU_LOAD))
++		switch_fpu_prepare(prev_fpu, cpu);
+ 
+ 	/* We must save %fs and %gs before load_TLS() because
+ 	 * %fs and %gs may be cleared by load_TLS().
+@@ -572,7 +573,7 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
+ 	this_cpu_write(current_task, next_p);
+ 	this_cpu_write(cpu_current_top_of_stack, task_top_of_stack(next_p));
+ 
+-	switch_fpu_finish(next_fpu, cpu);
++	switch_fpu_finish(next_fpu);
+ 
+ 	/* Reload sp0. */
+ 	update_task_stack(next_p);
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index aa5fe360df50b..a8cc817882788 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7849,6 +7849,10 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+ 		wait_lapic_expire(vcpu);
+ 	guest_enter_irqoff();
+ 
++	fpregs_assert_state_consistent();
++	if (test_thread_flag(TIF_NEED_FPU_LOAD))
++		switch_fpu_return();
++
+ 	if (unlikely(vcpu->arch.switch_db_regs)) {
+ 		set_debugreg(0, 7);
+ 		set_debugreg(vcpu->arch.eff_db[0], 0);
+@@ -8109,22 +8113,30 @@ static int complete_emulated_mmio(struct kvm_vcpu *vcpu)
+ /* Swap (qemu) user FPU context for the guest FPU context. */
+ static void kvm_load_guest_fpu(struct kvm_vcpu *vcpu)
+ {
+-	preempt_disable();
++	fpregs_lock();
++
+ 	copy_fpregs_to_fpstate(&current->thread.fpu);
+ 	/* PKRU is separately restored in kvm_x86_ops->run.  */
+ 	__copy_kernel_to_fpregs(&vcpu->arch.guest_fpu->state,
+ 				~XFEATURE_MASK_PKRU);
+-	preempt_enable();
++
++	fpregs_mark_activate();
++	fpregs_unlock();
++
+ 	trace_kvm_fpu(1);
+ }
+ 
+ /* When vcpu_run ends, restore user space FPU context. */
+ static void kvm_put_guest_fpu(struct kvm_vcpu *vcpu)
+ {
+-	preempt_disable();
++	fpregs_lock();
++
+ 	copy_fpregs_to_fpstate(vcpu->arch.guest_fpu);
+ 	copy_kernel_to_fpregs(&current->thread.fpu.state);
+-	preempt_enable();
++
++	fpregs_mark_activate();
++	fpregs_unlock();
++
+ 	++vcpu->stat.fpu_reload;
+ 	trace_kvm_fpu(0);
+ }
+
+From patchwork Thu Mar 21 20:26:32 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+X-Patchwork-Id: 10864283
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id DE7721515
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:15 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C50732A48C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:15 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id B8E0D2A497; Thu, 21 Mar 2019 20:27:15 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5EA7B2A48C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 21 Mar 2019 20:27:15 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729097AbfCUU1I (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 21 Mar 2019 16:27:08 -0400
+Received: from Galois.linutronix.de ([146.0.238.70]:39474 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1729090AbfCUU1H (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 21 Mar 2019 16:27:07 -0400
+Received: from localhost ([127.0.0.1] helo=flow.W.breakpoint.cc)
+        by Galois.linutronix.de with esmtp (Exim 4.80)
+        (envelope-from <bigeasy@linutronix.de>)
+        id 1h74H9-00057y-Np; Thu, 21 Mar 2019 21:26:56 +0100
+From: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+To: linux-kernel@vger.kernel.org
+Cc: x86@kernel.org, Andy Lutomirski <luto@kernel.org>,
+ Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>, kvm@vger.kernel.org,
+ "Jason A. Donenfeld" <Jason@zx2c4.com>, Rik van Riel <riel@surriel.com>,
+ Dave Hansen <dave.hansen@linux.intel.com>,
+ Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+Subject: [PATCH 24/24] x86/pkeys: add PKRU value to init_fpstate
+Date: Thu, 21 Mar 2019 21:26:32 +0100
+Message-Id: <20190321202632.16810-25-bigeasy@linutronix.de>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190321202632.16810-1-bigeasy@linutronix.de>
+References: <20190321202632.16810-1-bigeasy@linutronix.de>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+The task's initiall PKRU value is set part for fpu__clear()/
+copy_init_pkru_to_fpregs(). It is not part of init_fpstate.xsave and
+instead it is set explictly.
+If the user removes the PKRU state from XSAVE in the signal handler then
+__fpu__restore_sig() will restore the missing bits from `init_fpstate'
+and initialize the PKRU value to 0.
+
+Add the `init_pkru_value' to `init_fpstate' so it is set to the init
+value in such a case.
+
+In theory we could drop copy_init_pkru_to_fpregs() because restoring the
+PKRU at return-to-userland should be enough.
+
+Signed-off-by: Sebastian Andrzej Siewior <bigeasy@linutronix.de>
+---
+ arch/x86/kernel/cpu/common.c | 5 +++++
+ arch/x86/mm/pkeys.c          | 6 ++++++
+ 2 files changed, 11 insertions(+)
+
+diff --git a/arch/x86/kernel/cpu/common.c b/arch/x86/kernel/cpu/common.c
+index cb28e98a0659a..352fa19e63110 100644
+--- a/arch/x86/kernel/cpu/common.c
++++ b/arch/x86/kernel/cpu/common.c
+@@ -372,6 +372,8 @@ static bool pku_disabled;
+ 
+ static __always_inline void setup_pku(struct cpuinfo_x86 *c)
+ {
++	struct pkru_state *pk;
++
+ 	/* check the boot processor, plus compile options for PKU: */
+ 	if (!cpu_feature_enabled(X86_FEATURE_PKU))
+ 		return;
+@@ -382,6 +384,9 @@ static __always_inline void setup_pku(struct cpuinfo_x86 *c)
+ 		return;
+ 
+ 	cr4_set_bits(X86_CR4_PKE);
++	pk = get_xsave_addr(&init_fpstate.xsave, XFEATURE_PKRU);
++	if (pk)
++		pk->pkru = init_pkru_value;
+ 	/*
+ 	 * Seting X86_CR4_PKE will cause the X86_FEATURE_OSPKE
+ 	 * cpuid bit to be set.  We need to ensure that we
+diff --git a/arch/x86/mm/pkeys.c b/arch/x86/mm/pkeys.c
+index 2ecbf4155f98f..1dcfc91c8f0c3 100644
+--- a/arch/x86/mm/pkeys.c
++++ b/arch/x86/mm/pkeys.c
+@@ -18,6 +18,7 @@
+ 
+ #include <asm/cpufeature.h>             /* boot_cpu_has, ...            */
+ #include <asm/mmu_context.h>            /* vma_pkey()                   */
++#include <asm/fpu/internal.h>		/* init_fpstate			*/
+ 
+ int __execute_only_pkey(struct mm_struct *mm)
+ {
+@@ -161,6 +162,7 @@ static ssize_t init_pkru_read_file(struct file *file, char __user *user_buf,
+ static ssize_t init_pkru_write_file(struct file *file,
+ 		 const char __user *user_buf, size_t count, loff_t *ppos)
+ {
++	struct pkru_state *pk;
+ 	char buf[32];
+ 	ssize_t len;
+ 	u32 new_init_pkru;
+@@ -183,6 +185,10 @@ static ssize_t init_pkru_write_file(struct file *file,
+ 		return -EINVAL;
+ 
+ 	WRITE_ONCE(init_pkru_value, new_init_pkru);
++	pk = get_xsave_addr(&init_fpstate.xsave, XFEATURE_PKRU);
++	if (!pk)
++		return -EINVAL;
++	pk->pkru = new_init_pkru;
+ 	return count;
+ }
+ 

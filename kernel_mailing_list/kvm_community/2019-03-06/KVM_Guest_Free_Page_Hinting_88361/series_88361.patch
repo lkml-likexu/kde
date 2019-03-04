@@ -1,0 +1,1451 @@
+From patchwork Wed Mar  6 15:50:43 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Nitesh Narayan Lal <nitesh@redhat.com>
+X-Patchwork-Id: 10841423
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id DADD21803
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:53:28 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C9E1A2E564
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:53:28 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C7A002E709; Wed,  6 Mar 2019 15:53:28 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 19E172E7E6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:53:28 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729071AbfCFPxV (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 6 Mar 2019 10:53:21 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:45276 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726606AbfCFPvM (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 6 Mar 2019 10:51:12 -0500
+Received: from smtp.corp.redhat.com (int-mx07.intmail.prod.int.phx2.redhat.com
+ [10.5.11.22])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 7D1B63089EC5;
+        Wed,  6 Mar 2019 15:51:11 +0000 (UTC)
+Received: from virtlab420.virt.lab.eng.bos.redhat.com
+ (virtlab420.virt.lab.eng.bos.redhat.com [10.19.152.148])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id D571F1001DF7;
+        Wed,  6 Mar 2019 15:51:09 +0000 (UTC)
+From: Nitesh Narayan Lal <nitesh@redhat.com>
+To: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        linux-mm@kvack.org, pbonzini@redhat.com, lcapitulino@redhat.com,
+        pagupta@redhat.com, wei.w.wang@intel.com, yang.zhang.wz@gmail.com,
+        riel@surriel.com, david@redhat.com, mst@redhat.com,
+        dodgen@google.com, konrad.wilk@oracle.com, dhildenb@redhat.com,
+        aarcange@redhat.com, alexander.duyck@gmail.com
+Subject: [RFC][Patch v9 1/6] KVM: Guest free page hinting support
+Date: Wed,  6 Mar 2019 10:50:43 -0500
+Message-Id: <20190306155048.12868-2-nitesh@redhat.com>
+In-Reply-To: <20190306155048.12868-1-nitesh@redhat.com>
+References: <20190306155048.12868-1-nitesh@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.22
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.44]);
+ Wed, 06 Mar 2019 15:51:11 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+This patch adds the following:
+1. Functional skeleton for the guest implementation. It enables the
+guest to maintain the PFN of head buddy free pages of order
+FREE_PAGE_HINTING_MIN_ORDER (currently defined as MAX_ORDER - 1)
+in a per-cpu array.
+Guest uses guest_free_page_enqueue() to enqueue the free pages post buddy
+merging to the above mentioned per-cpu array.
+guest_free_page_try_hinting() is used to initiate hinting operation once
+the collected entries of the per-cpu array reaches or exceeds
+HINTING_THRESHOLD (128). Having larger array size(MAX_FGPT_ENTRIES = 256)
+than HINTING_THRESHOLD allows us to capture more pages specifically when
+guest_free_page_enqueue() is called from free_pcppages_bulk().
+For now guest_free_page_hinting() just resets the array index to continue
+capturing of the freed pages.
+2. Enables the support for x86 architecture.
+
+Signed-off-by: Nitesh Narayan Lal <nitesh@redhat.com>
+---
+ arch/x86/Kbuild              |  2 +-
+ arch/x86/kvm/Kconfig         |  8 +++
+ arch/x86/kvm/Makefile        |  2 +
+ include/linux/page_hinting.h | 15 ++++++
+ mm/page_alloc.c              |  5 ++
+ virt/kvm/page_hinting.c      | 98 ++++++++++++++++++++++++++++++++++++
+ 6 files changed, 129 insertions(+), 1 deletion(-)
+ create mode 100644 include/linux/page_hinting.h
+ create mode 100644 virt/kvm/page_hinting.c
+
+diff --git a/arch/x86/Kbuild b/arch/x86/Kbuild
+index c625f57472f7..3244df4ee311 100644
+--- a/arch/x86/Kbuild
++++ b/arch/x86/Kbuild
+@@ -2,7 +2,7 @@ obj-y += entry/
+ 
+ obj-$(CONFIG_PERF_EVENTS) += events/
+ 
+-obj-$(CONFIG_KVM) += kvm/
++obj-$(subst m,y,$(CONFIG_KVM)) += kvm/
+ 
+ # Xen paravirtualization support
+ obj-$(CONFIG_XEN) += xen/
+diff --git a/arch/x86/kvm/Kconfig b/arch/x86/kvm/Kconfig
+index 72fa955f4a15..2fae31459706 100644
+--- a/arch/x86/kvm/Kconfig
++++ b/arch/x86/kvm/Kconfig
+@@ -96,6 +96,14 @@ config KVM_MMU_AUDIT
+ 	 This option adds a R/W kVM module parameter 'mmu_audit', which allows
+ 	 auditing of KVM MMU events at runtime.
+ 
++# KVM_FREE_PAGE_HINTING will allow the guest to report the free pages to the
++# host in regular interval of time.
++config KVM_FREE_PAGE_HINTING
++       def_bool y
++       depends on KVM
++       select VIRTIO
++       select VIRTIO_BALLOON
++
+ # OK, it's a little counter-intuitive to do this, but it puts it neatly under
+ # the virtualization menu.
+ source "drivers/vhost/Kconfig"
+diff --git a/arch/x86/kvm/Makefile b/arch/x86/kvm/Makefile
+index 69b3a7c30013..78640a80501e 100644
+--- a/arch/x86/kvm/Makefile
++++ b/arch/x86/kvm/Makefile
+@@ -16,6 +16,8 @@ kvm-y			+= x86.o mmu.o emulate.o i8259.o irq.o lapic.o \
+ 			   i8254.o ioapic.o irq_comm.o cpuid.o pmu.o mtrr.o \
+ 			   hyperv.o page_track.o debugfs.o
+ 
++obj-$(CONFIG_KVM_FREE_PAGE_HINTING)    += $(KVM)/page_hinting.o
++
+ kvm-intel-y		+= vmx/vmx.o vmx/vmenter.o vmx/pmu_intel.o vmx/vmcs12.o vmx/evmcs.o vmx/nested.o
+ kvm-amd-y		+= svm.o pmu_amd.o
+ 
+diff --git a/include/linux/page_hinting.h b/include/linux/page_hinting.h
+new file mode 100644
+index 000000000000..90254c582789
+--- /dev/null
++++ b/include/linux/page_hinting.h
+@@ -0,0 +1,15 @@
++#include <linux/gfp.h>
++/*
++ * Size of the array which is used to store the freed pages is defined by
++ * MAX_FGPT_ENTRIES.
++ */
++#define MAX_FGPT_ENTRIES	256
++/*
++ * Threshold value after which hinting needs to be initiated on the captured
++ * free pages.
++ */
++#define HINTING_THRESHOLD	128
++#define FREE_PAGE_HINTING_MIN_ORDER	(MAX_ORDER - 1)
++
++void guest_free_page_enqueue(struct page *page, int order);
++void guest_free_page_try_hinting(void);
+diff --git a/mm/page_alloc.c b/mm/page_alloc.c
+index d295c9bc01a8..684d047f33ee 100644
+--- a/mm/page_alloc.c
++++ b/mm/page_alloc.c
+@@ -67,6 +67,7 @@
+ #include <linux/lockdep.h>
+ #include <linux/nmi.h>
+ #include <linux/psi.h>
++#include <linux/page_hinting.h>
+ 
+ #include <asm/sections.h>
+ #include <asm/tlbflush.h>
+@@ -1194,9 +1195,11 @@ static void free_pcppages_bulk(struct zone *zone, int count,
+ 			mt = get_pageblock_migratetype(page);
+ 
+ 		__free_one_page(page, page_to_pfn(page), zone, 0, mt);
++		guest_free_page_enqueue(page, 0);
+ 		trace_mm_page_pcpu_drain(page, 0, mt);
+ 	}
+ 	spin_unlock(&zone->lock);
++	guest_free_page_try_hinting();
+ }
+ 
+ static void free_one_page(struct zone *zone,
+@@ -1210,7 +1213,9 @@ static void free_one_page(struct zone *zone,
+ 		migratetype = get_pfnblock_migratetype(page, pfn);
+ 	}
+ 	__free_one_page(page, pfn, zone, order, migratetype);
++	guest_free_page_enqueue(page, order);
+ 	spin_unlock(&zone->lock);
++	guest_free_page_try_hinting();
+ }
+ 
+ static void __meminit __init_single_page(struct page *page, unsigned long pfn,
+diff --git a/virt/kvm/page_hinting.c b/virt/kvm/page_hinting.c
+new file mode 100644
+index 000000000000..48b4b5e796b0
+--- /dev/null
++++ b/virt/kvm/page_hinting.c
+@@ -0,0 +1,98 @@
++#include <linux/mm.h>
++#include <linux/page_hinting.h>
++
++/*
++ * struct guest_free_pages- holds array of guest freed PFN's along with an
++ * index variable to track total freed PFN's.
++ * @free_pfn_arr: array to store the page frame number of all the pages which
++ * are freed by the guest.
++ * @guest_free_pages_idx: index to track the number entries stored in
++ * free_pfn_arr.
++ */
++struct guest_free_pages {
++	unsigned long free_page_arr[MAX_FGPT_ENTRIES];
++	int free_pages_idx;
++};
++
++DEFINE_PER_CPU(struct guest_free_pages, free_pages_obj);
++
++struct page *get_buddy_page(struct page *page)
++{
++	unsigned long pfn = page_to_pfn(page);
++	unsigned int order;
++
++	for (order = 0; order < MAX_ORDER; order++) {
++		struct page *page_head = page - (pfn & ((1 << order) - 1));
++
++		if (PageBuddy(page_head) && page_private(page_head) >= order)
++			return page_head;
++	}
++	return NULL;
++}
++
++static void guest_free_page_hinting(void)
++{
++	struct guest_free_pages *hinting_obj = &get_cpu_var(free_pages_obj);
++
++	hinting_obj->free_pages_idx = 0;
++	put_cpu_var(hinting_obj);
++}
++
++int if_exist(struct page *page)
++{
++	int i = 0;
++	struct guest_free_pages *hinting_obj = this_cpu_ptr(&free_pages_obj);
++
++	while (i < MAX_FGPT_ENTRIES) {
++		if (page_to_pfn(page) == hinting_obj->free_page_arr[i])
++			return 1;
++		i++;
++	}
++	return 0;
++}
++
++void guest_free_page_enqueue(struct page *page, int order)
++{
++	unsigned long flags;
++	struct guest_free_pages *hinting_obj;
++	int l_idx;
++
++	/*
++	 * use of global variables may trigger a race condition between irq and
++	 * process context causing unwanted overwrites. This will be replaced
++	 * with a better solution to prevent such race conditions.
++	 */
++	local_irq_save(flags);
++	hinting_obj = this_cpu_ptr(&free_pages_obj);
++	l_idx = hinting_obj->free_pages_idx;
++	if (l_idx != MAX_FGPT_ENTRIES) {
++		if (PageBuddy(page) && page_private(page) >=
++		    FREE_PAGE_HINTING_MIN_ORDER) {
++			hinting_obj->free_page_arr[l_idx] = page_to_pfn(page);
++			hinting_obj->free_pages_idx += 1;
++		} else {
++			struct page *buddy_page = get_buddy_page(page);
++
++			if (buddy_page && page_private(buddy_page) >=
++			    FREE_PAGE_HINTING_MIN_ORDER &&
++			    !if_exist(buddy_page)) {
++				unsigned long buddy_pfn =
++					page_to_pfn(buddy_page);
++
++				hinting_obj->free_page_arr[l_idx] =
++							buddy_pfn;
++				hinting_obj->free_pages_idx += 1;
++			}
++		}
++	}
++	local_irq_restore(flags);
++}
++
++void guest_free_page_try_hinting(void)
++{
++	struct guest_free_pages *hinting_obj;
++
++	hinting_obj = this_cpu_ptr(&free_pages_obj);
++	if (hinting_obj->free_pages_idx >= HINTING_THRESHOLD)
++		guest_free_page_hinting();
++}
+
+From patchwork Wed Mar  6 15:50:44 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Nitesh Narayan Lal <nitesh@redhat.com>
+X-Patchwork-Id: 10841355
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 16BE317E0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:51:24 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id F29292E73B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:51:23 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id EF5EA2E605; Wed,  6 Mar 2019 15:51:23 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 433B22E73B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:51:23 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729963AbfCFPvR (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 6 Mar 2019 10:51:17 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:52808 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727566AbfCFPvP (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 6 Mar 2019 10:51:15 -0500
+Received: from smtp.corp.redhat.com (int-mx07.intmail.prod.int.phx2.redhat.com
+ [10.5.11.22])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id CFCDCC05D3E4;
+        Wed,  6 Mar 2019 15:51:14 +0000 (UTC)
+Received: from virtlab420.virt.lab.eng.bos.redhat.com
+ (virtlab420.virt.lab.eng.bos.redhat.com [10.19.152.148])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 9A88C1001DFD;
+        Wed,  6 Mar 2019 15:51:11 +0000 (UTC)
+From: Nitesh Narayan Lal <nitesh@redhat.com>
+To: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        linux-mm@kvack.org, pbonzini@redhat.com, lcapitulino@redhat.com,
+        pagupta@redhat.com, wei.w.wang@intel.com, yang.zhang.wz@gmail.com,
+        riel@surriel.com, david@redhat.com, mst@redhat.com,
+        dodgen@google.com, konrad.wilk@oracle.com, dhildenb@redhat.com,
+        aarcange@redhat.com, alexander.duyck@gmail.com
+Subject: [RFC][Patch v9 2/6] KVM: Enables the kernel to isolate guest free
+ pages
+Date: Wed,  6 Mar 2019 10:50:44 -0500
+Message-Id: <20190306155048.12868-3-nitesh@redhat.com>
+In-Reply-To: <20190306155048.12868-1-nitesh@redhat.com>
+References: <20190306155048.12868-1-nitesh@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.22
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.32]);
+ Wed, 06 Mar 2019 15:51:14 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+This patch enables the kernel to scan the per cpu array
+which carries head pages from the buddy free list of order
+FREE_PAGE_HINTING_MIN_ORDER (MAX_ORDER - 1) by
+guest_free_page_hinting().
+guest_free_page_hinting() scans the entire per cpu array by
+acquiring a zone lock corresponding to the pages which are
+being scanned. If the page is still free and present in the
+buddy it tries to isolate the page and adds it to a
+dynamically allocated array.
+
+Once this scanning process is complete and if there are any
+isolated pages added to the dynamically allocated array
+guest_free_page_report() is invoked. However, before this the
+per-cpu array index is reset so that it can continue capturing
+the pages from buddy free list.
+
+In this patch guest_free_page_report() simply releases the pages back
+to the buddy by using __free_one_page()
+
+Signed-off-by: Nitesh Narayan Lal <nitesh@redhat.com>
+---
+ include/linux/page_hinting.h |   5 ++
+ mm/page_alloc.c              |   2 +-
+ virt/kvm/page_hinting.c      | 154 +++++++++++++++++++++++++++++++++++
+ 3 files changed, 160 insertions(+), 1 deletion(-)
+
+diff --git a/include/linux/page_hinting.h b/include/linux/page_hinting.h
+index 90254c582789..d554a2581826 100644
+--- a/include/linux/page_hinting.h
++++ b/include/linux/page_hinting.h
+@@ -13,3 +13,8 @@
+ 
+ void guest_free_page_enqueue(struct page *page, int order);
+ void guest_free_page_try_hinting(void);
++extern int __isolate_free_page(struct page *page, unsigned int order);
++extern void __free_one_page(struct page *page, unsigned long pfn,
++			    struct zone *zone, unsigned int order,
++			    int migratetype);
++void release_buddy_pages(void *obj_to_free, int entries);
+diff --git a/mm/page_alloc.c b/mm/page_alloc.c
+index 684d047f33ee..d38b7eea207b 100644
+--- a/mm/page_alloc.c
++++ b/mm/page_alloc.c
+@@ -814,7 +814,7 @@ static inline int page_is_buddy(struct page *page, struct page *buddy,
+  * -- nyc
+  */
+ 
+-static inline void __free_one_page(struct page *page,
++inline void __free_one_page(struct page *page,
+ 		unsigned long pfn,
+ 		struct zone *zone, unsigned int order,
+ 		int migratetype)
+diff --git a/virt/kvm/page_hinting.c b/virt/kvm/page_hinting.c
+index 48b4b5e796b0..9885b372b5a9 100644
+--- a/virt/kvm/page_hinting.c
++++ b/virt/kvm/page_hinting.c
+@@ -1,5 +1,9 @@
+ #include <linux/mm.h>
+ #include <linux/page_hinting.h>
++#include <linux/page_ref.h>
++#include <linux/kvm_host.h>
++#include <linux/kernel.h>
++#include <linux/sort.h>
+ 
+ /*
+  * struct guest_free_pages- holds array of guest freed PFN's along with an
+@@ -16,6 +20,54 @@ struct guest_free_pages {
+ 
+ DEFINE_PER_CPU(struct guest_free_pages, free_pages_obj);
+ 
++/*
++ * struct guest_isolated_pages- holds the buddy isolated pages which are
++ * supposed to be freed by the host.
++ * @pfn: page frame number for the isolated page.
++ * @order: order of the isolated page.
++ */
++struct guest_isolated_pages {
++	unsigned long pfn;
++	unsigned int order;
++};
++
++void release_buddy_pages(void *obj_to_free, int entries)
++{
++	int i = 0;
++	int mt = 0;
++	struct guest_isolated_pages *isolated_pages_obj = obj_to_free;
++
++	while (i < entries) {
++		struct page *page = pfn_to_page(isolated_pages_obj[i].pfn);
++
++		mt = get_pageblock_migratetype(page);
++		__free_one_page(page, page_to_pfn(page), page_zone(page),
++				isolated_pages_obj[i].order, mt);
++		i++;
++	}
++	kfree(isolated_pages_obj);
++}
++
++void guest_free_page_report(struct guest_isolated_pages *isolated_pages_obj,
++			    int entries)
++{
++	release_buddy_pages(isolated_pages_obj, entries);
++}
++
++static int sort_zonenum(const void *a1, const void *b1)
++{
++	const unsigned long *a = a1;
++	const unsigned long *b = b1;
++
++	if (page_zonenum(pfn_to_page(a[0])) > page_zonenum(pfn_to_page(b[0])))
++		return 1;
++
++	if (page_zonenum(pfn_to_page(a[0])) < page_zonenum(pfn_to_page(b[0])))
++		return -1;
++
++	return 0;
++}
++
+ struct page *get_buddy_page(struct page *page)
+ {
+ 	unsigned long pfn = page_to_pfn(page);
+@@ -33,9 +85,111 @@ struct page *get_buddy_page(struct page *page)
+ static void guest_free_page_hinting(void)
+ {
+ 	struct guest_free_pages *hinting_obj = &get_cpu_var(free_pages_obj);
++	struct guest_isolated_pages *isolated_pages_obj;
++	int idx = 0, ret = 0;
++	struct zone *zone_cur, *zone_prev;
++	unsigned long flags = 0;
++	int hyp_idx = 0;
++	int free_pages_idx = hinting_obj->free_pages_idx;
++
++	isolated_pages_obj = kmalloc(MAX_FGPT_ENTRIES *
++			sizeof(struct guest_isolated_pages), GFP_KERNEL);
++	if (!isolated_pages_obj) {
++		hinting_obj->free_pages_idx = 0;
++		put_cpu_var(hinting_obj);
++		return;
++		/* return some logical error here*/
++	}
++
++	sort(hinting_obj->free_page_arr, free_pages_idx,
++	     sizeof(unsigned long), sort_zonenum, NULL);
++
++	while (idx < free_pages_idx) {
++		unsigned long pfn = hinting_obj->free_page_arr[idx];
++		unsigned long pfn_end = hinting_obj->free_page_arr[idx] +
++			(1 << FREE_PAGE_HINTING_MIN_ORDER) - 1;
++
++		zone_cur = page_zone(pfn_to_page(pfn));
++		if (idx == 0) {
++			zone_prev = zone_cur;
++			spin_lock_irqsave(&zone_cur->lock, flags);
++		} else if (zone_prev != zone_cur) {
++			spin_unlock_irqrestore(&zone_prev->lock, flags);
++			spin_lock_irqsave(&zone_cur->lock, flags);
++			zone_prev = zone_cur;
++		}
++
++		while (pfn <= pfn_end) {
++			struct page *page = pfn_to_page(pfn);
++			struct page *buddy_page = NULL;
++
++			if (PageCompound(page)) {
++				struct page *head_page = compound_head(page);
++				unsigned long head_pfn = page_to_pfn(head_page);
++				unsigned int alloc_pages =
++					1 << compound_order(head_page);
++
++				pfn = head_pfn + alloc_pages;
++				continue;
++			}
++
++			if (page_ref_count(page)) {
++				pfn++;
++				continue;
++			}
++
++			if (PageBuddy(page) && page_private(page) >=
++			    FREE_PAGE_HINTING_MIN_ORDER) {
++				int buddy_order = page_private(page);
++
++				ret = __isolate_free_page(page, buddy_order);
++				if (ret) {
++					isolated_pages_obj[hyp_idx].pfn = pfn;
++					isolated_pages_obj[hyp_idx].order =
++								buddy_order;
++					hyp_idx += 1;
++				}
++				pfn = pfn + (1 << buddy_order);
++				continue;
++			}
++
++			buddy_page = get_buddy_page(page);
++			if (buddy_page && page_private(buddy_page) >=
++			    FREE_PAGE_HINTING_MIN_ORDER) {
++				int buddy_order = page_private(buddy_page);
++
++				ret = __isolate_free_page(buddy_page,
++							  buddy_order);
++				if (ret) {
++					unsigned long buddy_pfn =
++						page_to_pfn(buddy_page);
++
++					isolated_pages_obj[hyp_idx].pfn =
++								buddy_pfn;
++					isolated_pages_obj[hyp_idx].order =
++								buddy_order;
++					hyp_idx += 1;
++				}
++				pfn = page_to_pfn(buddy_page) +
++					(1 << buddy_order);
++				continue;
++			}
++			pfn++;
++		}
++		hinting_obj->free_page_arr[idx] = 0;
++		idx++;
++		if (idx == free_pages_idx)
++			spin_unlock_irqrestore(&zone_cur->lock, flags);
++	}
+ 
+ 	hinting_obj->free_pages_idx = 0;
+ 	put_cpu_var(hinting_obj);
++
++	if (hyp_idx > 0)
++		guest_free_page_report(isolated_pages_obj, hyp_idx);
++	else
++		kfree(isolated_pages_obj);
++		/* return some logical error here*/
+ }
+ 
+ int if_exist(struct page *page)
+
+From patchwork Wed Mar  6 15:50:45 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Nitesh Narayan Lal <nitesh@redhat.com>
+X-Patchwork-Id: 10841421
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 42A1217E0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:53:02 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 31D972E7BE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:53:02 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 2FEAA2E7D0; Wed,  6 Mar 2019 15:53:02 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 64B982E7BE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:53:01 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730002AbfCFPvX (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 6 Mar 2019 10:51:23 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:59036 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729998AbfCFPvW (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 6 Mar 2019 10:51:22 -0500
+Received: from smtp.corp.redhat.com (int-mx07.intmail.prod.int.phx2.redhat.com
+ [10.5.11.22])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id AA96A308FED5;
+        Wed,  6 Mar 2019 15:51:21 +0000 (UTC)
+Received: from virtlab420.virt.lab.eng.bos.redhat.com
+ (virtlab420.virt.lab.eng.bos.redhat.com [10.19.152.148])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id F3D551001DCE;
+        Wed,  6 Mar 2019 15:51:14 +0000 (UTC)
+From: Nitesh Narayan Lal <nitesh@redhat.com>
+To: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        linux-mm@kvack.org, pbonzini@redhat.com, lcapitulino@redhat.com,
+        pagupta@redhat.com, wei.w.wang@intel.com, yang.zhang.wz@gmail.com,
+        riel@surriel.com, david@redhat.com, mst@redhat.com,
+        dodgen@google.com, konrad.wilk@oracle.com, dhildenb@redhat.com,
+        aarcange@redhat.com, alexander.duyck@gmail.com
+Subject: [RFC][Patch v9 3/6] KVM: Enables the kernel to report isolated pages
+Date: Wed,  6 Mar 2019 10:50:45 -0500
+Message-Id: <20190306155048.12868-4-nitesh@redhat.com>
+In-Reply-To: <20190306155048.12868-1-nitesh@redhat.com>
+References: <20190306155048.12868-1-nitesh@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.22
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.49]);
+ Wed, 06 Mar 2019 15:51:21 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+This patch enables the kernel to report the isolated pages
+to the host via virtio balloon driver.
+In order to do so a new virtuqeue (hinting_vq) is added to the
+virtio balloon driver. As the host responds back after freeing
+the pages, all the isolated pages are returned back to the buddy
+via __free_one_page().
+
+Signed-off-by: Nitesh Narayan Lal <nitesh@redhat.com>
+---
+ drivers/virtio/virtio_balloon.c     | 72 ++++++++++++++++++++++++++++-
+ include/linux/page_hinting.h        |  4 ++
+ include/uapi/linux/virtio_balloon.h |  8 ++++
+ virt/kvm/page_hinting.c             | 18 ++++++--
+ 4 files changed, 98 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/virtio/virtio_balloon.c b/drivers/virtio/virtio_balloon.c
+index 728ecd1eea30..cfe7574b5204 100644
+--- a/drivers/virtio/virtio_balloon.c
++++ b/drivers/virtio/virtio_balloon.c
+@@ -57,13 +57,15 @@ enum virtio_balloon_vq {
+ 	VIRTIO_BALLOON_VQ_INFLATE,
+ 	VIRTIO_BALLOON_VQ_DEFLATE,
+ 	VIRTIO_BALLOON_VQ_STATS,
++	VIRTIO_BALLOON_VQ_HINTING,
+ 	VIRTIO_BALLOON_VQ_FREE_PAGE,
+ 	VIRTIO_BALLOON_VQ_MAX
+ };
+ 
+ struct virtio_balloon {
+ 	struct virtio_device *vdev;
+-	struct virtqueue *inflate_vq, *deflate_vq, *stats_vq, *free_page_vq;
++	struct virtqueue *inflate_vq, *deflate_vq, *stats_vq, *free_page_vq,
++								*hinting_vq;
+ 
+ 	/* Balloon's own wq for cpu-intensive work items */
+ 	struct workqueue_struct *balloon_wq;
+@@ -122,6 +124,56 @@ static struct virtio_device_id id_table[] = {
+ 	{ 0 },
+ };
+ 
++#ifdef CONFIG_KVM_FREE_PAGE_HINTING
++int virtballoon_page_hinting(struct virtio_balloon *vb,
++			     void *hinting_req,
++			     int entries)
++{
++	struct scatterlist sg;
++	struct virtqueue *vq = vb->hinting_vq;
++	int err;
++	int unused;
++	struct virtio_balloon_hint_req *hint_req;
++	u64 gpaddr;
++
++	hint_req = kmalloc(sizeof(struct virtio_balloon_hint_req), GFP_KERNEL);
++	while (virtqueue_get_buf(vq, &unused))
++		;
++
++	gpaddr = virt_to_phys(hinting_req);
++	hint_req->phys_addr = cpu_to_virtio64(vb->vdev, gpaddr);
++	hint_req->count = cpu_to_virtio32(vb->vdev, entries);
++	sg_init_one(&sg, hint_req, sizeof(struct virtio_balloon_hint_req));
++	err = virtqueue_add_outbuf(vq, &sg, 1, hint_req, GFP_KERNEL);
++	if (!err)
++		virtqueue_kick(vb->hinting_vq);
++	else
++		kfree(hint_req);
++	return err;
++}
++
++static void hinting_ack(struct virtqueue *vq)
++{
++	int len = sizeof(struct virtio_balloon_hint_req);
++	struct virtio_balloon_hint_req *hint_req = virtqueue_get_buf(vq, &len);
++	void *v_addr = phys_to_virt(hint_req->phys_addr);
++
++	release_buddy_pages(v_addr, hint_req->count);
++	kfree(hint_req);
++}
++
++static void enable_hinting(struct virtio_balloon *vb)
++{
++	request_hypercall = (void *)&virtballoon_page_hinting;
++	balloon_ptr = vb;
++}
++
++static void disable_hinting(void)
++{
++	balloon_ptr = NULL;
++}
++#endif
++
+ static u32 page_to_balloon_pfn(struct page *page)
+ {
+ 	unsigned long pfn = page_to_pfn(page);
+@@ -481,6 +533,7 @@ static int init_vqs(struct virtio_balloon *vb)
+ 	names[VIRTIO_BALLOON_VQ_DEFLATE] = "deflate";
+ 	names[VIRTIO_BALLOON_VQ_STATS] = NULL;
+ 	names[VIRTIO_BALLOON_VQ_FREE_PAGE] = NULL;
++	names[VIRTIO_BALLOON_VQ_HINTING] = NULL;
+ 
+ 	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_STATS_VQ)) {
+ 		names[VIRTIO_BALLOON_VQ_STATS] = "stats";
+@@ -492,11 +545,18 @@ static int init_vqs(struct virtio_balloon *vb)
+ 		callbacks[VIRTIO_BALLOON_VQ_FREE_PAGE] = NULL;
+ 	}
+ 
++	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING)) {
++		names[VIRTIO_BALLOON_VQ_HINTING] = "hinting_vq";
++		callbacks[VIRTIO_BALLOON_VQ_HINTING] = hinting_ack;
++	}
+ 	err = vb->vdev->config->find_vqs(vb->vdev, VIRTIO_BALLOON_VQ_MAX,
+ 					 vqs, callbacks, names, NULL, NULL);
+ 	if (err)
+ 		return err;
+ 
++	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING))
++		vb->hinting_vq = vqs[VIRTIO_BALLOON_VQ_HINTING];
++
+ 	vb->inflate_vq = vqs[VIRTIO_BALLOON_VQ_INFLATE];
+ 	vb->deflate_vq = vqs[VIRTIO_BALLOON_VQ_DEFLATE];
+ 	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_STATS_VQ)) {
+@@ -908,6 +968,11 @@ static int virtballoon_probe(struct virtio_device *vdev)
+ 		if (err)
+ 			goto out_del_balloon_wq;
+ 	}
++
++#ifdef CONFIG_KVM_FREE_PAGE_HINTING
++	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING))
++		enable_hinting(vb);
++#endif
+ 	virtio_device_ready(vdev);
+ 
+ 	if (towards_target(vb))
+@@ -950,6 +1015,10 @@ static void virtballoon_remove(struct virtio_device *vdev)
+ 	cancel_work_sync(&vb->update_balloon_size_work);
+ 	cancel_work_sync(&vb->update_balloon_stats_work);
+ 
++#ifdef CONFIG_KVM_FREE_PAGE_HINTING
++	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING))
++		disable_hinting();
++#endif
+ 	if (virtio_has_feature(vdev, VIRTIO_BALLOON_F_FREE_PAGE_HINT)) {
+ 		cancel_work_sync(&vb->report_free_page_work);
+ 		destroy_workqueue(vb->balloon_wq);
+@@ -1009,6 +1078,7 @@ static unsigned int features[] = {
+ 	VIRTIO_BALLOON_F_MUST_TELL_HOST,
+ 	VIRTIO_BALLOON_F_STATS_VQ,
+ 	VIRTIO_BALLOON_F_DEFLATE_ON_OOM,
++	VIRTIO_BALLOON_F_HINTING,
+ 	VIRTIO_BALLOON_F_FREE_PAGE_HINT,
+ 	VIRTIO_BALLOON_F_PAGE_POISON,
+ };
+diff --git a/include/linux/page_hinting.h b/include/linux/page_hinting.h
+index d554a2581826..a32af8851081 100644
+--- a/include/linux/page_hinting.h
++++ b/include/linux/page_hinting.h
+@@ -11,6 +11,8 @@
+ #define HINTING_THRESHOLD	128
+ #define FREE_PAGE_HINTING_MIN_ORDER	(MAX_ORDER - 1)
+ 
++extern void *balloon_ptr;
++
+ void guest_free_page_enqueue(struct page *page, int order);
+ void guest_free_page_try_hinting(void);
+ extern int __isolate_free_page(struct page *page, unsigned int order);
+@@ -18,3 +20,5 @@ extern void __free_one_page(struct page *page, unsigned long pfn,
+ 			    struct zone *zone, unsigned int order,
+ 			    int migratetype);
+ void release_buddy_pages(void *obj_to_free, int entries);
++extern int (*request_hypercall)(void *balloon_ptr,
++				void *hinting_req, int entries);
+diff --git a/include/uapi/linux/virtio_balloon.h b/include/uapi/linux/virtio_balloon.h
+index a1966cd7b677..a7e909d77447 100644
+--- a/include/uapi/linux/virtio_balloon.h
++++ b/include/uapi/linux/virtio_balloon.h
+@@ -29,6 +29,7 @@
+ #include <linux/virtio_types.h>
+ #include <linux/virtio_ids.h>
+ #include <linux/virtio_config.h>
++#include <linux/page_hinting.h>
+ 
+ /* The feature bitmap for virtio balloon */
+ #define VIRTIO_BALLOON_F_MUST_TELL_HOST	0 /* Tell before reclaiming pages */
+@@ -36,6 +37,7 @@
+ #define VIRTIO_BALLOON_F_DEFLATE_ON_OOM	2 /* Deflate balloon on OOM */
+ #define VIRTIO_BALLOON_F_FREE_PAGE_HINT	3 /* VQ to report free pages */
+ #define VIRTIO_BALLOON_F_PAGE_POISON	4 /* Guest is using page poisoning */
++#define VIRTIO_BALLOON_F_HINTING	5 /* Page hinting virtqueue */
+ 
+ /* Size of a PFN in the balloon interface. */
+ #define VIRTIO_BALLOON_PFN_SHIFT 12
+@@ -108,4 +110,10 @@ struct virtio_balloon_stat {
+ 	__virtio64 val;
+ } __attribute__((packed));
+ 
++#ifdef CONFIG_KVM_FREE_PAGE_HINTING
++struct virtio_balloon_hint_req {
++	__virtio64 phys_addr;
++	__virtio64 count;
++};
++#endif
+ #endif /* _LINUX_VIRTIO_BALLOON_H */
+diff --git a/virt/kvm/page_hinting.c b/virt/kvm/page_hinting.c
+index 9885b372b5a9..eb0c0ddfe990 100644
+--- a/virt/kvm/page_hinting.c
++++ b/virt/kvm/page_hinting.c
+@@ -31,11 +31,16 @@ struct guest_isolated_pages {
+ 	unsigned int order;
+ };
+ 
+-void release_buddy_pages(void *obj_to_free, int entries)
++int (*request_hypercall)(void *balloon_ptr, void *hinting_req, int entries);
++EXPORT_SYMBOL(request_hypercall);
++void *balloon_ptr;
++EXPORT_SYMBOL(balloon_ptr);
++
++void release_buddy_pages(void *hinting_req, int entries)
+ {
+ 	int i = 0;
+ 	int mt = 0;
+-	struct guest_isolated_pages *isolated_pages_obj = obj_to_free;
++	struct guest_isolated_pages *isolated_pages_obj = hinting_req;
+ 
+ 	while (i < entries) {
+ 		struct page *page = pfn_to_page(isolated_pages_obj[i].pfn);
+@@ -51,7 +56,14 @@ void release_buddy_pages(void *obj_to_free, int entries)
+ void guest_free_page_report(struct guest_isolated_pages *isolated_pages_obj,
+ 			    int entries)
+ {
+-	release_buddy_pages(isolated_pages_obj, entries);
++	int err = 0;
++
++	if (balloon_ptr) {
++		err = request_hypercall(balloon_ptr, isolated_pages_obj,
++					entries);
++		if (err)
++			release_buddy_pages(isolated_pages_obj, entries);
++	}
+ }
+ 
+ static int sort_zonenum(const void *a1, const void *b1)
+
+From patchwork Wed Mar  6 15:50:46 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Nitesh Narayan Lal <nitesh@redhat.com>
+X-Patchwork-Id: 10841411
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 2998C17E0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:52:36 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1A3982E73A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:52:36 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 1863F2E7A6; Wed,  6 Mar 2019 15:52:36 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 948F12E780
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:52:35 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730067AbfCFPv1 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 6 Mar 2019 10:51:27 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:34480 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726512AbfCFPv0 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 6 Mar 2019 10:51:26 -0500
+Received: from smtp.corp.redhat.com (int-mx07.intmail.prod.int.phx2.redhat.com
+ [10.5.11.22])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 7EBB388305;
+        Wed,  6 Mar 2019 15:51:26 +0000 (UTC)
+Received: from virtlab420.virt.lab.eng.bos.redhat.com
+ (virtlab420.virt.lab.eng.bos.redhat.com [10.19.152.148])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id CBFFF1001E60;
+        Wed,  6 Mar 2019 15:51:21 +0000 (UTC)
+From: Nitesh Narayan Lal <nitesh@redhat.com>
+To: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        linux-mm@kvack.org, pbonzini@redhat.com, lcapitulino@redhat.com,
+        pagupta@redhat.com, wei.w.wang@intel.com, yang.zhang.wz@gmail.com,
+        riel@surriel.com, david@redhat.com, mst@redhat.com,
+        dodgen@google.com, konrad.wilk@oracle.com, dhildenb@redhat.com,
+        aarcange@redhat.com, alexander.duyck@gmail.com
+Subject: [RFC][Patch v9 4/6] KVM: Reporting page poisoning value to the host
+Date: Wed,  6 Mar 2019 10:50:46 -0500
+Message-Id: <20190306155048.12868-5-nitesh@redhat.com>
+In-Reply-To: <20190306155048.12868-1-nitesh@redhat.com>
+References: <20190306155048.12868-1-nitesh@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.22
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.28]);
+ Wed, 06 Mar 2019 15:51:26 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+This patch enables the kernel to report the page poisoning value
+to the host by using VIRTIO_BALLOON_F_PAGE_POISON feature.
+Page Poisoning is a feature in which the page is filled with a specific
+pattern of (0x00 or 0xaa) after freeing and the same is verified
+before allocation to prevent following issues:
+    *information leak from the freed data
+    *use after free bugs
+    *memory corruption
+The issue arises when the pattern used for Page Poisoning is 0xaa while
+the newly allocated page received from the host by the guest is
+filled with the pattern 0x00. This will result in memory corruption errors.
+
+Signed-off-by: Nitesh Narayan Lal <nitesh@redhat.com>
+---
+ drivers/virtio/virtio_balloon.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/drivers/virtio/virtio_balloon.c b/drivers/virtio/virtio_balloon.c
+index cfe7574b5204..e82c72cd916b 100644
+--- a/drivers/virtio/virtio_balloon.c
++++ b/drivers/virtio/virtio_balloon.c
+@@ -970,6 +970,11 @@ static int virtballoon_probe(struct virtio_device *vdev)
+ 	}
+ 
+ #ifdef CONFIG_KVM_FREE_PAGE_HINTING
++	if (virtio_has_feature(vdev, VIRTIO_BALLOON_F_PAGE_POISON)) {
++		memset(&poison_val, PAGE_POISON, sizeof(poison_val));
++		virtio_cwrite(vb->vdev, struct virtio_balloon_config,
++			      poison_val, &poison_val);
++	}
+ 	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING))
+ 		enable_hinting(vb);
+ #endif
+
+From patchwork Wed Mar  6 15:50:47 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Nitesh Narayan Lal <nitesh@redhat.com>
+X-Patchwork-Id: 10841407
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id ED0E017E0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:52:24 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D75A52E72F
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:52:24 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id D4C2B2E770; Wed,  6 Mar 2019 15:52:24 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5AD102E7A7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:52:24 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730130AbfCFPvc (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 6 Mar 2019 10:51:32 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:47504 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730061AbfCFPvb (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 6 Mar 2019 10:51:31 -0500
+Received: from smtp.corp.redhat.com (int-mx07.intmail.prod.int.phx2.redhat.com
+ [10.5.11.22])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 107853087BAE;
+        Wed,  6 Mar 2019 15:51:31 +0000 (UTC)
+Received: from virtlab420.virt.lab.eng.bos.redhat.com
+ (virtlab420.virt.lab.eng.bos.redhat.com [10.19.152.148])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id A01901001E60;
+        Wed,  6 Mar 2019 15:51:26 +0000 (UTC)
+From: Nitesh Narayan Lal <nitesh@redhat.com>
+To: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        linux-mm@kvack.org, pbonzini@redhat.com, lcapitulino@redhat.com,
+        pagupta@redhat.com, wei.w.wang@intel.com, yang.zhang.wz@gmail.com,
+        riel@surriel.com, david@redhat.com, mst@redhat.com,
+        dodgen@google.com, konrad.wilk@oracle.com, dhildenb@redhat.com,
+        aarcange@redhat.com, alexander.duyck@gmail.com
+Subject: [RFC][Patch v9 5/6] KVM: Enabling guest free page hinting via static
+ key
+Date: Wed,  6 Mar 2019 10:50:47 -0500
+Message-Id: <20190306155048.12868-6-nitesh@redhat.com>
+In-Reply-To: <20190306155048.12868-1-nitesh@redhat.com>
+References: <20190306155048.12868-1-nitesh@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.22
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.45]);
+ Wed, 06 Mar 2019 15:51:31 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+This patch enables the guest free page hinting support
+to enable or disable based on the STATIC key which
+could be set via sysctl.
+
+Signed-off-by: Nitesh Narayan Lal <nitesh@redhat.com>
+---
+ Documentation/sysctl/vm.txt     | 12 ++++++++++++
+ drivers/virtio/virtio_balloon.c |  4 ++++
+ include/linux/page_hinting.h    |  5 +++++
+ kernel/sysctl.c                 | 12 ++++++++++++
+ virt/kvm/page_hinting.c         | 26 ++++++++++++++++++++++++++
+ 5 files changed, 59 insertions(+)
+
+diff --git a/Documentation/sysctl/vm.txt b/Documentation/sysctl/vm.txt
+index 187ce4f599a2..eae9180ea0aa 100644
+--- a/Documentation/sysctl/vm.txt
++++ b/Documentation/sysctl/vm.txt
+@@ -31,6 +31,7 @@ Currently, these files are in /proc/sys/vm:
+ - dirty_writeback_centisecs
+ - drop_caches
+ - extfrag_threshold
++- guest_free_page_hinting
+ - hugetlb_shm_group
+ - laptop_mode
+ - legacy_va_layout
+@@ -255,6 +256,17 @@ fragmentation index is <= extfrag_threshold. The default value is 500.
+ 
+ ==============================================================
+ 
++guest_free_page_hinting
++
++This parameter enables the kernel to report KVM guest free pages to the host
++via virtio balloon driver. QEMU receives these free page hints and frees them
++by performing MADVISE_DONTNEED on it.
++
++It depends on VIRTIO_BALLOON for its functionality. In case VIRTIO_BALLOON
++driver is missing, this feature is disabled by default.
++
++==============================================================
++
+ highmem_is_dirtyable
+ 
+ Available only for systems with CONFIG_HIGHMEM enabled (32b systems).
+diff --git a/drivers/virtio/virtio_balloon.c b/drivers/virtio/virtio_balloon.c
+index e82c72cd916b..171fd72ef2ae 100644
+--- a/drivers/virtio/virtio_balloon.c
++++ b/drivers/virtio/virtio_balloon.c
+@@ -164,12 +164,16 @@ static void hinting_ack(struct virtqueue *vq)
+ 
+ static void enable_hinting(struct virtio_balloon *vb)
+ {
++	guest_free_page_hinting_flag = 1;
++	static_branch_enable(&guest_free_page_hinting_key);
+ 	request_hypercall = (void *)&virtballoon_page_hinting;
+ 	balloon_ptr = vb;
+ }
+ 
+ static void disable_hinting(void)
+ {
++	guest_free_page_hinting_flag = 0;
++	static_branch_enable(&guest_free_page_hinting_key);
+ 	balloon_ptr = NULL;
+ }
+ #endif
+diff --git a/include/linux/page_hinting.h b/include/linux/page_hinting.h
+index a32af8851081..60e0a21bfbe6 100644
+--- a/include/linux/page_hinting.h
++++ b/include/linux/page_hinting.h
+@@ -12,6 +12,8 @@
+ #define FREE_PAGE_HINTING_MIN_ORDER	(MAX_ORDER - 1)
+ 
+ extern void *balloon_ptr;
++extern int guest_free_page_hinting_flag;
++extern struct static_key_false guest_free_page_hinting_key;
+ 
+ void guest_free_page_enqueue(struct page *page, int order);
+ void guest_free_page_try_hinting(void);
+@@ -22,3 +24,6 @@ extern void __free_one_page(struct page *page, unsigned long pfn,
+ void release_buddy_pages(void *obj_to_free, int entries);
+ extern int (*request_hypercall)(void *balloon_ptr,
+ 				void *hinting_req, int entries);
++int guest_free_page_hinting_sysctl(struct ctl_table *table, int write,
++				   void __user *buffer, size_t *lenp,
++				   loff_t *ppos);
+diff --git a/kernel/sysctl.c b/kernel/sysctl.c
+index ba4d9e85feb8..7b2970e9e937 100644
+--- a/kernel/sysctl.c
++++ b/kernel/sysctl.c
+@@ -96,6 +96,9 @@
+ #ifdef CONFIG_LOCKUP_DETECTOR
+ #include <linux/nmi.h>
+ #endif
++#ifdef CONFIG_KVM_FREE_PAGE_HINTING
++#include <linux/page_hinting.h>
++#endif
+ 
+ #if defined(CONFIG_SYSCTL)
+ 
+@@ -1690,6 +1693,15 @@ static struct ctl_table vm_table[] = {
+ 		.extra1		= (void *)&mmap_rnd_compat_bits_min,
+ 		.extra2		= (void *)&mmap_rnd_compat_bits_max,
+ 	},
++#endif
++#ifdef CONFIG_KVM_FREE_PAGE_HINTING
++	{
++		.procname       = "guest-free-page-hinting",
++		.data           = &guest_free_page_hinting_flag,
++		.maxlen         = sizeof(guest_free_page_hinting_flag),
++		.mode           = 0644,
++		.proc_handler   = guest_free_page_hinting_sysctl,
++	},
+ #endif
+ 	{ }
+ };
+diff --git a/virt/kvm/page_hinting.c b/virt/kvm/page_hinting.c
+index eb0c0ddfe990..5980682e0b86 100644
+--- a/virt/kvm/page_hinting.c
++++ b/virt/kvm/page_hinting.c
+@@ -36,6 +36,28 @@ EXPORT_SYMBOL(request_hypercall);
+ void *balloon_ptr;
+ EXPORT_SYMBOL(balloon_ptr);
+ 
++struct static_key_false guest_free_page_hinting_key  = STATIC_KEY_FALSE_INIT;
++EXPORT_SYMBOL(guest_free_page_hinting_key);
++static DEFINE_MUTEX(hinting_mutex);
++int guest_free_page_hinting_flag;
++EXPORT_SYMBOL(guest_free_page_hinting_flag);
++
++int guest_free_page_hinting_sysctl(struct ctl_table *table, int write,
++				   void __user *buffer, size_t *lenp,
++				   loff_t *ppos)
++{
++	int ret;
++
++	mutex_lock(&hinting_mutex);
++	ret = proc_dointvec(table, write, buffer, lenp, ppos);
++	if (guest_free_page_hinting_flag)
++		static_key_enable(&guest_free_page_hinting_key.key);
++	else
++		static_key_disable(&guest_free_page_hinting_key.key);
++	mutex_unlock(&hinting_mutex);
++	return ret;
++}
++
+ void release_buddy_pages(void *hinting_req, int entries)
+ {
+ 	int i = 0;
+@@ -223,6 +245,8 @@ void guest_free_page_enqueue(struct page *page, int order)
+ 	struct guest_free_pages *hinting_obj;
+ 	int l_idx;
+ 
++	if (!static_branch_unlikely(&guest_free_page_hinting_key))
++		return;
+ 	/*
+ 	 * use of global variables may trigger a race condition between irq and
+ 	 * process context causing unwanted overwrites. This will be replaced
+@@ -258,6 +282,8 @@ void guest_free_page_try_hinting(void)
+ {
+ 	struct guest_free_pages *hinting_obj;
+ 
++	if (!static_branch_unlikely(&guest_free_page_hinting_key))
++		return;
+ 	hinting_obj = this_cpu_ptr(&free_pages_obj);
+ 	if (hinting_obj->free_pages_idx >= HINTING_THRESHOLD)
+ 		guest_free_page_hinting();
+
+From patchwork Wed Mar  6 15:50:48 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Nitesh Narayan Lal <nitesh@redhat.com>
+X-Patchwork-Id: 10841403
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9878817E0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:52:22 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 86ACC2E7BF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:52:22 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 847952E7BC; Wed,  6 Mar 2019 15:52:22 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1E59D2E7BF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 15:52:22 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730156AbfCFPvd (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 6 Mar 2019 10:51:33 -0500
+Received: from mx1.redhat.com ([209.132.183.28]:56926 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730137AbfCFPvd (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 6 Mar 2019 10:51:33 -0500
+Received: from smtp.corp.redhat.com (int-mx07.intmail.prod.int.phx2.redhat.com
+ [10.5.11.22])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id B4A3DE6A88;
+        Wed,  6 Mar 2019 15:51:32 +0000 (UTC)
+Received: from virtlab420.virt.lab.eng.bos.redhat.com
+ (virtlab420.virt.lab.eng.bos.redhat.com [10.19.152.148])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 3078A1001DCE;
+        Wed,  6 Mar 2019 15:51:31 +0000 (UTC)
+From: Nitesh Narayan Lal <nitesh@redhat.com>
+To: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        linux-mm@kvack.org, pbonzini@redhat.com, lcapitulino@redhat.com,
+        pagupta@redhat.com, wei.w.wang@intel.com, yang.zhang.wz@gmail.com,
+        riel@surriel.com, david@redhat.com, mst@redhat.com,
+        dodgen@google.com, konrad.wilk@oracle.com, dhildenb@redhat.com,
+        aarcange@redhat.com, alexander.duyck@gmail.com
+Subject: [RFC][Patch v9 6/6] KVM: Adding tracepoints for guest free page
+ hinting
+Date: Wed,  6 Mar 2019 10:50:48 -0500
+Message-Id: <20190306155048.12868-7-nitesh@redhat.com>
+In-Reply-To: <20190306155048.12868-1-nitesh@redhat.com>
+References: <20190306155048.12868-1-nitesh@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.22
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.38]);
+ Wed, 06 Mar 2019 15:51:32 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+This patch enables to track the pages freed by the guest and
+the pages isolated by the page hinting code through kernel
+tracepoints.
+
+Signed-off-by: Nitesh Narayan Lal <nitesh@redhat.com>
+---
+ include/trace/events/kmem.h | 62 +++++++++++++++++++++++++++++++++++++
+ virt/kvm/page_hinting.c     | 12 +++++++
+ 2 files changed, 74 insertions(+)
+
+diff --git a/include/trace/events/kmem.h b/include/trace/events/kmem.h
+index eb57e3037deb..0bef31484cf8 100644
+--- a/include/trace/events/kmem.h
++++ b/include/trace/events/kmem.h
+@@ -315,6 +315,68 @@ TRACE_EVENT(mm_page_alloc_extfrag,
+ 		__entry->change_ownership)
+ );
+ 
++TRACE_EVENT(guest_free_page,
++	    TP_PROTO(unsigned long pfn, unsigned int order),
++
++	TP_ARGS(pfn, order),
++
++	TP_STRUCT__entry(
++		__field(unsigned long, pfn)
++		__field(unsigned int, order)
++	),
++
++	TP_fast_assign(
++		__entry->pfn            = pfn;
++		__entry->order          = order;
++	),
++
++	TP_printk("pfn=%lu order=%d",
++		  __entry->pfn,
++		  __entry->order)
++);
++
++TRACE_EVENT(guest_isolated_page,
++	    TP_PROTO(unsigned long pfn, unsigned int order),
++
++	TP_ARGS(pfn, order),
++
++	TP_STRUCT__entry(
++		__field(unsigned long, pfn)
++		__field(unsigned int, order)
++	),
++
++	TP_fast_assign(
++		__entry->pfn            = pfn;
++		__entry->order          = order;
++	),
++
++	TP_printk("pfn=%lu order=%u",
++		  __entry->pfn,
++		  __entry->order)
++);
++
++TRACE_EVENT(guest_captured_page,
++	    TP_PROTO(unsigned long pfn, unsigned int order, int idx),
++
++	TP_ARGS(pfn, order, idx),
++
++	TP_STRUCT__entry(
++		__field(unsigned long, pfn)
++		__field(unsigned int, order)
++		__field(int, idx)
++	),
++
++	TP_fast_assign(
++		__entry->pfn		= pfn;
++		__entry->order		= order;
++		__entry->idx		= idx;
++	),
++
++	TP_printk("pfn=%lu order=%u array_index=%d",
++		  __entry->pfn,
++		  __entry->order,
++		  __entry->idx)
++);
+ #endif /* _TRACE_KMEM_H */
+ 
+ /* This part must be outside protection */
+diff --git a/virt/kvm/page_hinting.c b/virt/kvm/page_hinting.c
+index 5980682e0b86..dc72f1947751 100644
+--- a/virt/kvm/page_hinting.c
++++ b/virt/kvm/page_hinting.c
+@@ -4,6 +4,7 @@
+ #include <linux/kvm_host.h>
+ #include <linux/kernel.h>
+ #include <linux/sort.h>
++#include <trace/events/kmem.h>
+ 
+ /*
+  * struct guest_free_pages- holds array of guest freed PFN's along with an
+@@ -178,6 +179,8 @@ static void guest_free_page_hinting(void)
+ 
+ 				ret = __isolate_free_page(page, buddy_order);
+ 				if (ret) {
++					trace_guest_isolated_page(pfn,
++								  buddy_order);
+ 					isolated_pages_obj[hyp_idx].pfn = pfn;
+ 					isolated_pages_obj[hyp_idx].order =
+ 								buddy_order;
+@@ -198,6 +201,8 @@ static void guest_free_page_hinting(void)
+ 					unsigned long buddy_pfn =
+ 						page_to_pfn(buddy_page);
+ 
++					trace_guest_isolated_page(buddy_pfn,
++								  buddy_order);
+ 					isolated_pages_obj[hyp_idx].pfn =
+ 								buddy_pfn;
+ 					isolated_pages_obj[hyp_idx].order =
+@@ -255,9 +260,12 @@ void guest_free_page_enqueue(struct page *page, int order)
+ 	local_irq_save(flags);
+ 	hinting_obj = this_cpu_ptr(&free_pages_obj);
+ 	l_idx = hinting_obj->free_pages_idx;
++	trace_guest_free_page(page_to_pfn(page), order);
+ 	if (l_idx != MAX_FGPT_ENTRIES) {
+ 		if (PageBuddy(page) && page_private(page) >=
+ 		    FREE_PAGE_HINTING_MIN_ORDER) {
++			trace_guest_captured_page(page_to_pfn(page), order,
++						  l_idx);
+ 			hinting_obj->free_page_arr[l_idx] = page_to_pfn(page);
+ 			hinting_obj->free_pages_idx += 1;
+ 		} else {
+@@ -268,7 +276,11 @@ void guest_free_page_enqueue(struct page *page, int order)
+ 			    !if_exist(buddy_page)) {
+ 				unsigned long buddy_pfn =
+ 					page_to_pfn(buddy_page);
++				unsigned int buddy_order =
++					page_private(buddy_page);
+ 
++				trace_guest_captured_page(buddy_pfn,
++							  buddy_order, l_idx);
+ 				hinting_obj->free_page_arr[l_idx] =
+ 							buddy_pfn;
+ 				hinting_obj->free_pages_idx += 1;

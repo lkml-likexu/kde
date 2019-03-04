@@ -1,0 +1,110 @@
+From patchwork Wed Mar  6 10:40:08 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 10840833
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B481E1575
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 10:40:17 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 9F7AF2CFAD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 10:40:17 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 924A72D0CB; Wed,  6 Mar 2019 10:40:17 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 0AE542CFAD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  6 Mar 2019 10:40:17 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729215AbfCFKkP (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 6 Mar 2019 05:40:15 -0500
+Received: from usa-sjc-mx-foss1.foss.arm.com ([217.140.101.70]:58876 "EHLO
+        foss.arm.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727367AbfCFKkP (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 6 Mar 2019 05:40:15 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 07522A78;
+        Wed,  6 Mar 2019 02:40:15 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.197.44])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ A4EFE3F71D;
+        Wed,  6 Mar 2019 02:40:13 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Marc Zyngier <marc.zyngier@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>
+Cc: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org, Dave Martin <dave.martin@arm.com>
+Subject: [PATCH] KVM: arm: VGIC: properly initialise private IRQ affinity
+Date: Wed,  6 Mar 2019 10:40:08 +0000
+Message-Id: <20190306104008.69414-1-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+At the moment we initialise the target *mask* of a virtual IRQ to the
+VCPU it belongs to, even though this mask is only defined for GICv2 and
+quickly runs out of bits for many GICv3 guests.
+This behaviour triggers an UBSAN complaint for more than 32 VCPUs:
+------
+[ 5659.462377] UBSAN: Undefined behaviour in virt/kvm/arm/vgic/vgic-init.c:223:21
+[ 5659.471689] shift exponent 32 is too large for 32-bit type 'unsigned int'
+------
+Also for GICv3 guests the reporting of TARGET in the "vgic-state" debugfs
+dump is wrong, due to this very same problem.
+
+Fix both issues by only initialising vgic_irq->targets for a vGICv2 guest,
+and by initialising vgic_irq->mpdir for vGICv3 guests instead. We can't
+use the actual MPIDR for that, as the VCPU's system register is not
+initialised at this point yet. This is not really an issue, as ->mpidr
+is just used for the debugfs output and the IROUTER MMIO register, which
+does not exist in redistributors (dealing with SGIs and PPIs).
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+Reported-by: Dave Martin <dave.martin@arm.com>
+---
+ virt/kvm/arm/vgic/vgic-init.c | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/virt/kvm/arm/vgic/vgic-init.c b/virt/kvm/arm/vgic/vgic-init.c
+index 3bdb31eaed64..3172b2c916f1 100644
+--- a/virt/kvm/arm/vgic/vgic-init.c
++++ b/virt/kvm/arm/vgic/vgic-init.c
+@@ -220,7 +220,6 @@ int kvm_vgic_vcpu_init(struct kvm_vcpu *vcpu)
+ 		irq->intid = i;
+ 		irq->vcpu = NULL;
+ 		irq->target_vcpu = vcpu;
+-		irq->targets = 1U << vcpu->vcpu_id;
+ 		kref_init(&irq->refcount);
+ 		if (vgic_irq_is_sgi(i)) {
+ 			/* SGIs */
+@@ -231,10 +230,14 @@ int kvm_vgic_vcpu_init(struct kvm_vcpu *vcpu)
+ 			irq->config = VGIC_CONFIG_LEVEL;
+ 		}
+ 
+-		if (dist->vgic_model == KVM_DEV_TYPE_ARM_VGIC_V3)
++		if (dist->vgic_model == KVM_DEV_TYPE_ARM_VGIC_V3) {
+ 			irq->group = 1;
+-		else
++			/* The actual MPIDR is not initialised at this point. */
++			irq->mpidr = 0;
++		} else {
+ 			irq->group = 0;
++			irq->targets = 1U << vcpu->vcpu_id;
++		}
+ 	}
+ 
+ 	if (!irqchip_in_kernel(vcpu->kvm))

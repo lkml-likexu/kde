@@ -1,0 +1,118 @@
+From patchwork Thu Mar 14 02:12:04 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Li RongQing <lirongqing@baidu.com>
+X-Patchwork-Id: 10852055
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id AA573139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 14 Mar 2019 02:12:19 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 90D662A136
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 14 Mar 2019 02:12:19 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 8F0432A146; Thu, 14 Mar 2019 02:12:19 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3E52E2A13B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 14 Mar 2019 02:12:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726774AbfCNCMR (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 13 Mar 2019 22:12:17 -0400
+Received: from mx56.baidu.com ([61.135.168.56]:23931 "EHLO
+        tc-sys-mailedm05.tc.baidu.com" rhost-flags-OK-OK-OK-FAIL)
+        by vger.kernel.org with ESMTP id S1726556AbfCNCMR (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Wed, 13 Mar 2019 22:12:17 -0400
+Received: from localhost (cp01-cos-dev01.cp01.baidu.com [10.92.119.46])
+        by tc-sys-mailedm05.tc.baidu.com (Postfix) with ESMTP id 054011EBA006;
+        Thu, 14 Mar 2019 10:12:04 +0800 (CST)
+From: Li RongQing <lirongqing@baidu.com>
+To: x86@kernel.org, kvm@vger.kernel.org, brijesh.singh@amd.com
+Subject: [PATCH][v2] KVM: fix error handling in svm_hardware_setup
+Date: Thu, 14 Mar 2019 10:12:04 +0800
+Message-Id: <1552529524-14668-1-git-send-email-lirongqing@baidu.com>
+X-Mailer: git-send-email 1.7.1
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Li Rongqing <lirongqing@baidu.com>
+
+move svm_hardware_unsetup before svm_hardware_setup, and call
+it to free all memory if fail to setup in svm_hardware_setup,
+otherwise memory will be leaked
+
+remove __exit attribute for svm_hardware_unsetup since it is
+called in __init function
+
+Signed-off-by: Li Rongqing <lirongqing@baidu.com>
+Signed-off-by: Zhang Yu <zhangyu31@baidu.com>
+Reviewed-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ arch/x86/kvm/svm.c | 31 +++++++++++++++----------------
+ 1 file changed, 15 insertions(+), 16 deletions(-)
+
+diff --git a/arch/x86/kvm/svm.c b/arch/x86/kvm/svm.c
+index 1787a484d21c..276ab8ab6c95 100644
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -1290,6 +1290,20 @@ static void shrink_ple_window(struct kvm_vcpu *vcpu)
+ 				    control->pause_filter_count, old);
+ }
+ 
++static void svm_hardware_unsetup(void)
++{
++	int cpu;
++
++	if (svm_sev_enabled())
++		bitmap_free(sev_asid_bitmap);
++
++	for_each_possible_cpu(cpu)
++		svm_cpu_uninit(cpu);
++
++	__free_pages(pfn_to_page(iopm_base >> PAGE_SHIFT), IOPM_ALLOC_ORDER);
++	iopm_base = 0;
++}
++
+ static __init int svm_hardware_setup(void)
+ {
+ 	int cpu;
+@@ -1396,25 +1410,10 @@ static __init int svm_hardware_setup(void)
+ 	return 0;
+ 
+ err:
+-	__free_pages(iopm_pages, IOPM_ALLOC_ORDER);
+-	iopm_base = 0;
++	svm_hardware_unsetup();
+ 	return r;
+ }
+ 
+-static __exit void svm_hardware_unsetup(void)
+-{
+-	int cpu;
+-
+-	if (svm_sev_enabled())
+-		bitmap_free(sev_asid_bitmap);
+-
+-	for_each_possible_cpu(cpu)
+-		svm_cpu_uninit(cpu);
+-
+-	__free_pages(pfn_to_page(iopm_base >> PAGE_SHIFT), IOPM_ALLOC_ORDER);
+-	iopm_base = 0;
+-}
+-
+ static void init_seg(struct vmcb_seg *seg)
+ {
+ 	seg->selector = 0;

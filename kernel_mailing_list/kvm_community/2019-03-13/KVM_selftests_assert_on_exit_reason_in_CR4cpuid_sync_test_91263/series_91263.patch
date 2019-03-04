@@ -1,0 +1,117 @@
+From patchwork Wed Mar 13 20:19:26 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10851719
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 7923D1575
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 13 Mar 2019 20:19:31 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 6417928C6D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 13 Mar 2019 20:19:31 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 57BC029F3E; Wed, 13 Mar 2019 20:19:31 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id EA12828C6D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 13 Mar 2019 20:19:30 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727087AbfCMUT3 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 13 Mar 2019 16:19:29 -0400
+Received: from mga12.intel.com ([192.55.52.136]:32905 "EHLO mga12.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726263AbfCMUT3 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 13 Mar 2019 16:19:29 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga004.fm.intel.com ([10.253.24.48])
+  by fmsmga106.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 13 Mar 2019 13:19:27 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.58,475,1544515200";
+   d="scan'208";a="152077533"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by fmsmga004.fm.intel.com with ESMTP; 13 Mar 2019 13:19:28 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Wei Huang <wei@redhat.com>
+Subject: [PATCH] KVM: selftests: assert on exit reason in CR4/cpuid sync test
+Date: Wed, 13 Mar 2019 13:19:26 -0700
+Message-Id: <20190313201926.7868-1-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+...so that the test doesn't end up in an infinite loop if it fails for
+whatever reason, e.g. SHUTDOWN due to gcc inserting stack canary code
+into ucall() and attempting to derefence a null segment.
+
+Fixes: ca359066889f7 ("kvm: selftests: add cr4_cpuid_sync_test")
+Cc: Wei Huang <wei@redhat.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ .../kvm/x86_64/cr4_cpuid_sync_test.c          | 35 ++++++++++---------
+ 1 file changed, 19 insertions(+), 16 deletions(-)
+
+diff --git a/tools/testing/selftests/kvm/x86_64/cr4_cpuid_sync_test.c b/tools/testing/selftests/kvm/x86_64/cr4_cpuid_sync_test.c
+index d503a51fad30..7c2c4d4055a8 100644
+--- a/tools/testing/selftests/kvm/x86_64/cr4_cpuid_sync_test.c
++++ b/tools/testing/selftests/kvm/x86_64/cr4_cpuid_sync_test.c
+@@ -87,22 +87,25 @@ int main(int argc, char *argv[])
+ 	while (1) {
+ 		rc = _vcpu_run(vm, VCPU_ID);
+ 
+-		if (run->exit_reason == KVM_EXIT_IO) {
+-			switch (get_ucall(vm, VCPU_ID, &uc)) {
+-			case UCALL_SYNC:
+-				/* emulate hypervisor clearing CR4.OSXSAVE */
+-				vcpu_sregs_get(vm, VCPU_ID, &sregs);
+-				sregs.cr4 &= ~X86_CR4_OSXSAVE;
+-				vcpu_sregs_set(vm, VCPU_ID, &sregs);
+-				break;
+-			case UCALL_ABORT:
+-				TEST_ASSERT(false, "Guest CR4 bit (OSXSAVE) unsynchronized with CPUID bit.");
+-				break;
+-			case UCALL_DONE:
+-				goto done;
+-			default:
+-				TEST_ASSERT(false, "Unknown ucall 0x%x.", uc.cmd);
+-			}
++		TEST_ASSERT(run->exit_reason == KVM_EXIT_IO,
++			    "Unexpected exit reason: %u (%s),\n",
++			    run->exit_reason,
++			    exit_reason_str(run->exit_reason));
++
++		switch (get_ucall(vm, VCPU_ID, &uc)) {
++		case UCALL_SYNC:
++			/* emulate hypervisor clearing CR4.OSXSAVE */
++			vcpu_sregs_get(vm, VCPU_ID, &sregs);
++			sregs.cr4 &= ~X86_CR4_OSXSAVE;
++			vcpu_sregs_set(vm, VCPU_ID, &sregs);
++			break;
++		case UCALL_ABORT:
++			TEST_ASSERT(false, "Guest CR4 bit (OSXSAVE) unsynchronized with CPUID bit.");
++			break;
++		case UCALL_DONE:
++			goto done;
++		default:
++			TEST_ASSERT(false, "Unknown ucall 0x%x.", uc.cmd);
+ 		}
+ 	}
+ 

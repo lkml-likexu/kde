@@ -1,0 +1,222 @@
+From patchwork Tue Mar 12 03:01:05 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10848545
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 71ABE17DF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 12 Mar 2019 03:01:10 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5E613294B3
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 12 Mar 2019 03:01:10 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 5C38E294C1; Tue, 12 Mar 2019 03:01:10 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 962ED294BD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 12 Mar 2019 03:01:09 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726754AbfCLDBI (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 11 Mar 2019 23:01:08 -0400
+Received: from mga04.intel.com ([192.55.52.120]:55666 "EHLO mga04.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726167AbfCLDBI (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Mar 2019 23:01:08 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by fmsmga104.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 11 Mar 2019 20:01:07 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.58,469,1544515200";
+   d="scan'208";a="150803841"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by fmsmga002.fm.intel.com with ESMTP; 11 Mar 2019 20:01:07 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>
+Subject: [PATCH] KVM: x86: update %rip after emulating IO
+Date: Mon, 11 Mar 2019 20:01:05 -0700
+Message-Id: <20190312030105.2118-1-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Most (all?) x86 platforms provide a port IO based reset mechanism, e.g.
+OUT 92h or CF9h.  Userspace may emulate said mechanism, i.e. reset a
+vCPU in response to KVM_EXIT_IO, without explicitly announcing to KVM
+that it is doing a reset, e.g. Qemu jams vCPU state and resumes running.
+
+To avoid corruping %rip after such a reset, commit 0967b7bf1c22 ("KVM:
+Skip pio instruction when it is emulated, not executed") changed the
+behavior of PIO handlers, i.e. today's "fast" PIO handling to skip the
+instruction prior to exiting to userspace.  Full emulation doesn't need
+such tricks becase re-emulating the instruction will naturally handle
+%rip being changed to point at the reset vector.
+
+Updating %rip prior to executing to userspace has several drawbacks:
+
+  - Userspace sees the wrong %rip on the exit, e.g. if PIO emulation
+    fails it will likely yell about the wrong address.
+  - Single step exits to userspace for are effectively dropped as
+    KVM_EXIT_DEBUG is overwritten with KVM_EXIT_IO.
+  - Behavior of PIO emulation is different depending on whether it
+    goes down the fast path or the slow path.
+
+Rather than skip the PIO instruction before exiting to userspace,
+snapshot the linear %rip and cancel PIO completion if the current
+value does not match the snapshot.  For a 64-bit vCPU, i.e. the most
+common scenario, the snapshot and comparison has negligible overhead
+as VMCS.GUEST_RIP will be cached regardless, i.e. there is no extra
+VMREAD in this case.
+
+All other alternatives to snapshotting the linear %rip that don't
+rely on an explicit reset announcenment suffer from one corner case
+or another.  For example, canceling PIO completion on any write to
+%rip fails if userspace does a save/restore of %rip, and attempting to
+avoid that issue by canceling PIO only if %rip changed then fails if PIO
+collides with the reset %rip.  Attempting to zero in on the exact reset
+vector won't work for APs, which means adding more hooks such as the
+vCPU's MP_STATE, and so on and so forth.
+
+Checking for a linear %rip match technically suffers from corner cases,
+e.g. userspace could theoretically rewrite the underlying code page and
+expect a different instruction to execute, or the guest hardcodes a PIO
+reset at 0xfffffff0, but those are far, far outside of what can be
+considered normal operation.
+
+Fixes: 432baf60eee3 ("KVM: VMX: use kvm_fast_pio_in for handling IN I/O")
+Cc: <stable@vger.kernel.org>
+Reported-by: Jim Mattson <jmattson@google.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+
+Although technically the "buggy" behavior goes back 10+ years, I used
+the recent VMX change for Fixes since that was the commit that actually
+led to a complaint.  Arguably the commit that re-introduced fast IN for
+SVM (8370c3d08bd9 "kvm: svm: Add kvm_fast_pio_in support") should be
+blamed, but given that his is more along the lines of "that's weird" as
+opposed to "the world is burning", err on the side of cuation.
+
+That being said, odds are good that userspace won't even exercise the
+rip checks.  Qemu has intentionally re-entered KVM to complete I/O since
+commit 9ccfac9ea4 ("kvm: Unconditionally reenter kernel after IO exits")
+in early 2011, i.e. testing this required modifying Qemu to not re-enter
+the kernel.  And AFIAK no other userspace emulates port-based resets.
+
+ arch/x86/include/asm/kvm_host.h |  1 +
+ arch/x86/kvm/x86.c              | 36 ++++++++++++++++++++++++---------
+ 2 files changed, 27 insertions(+), 10 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 7712b4ed8aa1..4b72a28dbdcb 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -349,6 +349,7 @@ struct kvm_mmu_page {
+ };
+ 
+ struct kvm_pio_request {
++	unsigned long linear_rip;
+ 	unsigned long count;
+ 	int in;
+ 	int port;
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index d90f011f3e32..61f1810a0aac 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -6523,14 +6523,27 @@ int kvm_emulate_instruction_from_buffer(struct kvm_vcpu *vcpu,
+ }
+ EXPORT_SYMBOL_GPL(kvm_emulate_instruction_from_buffer);
+ 
++static int complete_fast_pio_out(struct kvm_vcpu *vcpu)
++{
++	vcpu->arch.pio.count = 0;
++
++	if (unlikely(!kvm_is_linear_rip(vcpu, vcpu->arch.pio.linear_rip)))
++		return 1;
++
++	return kvm_skip_emulated_instruction(vcpu);
++}
++
+ static int kvm_fast_pio_out(struct kvm_vcpu *vcpu, int size,
+ 			    unsigned short port)
+ {
+ 	unsigned long val = kvm_register_read(vcpu, VCPU_REGS_RAX);
+ 	int ret = emulator_pio_out_emulated(&vcpu->arch.emulate_ctxt,
+ 					    size, port, &val, 1);
+-	/* do not return to emulator after return from userspace */
+-	vcpu->arch.pio.count = 0;
++
++	if (!ret) {
++		vcpu->arch.pio.linear_rip = kvm_get_linear_rip(vcpu);
++		vcpu->arch.complete_userspace_io = complete_fast_pio_out;
++	}
+ 	return ret;
+ }
+ 
+@@ -6541,6 +6554,11 @@ static int complete_fast_pio_in(struct kvm_vcpu *vcpu)
+ 	/* We should only ever be called with arch.pio.count equal to 1 */
+ 	BUG_ON(vcpu->arch.pio.count != 1);
+ 
++	if (unlikely(!kvm_is_linear_rip(vcpu, vcpu->arch.pio.linear_rip))) {
++		vcpu->arch.pio.count = 0;
++		return 1;
++	}
++
+ 	/* For size less than 4 we merge, else we zero extend */
+ 	val = (vcpu->arch.pio.size < 4) ? kvm_register_read(vcpu, VCPU_REGS_RAX)
+ 					: 0;
+@@ -6553,7 +6571,7 @@ static int complete_fast_pio_in(struct kvm_vcpu *vcpu)
+ 				 vcpu->arch.pio.port, &val, 1);
+ 	kvm_register_write(vcpu, VCPU_REGS_RAX, val);
+ 
+-	return 1;
++	return kvm_skip_emulated_instruction(vcpu);
+ }
+ 
+ static int kvm_fast_pio_in(struct kvm_vcpu *vcpu, int size,
+@@ -6572,6 +6590,7 @@ static int kvm_fast_pio_in(struct kvm_vcpu *vcpu, int size,
+ 		return ret;
+ 	}
+ 
++	vcpu->arch.pio.linear_rip = kvm_get_linear_rip(vcpu);
+ 	vcpu->arch.complete_userspace_io = complete_fast_pio_in;
+ 
+ 	return 0;
+@@ -6579,16 +6598,13 @@ static int kvm_fast_pio_in(struct kvm_vcpu *vcpu, int size,
+ 
+ int kvm_fast_pio(struct kvm_vcpu *vcpu, int size, unsigned short port, int in)
+ {
+-	int ret = kvm_skip_emulated_instruction(vcpu);
++	int ret;
+ 
+-	/*
+-	 * TODO: we might be squashing a KVM_GUESTDBG_SINGLESTEP-triggered
+-	 * KVM_EXIT_DEBUG here.
+-	 */
+ 	if (in)
+-		return kvm_fast_pio_in(vcpu, size, port) && ret;
++		ret = kvm_fast_pio_in(vcpu, size, port);
+ 	else
+-		return kvm_fast_pio_out(vcpu, size, port) && ret;
++		ret = kvm_fast_pio_out(vcpu, size, port);
++	return ret && kvm_skip_emulated_instruction(vcpu);
+ }
+ EXPORT_SYMBOL_GPL(kvm_fast_pio);
+ 
