@@ -1,0 +1,3461 @@
+From patchwork Thu Mar 28 17:55:40 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875625
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 88D6E1708
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:09 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 6EA5F28CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:09 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 61CBE28D32; Thu, 28 Mar 2019 17:56:09 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 0D16428CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:08 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727416AbfC1R4H (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:07 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7260 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726029AbfC1R4F (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:05 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:00 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691164"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:55:59 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 01/18] KVM: x86: Move emulation of RSM, i.e. leave_smm,
+ out of emulator
+Date: Thu, 28 Mar 2019 10:55:40 -0700
+Message-Id: <20190328175557.14408-2-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_emulate.h |   1 +
+ arch/x86/kvm/emulate.c             | 298 +--------------------------
+ arch/x86/kvm/x86.c                 | 316 +++++++++++++++++++++++++++++
+ 3 files changed, 318 insertions(+), 297 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_emulate.h b/arch/x86/include/asm/kvm_emulate.h
+index 93c4bf598fb0..4622ac0028d1 100644
+--- a/arch/x86/include/asm/kvm_emulate.h
++++ b/arch/x86/include/asm/kvm_emulate.h
+@@ -227,6 +227,7 @@ struct x86_emulate_ops {
+ 	unsigned (*get_hflags)(struct x86_emulate_ctxt *ctxt);
+ 	void (*set_hflags)(struct x86_emulate_ctxt *ctxt, unsigned hflags);
+ 	int (*pre_leave_smm)(struct x86_emulate_ctxt *ctxt, u64 smbase);
++	int (*leave_smm)(struct x86_emulate_ctxt *ctxt);
+ 
+ };
+ 
+diff --git a/arch/x86/kvm/emulate.c b/arch/x86/kvm/emulate.c
+index c338984c850d..d2c5510d9ac3 100644
+--- a/arch/x86/kvm/emulate.c
++++ b/arch/x86/kvm/emulate.c
+@@ -2329,308 +2329,12 @@ static int em_lseg(struct x86_emulate_ctxt *ctxt)
+ 	return rc;
+ }
+ 
+-static int emulator_has_longmode(struct x86_emulate_ctxt *ctxt)
+-{
+-	u32 eax, ebx, ecx, edx;
+-
+-	eax = 0x80000001;
+-	ecx = 0;
+-	ctxt->ops->get_cpuid(ctxt, &eax, &ebx, &ecx, &edx, false);
+-	return edx & bit(X86_FEATURE_LM);
+-}
+-
+-#define GET_SMSTATE(type, smbase, offset)				  \
+-	({								  \
+-	 type __val;							  \
+-	 int r = ctxt->ops->read_phys(ctxt, smbase + offset, &__val,      \
+-				      sizeof(__val));			  \
+-	 if (r != X86EMUL_CONTINUE)					  \
+-		 return X86EMUL_UNHANDLEABLE;				  \
+-	 __val;								  \
+-	})
+-
+-static void rsm_set_desc_flags(struct desc_struct *desc, u32 flags)
+-{
+-	desc->g    = (flags >> 23) & 1;
+-	desc->d    = (flags >> 22) & 1;
+-	desc->l    = (flags >> 21) & 1;
+-	desc->avl  = (flags >> 20) & 1;
+-	desc->p    = (flags >> 15) & 1;
+-	desc->dpl  = (flags >> 13) & 3;
+-	desc->s    = (flags >> 12) & 1;
+-	desc->type = (flags >>  8) & 15;
+-}
+-
+-static int rsm_load_seg_32(struct x86_emulate_ctxt *ctxt, u64 smbase, int n)
+-{
+-	struct desc_struct desc;
+-	int offset;
+-	u16 selector;
+-
+-	selector = GET_SMSTATE(u32, smbase, 0x7fa8 + n * 4);
+-
+-	if (n < 3)
+-		offset = 0x7f84 + n * 12;
+-	else
+-		offset = 0x7f2c + (n - 3) * 12;
+-
+-	set_desc_base(&desc,      GET_SMSTATE(u32, smbase, offset + 8));
+-	set_desc_limit(&desc,     GET_SMSTATE(u32, smbase, offset + 4));
+-	rsm_set_desc_flags(&desc, GET_SMSTATE(u32, smbase, offset));
+-	ctxt->ops->set_segment(ctxt, selector, &desc, 0, n);
+-	return X86EMUL_CONTINUE;
+-}
+-
+-static int rsm_load_seg_64(struct x86_emulate_ctxt *ctxt, u64 smbase, int n)
+-{
+-	struct desc_struct desc;
+-	int offset;
+-	u16 selector;
+-	u32 base3;
+-
+-	offset = 0x7e00 + n * 16;
+-
+-	selector =                GET_SMSTATE(u16, smbase, offset);
+-	rsm_set_desc_flags(&desc, GET_SMSTATE(u16, smbase, offset + 2) << 8);
+-	set_desc_limit(&desc,     GET_SMSTATE(u32, smbase, offset + 4));
+-	set_desc_base(&desc,      GET_SMSTATE(u32, smbase, offset + 8));
+-	base3 =                   GET_SMSTATE(u32, smbase, offset + 12);
+-
+-	ctxt->ops->set_segment(ctxt, selector, &desc, base3, n);
+-	return X86EMUL_CONTINUE;
+-}
+-
+-static int rsm_enter_protected_mode(struct x86_emulate_ctxt *ctxt,
+-				    u64 cr0, u64 cr3, u64 cr4)
+-{
+-	int bad;
+-	u64 pcid;
+-
+-	/* In order to later set CR4.PCIDE, CR3[11:0] must be zero.  */
+-	pcid = 0;
+-	if (cr4 & X86_CR4_PCIDE) {
+-		pcid = cr3 & 0xfff;
+-		cr3 &= ~0xfff;
+-	}
+-
+-	bad = ctxt->ops->set_cr(ctxt, 3, cr3);
+-	if (bad)
+-		return X86EMUL_UNHANDLEABLE;
+-
+-	/*
+-	 * First enable PAE, long mode needs it before CR0.PG = 1 is set.
+-	 * Then enable protected mode.	However, PCID cannot be enabled
+-	 * if EFER.LMA=0, so set it separately.
+-	 */
+-	bad = ctxt->ops->set_cr(ctxt, 4, cr4 & ~X86_CR4_PCIDE);
+-	if (bad)
+-		return X86EMUL_UNHANDLEABLE;
+-
+-	bad = ctxt->ops->set_cr(ctxt, 0, cr0);
+-	if (bad)
+-		return X86EMUL_UNHANDLEABLE;
+-
+-	if (cr4 & X86_CR4_PCIDE) {
+-		bad = ctxt->ops->set_cr(ctxt, 4, cr4);
+-		if (bad)
+-			return X86EMUL_UNHANDLEABLE;
+-		if (pcid) {
+-			bad = ctxt->ops->set_cr(ctxt, 3, cr3 | pcid);
+-			if (bad)
+-				return X86EMUL_UNHANDLEABLE;
+-		}
+-
+-	}
+-
+-	return X86EMUL_CONTINUE;
+-}
+-
+-static int rsm_load_state_32(struct x86_emulate_ctxt *ctxt, u64 smbase)
+-{
+-	struct desc_struct desc;
+-	struct desc_ptr dt;
+-	u16 selector;
+-	u32 val, cr0, cr3, cr4;
+-	int i;
+-
+-	cr0 =                      GET_SMSTATE(u32, smbase, 0x7ffc);
+-	cr3 =                      GET_SMSTATE(u32, smbase, 0x7ff8);
+-	ctxt->eflags =             GET_SMSTATE(u32, smbase, 0x7ff4) | X86_EFLAGS_FIXED;
+-	ctxt->_eip =               GET_SMSTATE(u32, smbase, 0x7ff0);
+-
+-	for (i = 0; i < 8; i++)
+-		*reg_write(ctxt, i) = GET_SMSTATE(u32, smbase, 0x7fd0 + i * 4);
+-
+-	val = GET_SMSTATE(u32, smbase, 0x7fcc);
+-	ctxt->ops->set_dr(ctxt, 6, (val & DR6_VOLATILE) | DR6_FIXED_1);
+-	val = GET_SMSTATE(u32, smbase, 0x7fc8);
+-	ctxt->ops->set_dr(ctxt, 7, (val & DR7_VOLATILE) | DR7_FIXED_1);
+-
+-	selector =                 GET_SMSTATE(u32, smbase, 0x7fc4);
+-	set_desc_base(&desc,       GET_SMSTATE(u32, smbase, 0x7f64));
+-	set_desc_limit(&desc,      GET_SMSTATE(u32, smbase, 0x7f60));
+-	rsm_set_desc_flags(&desc,  GET_SMSTATE(u32, smbase, 0x7f5c));
+-	ctxt->ops->set_segment(ctxt, selector, &desc, 0, VCPU_SREG_TR);
+-
+-	selector =                 GET_SMSTATE(u32, smbase, 0x7fc0);
+-	set_desc_base(&desc,       GET_SMSTATE(u32, smbase, 0x7f80));
+-	set_desc_limit(&desc,      GET_SMSTATE(u32, smbase, 0x7f7c));
+-	rsm_set_desc_flags(&desc,  GET_SMSTATE(u32, smbase, 0x7f78));
+-	ctxt->ops->set_segment(ctxt, selector, &desc, 0, VCPU_SREG_LDTR);
+-
+-	dt.address =               GET_SMSTATE(u32, smbase, 0x7f74);
+-	dt.size =                  GET_SMSTATE(u32, smbase, 0x7f70);
+-	ctxt->ops->set_gdt(ctxt, &dt);
+-
+-	dt.address =               GET_SMSTATE(u32, smbase, 0x7f58);
+-	dt.size =                  GET_SMSTATE(u32, smbase, 0x7f54);
+-	ctxt->ops->set_idt(ctxt, &dt);
+-
+-	for (i = 0; i < 6; i++) {
+-		int r = rsm_load_seg_32(ctxt, smbase, i);
+-		if (r != X86EMUL_CONTINUE)
+-			return r;
+-	}
+-
+-	cr4 = GET_SMSTATE(u32, smbase, 0x7f14);
+-
+-	ctxt->ops->set_smbase(ctxt, GET_SMSTATE(u32, smbase, 0x7ef8));
+-
+-	return rsm_enter_protected_mode(ctxt, cr0, cr3, cr4);
+-}
+-
+-static int rsm_load_state_64(struct x86_emulate_ctxt *ctxt, u64 smbase)
+-{
+-	struct desc_struct desc;
+-	struct desc_ptr dt;
+-	u64 val, cr0, cr3, cr4;
+-	u32 base3;
+-	u16 selector;
+-	int i, r;
+-
+-	for (i = 0; i < 16; i++)
+-		*reg_write(ctxt, i) = GET_SMSTATE(u64, smbase, 0x7ff8 - i * 8);
+-
+-	ctxt->_eip   = GET_SMSTATE(u64, smbase, 0x7f78);
+-	ctxt->eflags = GET_SMSTATE(u32, smbase, 0x7f70) | X86_EFLAGS_FIXED;
+-
+-	val = GET_SMSTATE(u32, smbase, 0x7f68);
+-	ctxt->ops->set_dr(ctxt, 6, (val & DR6_VOLATILE) | DR6_FIXED_1);
+-	val = GET_SMSTATE(u32, smbase, 0x7f60);
+-	ctxt->ops->set_dr(ctxt, 7, (val & DR7_VOLATILE) | DR7_FIXED_1);
+-
+-	cr0 =                       GET_SMSTATE(u64, smbase, 0x7f58);
+-	cr3 =                       GET_SMSTATE(u64, smbase, 0x7f50);
+-	cr4 =                       GET_SMSTATE(u64, smbase, 0x7f48);
+-	ctxt->ops->set_smbase(ctxt, GET_SMSTATE(u32, smbase, 0x7f00));
+-	val =                       GET_SMSTATE(u64, smbase, 0x7ed0);
+-	ctxt->ops->set_msr(ctxt, MSR_EFER, val & ~EFER_LMA);
+-
+-	selector =                  GET_SMSTATE(u32, smbase, 0x7e90);
+-	rsm_set_desc_flags(&desc,   GET_SMSTATE(u32, smbase, 0x7e92) << 8);
+-	set_desc_limit(&desc,       GET_SMSTATE(u32, smbase, 0x7e94));
+-	set_desc_base(&desc,        GET_SMSTATE(u32, smbase, 0x7e98));
+-	base3 =                     GET_SMSTATE(u32, smbase, 0x7e9c);
+-	ctxt->ops->set_segment(ctxt, selector, &desc, base3, VCPU_SREG_TR);
+-
+-	dt.size =                   GET_SMSTATE(u32, smbase, 0x7e84);
+-	dt.address =                GET_SMSTATE(u64, smbase, 0x7e88);
+-	ctxt->ops->set_idt(ctxt, &dt);
+-
+-	selector =                  GET_SMSTATE(u32, smbase, 0x7e70);
+-	rsm_set_desc_flags(&desc,   GET_SMSTATE(u32, smbase, 0x7e72) << 8);
+-	set_desc_limit(&desc,       GET_SMSTATE(u32, smbase, 0x7e74));
+-	set_desc_base(&desc,        GET_SMSTATE(u32, smbase, 0x7e78));
+-	base3 =                     GET_SMSTATE(u32, smbase, 0x7e7c);
+-	ctxt->ops->set_segment(ctxt, selector, &desc, base3, VCPU_SREG_LDTR);
+-
+-	dt.size =                   GET_SMSTATE(u32, smbase, 0x7e64);
+-	dt.address =                GET_SMSTATE(u64, smbase, 0x7e68);
+-	ctxt->ops->set_gdt(ctxt, &dt);
+-
+-	r = rsm_enter_protected_mode(ctxt, cr0, cr3, cr4);
+-	if (r != X86EMUL_CONTINUE)
+-		return r;
+-
+-	for (i = 0; i < 6; i++) {
+-		r = rsm_load_seg_64(ctxt, smbase, i);
+-		if (r != X86EMUL_CONTINUE)
+-			return r;
+-	}
+-
+-	return X86EMUL_CONTINUE;
+-}
+-
+ static int em_rsm(struct x86_emulate_ctxt *ctxt)
+ {
+-	unsigned long cr0, cr4, efer;
+-	u64 smbase;
+-	int ret;
+-
+ 	if ((ctxt->ops->get_hflags(ctxt) & X86EMUL_SMM_MASK) == 0)
+ 		return emulate_ud(ctxt);
+ 
+-	/*
+-	 * Get back to real mode, to prepare a safe state in which to load
+-	 * CR0/CR3/CR4/EFER.  It's all a bit more complicated if the vCPU
+-	 * supports long mode.
+-	 */
+-	cr4 = ctxt->ops->get_cr(ctxt, 4);
+-	if (emulator_has_longmode(ctxt)) {
+-		struct desc_struct cs_desc;
+-
+-		/* Zero CR4.PCIDE before CR0.PG.  */
+-		if (cr4 & X86_CR4_PCIDE) {
+-			ctxt->ops->set_cr(ctxt, 4, cr4 & ~X86_CR4_PCIDE);
+-			cr4 &= ~X86_CR4_PCIDE;
+-		}
+-
+-		/* A 32-bit code segment is required to clear EFER.LMA.  */
+-		memset(&cs_desc, 0, sizeof(cs_desc));
+-		cs_desc.type = 0xb;
+-		cs_desc.s = cs_desc.g = cs_desc.p = 1;
+-		ctxt->ops->set_segment(ctxt, 0, &cs_desc, 0, VCPU_SREG_CS);
+-	}
+-
+-	/* For the 64-bit case, this will clear EFER.LMA.  */
+-	cr0 = ctxt->ops->get_cr(ctxt, 0);
+-	if (cr0 & X86_CR0_PE)
+-		ctxt->ops->set_cr(ctxt, 0, cr0 & ~(X86_CR0_PG | X86_CR0_PE));
+-
+-	/* Now clear CR4.PAE (which must be done before clearing EFER.LME).  */
+-	if (cr4 & X86_CR4_PAE)
+-		ctxt->ops->set_cr(ctxt, 4, cr4 & ~X86_CR4_PAE);
+-
+-	/* And finally go back to 32-bit mode.  */
+-	efer = 0;
+-	ctxt->ops->set_msr(ctxt, MSR_EFER, efer);
+-
+-	smbase = ctxt->ops->get_smbase(ctxt);
+-
+-	/*
+-	 * Give pre_leave_smm() a chance to make ISA-specific changes to the
+-	 * vCPU state (e.g. enter guest mode) before loading state from the SMM
+-	 * state-save area.
+-	 */
+-	if (ctxt->ops->pre_leave_smm(ctxt, smbase))
+-		return X86EMUL_UNHANDLEABLE;
+-
+-	if (emulator_has_longmode(ctxt))
+-		ret = rsm_load_state_64(ctxt, smbase + 0x8000);
+-	else
+-		ret = rsm_load_state_32(ctxt, smbase + 0x8000);
+-
+-	if (ret != X86EMUL_CONTINUE) {
+-		/* FIXME: should triple fault */
+-		return X86EMUL_UNHANDLEABLE;
+-	}
+-
+-	if ((ctxt->ops->get_hflags(ctxt) & X86EMUL_SMM_INSIDE_NMI_MASK) == 0)
+-		ctxt->ops->set_nmi_mask(ctxt, false);
+-
+-	ctxt->ops->set_hflags(ctxt, ctxt->ops->get_hflags(ctxt) &
+-		~(X86EMUL_SMM_INSIDE_NMI_MASK | X86EMUL_SMM_MASK));
+-	return X86EMUL_CONTINUE;
++	return ctxt->ops->leave_smm(ctxt);
+ }
+ 
+ static void
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index a419656521b6..9ad864c27398 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -102,6 +102,7 @@ static u64 __read_mostly efer_reserved_bits = ~((u64)EFER_SCE);
+ static void update_cr8_intercept(struct kvm_vcpu *vcpu);
+ static void process_nmi(struct kvm_vcpu *vcpu);
+ static void enter_smm(struct kvm_vcpu *vcpu);
++static int leave_smm(struct kvm_vcpu *vcpu);
+ static void __kvm_set_rflags(struct kvm_vcpu *vcpu, unsigned long rflags);
+ static void store_regs(struct kvm_vcpu *vcpu);
+ static int sync_regs(struct kvm_vcpu *vcpu);
+@@ -5966,6 +5967,11 @@ static int emulator_pre_leave_smm(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 	return kvm_x86_ops->pre_leave_smm(emul_to_vcpu(ctxt), smbase);
+ }
+ 
++static int emulator_leave_smm(struct x86_emulate_ctxt *ctxt)
++{
++	return leave_smm(emul_to_vcpu(ctxt));
++}
++
+ static const struct x86_emulate_ops emulate_ops = {
+ 	.read_gpr            = emulator_read_gpr,
+ 	.write_gpr           = emulator_write_gpr,
+@@ -6006,6 +6012,7 @@ static const struct x86_emulate_ops emulate_ops = {
+ 	.get_hflags          = emulator_get_hflags,
+ 	.set_hflags          = emulator_set_hflags,
+ 	.pre_leave_smm       = emulator_pre_leave_smm,
++	.leave_smm           = emulator_leave_smm,
+ };
+ 
+ static void toggle_interruptibility(struct kvm_vcpu *vcpu, u32 mask)
+@@ -7584,6 +7591,315 @@ static void enter_smm(struct kvm_vcpu *vcpu)
+ 	kvm_mmu_reset_context(vcpu);
+ }
+ 
++static int emulator_has_longmode(struct x86_emulate_ctxt *ctxt)
++{
++	u32 eax, ebx, ecx, edx;
++
++	eax = 0x80000001;
++	ecx = 0;
++	ctxt->ops->get_cpuid(ctxt, &eax, &ebx, &ecx, &edx, false);
++	return edx & bit(X86_FEATURE_LM);
++}
++
++#define GET_SMSTATE(type, smbase, offset)				  \
++	({								  \
++	 type __val;							  \
++	 int r = ctxt->ops->read_phys(ctxt, smbase + offset, &__val,      \
++				      sizeof(__val));			  \
++	 if (r != X86EMUL_CONTINUE)					  \
++		 return X86EMUL_UNHANDLEABLE;				  \
++	 __val;								  \
++	})
++
++static void rsm_set_desc_flags(struct desc_struct *desc, u32 flags)
++{
++	desc->g    = (flags >> 23) & 1;
++	desc->d    = (flags >> 22) & 1;
++	desc->l    = (flags >> 21) & 1;
++	desc->avl  = (flags >> 20) & 1;
++	desc->p    = (flags >> 15) & 1;
++	desc->dpl  = (flags >> 13) & 3;
++	desc->s    = (flags >> 12) & 1;
++	desc->type = (flags >>  8) & 15;
++}
++
++static int rsm_load_seg_32(struct x86_emulate_ctxt *ctxt, u64 smbase, int n)
++{
++	struct desc_struct desc;
++	int offset;
++	u16 selector;
++
++	selector = GET_SMSTATE(u32, smbase, 0x7fa8 + n * 4);
++
++	if (n < 3)
++		offset = 0x7f84 + n * 12;
++	else
++		offset = 0x7f2c + (n - 3) * 12;
++
++	set_desc_base(&desc,      GET_SMSTATE(u32, smbase, offset + 8));
++	set_desc_limit(&desc,     GET_SMSTATE(u32, smbase, offset + 4));
++	rsm_set_desc_flags(&desc, GET_SMSTATE(u32, smbase, offset));
++	ctxt->ops->set_segment(ctxt, selector, &desc, 0, n);
++	return X86EMUL_CONTINUE;
++}
++
++static int rsm_load_seg_64(struct x86_emulate_ctxt *ctxt, u64 smbase, int n)
++{
++	struct desc_struct desc;
++	int offset;
++	u16 selector;
++	u32 base3;
++
++	offset = 0x7e00 + n * 16;
++
++	selector =                GET_SMSTATE(u16, smbase, offset);
++	rsm_set_desc_flags(&desc, GET_SMSTATE(u16, smbase, offset + 2) << 8);
++	set_desc_limit(&desc,     GET_SMSTATE(u32, smbase, offset + 4));
++	set_desc_base(&desc,      GET_SMSTATE(u32, smbase, offset + 8));
++	base3 =                   GET_SMSTATE(u32, smbase, offset + 12);
++
++	ctxt->ops->set_segment(ctxt, selector, &desc, base3, n);
++	return X86EMUL_CONTINUE;
++}
++
++static int rsm_enter_protected_mode(struct x86_emulate_ctxt *ctxt,
++				    u64 cr0, u64 cr3, u64 cr4)
++{
++	int bad;
++	u64 pcid;
++
++	/* In order to later set CR4.PCIDE, CR3[11:0] must be zero.  */
++	pcid = 0;
++	if (cr4 & X86_CR4_PCIDE) {
++		pcid = cr3 & 0xfff;
++		cr3 &= ~0xfff;
++	}
++
++	bad = ctxt->ops->set_cr(ctxt, 3, cr3);
++	if (bad)
++		return X86EMUL_UNHANDLEABLE;
++
++	/*
++	 * First enable PAE, long mode needs it before CR0.PG = 1 is set.
++	 * Then enable protected mode.	However, PCID cannot be enabled
++	 * if EFER.LMA=0, so set it separately.
++	 */
++	bad = ctxt->ops->set_cr(ctxt, 4, cr4 & ~X86_CR4_PCIDE);
++	if (bad)
++		return X86EMUL_UNHANDLEABLE;
++
++	bad = ctxt->ops->set_cr(ctxt, 0, cr0);
++	if (bad)
++		return X86EMUL_UNHANDLEABLE;
++
++	if (cr4 & X86_CR4_PCIDE) {
++		bad = ctxt->ops->set_cr(ctxt, 4, cr4);
++		if (bad)
++			return X86EMUL_UNHANDLEABLE;
++		if (pcid) {
++			bad = ctxt->ops->set_cr(ctxt, 3, cr3 | pcid);
++			if (bad)
++				return X86EMUL_UNHANDLEABLE;
++		}
++
++	}
++
++	return X86EMUL_CONTINUE;
++}
++
++static ulong *reg_write(struct x86_emulate_ctxt *ctxt, unsigned nr)
++{
++	ctxt->regs_valid |= 1 << nr;
++	ctxt->regs_dirty |= 1 << nr;
++	return &ctxt->_regs[nr];
++}
++
++static int rsm_load_state_32(struct x86_emulate_ctxt *ctxt, u64 smbase)
++{
++	struct desc_struct desc;
++	struct desc_ptr dt;
++	u16 selector;
++	u32 val, cr0, cr3, cr4;
++	int i;
++
++	cr0 =                      GET_SMSTATE(u32, smbase, 0x7ffc);
++	cr3 =                      GET_SMSTATE(u32, smbase, 0x7ff8);
++	ctxt->eflags =             GET_SMSTATE(u32, smbase, 0x7ff4) | X86_EFLAGS_FIXED;
++	ctxt->_eip =               GET_SMSTATE(u32, smbase, 0x7ff0);
++
++	for (i = 0; i < 8; i++)
++		*reg_write(ctxt, i) = GET_SMSTATE(u32, smbase, 0x7fd0 + i * 4);
++
++	val = GET_SMSTATE(u32, smbase, 0x7fcc);
++	ctxt->ops->set_dr(ctxt, 6, (val & DR6_VOLATILE) | DR6_FIXED_1);
++	val = GET_SMSTATE(u32, smbase, 0x7fc8);
++	ctxt->ops->set_dr(ctxt, 7, (val & DR7_VOLATILE) | DR7_FIXED_1);
++
++	selector =                 GET_SMSTATE(u32, smbase, 0x7fc4);
++	set_desc_base(&desc,       GET_SMSTATE(u32, smbase, 0x7f64));
++	set_desc_limit(&desc,      GET_SMSTATE(u32, smbase, 0x7f60));
++	rsm_set_desc_flags(&desc,  GET_SMSTATE(u32, smbase, 0x7f5c));
++	ctxt->ops->set_segment(ctxt, selector, &desc, 0, VCPU_SREG_TR);
++
++	selector =                 GET_SMSTATE(u32, smbase, 0x7fc0);
++	set_desc_base(&desc,       GET_SMSTATE(u32, smbase, 0x7f80));
++	set_desc_limit(&desc,      GET_SMSTATE(u32, smbase, 0x7f7c));
++	rsm_set_desc_flags(&desc,  GET_SMSTATE(u32, smbase, 0x7f78));
++	ctxt->ops->set_segment(ctxt, selector, &desc, 0, VCPU_SREG_LDTR);
++
++	dt.address =               GET_SMSTATE(u32, smbase, 0x7f74);
++	dt.size =                  GET_SMSTATE(u32, smbase, 0x7f70);
++	ctxt->ops->set_gdt(ctxt, &dt);
++
++	dt.address =               GET_SMSTATE(u32, smbase, 0x7f58);
++	dt.size =                  GET_SMSTATE(u32, smbase, 0x7f54);
++	ctxt->ops->set_idt(ctxt, &dt);
++
++	for (i = 0; i < 6; i++) {
++		int r = rsm_load_seg_32(ctxt, smbase, i);
++		if (r != X86EMUL_CONTINUE)
++			return r;
++	}
++
++	cr4 = GET_SMSTATE(u32, smbase, 0x7f14);
++
++	ctxt->ops->set_smbase(ctxt, GET_SMSTATE(u32, smbase, 0x7ef8));
++
++	return rsm_enter_protected_mode(ctxt, cr0, cr3, cr4);
++}
++
++static int rsm_load_state_64(struct x86_emulate_ctxt *ctxt, u64 smbase)
++{
++	struct desc_struct desc;
++	struct desc_ptr dt;
++	u64 val, cr0, cr3, cr4;
++	u32 base3;
++	u16 selector;
++	int i, r;
++
++	for (i = 0; i < 16; i++)
++		*reg_write(ctxt, i) = GET_SMSTATE(u64, smbase, 0x7ff8 - i * 8);
++
++	ctxt->_eip   = GET_SMSTATE(u64, smbase, 0x7f78);
++	ctxt->eflags = GET_SMSTATE(u32, smbase, 0x7f70) | X86_EFLAGS_FIXED;
++
++	val = GET_SMSTATE(u32, smbase, 0x7f68);
++	ctxt->ops->set_dr(ctxt, 6, (val & DR6_VOLATILE) | DR6_FIXED_1);
++	val = GET_SMSTATE(u32, smbase, 0x7f60);
++	ctxt->ops->set_dr(ctxt, 7, (val & DR7_VOLATILE) | DR7_FIXED_1);
++
++	cr0 =                       GET_SMSTATE(u64, smbase, 0x7f58);
++	cr3 =                       GET_SMSTATE(u64, smbase, 0x7f50);
++	cr4 =                       GET_SMSTATE(u64, smbase, 0x7f48);
++	ctxt->ops->set_smbase(ctxt, GET_SMSTATE(u32, smbase, 0x7f00));
++	val =                       GET_SMSTATE(u64, smbase, 0x7ed0);
++	ctxt->ops->set_msr(ctxt, MSR_EFER, val & ~EFER_LMA);
++
++	selector =                  GET_SMSTATE(u32, smbase, 0x7e90);
++	rsm_set_desc_flags(&desc,   GET_SMSTATE(u32, smbase, 0x7e92) << 8);
++	set_desc_limit(&desc,       GET_SMSTATE(u32, smbase, 0x7e94));
++	set_desc_base(&desc,        GET_SMSTATE(u32, smbase, 0x7e98));
++	base3 =                     GET_SMSTATE(u32, smbase, 0x7e9c);
++	ctxt->ops->set_segment(ctxt, selector, &desc, base3, VCPU_SREG_TR);
++
++	dt.size =                   GET_SMSTATE(u32, smbase, 0x7e84);
++	dt.address =                GET_SMSTATE(u64, smbase, 0x7e88);
++	ctxt->ops->set_idt(ctxt, &dt);
++
++	selector =                  GET_SMSTATE(u32, smbase, 0x7e70);
++	rsm_set_desc_flags(&desc,   GET_SMSTATE(u32, smbase, 0x7e72) << 8);
++	set_desc_limit(&desc,       GET_SMSTATE(u32, smbase, 0x7e74));
++	set_desc_base(&desc,        GET_SMSTATE(u32, smbase, 0x7e78));
++	base3 =                     GET_SMSTATE(u32, smbase, 0x7e7c);
++	ctxt->ops->set_segment(ctxt, selector, &desc, base3, VCPU_SREG_LDTR);
++
++	dt.size =                   GET_SMSTATE(u32, smbase, 0x7e64);
++	dt.address =                GET_SMSTATE(u64, smbase, 0x7e68);
++	ctxt->ops->set_gdt(ctxt, &dt);
++
++	r = rsm_enter_protected_mode(ctxt, cr0, cr3, cr4);
++	if (r != X86EMUL_CONTINUE)
++		return r;
++
++	for (i = 0; i < 6; i++) {
++		r = rsm_load_seg_64(ctxt, smbase, i);
++		if (r != X86EMUL_CONTINUE)
++			return r;
++	}
++
++	return X86EMUL_CONTINUE;
++}
++
++static int leave_smm(struct kvm_vcpu *vcpu)
++{
++	struct x86_emulate_ctxt *ctxt = &vcpu->arch.emulate_ctxt;
++	unsigned long cr0, cr4, efer;
++	u64 smbase;
++	int ret;
++
++	/*
++	 * Get back to real mode, to prepare a safe state in which to load
++	 * CR0/CR3/CR4/EFER.  It's all a bit more complicated if the vCPU
++	 * supports long mode.
++	 */
++	cr4 = ctxt->ops->get_cr(ctxt, 4);
++	if (emulator_has_longmode(ctxt)) {
++		struct desc_struct cs_desc;
++
++		/* Zero CR4.PCIDE before CR0.PG.  */
++		if (cr4 & X86_CR4_PCIDE) {
++			ctxt->ops->set_cr(ctxt, 4, cr4 & ~X86_CR4_PCIDE);
++			cr4 &= ~X86_CR4_PCIDE;
++		}
++
++		/* A 32-bit code segment is required to clear EFER.LMA.  */
++		memset(&cs_desc, 0, sizeof(cs_desc));
++		cs_desc.type = 0xb;
++		cs_desc.s = cs_desc.g = cs_desc.p = 1;
++		ctxt->ops->set_segment(ctxt, 0, &cs_desc, 0, VCPU_SREG_CS);
++	}
++
++	/* For the 64-bit case, this will clear EFER.LMA.  */
++	cr0 = ctxt->ops->get_cr(ctxt, 0);
++	if (cr0 & X86_CR0_PE)
++		ctxt->ops->set_cr(ctxt, 0, cr0 & ~(X86_CR0_PG | X86_CR0_PE));
++
++	/* Now clear CR4.PAE (which must be done before clearing EFER.LME).  */
++	if (cr4 & X86_CR4_PAE)
++		ctxt->ops->set_cr(ctxt, 4, cr4 & ~X86_CR4_PAE);
++
++	/* And finally go back to 32-bit mode.  */
++	efer = 0;
++	ctxt->ops->set_msr(ctxt, MSR_EFER, efer);
++
++	smbase = ctxt->ops->get_smbase(ctxt);
++
++	/*
++	 * Give pre_leave_smm() a chance to make ISA-specific changes to the
++	 * vCPU state (e.g. enter guest mode) before loading state from the SMM
++	 * state-save area.
++	 */
++	if (ctxt->ops->pre_leave_smm(ctxt, smbase))
++		return X86EMUL_UNHANDLEABLE;
++
++	if (emulator_has_longmode(ctxt))
++		ret = rsm_load_state_64(ctxt, smbase + 0x8000);
++	else
++		ret = rsm_load_state_32(ctxt, smbase + 0x8000);
++
++	if (ret != X86EMUL_CONTINUE) {
++		/* FIXME: should triple fault */
++		return X86EMUL_UNHANDLEABLE;
++	}
++
++	if ((ctxt->ops->get_hflags(ctxt) & X86EMUL_SMM_INSIDE_NMI_MASK) == 0)
++		ctxt->ops->set_nmi_mask(ctxt, false);
++
++	ctxt->ops->set_hflags(ctxt, ctxt->ops->get_hflags(ctxt) &
++		~(X86EMUL_SMM_INSIDE_NMI_MASK | X86EMUL_SMM_MASK));
++	return X86EMUL_CONTINUE;
++}
++
+ static void process_smi(struct kvm_vcpu *vcpu)
+ {
+ 	vcpu->arch.smi_pending = true;
+
+From patchwork Thu Mar 28 17:55:41 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875655
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9E338139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:32 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 8607B28CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:32 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 7A53028D17; Thu, 28 Mar 2019 17:56:32 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2E44E28CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:32 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727181AbfC1R4G (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:06 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7260 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726298AbfC1R4F (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:05 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:00 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691167"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:00 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 02/18] KVM: x86: Drop emulator_has_longmode()
+Date: Thu, 28 Mar 2019 10:55:41 -0700
+Message-Id: <20190328175557.14408-3-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/x86.c | 14 ++------------
+ 1 file changed, 2 insertions(+), 12 deletions(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 9ad864c27398..45ea253f41f8 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7591,16 +7591,6 @@ static void enter_smm(struct kvm_vcpu *vcpu)
+ 	kvm_mmu_reset_context(vcpu);
+ }
+ 
+-static int emulator_has_longmode(struct x86_emulate_ctxt *ctxt)
+-{
+-	u32 eax, ebx, ecx, edx;
+-
+-	eax = 0x80000001;
+-	ecx = 0;
+-	ctxt->ops->get_cpuid(ctxt, &eax, &ebx, &ecx, &edx, false);
+-	return edx & bit(X86_FEATURE_LM);
+-}
+-
+ #define GET_SMSTATE(type, smbase, offset)				  \
+ 	({								  \
+ 	 type __val;							  \
+@@ -7843,7 +7833,7 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 	 * supports long mode.
+ 	 */
+ 	cr4 = ctxt->ops->get_cr(ctxt, 4);
+-	if (emulator_has_longmode(ctxt)) {
++	if (guest_cpuid_has(vcpu, X86_FEATURE_LM)) {
+ 		struct desc_struct cs_desc;
+ 
+ 		/* Zero CR4.PCIDE before CR0.PG.  */
+@@ -7882,7 +7872,7 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 	if (ctxt->ops->pre_leave_smm(ctxt, smbase))
+ 		return X86EMUL_UNHANDLEABLE;
+ 
+-	if (emulator_has_longmode(ctxt))
++	if (guest_cpuid_has(vcpu, X86_FEATURE_LM))
+ 		ret = rsm_load_state_64(ctxt, smbase + 0x8000);
+ 	else
+ 		ret = rsm_load_state_32(ctxt, smbase + 0x8000);
+
+From patchwork Thu Mar 28 17:55:42 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875657
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 4D444139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:34 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3540328CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:34 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 2835728D27; Thu, 28 Mar 2019 17:56:34 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A5AF628CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:33 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727018AbfC1R4G (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:06 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7265 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726453AbfC1R4G (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:06 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:01 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691183"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:00 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 03/18] KVM: x86: Drop emulator_pre_leave_smm()
+Date: Thu, 28 Mar 2019 10:55:42 -0700
+Message-Id: <20190328175557.14408-4-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_emulate.h |  3 ---
+ arch/x86/kvm/x86.c                 | 32 ++++++------------------------
+ 2 files changed, 6 insertions(+), 29 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_emulate.h b/arch/x86/include/asm/kvm_emulate.h
+index 4622ac0028d1..51e474944d59 100644
+--- a/arch/x86/include/asm/kvm_emulate.h
++++ b/arch/x86/include/asm/kvm_emulate.h
+@@ -207,8 +207,6 @@ struct x86_emulate_ops {
+ 	int (*cpl)(struct x86_emulate_ctxt *ctxt);
+ 	int (*get_dr)(struct x86_emulate_ctxt *ctxt, int dr, ulong *dest);
+ 	int (*set_dr)(struct x86_emulate_ctxt *ctxt, int dr, ulong value);
+-	u64 (*get_smbase)(struct x86_emulate_ctxt *ctxt);
+-	void (*set_smbase)(struct x86_emulate_ctxt *ctxt, u64 smbase);
+ 	int (*set_msr)(struct x86_emulate_ctxt *ctxt, u32 msr_index, u64 data);
+ 	int (*get_msr)(struct x86_emulate_ctxt *ctxt, u32 msr_index, u64 *pdata);
+ 	int (*check_pmc)(struct x86_emulate_ctxt *ctxt, u32 pmc);
+@@ -226,7 +224,6 @@ struct x86_emulate_ops {
+ 
+ 	unsigned (*get_hflags)(struct x86_emulate_ctxt *ctxt);
+ 	void (*set_hflags)(struct x86_emulate_ctxt *ctxt, unsigned hflags);
+-	int (*pre_leave_smm)(struct x86_emulate_ctxt *ctxt, u64 smbase);
+ 	int (*leave_smm)(struct x86_emulate_ctxt *ctxt);
+ 
+ };
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 45ea253f41f8..bef35c3a79bf 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -5893,20 +5893,6 @@ static int emulator_set_msr(struct x86_emulate_ctxt *ctxt,
+ 	return kvm_set_msr(emul_to_vcpu(ctxt), &msr);
+ }
+ 
+-static u64 emulator_get_smbase(struct x86_emulate_ctxt *ctxt)
+-{
+-	struct kvm_vcpu *vcpu = emul_to_vcpu(ctxt);
+-
+-	return vcpu->arch.smbase;
+-}
+-
+-static void emulator_set_smbase(struct x86_emulate_ctxt *ctxt, u64 smbase)
+-{
+-	struct kvm_vcpu *vcpu = emul_to_vcpu(ctxt);
+-
+-	vcpu->arch.smbase = smbase;
+-}
+-
+ static int emulator_check_pmc(struct x86_emulate_ctxt *ctxt,
+ 			      u32 pmc)
+ {
+@@ -5962,11 +5948,6 @@ static void emulator_set_hflags(struct x86_emulate_ctxt *ctxt, unsigned emul_fla
+ 	kvm_set_hflags(emul_to_vcpu(ctxt), emul_flags);
+ }
+ 
+-static int emulator_pre_leave_smm(struct x86_emulate_ctxt *ctxt, u64 smbase)
+-{
+-	return kvm_x86_ops->pre_leave_smm(emul_to_vcpu(ctxt), smbase);
+-}
+-
+ static int emulator_leave_smm(struct x86_emulate_ctxt *ctxt)
+ {
+ 	return leave_smm(emul_to_vcpu(ctxt));
+@@ -5997,8 +5978,6 @@ static const struct x86_emulate_ops emulate_ops = {
+ 	.cpl                 = emulator_get_cpl,
+ 	.get_dr              = emulator_get_dr,
+ 	.set_dr              = emulator_set_dr,
+-	.get_smbase          = emulator_get_smbase,
+-	.set_smbase          = emulator_set_smbase,
+ 	.set_msr             = emulator_set_msr,
+ 	.get_msr             = emulator_get_msr,
+ 	.check_pmc	     = emulator_check_pmc,
+@@ -6011,7 +5990,6 @@ static const struct x86_emulate_ops emulate_ops = {
+ 	.set_nmi_mask        = emulator_set_nmi_mask,
+ 	.get_hflags          = emulator_get_hflags,
+ 	.set_hflags          = emulator_set_hflags,
+-	.pre_leave_smm       = emulator_pre_leave_smm,
+ 	.leave_smm           = emulator_leave_smm,
+ };
+ 
+@@ -7706,6 +7684,7 @@ static ulong *reg_write(struct x86_emulate_ctxt *ctxt, unsigned nr)
+ 
+ static int rsm_load_state_32(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ {
++	struct kvm_vcpu *vcpu = emul_to_vcpu(ctxt);
+ 	struct desc_struct desc;
+ 	struct desc_ptr dt;
+ 	u16 selector;
+@@ -7753,13 +7732,14 @@ static int rsm_load_state_32(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 
+ 	cr4 = GET_SMSTATE(u32, smbase, 0x7f14);
+ 
+-	ctxt->ops->set_smbase(ctxt, GET_SMSTATE(u32, smbase, 0x7ef8));
++	vcpu->arch.smbase = GET_SMSTATE(u32, smbase, 0x7ef8);
+ 
+ 	return rsm_enter_protected_mode(ctxt, cr0, cr3, cr4);
+ }
+ 
+ static int rsm_load_state_64(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ {
++	struct kvm_vcpu *vcpu = emul_to_vcpu(ctxt);
+ 	struct desc_struct desc;
+ 	struct desc_ptr dt;
+ 	u64 val, cr0, cr3, cr4;
+@@ -7781,7 +7761,7 @@ static int rsm_load_state_64(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 	cr0 =                       GET_SMSTATE(u64, smbase, 0x7f58);
+ 	cr3 =                       GET_SMSTATE(u64, smbase, 0x7f50);
+ 	cr4 =                       GET_SMSTATE(u64, smbase, 0x7f48);
+-	ctxt->ops->set_smbase(ctxt, GET_SMSTATE(u32, smbase, 0x7f00));
++	vcpu->arch.smbase =         GET_SMSTATE(u32, smbase, 0x7f00);
+ 	val =                       GET_SMSTATE(u64, smbase, 0x7ed0);
+ 	ctxt->ops->set_msr(ctxt, MSR_EFER, val & ~EFER_LMA);
+ 
+@@ -7862,14 +7842,14 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 	efer = 0;
+ 	ctxt->ops->set_msr(ctxt, MSR_EFER, efer);
+ 
+-	smbase = ctxt->ops->get_smbase(ctxt);
++	smbase = vcpu->arch.smbase;
+ 
+ 	/*
+ 	 * Give pre_leave_smm() a chance to make ISA-specific changes to the
+ 	 * vCPU state (e.g. enter guest mode) before loading state from the SMM
+ 	 * state-save area.
+ 	 */
+-	if (ctxt->ops->pre_leave_smm(ctxt, smbase))
++	if (kvm_x86_ops->pre_leave_smm(vcpu, smbase))
+ 		return X86EMUL_UNHANDLEABLE;
+ 
+ 	if (guest_cpuid_has(vcpu, X86_FEATURE_LM))
+
+From patchwork Thu Mar 28 17:55:43 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875641
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 33E1A1708
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:20 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1CE1328CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:20 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 10E3128D17; Thu, 28 Mar 2019 17:56:20 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B5D7A28CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727502AbfC1R4H (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:07 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7260 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726692AbfC1R4G (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:06 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:01 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691186"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:01 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 04/18] KVM: x86: Drop emulator_set_hflags()
+Date: Thu, 28 Mar 2019 10:55:43 -0700
+Message-Id: <20190328175557.14408-5-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_emulate.h | 1 -
+ arch/x86/kvm/x86.c                 | 8 +-------
+ 2 files changed, 1 insertion(+), 8 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_emulate.h b/arch/x86/include/asm/kvm_emulate.h
+index 51e474944d59..e69ad18f8bf9 100644
+--- a/arch/x86/include/asm/kvm_emulate.h
++++ b/arch/x86/include/asm/kvm_emulate.h
+@@ -223,7 +223,6 @@ struct x86_emulate_ops {
+ 	void (*set_nmi_mask)(struct x86_emulate_ctxt *ctxt, bool masked);
+ 
+ 	unsigned (*get_hflags)(struct x86_emulate_ctxt *ctxt);
+-	void (*set_hflags)(struct x86_emulate_ctxt *ctxt, unsigned hflags);
+ 	int (*leave_smm)(struct x86_emulate_ctxt *ctxt);
+ 
+ };
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index bef35c3a79bf..dd8bdd9d934f 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -5943,11 +5943,6 @@ static unsigned emulator_get_hflags(struct x86_emulate_ctxt *ctxt)
+ 	return emul_to_vcpu(ctxt)->arch.hflags;
+ }
+ 
+-static void emulator_set_hflags(struct x86_emulate_ctxt *ctxt, unsigned emul_flags)
+-{
+-	kvm_set_hflags(emul_to_vcpu(ctxt), emul_flags);
+-}
+-
+ static int emulator_leave_smm(struct x86_emulate_ctxt *ctxt)
+ {
+ 	return leave_smm(emul_to_vcpu(ctxt));
+@@ -5989,7 +5984,6 @@ static const struct x86_emulate_ops emulate_ops = {
+ 	.get_cpuid           = emulator_get_cpuid,
+ 	.set_nmi_mask        = emulator_set_nmi_mask,
+ 	.get_hflags          = emulator_get_hflags,
+-	.set_hflags          = emulator_set_hflags,
+ 	.leave_smm           = emulator_leave_smm,
+ };
+ 
+@@ -7865,7 +7859,7 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 	if ((ctxt->ops->get_hflags(ctxt) & X86EMUL_SMM_INSIDE_NMI_MASK) == 0)
+ 		ctxt->ops->set_nmi_mask(ctxt, false);
+ 
+-	ctxt->ops->set_hflags(ctxt, ctxt->ops->get_hflags(ctxt) &
++	kvm_set_hflags(vcpu, ctxt->ops->get_hflags(ctxt) &
+ 		~(X86EMUL_SMM_INSIDE_NMI_MASK | X86EMUL_SMM_MASK));
+ 	return X86EMUL_CONTINUE;
+ }
+
+From patchwork Thu Mar 28 17:55:44 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875627
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id DE92817E0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:09 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C585F28CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:09 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id B9ABA28D17; Thu, 28 Mar 2019 17:56:09 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 558FB28D27
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:09 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727592AbfC1R4I (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:08 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7265 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726715AbfC1R4G (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:06 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:01 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691187"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:01 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 05/18] KVM: x86: Add emulator_is_smm()
+Date: Thu, 28 Mar 2019 10:55:44 -0700
+Message-Id: <20190328175557.14408-6-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_emulate.h | 1 +
+ arch/x86/kvm/emulate.c             | 2 +-
+ arch/x86/kvm/x86.c                 | 6 ++++++
+ 3 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/kvm_emulate.h b/arch/x86/include/asm/kvm_emulate.h
+index e69ad18f8bf9..437ba2cc29f5 100644
+--- a/arch/x86/include/asm/kvm_emulate.h
++++ b/arch/x86/include/asm/kvm_emulate.h
+@@ -223,6 +223,7 @@ struct x86_emulate_ops {
+ 	void (*set_nmi_mask)(struct x86_emulate_ctxt *ctxt, bool masked);
+ 
+ 	unsigned (*get_hflags)(struct x86_emulate_ctxt *ctxt);
++	bool (*is_smm)(struct x86_emulate_ctxt *ctxt);
+ 	int (*leave_smm)(struct x86_emulate_ctxt *ctxt);
+ 
+ };
+diff --git a/arch/x86/kvm/emulate.c b/arch/x86/kvm/emulate.c
+index d2c5510d9ac3..1c0c901db893 100644
+--- a/arch/x86/kvm/emulate.c
++++ b/arch/x86/kvm/emulate.c
+@@ -2331,7 +2331,7 @@ static int em_lseg(struct x86_emulate_ctxt *ctxt)
+ 
+ static int em_rsm(struct x86_emulate_ctxt *ctxt)
+ {
+-	if ((ctxt->ops->get_hflags(ctxt) & X86EMUL_SMM_MASK) == 0)
++	if (!ctxt->ops->is_smm(ctxt))
+ 		return emulate_ud(ctxt);
+ 
+ 	return ctxt->ops->leave_smm(ctxt);
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index dd8bdd9d934f..0c7b959d7dc6 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -5943,6 +5943,11 @@ static unsigned emulator_get_hflags(struct x86_emulate_ctxt *ctxt)
+ 	return emul_to_vcpu(ctxt)->arch.hflags;
+ }
+ 
++static bool emulator_is_smm(struct x86_emulate_ctxt *ctxt)
++{
++	return emul_to_vcpu(ctxt)->arch.hflags & HF_SMM_MASK;
++}
++
+ static int emulator_leave_smm(struct x86_emulate_ctxt *ctxt)
+ {
+ 	return leave_smm(emul_to_vcpu(ctxt));
+@@ -5984,6 +5989,7 @@ static const struct x86_emulate_ops emulate_ops = {
+ 	.get_cpuid           = emulator_get_cpuid,
+ 	.set_nmi_mask        = emulator_set_nmi_mask,
+ 	.get_hflags          = emulator_get_hflags,
++	.is_smm              = emulator_is_smm,
+ 	.leave_smm           = emulator_leave_smm,
+ };
+ 
+
+From patchwork Thu Mar 28 17:55:45 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875659
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 0BC4F139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:36 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E775128CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:35 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id DBDC328D32; Thu, 28 Mar 2019 17:56:35 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7711B28CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:35 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727724AbfC1R4d (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:33 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7260 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726969AbfC1R4G (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:06 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:02 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691189"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:01 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 06/18] KVM: x86: Add emulator_is_guest_mode()
+Date: Thu, 28 Mar 2019 10:55:45 -0700
+Message-Id: <20190328175557.14408-7-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_emulate.h |  1 +
+ arch/x86/kvm/emulate.c             | 10 +++++-----
+ arch/x86/kvm/x86.c                 |  6 ++++++
+ 3 files changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_emulate.h b/arch/x86/include/asm/kvm_emulate.h
+index 437ba2cc29f5..b76a79febd6a 100644
+--- a/arch/x86/include/asm/kvm_emulate.h
++++ b/arch/x86/include/asm/kvm_emulate.h
+@@ -223,6 +223,7 @@ struct x86_emulate_ops {
+ 	void (*set_nmi_mask)(struct x86_emulate_ctxt *ctxt, bool masked);
+ 
+ 	unsigned (*get_hflags)(struct x86_emulate_ctxt *ctxt);
++	bool (*is_guest_mode)(struct x86_emulate_ctxt *ctxt);
+ 	bool (*is_smm)(struct x86_emulate_ctxt *ctxt);
+ 	int (*leave_smm)(struct x86_emulate_ctxt *ctxt);
+ 
+diff --git a/arch/x86/kvm/emulate.c b/arch/x86/kvm/emulate.c
+index 1c0c901db893..874b7460ad75 100644
+--- a/arch/x86/kvm/emulate.c
++++ b/arch/x86/kvm/emulate.c
+@@ -5150,7 +5150,7 @@ int x86_emulate_insn(struct x86_emulate_ctxt *ctxt)
+ 	const struct x86_emulate_ops *ops = ctxt->ops;
+ 	int rc = X86EMUL_CONTINUE;
+ 	int saved_dst_type = ctxt->dst.type;
+-	unsigned emul_flags;
++	bool guest_mode;
+ 
+ 	ctxt->mem_read.pos = 0;
+ 
+@@ -5165,7 +5165,7 @@ int x86_emulate_insn(struct x86_emulate_ctxt *ctxt)
+ 		goto done;
+ 	}
+ 
+-	emul_flags = ctxt->ops->get_hflags(ctxt);
++	guest_mode = ctxt->ops->is_guest_mode(ctxt);
+ 	if (unlikely(ctxt->d &
+ 		     (No64|Undefined|Sse|Mmx|Intercept|CheckPerm|Priv|Prot|String))) {
+ 		if ((ctxt->mode == X86EMUL_MODE_PROT64 && (ctxt->d & No64)) ||
+@@ -5199,7 +5199,7 @@ int x86_emulate_insn(struct x86_emulate_ctxt *ctxt)
+ 				fetch_possible_mmx_operand(ctxt, &ctxt->dst);
+ 		}
+ 
+-		if (unlikely(emul_flags & X86EMUL_GUEST_MASK) && ctxt->intercept) {
++		if (unlikely(guest_mode) && ctxt->intercept) {
+ 			rc = emulator_check_intercept(ctxt, ctxt->intercept,
+ 						      X86_ICPT_PRE_EXCEPT);
+ 			if (rc != X86EMUL_CONTINUE)
+@@ -5228,7 +5228,7 @@ int x86_emulate_insn(struct x86_emulate_ctxt *ctxt)
+ 				goto done;
+ 		}
+ 
+-		if (unlikely(emul_flags & X86EMUL_GUEST_MASK) && (ctxt->d & Intercept)) {
++		if (unlikely(guest_mode) && (ctxt->d & Intercept)) {
+ 			rc = emulator_check_intercept(ctxt, ctxt->intercept,
+ 						      X86_ICPT_POST_EXCEPT);
+ 			if (rc != X86EMUL_CONTINUE)
+@@ -5282,7 +5282,7 @@ int x86_emulate_insn(struct x86_emulate_ctxt *ctxt)
+ 
+ special_insn:
+ 
+-	if (unlikely(emul_flags & X86EMUL_GUEST_MASK) && (ctxt->d & Intercept)) {
++	if (unlikely(guest_mode) && (ctxt->d & Intercept)) {
+ 		rc = emulator_check_intercept(ctxt, ctxt->intercept,
+ 					      X86_ICPT_POST_MEMACCESS);
+ 		if (rc != X86EMUL_CONTINUE)
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 0c7b959d7dc6..957bd9371561 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -5943,6 +5943,11 @@ static unsigned emulator_get_hflags(struct x86_emulate_ctxt *ctxt)
+ 	return emul_to_vcpu(ctxt)->arch.hflags;
+ }
+ 
++static bool emulator_is_guest_mode(struct x86_emulate_ctxt *ctxt)
++{
++	return emul_to_vcpu(ctxt)->arch.hflags & HF_GUEST_MASK;
++}
++
+ static bool emulator_is_smm(struct x86_emulate_ctxt *ctxt)
+ {
+ 	return emul_to_vcpu(ctxt)->arch.hflags & HF_SMM_MASK;
+@@ -5989,6 +5994,7 @@ static const struct x86_emulate_ops emulate_ops = {
+ 	.get_cpuid           = emulator_get_cpuid,
+ 	.set_nmi_mask        = emulator_set_nmi_mask,
+ 	.get_hflags          = emulator_get_hflags,
++	.is_guest_mode       = emulator_is_guest_mode,
+ 	.is_smm              = emulator_is_smm,
+ 	.leave_smm           = emulator_leave_smm,
+ };
+
+From patchwork Thu Mar 28 17:55:46 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875653
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9FACE17E0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:30 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 87C2A28CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:30 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 7C4AD28D17; Thu, 28 Mar 2019 17:56:30 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1C65028CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:30 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727723AbfC1R43 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:29 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7265 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726453AbfC1R4H (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:07 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:02 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691194"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:02 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 07/18] KVM: x86: Drop emulator_get_hflags()
+Date: Thu, 28 Mar 2019 10:55:46 -0700
+Message-Id: <20190328175557.14408-8-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_emulate.h |  6 ------
+ arch/x86/kvm/x86.c                 | 15 +++------------
+ 2 files changed, 3 insertions(+), 18 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_emulate.h b/arch/x86/include/asm/kvm_emulate.h
+index b76a79febd6a..f436ce5319cd 100644
+--- a/arch/x86/include/asm/kvm_emulate.h
++++ b/arch/x86/include/asm/kvm_emulate.h
+@@ -222,7 +222,6 @@ struct x86_emulate_ops {
+ 			  u32 *ecx, u32 *edx, bool check_limit);
+ 	void (*set_nmi_mask)(struct x86_emulate_ctxt *ctxt, bool masked);
+ 
+-	unsigned (*get_hflags)(struct x86_emulate_ctxt *ctxt);
+ 	bool (*is_guest_mode)(struct x86_emulate_ctxt *ctxt);
+ 	bool (*is_smm)(struct x86_emulate_ctxt *ctxt);
+ 	int (*leave_smm)(struct x86_emulate_ctxt *ctxt);
+@@ -280,11 +279,6 @@ enum x86emul_mode {
+ 	X86EMUL_MODE_PROT64,	/* 64-bit (long) mode.    */
+ };
+ 
+-/* These match some of the HF_* flags defined in kvm_host.h  */
+-#define X86EMUL_GUEST_MASK           (1 << 5) /* VCPU is in guest-mode */
+-#define X86EMUL_SMM_MASK             (1 << 6)
+-#define X86EMUL_SMM_INSIDE_NMI_MASK  (1 << 7)
+-
+ struct x86_emulate_ctxt {
+ 	const struct x86_emulate_ops *ops;
+ 
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 957bd9371561..d6dd701c471f 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -5938,11 +5938,6 @@ static void emulator_set_nmi_mask(struct x86_emulate_ctxt *ctxt, bool masked)
+ 	kvm_x86_ops->set_nmi_mask(emul_to_vcpu(ctxt), masked);
+ }
+ 
+-static unsigned emulator_get_hflags(struct x86_emulate_ctxt *ctxt)
+-{
+-	return emul_to_vcpu(ctxt)->arch.hflags;
+-}
+-
+ static bool emulator_is_guest_mode(struct x86_emulate_ctxt *ctxt)
+ {
+ 	return emul_to_vcpu(ctxt)->arch.hflags & HF_GUEST_MASK;
+@@ -5993,7 +5988,6 @@ static const struct x86_emulate_ops emulate_ops = {
+ 	.intercept           = emulator_intercept,
+ 	.get_cpuid           = emulator_get_cpuid,
+ 	.set_nmi_mask        = emulator_set_nmi_mask,
+-	.get_hflags          = emulator_get_hflags,
+ 	.is_guest_mode       = emulator_is_guest_mode,
+ 	.is_smm              = emulator_is_smm,
+ 	.leave_smm           = emulator_leave_smm,
+@@ -6048,9 +6042,6 @@ static void init_emulate_ctxt(struct kvm_vcpu *vcpu)
+ 		     (cs_l && is_long_mode(vcpu))	? X86EMUL_MODE_PROT64 :
+ 		     cs_db				? X86EMUL_MODE_PROT32 :
+ 							  X86EMUL_MODE_PROT16;
+-	BUILD_BUG_ON(HF_GUEST_MASK != X86EMUL_GUEST_MASK);
+-	BUILD_BUG_ON(HF_SMM_MASK != X86EMUL_SMM_MASK);
+-	BUILD_BUG_ON(HF_SMM_INSIDE_NMI_MASK != X86EMUL_SMM_INSIDE_NMI_MASK);
+ 
+ 	init_decode_cache(ctxt);
+ 	vcpu->arch.emulate_regs_need_sync_from_vcpu = false;
+@@ -7868,11 +7859,11 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 		return X86EMUL_UNHANDLEABLE;
+ 	}
+ 
+-	if ((ctxt->ops->get_hflags(ctxt) & X86EMUL_SMM_INSIDE_NMI_MASK) == 0)
++	if ((vcpu->arch.hflags & HF_SMM_INSIDE_NMI_MASK) == 0)
+ 		ctxt->ops->set_nmi_mask(ctxt, false);
+ 
+-	kvm_set_hflags(vcpu, ctxt->ops->get_hflags(ctxt) &
+-		~(X86EMUL_SMM_INSIDE_NMI_MASK | X86EMUL_SMM_MASK));
++	kvm_set_hflags(vcpu,
++		vcpu->arch.hflags & ~(HF_SMM_INSIDE_NMI_MASK | HF_SMM_MASK));
+ 	return X86EMUL_CONTINUE;
+ }
+ 
+
+From patchwork Thu Mar 28 17:55:47 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875651
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id F32DE139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:29 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id DB87828CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:29 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id D001F28D17; Thu, 28 Mar 2019 17:56:29 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 8D6EE28CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:29 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727696AbfC1R42 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:28 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7260 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727236AbfC1R4H (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:07 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:03 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691197"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:02 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 08/18] KVM: x86: Call set_nmi_mask() directly when leaving
+ SMM
+Date: Thu, 28 Mar 2019 10:55:47 -0700
+Message-Id: <20190328175557.14408-9-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/x86.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index d6dd701c471f..5c520bb2f649 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7860,7 +7860,7 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 	}
+ 
+ 	if ((vcpu->arch.hflags & HF_SMM_INSIDE_NMI_MASK) == 0)
+-		ctxt->ops->set_nmi_mask(ctxt, false);
++		kvm_x86_ops->set_nmi_mask(vcpu, false);
+ 
+ 	kvm_set_hflags(vcpu,
+ 		vcpu->arch.hflags & ~(HF_SMM_INSIDE_NMI_MASK | HF_SMM_MASK));
+
+From patchwork Thu Mar 28 17:55:48 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875647
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 5948017E0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:24 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 416F028CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:24 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 35D3328D17; Thu, 28 Mar 2019 17:56:24 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C246B28D32
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:23 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727698AbfC1R4X (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:23 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7272 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726298AbfC1R4H (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:07 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:03 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691198"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:03 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 09/18] KVM: x86: Call kvm_{get,set}_cr*() directly when
+ leaving SMM
+Date: Thu, 28 Mar 2019 10:55:48 -0700
+Message-Id: <20190328175557.14408-10-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/x86.c | 26 +++++++++++++-------------
+ 1 file changed, 13 insertions(+), 13 deletions(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 5c520bb2f649..ea0775842c9c 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7627,7 +7627,7 @@ static int rsm_load_seg_64(struct x86_emulate_ctxt *ctxt, u64 smbase, int n)
+ 	return X86EMUL_CONTINUE;
+ }
+ 
+-static int rsm_enter_protected_mode(struct x86_emulate_ctxt *ctxt,
++static int rsm_enter_protected_mode(struct kvm_vcpu *vcpu,
+ 				    u64 cr0, u64 cr3, u64 cr4)
+ {
+ 	int bad;
+@@ -7640,7 +7640,7 @@ static int rsm_enter_protected_mode(struct x86_emulate_ctxt *ctxt,
+ 		cr3 &= ~0xfff;
+ 	}
+ 
+-	bad = ctxt->ops->set_cr(ctxt, 3, cr3);
++	bad = kvm_set_cr3(vcpu, cr3);
+ 	if (bad)
+ 		return X86EMUL_UNHANDLEABLE;
+ 
+@@ -7649,20 +7649,20 @@ static int rsm_enter_protected_mode(struct x86_emulate_ctxt *ctxt,
+ 	 * Then enable protected mode.	However, PCID cannot be enabled
+ 	 * if EFER.LMA=0, so set it separately.
+ 	 */
+-	bad = ctxt->ops->set_cr(ctxt, 4, cr4 & ~X86_CR4_PCIDE);
++	bad = kvm_set_cr4(vcpu, cr4 & ~X86_CR4_PCIDE);
+ 	if (bad)
+ 		return X86EMUL_UNHANDLEABLE;
+ 
+-	bad = ctxt->ops->set_cr(ctxt, 0, cr0);
++	bad = kvm_set_cr0(vcpu, cr0);
+ 	if (bad)
+ 		return X86EMUL_UNHANDLEABLE;
+ 
+ 	if (cr4 & X86_CR4_PCIDE) {
+-		bad = ctxt->ops->set_cr(ctxt, 4, cr4);
++		bad = kvm_set_cr4(vcpu, cr4);
+ 		if (bad)
+ 			return X86EMUL_UNHANDLEABLE;
+ 		if (pcid) {
+-			bad = ctxt->ops->set_cr(ctxt, 3, cr3 | pcid);
++			bad = kvm_set_cr3(vcpu, cr3 | pcid);
+ 			if (bad)
+ 				return X86EMUL_UNHANDLEABLE;
+ 		}
+@@ -7731,7 +7731,7 @@ static int rsm_load_state_32(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 
+ 	vcpu->arch.smbase = GET_SMSTATE(u32, smbase, 0x7ef8);
+ 
+-	return rsm_enter_protected_mode(ctxt, cr0, cr3, cr4);
++	return rsm_enter_protected_mode(vcpu, cr0, cr3, cr4);
+ }
+ 
+ static int rsm_load_state_64(struct x86_emulate_ctxt *ctxt, u64 smbase)
+@@ -7784,7 +7784,7 @@ static int rsm_load_state_64(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 	dt.address =                GET_SMSTATE(u64, smbase, 0x7e68);
+ 	ctxt->ops->set_gdt(ctxt, &dt);
+ 
+-	r = rsm_enter_protected_mode(ctxt, cr0, cr3, cr4);
++	r = rsm_enter_protected_mode(vcpu, cr0, cr3, cr4);
+ 	if (r != X86EMUL_CONTINUE)
+ 		return r;
+ 
+@@ -7809,13 +7809,13 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 	 * CR0/CR3/CR4/EFER.  It's all a bit more complicated if the vCPU
+ 	 * supports long mode.
+ 	 */
+-	cr4 = ctxt->ops->get_cr(ctxt, 4);
++	cr4 = kvm_read_cr4(vcpu);
+ 	if (guest_cpuid_has(vcpu, X86_FEATURE_LM)) {
+ 		struct desc_struct cs_desc;
+ 
+ 		/* Zero CR4.PCIDE before CR0.PG.  */
+ 		if (cr4 & X86_CR4_PCIDE) {
+-			ctxt->ops->set_cr(ctxt, 4, cr4 & ~X86_CR4_PCIDE);
++			kvm_set_cr4(vcpu, cr4 & ~X86_CR4_PCIDE);
+ 			cr4 &= ~X86_CR4_PCIDE;
+ 		}
+ 
+@@ -7827,13 +7827,13 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 	}
+ 
+ 	/* For the 64-bit case, this will clear EFER.LMA.  */
+-	cr0 = ctxt->ops->get_cr(ctxt, 0);
++	cr0 = kvm_read_cr0(vcpu);
+ 	if (cr0 & X86_CR0_PE)
+-		ctxt->ops->set_cr(ctxt, 0, cr0 & ~(X86_CR0_PG | X86_CR0_PE));
++		kvm_set_cr0(vcpu, cr0 & ~(X86_CR0_PG | X86_CR0_PE));
+ 
+ 	/* Now clear CR4.PAE (which must be done before clearing EFER.LME).  */
+ 	if (cr4 & X86_CR4_PAE)
+-		ctxt->ops->set_cr(ctxt, 4, cr4 & ~X86_CR4_PAE);
++		kvm_set_cr4(vcpu, cr4 & ~X86_CR4_PAE);
+ 
+ 	/* And finally go back to 32-bit mode.  */
+ 	efer = 0;
+
+From patchwork Thu Mar 28 17:55:49 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875637
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1DE96139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:16 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 06E6928CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:16 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id EED8A28D27; Thu, 28 Mar 2019 17:56:15 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A20EA28CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:15 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727621AbfC1R4J (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:09 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7260 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727393AbfC1R4H (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:07 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:04 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691201"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:03 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 10/18] KVM: x86: Call __kvm_set_dr() directly when leaving
+ SMM
+Date: Thu, 28 Mar 2019 10:55:49 -0700
+Message-Id: <20190328175557.14408-11-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/x86.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index ea0775842c9c..9d0c06c88c89 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7697,9 +7697,9 @@ static int rsm_load_state_32(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 		*reg_write(ctxt, i) = GET_SMSTATE(u32, smbase, 0x7fd0 + i * 4);
+ 
+ 	val = GET_SMSTATE(u32, smbase, 0x7fcc);
+-	ctxt->ops->set_dr(ctxt, 6, (val & DR6_VOLATILE) | DR6_FIXED_1);
++	__kvm_set_dr(vcpu, 6, (val & DR6_VOLATILE) | DR6_FIXED_1);
+ 	val = GET_SMSTATE(u32, smbase, 0x7fc8);
+-	ctxt->ops->set_dr(ctxt, 7, (val & DR7_VOLATILE) | DR7_FIXED_1);
++	__kvm_set_dr(vcpu, 7, (val & DR7_VOLATILE) | DR7_FIXED_1);
+ 
+ 	selector =                 GET_SMSTATE(u32, smbase, 0x7fc4);
+ 	set_desc_base(&desc,       GET_SMSTATE(u32, smbase, 0x7f64));
+@@ -7751,9 +7751,9 @@ static int rsm_load_state_64(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 	ctxt->eflags = GET_SMSTATE(u32, smbase, 0x7f70) | X86_EFLAGS_FIXED;
+ 
+ 	val = GET_SMSTATE(u32, smbase, 0x7f68);
+-	ctxt->ops->set_dr(ctxt, 6, (val & DR6_VOLATILE) | DR6_FIXED_1);
++	__kvm_set_dr(vcpu, 6, (val & DR6_VOLATILE) | DR6_FIXED_1);
+ 	val = GET_SMSTATE(u32, smbase, 0x7f60);
+-	ctxt->ops->set_dr(ctxt, 7, (val & DR7_VOLATILE) | DR7_FIXED_1);
++	__kvm_set_dr(vcpu, 7, (val & DR7_VOLATILE) | DR7_FIXED_1);
+ 
+ 	cr0 =                       GET_SMSTATE(u64, smbase, 0x7f58);
+ 	cr3 =                       GET_SMSTATE(u64, smbase, 0x7f50);
+
+From patchwork Thu Mar 28 17:55:50 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875649
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 779AB139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:25 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5EFCE28CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:25 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 5392F28D17; Thu, 28 Mar 2019 17:56:25 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 0485728CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:25 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727685AbfC1R4W (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:22 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7265 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727365AbfC1R4H (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:07 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:04 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691202"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:04 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 11/18] KVM: x86: Call kvm_x86_ops.set_*dt() directly when
+ leaving SMM
+Date: Thu, 28 Mar 2019 10:55:50 -0700
+Message-Id: <20190328175557.14408-12-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/x86.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 9d0c06c88c89..45a1a98e4a81 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7715,11 +7715,11 @@ static int rsm_load_state_32(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 
+ 	dt.address =               GET_SMSTATE(u32, smbase, 0x7f74);
+ 	dt.size =                  GET_SMSTATE(u32, smbase, 0x7f70);
+-	ctxt->ops->set_gdt(ctxt, &dt);
++	kvm_x86_ops->set_gdt(vcpu, &dt);
+ 
+ 	dt.address =               GET_SMSTATE(u32, smbase, 0x7f58);
+ 	dt.size =                  GET_SMSTATE(u32, smbase, 0x7f54);
+-	ctxt->ops->set_idt(ctxt, &dt);
++	kvm_x86_ops->set_idt(vcpu, &dt);
+ 
+ 	for (i = 0; i < 6; i++) {
+ 		int r = rsm_load_seg_32(ctxt, smbase, i);
+@@ -7771,7 +7771,7 @@ static int rsm_load_state_64(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 
+ 	dt.size =                   GET_SMSTATE(u32, smbase, 0x7e84);
+ 	dt.address =                GET_SMSTATE(u64, smbase, 0x7e88);
+-	ctxt->ops->set_idt(ctxt, &dt);
++	kvm_x86_ops->set_idt(vcpu, &dt);
+ 
+ 	selector =                  GET_SMSTATE(u32, smbase, 0x7e70);
+ 	rsm_set_desc_flags(&desc,   GET_SMSTATE(u32, smbase, 0x7e72) << 8);
+@@ -7782,7 +7782,7 @@ static int rsm_load_state_64(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 
+ 	dt.size =                   GET_SMSTATE(u32, smbase, 0x7e64);
+ 	dt.address =                GET_SMSTATE(u64, smbase, 0x7e68);
+-	ctxt->ops->set_gdt(ctxt, &dt);
++	kvm_x86_ops->set_gdt(vcpu, &dt);
+ 
+ 	r = rsm_enter_protected_mode(vcpu, cr0, cr3, cr4);
+ 	if (r != X86EMUL_CONTINUE)
+
+From patchwork Thu Mar 28 17:55:51 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875631
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C9A0A139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:11 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B274728CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:11 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id A645528D27; Thu, 28 Mar 2019 17:56:11 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 591A128CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:11 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727668AbfC1R4K (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:10 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7272 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727192AbfC1R4I (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:08 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:04 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691205"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:04 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 12/18] KVM: x86: call emulator_set_msr() directly when
+ leaving SMM
+Date: Thu, 28 Mar 2019 10:55:51 -0700
+Message-Id: <20190328175557.14408-13-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/x86.c | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 45a1a98e4a81..b03debd98750 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7760,7 +7760,7 @@ static int rsm_load_state_64(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 	cr4 =                       GET_SMSTATE(u64, smbase, 0x7f48);
+ 	vcpu->arch.smbase =         GET_SMSTATE(u32, smbase, 0x7f00);
+ 	val =                       GET_SMSTATE(u64, smbase, 0x7ed0);
+-	ctxt->ops->set_msr(ctxt, MSR_EFER, val & ~EFER_LMA);
++	emulator_set_msr(ctxt, MSR_EFER, val & ~EFER_LMA);
+ 
+ 	selector =                  GET_SMSTATE(u32, smbase, 0x7e90);
+ 	rsm_set_desc_flags(&desc,   GET_SMSTATE(u32, smbase, 0x7e92) << 8);
+@@ -7800,7 +7800,7 @@ static int rsm_load_state_64(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ static int leave_smm(struct kvm_vcpu *vcpu)
+ {
+ 	struct x86_emulate_ctxt *ctxt = &vcpu->arch.emulate_ctxt;
+-	unsigned long cr0, cr4, efer;
++	unsigned long cr0, cr4;
+ 	u64 smbase;
+ 	int ret;
+ 
+@@ -7836,8 +7836,7 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 		kvm_set_cr4(vcpu, cr4 & ~X86_CR4_PAE);
+ 
+ 	/* And finally go back to 32-bit mode.  */
+-	efer = 0;
+-	ctxt->ops->set_msr(ctxt, MSR_EFER, efer);
++	emulator_set_msr(ctxt, MSR_EFER, 0);
+ 
+ 	smbase = vcpu->arch.smbase;
+ 
+
+From patchwork Thu Mar 28 17:55:52 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875645
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D656B1708
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:23 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id BE30928CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:23 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id B207828D27; Thu, 28 Mar 2019 17:56:23 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4958D28CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:23 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727684AbfC1R4W (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:22 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7260 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727461AbfC1R4H (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:07 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:05 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691207"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:04 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 13/18] KVM: x86: Drop x86_emulate_ops.read_phys()
+Date: Thu, 28 Mar 2019 10:55:52 -0700
+Message-Id: <20190328175557.14408-14-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_emulate.h | 10 ----------
+ arch/x86/kvm/x86.c                 | 16 +++-------------
+ 2 files changed, 3 insertions(+), 23 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_emulate.h b/arch/x86/include/asm/kvm_emulate.h
+index f436ce5319cd..9147bf61ec19 100644
+--- a/arch/x86/include/asm/kvm_emulate.h
++++ b/arch/x86/include/asm/kvm_emulate.h
+@@ -114,16 +114,6 @@ struct x86_emulate_ops {
+ 			unsigned int bytes,
+ 			struct x86_exception *fault, bool system);
+ 
+-	/*
+-	 * read_phys: Read bytes of standard (non-emulated/special) memory.
+-	 *            Used for descriptor reading.
+-	 *  @addr:  [IN ] Physical address from which to read.
+-	 *  @val:   [OUT] Value read from memory.
+-	 *  @bytes: [IN ] Number of bytes to read from memory.
+-	 */
+-	int (*read_phys)(struct x86_emulate_ctxt *ctxt, unsigned long addr,
+-			void *val, unsigned int bytes);
+-
+ 	/*
+ 	 * write_std: Write bytes of standard (non-emulated/special) memory.
+ 	 *            Used for descriptor writing.
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index b03debd98750..aa769bb36f3b 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -5155,15 +5155,6 @@ static int emulator_read_std(struct x86_emulate_ctxt *ctxt,
+ 	return kvm_read_guest_virt_helper(addr, val, bytes, vcpu, access, exception);
+ }
+ 
+-static int kvm_read_guest_phys_system(struct x86_emulate_ctxt *ctxt,
+-		unsigned long addr, void *val, unsigned int bytes)
+-{
+-	struct kvm_vcpu *vcpu = emul_to_vcpu(ctxt);
+-	int r = kvm_vcpu_read_guest(vcpu, addr, val, bytes);
+-
+-	return r < 0 ? X86EMUL_IO_NEEDED : X86EMUL_CONTINUE;
+-}
+-
+ static int kvm_write_guest_virt_helper(gva_t addr, void *val, unsigned int bytes,
+ 				      struct kvm_vcpu *vcpu, u32 access,
+ 				      struct x86_exception *exception)
+@@ -5958,7 +5949,6 @@ static const struct x86_emulate_ops emulate_ops = {
+ 	.write_gpr           = emulator_write_gpr,
+ 	.read_std            = emulator_read_std,
+ 	.write_std           = emulator_write_std,
+-	.read_phys           = kvm_read_guest_phys_system,
+ 	.fetch               = kvm_fetch_guest_virt,
+ 	.read_emulated       = emulator_read_emulated,
+ 	.write_emulated      = emulator_write_emulated,
+@@ -7569,9 +7559,7 @@ static void enter_smm(struct kvm_vcpu *vcpu)
+ #define GET_SMSTATE(type, smbase, offset)				  \
+ 	({								  \
+ 	 type __val;							  \
+-	 int r = ctxt->ops->read_phys(ctxt, smbase + offset, &__val,      \
+-				      sizeof(__val));			  \
+-	 if (r != X86EMUL_CONTINUE)					  \
++	 if (kvm_vcpu_read_guest(vcpu, smbase + offset, &__val, sizeof(__val))) \
+ 		 return X86EMUL_UNHANDLEABLE;				  \
+ 	 __val;								  \
+ 	})
+@@ -7590,6 +7578,7 @@ static void rsm_set_desc_flags(struct desc_struct *desc, u32 flags)
+ 
+ static int rsm_load_seg_32(struct x86_emulate_ctxt *ctxt, u64 smbase, int n)
+ {
++	struct kvm_vcpu *vcpu = emul_to_vcpu(ctxt);
+ 	struct desc_struct desc;
+ 	int offset;
+ 	u16 selector;
+@@ -7610,6 +7599,7 @@ static int rsm_load_seg_32(struct x86_emulate_ctxt *ctxt, u64 smbase, int n)
+ 
+ static int rsm_load_seg_64(struct x86_emulate_ctxt *ctxt, u64 smbase, int n)
+ {
++	struct kvm_vcpu *vcpu = emul_to_vcpu(ctxt);
+ 	struct desc_struct desc;
+ 	int offset;
+ 	u16 selector;
+
+From patchwork Thu Mar 28 17:55:53 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875633
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B39681708
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:13 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 99CF428CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:13 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 8DEAC28D17; Thu, 28 Mar 2019 17:56:13 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D231628CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727670AbfC1R4K (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:10 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7265 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727462AbfC1R4I (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:08 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:05 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691208"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:05 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 14/18] KVM: x86: Use kvm_set_segment() directly when
+ leaving SMM
+Date: Thu, 28 Mar 2019 10:55:53 -0700
+Message-Id: <20190328175557.14408-15-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/x86.c | 131 ++++++++++++++++++++++++---------------------
+ 1 file changed, 70 insertions(+), 61 deletions(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index aa769bb36f3b..55687273d428 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7564,22 +7564,38 @@ static void enter_smm(struct kvm_vcpu *vcpu)
+ 	 __val;								  \
+ 	})
+ 
+-static void rsm_set_desc_flags(struct desc_struct *desc, u32 flags)
++static void rsm_set_seg(struct kvm_vcpu *vcpu, int seg, u16 sel, u64 base,
++			u32 limit, u32 flags)
+ {
+-	desc->g    = (flags >> 23) & 1;
+-	desc->d    = (flags >> 22) & 1;
+-	desc->l    = (flags >> 21) & 1;
+-	desc->avl  = (flags >> 20) & 1;
+-	desc->p    = (flags >> 15) & 1;
+-	desc->dpl  = (flags >> 13) & 3;
+-	desc->s    = (flags >> 12) & 1;
+-	desc->type = (flags >>  8) & 15;
++	struct kvm_segment var;
++
++	var.selector	= sel;
++	var.base	= base;
++	var.limit	= limit;
++	var.g		= (flags >> 23) & 1;
++	var.db		= (flags >> 22) & 1;
++	var.l		= (flags >> 21) & 1;
++	var.avl		= (flags >> 20) & 1;
++	var.present	= (flags >> 15) & 1;
++	var.dpl		= (flags >> 13) & 3;
++	var.s		= (flags >> 12) & 1;
++	var.type	= (flags >>  8) & 15;
++	var.unusable	= !var.present;
++	var.padding	= 0;
++	if (var.g)
++		var.limit = (var.limit << 12) | 0xfff;
++
++	kvm_set_segment(vcpu, &var, seg);
++}
++
++static void rsm_set_seg_64(struct kvm_vcpu *vcpu, int seg, u16 sel,
++			   u64 base_lo, u64 base_hi, u32 limit, u32 flags)
++{
++	rsm_set_seg(vcpu, seg, sel, base_lo | (base_hi << 32), limit, flags);
+ }
+ 
+-static int rsm_load_seg_32(struct x86_emulate_ctxt *ctxt, u64 smbase, int n)
++static int rsm_load_seg_32(struct kvm_vcpu *vcpu, u64 smbase, int n)
+ {
+-	struct kvm_vcpu *vcpu = emul_to_vcpu(ctxt);
+-	struct desc_struct desc;
+ 	int offset;
+ 	u16 selector;
+ 
+@@ -7590,30 +7606,27 @@ static int rsm_load_seg_32(struct x86_emulate_ctxt *ctxt, u64 smbase, int n)
+ 	else
+ 		offset = 0x7f2c + (n - 3) * 12;
+ 
+-	set_desc_base(&desc,      GET_SMSTATE(u32, smbase, offset + 8));
+-	set_desc_limit(&desc,     GET_SMSTATE(u32, smbase, offset + 4));
+-	rsm_set_desc_flags(&desc, GET_SMSTATE(u32, smbase, offset));
+-	ctxt->ops->set_segment(ctxt, selector, &desc, 0, n);
++	rsm_set_seg(vcpu, n, selector,
++		    GET_SMSTATE(u32, smbase, offset + 8),
++		    GET_SMSTATE(u32, smbase, offset + 4),
++		    GET_SMSTATE(u32, smbase, offset));
++
+ 	return X86EMUL_CONTINUE;
+ }
+ 
+-static int rsm_load_seg_64(struct x86_emulate_ctxt *ctxt, u64 smbase, int n)
++static int rsm_load_seg_64(struct kvm_vcpu *vcpu, u64 smbase, int n)
+ {
+-	struct kvm_vcpu *vcpu = emul_to_vcpu(ctxt);
+-	struct desc_struct desc;
+ 	int offset;
+-	u16 selector;
+-	u32 base3;
+ 
+ 	offset = 0x7e00 + n * 16;
+ 
+-	selector =                GET_SMSTATE(u16, smbase, offset);
+-	rsm_set_desc_flags(&desc, GET_SMSTATE(u16, smbase, offset + 2) << 8);
+-	set_desc_limit(&desc,     GET_SMSTATE(u32, smbase, offset + 4));
+-	set_desc_base(&desc,      GET_SMSTATE(u32, smbase, offset + 8));
+-	base3 =                   GET_SMSTATE(u32, smbase, offset + 12);
++	rsm_set_seg_64(vcpu, n,
++		       GET_SMSTATE(u16, smbase, offset),
++		       GET_SMSTATE(u32, smbase, offset + 8),
++		       GET_SMSTATE(u32, smbase, offset + 12),
++		       GET_SMSTATE(u32, smbase, offset + 4),
++		       GET_SMSTATE(u16, smbase, offset + 2) << 8);
+ 
+-	ctxt->ops->set_segment(ctxt, selector, &desc, base3, n);
+ 	return X86EMUL_CONTINUE;
+ }
+ 
+@@ -7672,9 +7685,7 @@ static ulong *reg_write(struct x86_emulate_ctxt *ctxt, unsigned nr)
+ static int rsm_load_state_32(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ {
+ 	struct kvm_vcpu *vcpu = emul_to_vcpu(ctxt);
+-	struct desc_struct desc;
+ 	struct desc_ptr dt;
+-	u16 selector;
+ 	u32 val, cr0, cr3, cr4;
+ 	int i;
+ 
+@@ -7691,17 +7702,17 @@ static int rsm_load_state_32(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 	val = GET_SMSTATE(u32, smbase, 0x7fc8);
+ 	__kvm_set_dr(vcpu, 7, (val & DR7_VOLATILE) | DR7_FIXED_1);
+ 
+-	selector =                 GET_SMSTATE(u32, smbase, 0x7fc4);
+-	set_desc_base(&desc,       GET_SMSTATE(u32, smbase, 0x7f64));
+-	set_desc_limit(&desc,      GET_SMSTATE(u32, smbase, 0x7f60));
+-	rsm_set_desc_flags(&desc,  GET_SMSTATE(u32, smbase, 0x7f5c));
+-	ctxt->ops->set_segment(ctxt, selector, &desc, 0, VCPU_SREG_TR);
++	rsm_set_seg(vcpu, VCPU_SREG_TR,
++		    GET_SMSTATE(u32, smbase, 0x7fc4),
++		    GET_SMSTATE(u32, smbase, 0x7f64),
++		    GET_SMSTATE(u32, smbase, 0x7f60),
++		    GET_SMSTATE(u32, smbase, 0x7f5c));
+ 
+-	selector =                 GET_SMSTATE(u32, smbase, 0x7fc0);
+-	set_desc_base(&desc,       GET_SMSTATE(u32, smbase, 0x7f80));
+-	set_desc_limit(&desc,      GET_SMSTATE(u32, smbase, 0x7f7c));
+-	rsm_set_desc_flags(&desc,  GET_SMSTATE(u32, smbase, 0x7f78));
+-	ctxt->ops->set_segment(ctxt, selector, &desc, 0, VCPU_SREG_LDTR);
++	rsm_set_seg(vcpu, VCPU_SREG_LDTR,
++		    GET_SMSTATE(u32, smbase, 0x7fc0),
++		    GET_SMSTATE(u32, smbase, 0x7f80),
++		    GET_SMSTATE(u32, smbase, 0x7f7c),
++		    GET_SMSTATE(u32, smbase, 0x7f78));
+ 
+ 	dt.address =               GET_SMSTATE(u32, smbase, 0x7f74);
+ 	dt.size =                  GET_SMSTATE(u32, smbase, 0x7f70);
+@@ -7712,7 +7723,7 @@ static int rsm_load_state_32(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 	kvm_x86_ops->set_idt(vcpu, &dt);
+ 
+ 	for (i = 0; i < 6; i++) {
+-		int r = rsm_load_seg_32(ctxt, smbase, i);
++		int r = rsm_load_seg_32(vcpu, smbase, i);
+ 		if (r != X86EMUL_CONTINUE)
+ 			return r;
+ 	}
+@@ -7727,11 +7738,8 @@ static int rsm_load_state_32(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ static int rsm_load_state_64(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ {
+ 	struct kvm_vcpu *vcpu = emul_to_vcpu(ctxt);
+-	struct desc_struct desc;
+ 	struct desc_ptr dt;
+ 	u64 val, cr0, cr3, cr4;
+-	u32 base3;
+-	u16 selector;
+ 	int i, r;
+ 
+ 	for (i = 0; i < 16; i++)
+@@ -7752,23 +7760,23 @@ static int rsm_load_state_64(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 	val =                       GET_SMSTATE(u64, smbase, 0x7ed0);
+ 	emulator_set_msr(ctxt, MSR_EFER, val & ~EFER_LMA);
+ 
+-	selector =                  GET_SMSTATE(u32, smbase, 0x7e90);
+-	rsm_set_desc_flags(&desc,   GET_SMSTATE(u32, smbase, 0x7e92) << 8);
+-	set_desc_limit(&desc,       GET_SMSTATE(u32, smbase, 0x7e94));
+-	set_desc_base(&desc,        GET_SMSTATE(u32, smbase, 0x7e98));
+-	base3 =                     GET_SMSTATE(u32, smbase, 0x7e9c);
+-	ctxt->ops->set_segment(ctxt, selector, &desc, base3, VCPU_SREG_TR);
++	rsm_set_seg_64(vcpu, VCPU_SREG_TR,
++		       GET_SMSTATE(u32, smbase, 0x7e90),
++		       GET_SMSTATE(u32, smbase, 0x7e98),
++		       GET_SMSTATE(u32, smbase, 0x7e9c),
++		       GET_SMSTATE(u32, smbase, 0x7e94),
++		       GET_SMSTATE(u32, smbase, 0x7e92) << 8);
+ 
+ 	dt.size =                   GET_SMSTATE(u32, smbase, 0x7e84);
+ 	dt.address =                GET_SMSTATE(u64, smbase, 0x7e88);
+ 	kvm_x86_ops->set_idt(vcpu, &dt);
+ 
+-	selector =                  GET_SMSTATE(u32, smbase, 0x7e70);
+-	rsm_set_desc_flags(&desc,   GET_SMSTATE(u32, smbase, 0x7e72) << 8);
+-	set_desc_limit(&desc,       GET_SMSTATE(u32, smbase, 0x7e74));
+-	set_desc_base(&desc,        GET_SMSTATE(u32, smbase, 0x7e78));
+-	base3 =                     GET_SMSTATE(u32, smbase, 0x7e7c);
+-	ctxt->ops->set_segment(ctxt, selector, &desc, base3, VCPU_SREG_LDTR);
++	rsm_set_seg_64(vcpu, VCPU_SREG_LDTR,
++		       GET_SMSTATE(u32, smbase, 0x7e70),
++		       GET_SMSTATE(u32, smbase, 0x7e78),
++		       GET_SMSTATE(u32, smbase, 0x7e7c),
++		       GET_SMSTATE(u32, smbase, 0x7e74),
++		       GET_SMSTATE(u32, smbase, 0x7e72) << 8);
+ 
+ 	dt.size =                   GET_SMSTATE(u32, smbase, 0x7e64);
+ 	dt.address =                GET_SMSTATE(u64, smbase, 0x7e68);
+@@ -7779,7 +7787,7 @@ static int rsm_load_state_64(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 		return r;
+ 
+ 	for (i = 0; i < 6; i++) {
+-		r = rsm_load_seg_64(ctxt, smbase, i);
++		r = rsm_load_seg_64(vcpu, smbase, i);
+ 		if (r != X86EMUL_CONTINUE)
+ 			return r;
+ 	}
+@@ -7801,7 +7809,7 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 	 */
+ 	cr4 = kvm_read_cr4(vcpu);
+ 	if (guest_cpuid_has(vcpu, X86_FEATURE_LM)) {
+-		struct desc_struct cs_desc;
++		struct kvm_segment cs_seg;
+ 
+ 		/* Zero CR4.PCIDE before CR0.PG.  */
+ 		if (cr4 & X86_CR4_PCIDE) {
+@@ -7810,10 +7818,11 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 		}
+ 
+ 		/* A 32-bit code segment is required to clear EFER.LMA.  */
+-		memset(&cs_desc, 0, sizeof(cs_desc));
+-		cs_desc.type = 0xb;
+-		cs_desc.s = cs_desc.g = cs_desc.p = 1;
+-		ctxt->ops->set_segment(ctxt, 0, &cs_desc, 0, VCPU_SREG_CS);
++		memset(&cs_seg, 0, sizeof(cs_seg));
++		cs_seg.type = 0xb;
++		cs_seg.s = cs_seg.g = cs_seg.present = 1;
++		cs_seg.limit = 0xffffffff;
++		kvm_set_segment(vcpu, &cs_seg, VCPU_SREG_CS);
+ 	}
+ 
+ 	/* For the 64-bit case, this will clear EFER.LMA.  */
+
+From patchwork Thu Mar 28 17:55:54 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875635
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E95381708
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:15 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D17E028CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:15 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C5F8A28D27; Thu, 28 Mar 2019 17:56:15 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 709BD28CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:15 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727623AbfC1R4J (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:09 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7260 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727474AbfC1R4H (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:07 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:06 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691209"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:05 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 15/18] KVM: x86: Invert passing of vcpu and ctxt when
+ leaving SMM
+Date: Thu, 28 Mar 2019 10:55:54 -0700
+Message-Id: <20190328175557.14408-16-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/x86.c | 15 +++++++--------
+ 1 file changed, 7 insertions(+), 8 deletions(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 55687273d428..282c85e41be8 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7682,9 +7682,9 @@ static ulong *reg_write(struct x86_emulate_ctxt *ctxt, unsigned nr)
+ 	return &ctxt->_regs[nr];
+ }
+ 
+-static int rsm_load_state_32(struct x86_emulate_ctxt *ctxt, u64 smbase)
++static int rsm_load_state_32(struct kvm_vcpu *vcpu, u64 smbase)
+ {
+-	struct kvm_vcpu *vcpu = emul_to_vcpu(ctxt);
++	struct x86_emulate_ctxt *ctxt = &vcpu->arch.emulate_ctxt;
+ 	struct desc_ptr dt;
+ 	u32 val, cr0, cr3, cr4;
+ 	int i;
+@@ -7735,9 +7735,9 @@ static int rsm_load_state_32(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 	return rsm_enter_protected_mode(vcpu, cr0, cr3, cr4);
+ }
+ 
+-static int rsm_load_state_64(struct x86_emulate_ctxt *ctxt, u64 smbase)
++static int rsm_load_state_64(struct kvm_vcpu *vcpu, u64 smbase)
+ {
+-	struct kvm_vcpu *vcpu = emul_to_vcpu(ctxt);
++	struct x86_emulate_ctxt *ctxt = &vcpu->arch.emulate_ctxt;
+ 	struct desc_ptr dt;
+ 	u64 val, cr0, cr3, cr4;
+ 	int i, r;
+@@ -7797,7 +7797,6 @@ static int rsm_load_state_64(struct x86_emulate_ctxt *ctxt, u64 smbase)
+ 
+ static int leave_smm(struct kvm_vcpu *vcpu)
+ {
+-	struct x86_emulate_ctxt *ctxt = &vcpu->arch.emulate_ctxt;
+ 	unsigned long cr0, cr4;
+ 	u64 smbase;
+ 	int ret;
+@@ -7835,7 +7834,7 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 		kvm_set_cr4(vcpu, cr4 & ~X86_CR4_PAE);
+ 
+ 	/* And finally go back to 32-bit mode.  */
+-	emulator_set_msr(ctxt, MSR_EFER, 0);
++	emulator_set_msr(&vcpu->arch.emulate_ctxt, MSR_EFER, 0);
+ 
+ 	smbase = vcpu->arch.smbase;
+ 
+@@ -7848,9 +7847,9 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 		return X86EMUL_UNHANDLEABLE;
+ 
+ 	if (guest_cpuid_has(vcpu, X86_FEATURE_LM))
+-		ret = rsm_load_state_64(ctxt, smbase + 0x8000);
++		ret = rsm_load_state_64(vcpu, smbase + 0x8000);
+ 	else
+-		ret = rsm_load_state_32(ctxt, smbase + 0x8000);
++		ret = rsm_load_state_32(vcpu, smbase + 0x8000);
+ 
+ 	if (ret != X86EMUL_CONTINUE) {
+ 		/* FIXME: should triple fault */
+
+From patchwork Thu Mar 28 17:55:55 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875629
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 172E6139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:11 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id F36E928CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:10 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id E7BB328D27; Thu, 28 Mar 2019 17:56:10 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 9418328CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727102AbfC1R4J (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:09 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7260 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726692AbfC1R4I (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:08 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:06 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691210"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:06 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 16/18] KVM: x86: Open code kvm_set_hflags
+Date: Thu, 28 Mar 2019 10:55:55 -0700
+Message-Id: <20190328175557.14408-17-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/x86.c | 31 ++++++++++++-------------------
+ 1 file changed, 12 insertions(+), 19 deletions(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 282c85e41be8..6c48c4e4383d 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -3529,7 +3529,7 @@ static void kvm_vcpu_ioctl_x86_get_vcpu_events(struct kvm_vcpu *vcpu,
+ 	memset(&events->reserved, 0, sizeof(events->reserved));
+ }
+ 
+-static void kvm_set_hflags(struct kvm_vcpu *vcpu, unsigned emul_flags);
++static void kvm_smm_changed(struct kvm_vcpu *vcpu);
+ 
+ static int kvm_vcpu_ioctl_x86_set_vcpu_events(struct kvm_vcpu *vcpu,
+ 					      struct kvm_vcpu_events *events)
+@@ -3589,12 +3589,13 @@ static int kvm_vcpu_ioctl_x86_set_vcpu_events(struct kvm_vcpu *vcpu,
+ 		vcpu->arch.apic->sipi_vector = events->sipi_vector;
+ 
+ 	if (events->flags & KVM_VCPUEVENT_VALID_SMM) {
+-		u32 hflags = vcpu->arch.hflags;
+-		if (events->smi.smm)
+-			hflags |= HF_SMM_MASK;
+-		else
+-			hflags &= ~HF_SMM_MASK;
+-		kvm_set_hflags(vcpu, hflags);
++		if (!!(vcpu->arch.hflags & HF_SMM_MASK) != events->smi.smm) {
++			if (events->smi.smm)
++				vcpu->arch.hflags |= HF_SMM_MASK;
++			else
++				vcpu->arch.hflags &= ~HF_SMM_MASK;
++			kvm_smm_changed(vcpu);
++		}
+ 
+ 		vcpu->arch.smi_pending = events->smi.pending;
+ 
+@@ -6219,16 +6220,6 @@ static void kvm_smm_changed(struct kvm_vcpu *vcpu)
+ 	kvm_mmu_reset_context(vcpu);
+ }
+ 
+-static void kvm_set_hflags(struct kvm_vcpu *vcpu, unsigned emul_flags)
+-{
+-	unsigned changed = vcpu->arch.hflags ^ emul_flags;
+-
+-	vcpu->arch.hflags = emul_flags;
+-
+-	if (changed & HF_SMM_MASK)
+-		kvm_smm_changed(vcpu);
+-}
+-
+ static int kvm_vcpu_check_hw_bp(unsigned long addr, u32 type, u32 dr7,
+ 				unsigned long *db)
+ {
+@@ -7859,8 +7850,10 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 	if ((vcpu->arch.hflags & HF_SMM_INSIDE_NMI_MASK) == 0)
+ 		kvm_x86_ops->set_nmi_mask(vcpu, false);
+ 
+-	kvm_set_hflags(vcpu,
+-		vcpu->arch.hflags & ~(HF_SMM_INSIDE_NMI_MASK | HF_SMM_MASK));
++	vcpu->arch.hflags &= ~(HF_SMM_INSIDE_NMI_MASK | HF_SMM_MASK);
++
++	kvm_smm_changed(vcpu);
++
+ 	return X86EMUL_CONTINUE;
+ }
+ 
+
+From patchwork Thu Mar 28 17:55:56 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875643
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 2E8DF139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:21 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1673028CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:21 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 0A47628CC7; Thu, 28 Mar 2019 17:56:21 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2C2A728D27
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:20 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727649AbfC1R4T (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:19 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7272 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727565AbfC1R4I (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:08 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:07 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691212"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:06 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 17/18] KVM: x86: Load SMRAM in a single shot when leaving
+ SMM
+Date: Thu, 28 Mar 2019 10:55:56 -0700
+Message-Id: <20190328175557.14408-18-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |   5 +-
+ arch/x86/kvm/svm.c              |  20 ++---
+ arch/x86/kvm/vmx/vmx.c          |   2 +-
+ arch/x86/kvm/x86.c              | 142 +++++++++++++++-----------------
+ 4 files changed, 81 insertions(+), 88 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 790876082a77..773f403d7017 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1182,7 +1182,7 @@ struct kvm_x86_ops {
+ 
+ 	int (*smi_allowed)(struct kvm_vcpu *vcpu);
+ 	int (*pre_enter_smm)(struct kvm_vcpu *vcpu, char *smstate);
+-	int (*pre_leave_smm)(struct kvm_vcpu *vcpu, u64 smbase);
++	int (*pre_leave_smm)(struct kvm_vcpu *vcpu, const char *smstate);
+ 	int (*enable_smi_window)(struct kvm_vcpu *vcpu);
+ 
+ 	int (*mem_enc_op)(struct kvm *kvm, void __user *argp);
+@@ -1592,4 +1592,7 @@ static inline int kvm_cpu_get_apicid(int mps_cpu)
+ #define put_smstate(type, buf, offset, val)                      \
+ 	*(type *)((buf) + (offset) - 0x7e00) = val
+ 
++#define GET_SMSTATE(type, buf, offset)		\
++	(*(type *)((buf) + (offset) - 0x7e00))
++
+ #endif /* _ASM_X86_KVM_HOST_H */
+diff --git a/arch/x86/kvm/svm.c b/arch/x86/kvm/svm.c
+index 426039285fd1..33975e2aa486 100644
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -6215,27 +6215,23 @@ static int svm_pre_enter_smm(struct kvm_vcpu *vcpu, char *smstate)
+ 	return 0;
+ }
+ 
+-static int svm_pre_leave_smm(struct kvm_vcpu *vcpu, u64 smbase)
++static int svm_pre_leave_smm(struct kvm_vcpu *vcpu, const char *smstate)
+ {
+ 	struct vcpu_svm *svm = to_svm(vcpu);
+ 	struct vmcb *nested_vmcb;
+ 	struct page *page;
+-	struct {
+-		u64 guest;
+-		u64 vmcb;
+-	} svm_state_save;
++	u64 guest;
++	u64 vmcb;
+ 	int ret;
+ 
+-	ret = kvm_vcpu_read_guest(vcpu, smbase + 0xfed8, &svm_state_save,
+-				  sizeof(svm_state_save));
+-	if (ret)
+-		return ret;
++	guest = GET_SMSTATE(u64, smsate, 0x7ed8);
++	vmcb = GET_SMSTATE(u64, smsate, 0x7ee0);
+ 
+-	if (svm_state_save.guest) {
++	if (guest) {
+ 		vcpu->arch.hflags &= ~HF_SMM_MASK;
+-		nested_vmcb = nested_svm_map(svm, svm_state_save.vmcb, &page);
++		nested_vmcb = nested_svm_map(svm, vmcb, &page);
+ 		if (nested_vmcb)
+-			enter_svm_guest_mode(svm, svm_state_save.vmcb, nested_vmcb, page);
++			enter_svm_guest_mode(svm, vmcb, nested_vmcb, page);
+ 		else
+ 			ret = 1;
+ 		vcpu->arch.hflags |= HF_SMM_MASK;
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 02cf8a551bd1..4612a1e7585e 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -7368,7 +7368,7 @@ static int vmx_pre_enter_smm(struct kvm_vcpu *vcpu, char *smstate)
+ 	return 0;
+ }
+ 
+-static int vmx_pre_leave_smm(struct kvm_vcpu *vcpu, u64 smbase)
++static int vmx_pre_leave_smm(struct kvm_vcpu *vcpu, const char *smstate)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+ 	int ret;
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 6c48c4e4383d..1e510ca8a8e4 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7547,14 +7547,6 @@ static void enter_smm(struct kvm_vcpu *vcpu)
+ 	kvm_mmu_reset_context(vcpu);
+ }
+ 
+-#define GET_SMSTATE(type, smbase, offset)				  \
+-	({								  \
+-	 type __val;							  \
+-	 if (kvm_vcpu_read_guest(vcpu, smbase + offset, &__val, sizeof(__val))) \
+-		 return X86EMUL_UNHANDLEABLE;				  \
+-	 __val;								  \
+-	})
+-
+ static void rsm_set_seg(struct kvm_vcpu *vcpu, int seg, u16 sel, u64 base,
+ 			u32 limit, u32 flags)
+ {
+@@ -7585,12 +7577,12 @@ static void rsm_set_seg_64(struct kvm_vcpu *vcpu, int seg, u16 sel,
+ 	rsm_set_seg(vcpu, seg, sel, base_lo | (base_hi << 32), limit, flags);
+ }
+ 
+-static int rsm_load_seg_32(struct kvm_vcpu *vcpu, u64 smbase, int n)
++static int rsm_load_seg_32(struct kvm_vcpu *vcpu, const char *buf, int n)
+ {
+ 	int offset;
+ 	u16 selector;
+ 
+-	selector = GET_SMSTATE(u32, smbase, 0x7fa8 + n * 4);
++	selector = GET_SMSTATE(u32, buf, 0x7fa8 + n * 4);
+ 
+ 	if (n < 3)
+ 		offset = 0x7f84 + n * 12;
+@@ -7598,25 +7590,25 @@ static int rsm_load_seg_32(struct kvm_vcpu *vcpu, u64 smbase, int n)
+ 		offset = 0x7f2c + (n - 3) * 12;
+ 
+ 	rsm_set_seg(vcpu, n, selector,
+-		    GET_SMSTATE(u32, smbase, offset + 8),
+-		    GET_SMSTATE(u32, smbase, offset + 4),
+-		    GET_SMSTATE(u32, smbase, offset));
++		    GET_SMSTATE(u32, buf, offset + 8),
++		    GET_SMSTATE(u32, buf, offset + 4),
++		    GET_SMSTATE(u32, buf, offset));
+ 
+ 	return X86EMUL_CONTINUE;
+ }
+ 
+-static int rsm_load_seg_64(struct kvm_vcpu *vcpu, u64 smbase, int n)
++static int rsm_load_seg_64(struct kvm_vcpu *vcpu, const char *buf, int n)
+ {
+ 	int offset;
+ 
+ 	offset = 0x7e00 + n * 16;
+ 
+ 	rsm_set_seg_64(vcpu, n,
+-		       GET_SMSTATE(u16, smbase, offset),
+-		       GET_SMSTATE(u32, smbase, offset + 8),
+-		       GET_SMSTATE(u32, smbase, offset + 12),
+-		       GET_SMSTATE(u32, smbase, offset + 4),
+-		       GET_SMSTATE(u16, smbase, offset + 2) << 8);
++		       GET_SMSTATE(u16, buf, offset),
++		       GET_SMSTATE(u32, buf, offset + 8),
++		       GET_SMSTATE(u32, buf, offset + 12),
++		       GET_SMSTATE(u32, buf, offset + 4),
++		       GET_SMSTATE(u16, buf, offset + 2) << 8);
+ 
+ 	return X86EMUL_CONTINUE;
+ }
+@@ -7673,60 +7665,60 @@ static ulong *reg_write(struct x86_emulate_ctxt *ctxt, unsigned nr)
+ 	return &ctxt->_regs[nr];
+ }
+ 
+-static int rsm_load_state_32(struct kvm_vcpu *vcpu, u64 smbase)
++static int rsm_load_state_32(struct kvm_vcpu *vcpu, const char *buf)
+ {
+ 	struct x86_emulate_ctxt *ctxt = &vcpu->arch.emulate_ctxt;
+ 	struct desc_ptr dt;
+ 	u32 val, cr0, cr3, cr4;
+ 	int i;
+ 
+-	cr0 =                      GET_SMSTATE(u32, smbase, 0x7ffc);
+-	cr3 =                      GET_SMSTATE(u32, smbase, 0x7ff8);
+-	ctxt->eflags =             GET_SMSTATE(u32, smbase, 0x7ff4) | X86_EFLAGS_FIXED;
+-	ctxt->_eip =               GET_SMSTATE(u32, smbase, 0x7ff0);
++	cr0 =          GET_SMSTATE(u32, buf, 0x7ffc);
++	cr3 =          GET_SMSTATE(u32, buf, 0x7ff8);
++	ctxt->eflags = GET_SMSTATE(u32, buf, 0x7ff4) | X86_EFLAGS_FIXED;
++	ctxt->_eip =   GET_SMSTATE(u32, buf, 0x7ff0);
+ 
+ 	for (i = 0; i < 8; i++)
+-		*reg_write(ctxt, i) = GET_SMSTATE(u32, smbase, 0x7fd0 + i * 4);
++		*reg_write(ctxt, i) = GET_SMSTATE(u32, buf, 0x7fd0 + i * 4);
+ 
+-	val = GET_SMSTATE(u32, smbase, 0x7fcc);
++	val = GET_SMSTATE(u32, buf, 0x7fcc);
+ 	__kvm_set_dr(vcpu, 6, (val & DR6_VOLATILE) | DR6_FIXED_1);
+-	val = GET_SMSTATE(u32, smbase, 0x7fc8);
++	val = GET_SMSTATE(u32, buf, 0x7fc8);
+ 	__kvm_set_dr(vcpu, 7, (val & DR7_VOLATILE) | DR7_FIXED_1);
+ 
+ 	rsm_set_seg(vcpu, VCPU_SREG_TR,
+-		    GET_SMSTATE(u32, smbase, 0x7fc4),
+-		    GET_SMSTATE(u32, smbase, 0x7f64),
+-		    GET_SMSTATE(u32, smbase, 0x7f60),
+-		    GET_SMSTATE(u32, smbase, 0x7f5c));
++		    GET_SMSTATE(u32, buf, 0x7fc4),
++		    GET_SMSTATE(u32, buf, 0x7f64),
++		    GET_SMSTATE(u32, buf, 0x7f60),
++		    GET_SMSTATE(u32, buf, 0x7f5c));
+ 
+ 	rsm_set_seg(vcpu, VCPU_SREG_LDTR,
+-		    GET_SMSTATE(u32, smbase, 0x7fc0),
+-		    GET_SMSTATE(u32, smbase, 0x7f80),
+-		    GET_SMSTATE(u32, smbase, 0x7f7c),
+-		    GET_SMSTATE(u32, smbase, 0x7f78));
++		    GET_SMSTATE(u32, buf, 0x7fc0),
++		    GET_SMSTATE(u32, buf, 0x7f80),
++		    GET_SMSTATE(u32, buf, 0x7f7c),
++		    GET_SMSTATE(u32, buf, 0x7f78));
+ 
+-	dt.address =               GET_SMSTATE(u32, smbase, 0x7f74);
+-	dt.size =                  GET_SMSTATE(u32, smbase, 0x7f70);
++	dt.address = GET_SMSTATE(u32, buf, 0x7f74);
++	dt.size =    GET_SMSTATE(u32, buf, 0x7f70);
+ 	kvm_x86_ops->set_gdt(vcpu, &dt);
+ 
+-	dt.address =               GET_SMSTATE(u32, smbase, 0x7f58);
+-	dt.size =                  GET_SMSTATE(u32, smbase, 0x7f54);
++	dt.address = GET_SMSTATE(u32, buf, 0x7f58);
++	dt.size =    GET_SMSTATE(u32, buf, 0x7f54);
+ 	kvm_x86_ops->set_idt(vcpu, &dt);
+ 
+ 	for (i = 0; i < 6; i++) {
+-		int r = rsm_load_seg_32(vcpu, smbase, i);
++		int r = rsm_load_seg_32(vcpu, buf, i);
+ 		if (r != X86EMUL_CONTINUE)
+ 			return r;
+ 	}
+ 
+-	cr4 = GET_SMSTATE(u32, smbase, 0x7f14);
++	cr4 = GET_SMSTATE(u32, buf, 0x7f14);
+ 
+-	vcpu->arch.smbase = GET_SMSTATE(u32, smbase, 0x7ef8);
++	vcpu->arch.smbase = GET_SMSTATE(u32, buf, 0x7ef8);
+ 
+ 	return rsm_enter_protected_mode(vcpu, cr0, cr3, cr4);
+ }
+ 
+-static int rsm_load_state_64(struct kvm_vcpu *vcpu, u64 smbase)
++static int rsm_load_state_64(struct kvm_vcpu *vcpu, const char *buf)
+ {
+ 	struct x86_emulate_ctxt *ctxt = &vcpu->arch.emulate_ctxt;
+ 	struct desc_ptr dt;
+@@ -7734,43 +7726,43 @@ static int rsm_load_state_64(struct kvm_vcpu *vcpu, u64 smbase)
+ 	int i, r;
+ 
+ 	for (i = 0; i < 16; i++)
+-		*reg_write(ctxt, i) = GET_SMSTATE(u64, smbase, 0x7ff8 - i * 8);
++		*reg_write(ctxt, i) = GET_SMSTATE(u64, buf, 0x7ff8 - i * 8);
+ 
+-	ctxt->_eip   = GET_SMSTATE(u64, smbase, 0x7f78);
+-	ctxt->eflags = GET_SMSTATE(u32, smbase, 0x7f70) | X86_EFLAGS_FIXED;
++	ctxt->_eip   = GET_SMSTATE(u64, buf, 0x7f78);
++	ctxt->eflags = GET_SMSTATE(u32, buf, 0x7f70) | X86_EFLAGS_FIXED;
+ 
+-	val = GET_SMSTATE(u32, smbase, 0x7f68);
++	val = GET_SMSTATE(u32, buf, 0x7f68);
+ 	__kvm_set_dr(vcpu, 6, (val & DR6_VOLATILE) | DR6_FIXED_1);
+-	val = GET_SMSTATE(u32, smbase, 0x7f60);
++	val = GET_SMSTATE(u32, buf, 0x7f60);
+ 	__kvm_set_dr(vcpu, 7, (val & DR7_VOLATILE) | DR7_FIXED_1);
+ 
+-	cr0 =                       GET_SMSTATE(u64, smbase, 0x7f58);
+-	cr3 =                       GET_SMSTATE(u64, smbase, 0x7f50);
+-	cr4 =                       GET_SMSTATE(u64, smbase, 0x7f48);
+-	vcpu->arch.smbase =         GET_SMSTATE(u32, smbase, 0x7f00);
+-	val =                       GET_SMSTATE(u64, smbase, 0x7ed0);
++	cr0 =               GET_SMSTATE(u64, buf, 0x7f58);
++	cr3 =               GET_SMSTATE(u64, buf, 0x7f50);
++	cr4 =               GET_SMSTATE(u64, buf, 0x7f48);
++	vcpu->arch.smbase = GET_SMSTATE(u32, buf, 0x7f00);
++	val =               GET_SMSTATE(u64, buf, 0x7ed0);
+ 	emulator_set_msr(ctxt, MSR_EFER, val & ~EFER_LMA);
+ 
+ 	rsm_set_seg_64(vcpu, VCPU_SREG_TR,
+-		       GET_SMSTATE(u32, smbase, 0x7e90),
+-		       GET_SMSTATE(u32, smbase, 0x7e98),
+-		       GET_SMSTATE(u32, smbase, 0x7e9c),
+-		       GET_SMSTATE(u32, smbase, 0x7e94),
+-		       GET_SMSTATE(u32, smbase, 0x7e92) << 8);
++		       GET_SMSTATE(u32, buf, 0x7e90),
++		       GET_SMSTATE(u32, buf, 0x7e98),
++		       GET_SMSTATE(u32, buf, 0x7e9c),
++		       GET_SMSTATE(u32, buf, 0x7e94),
++		       GET_SMSTATE(u32, buf, 0x7e92) << 8);
+ 
+-	dt.size =                   GET_SMSTATE(u32, smbase, 0x7e84);
+-	dt.address =                GET_SMSTATE(u64, smbase, 0x7e88);
++	dt.size =      GET_SMSTATE(u32, buf, 0x7e84);
++	dt.address =   GET_SMSTATE(u64, buf, 0x7e88);
+ 	kvm_x86_ops->set_idt(vcpu, &dt);
+ 
+ 	rsm_set_seg_64(vcpu, VCPU_SREG_LDTR,
+-		       GET_SMSTATE(u32, smbase, 0x7e70),
+-		       GET_SMSTATE(u32, smbase, 0x7e78),
+-		       GET_SMSTATE(u32, smbase, 0x7e7c),
+-		       GET_SMSTATE(u32, smbase, 0x7e74),
+-		       GET_SMSTATE(u32, smbase, 0x7e72) << 8);
++		       GET_SMSTATE(u32, buf, 0x7e70),
++		       GET_SMSTATE(u32, buf, 0x7e78),
++		       GET_SMSTATE(u32, buf, 0x7e7c),
++		       GET_SMSTATE(u32, buf, 0x7e74),
++		       GET_SMSTATE(u32, buf, 0x7e72) << 8);
+ 
+-	dt.size =                   GET_SMSTATE(u32, smbase, 0x7e64);
+-	dt.address =                GET_SMSTATE(u64, smbase, 0x7e68);
++	dt.size =      GET_SMSTATE(u32, buf, 0x7e64);
++	dt.address =   GET_SMSTATE(u64, buf, 0x7e68);
+ 	kvm_x86_ops->set_gdt(vcpu, &dt);
+ 
+ 	r = rsm_enter_protected_mode(vcpu, cr0, cr3, cr4);
+@@ -7778,7 +7770,7 @@ static int rsm_load_state_64(struct kvm_vcpu *vcpu, u64 smbase)
+ 		return r;
+ 
+ 	for (i = 0; i < 6; i++) {
+-		r = rsm_load_seg_64(vcpu, smbase, i);
++		r = rsm_load_seg_64(vcpu, buf, i);
+ 		if (r != X86EMUL_CONTINUE)
+ 			return r;
+ 	}
+@@ -7789,9 +7781,13 @@ static int rsm_load_state_64(struct kvm_vcpu *vcpu, u64 smbase)
+ static int leave_smm(struct kvm_vcpu *vcpu)
+ {
+ 	unsigned long cr0, cr4;
+-	u64 smbase;
++	char buf[512];
+ 	int ret;
+ 
++	if (kvm_vcpu_read_guest(vcpu, vcpu->arch.smbase + 0xfe00, buf,
++				sizeof(buf)))
++		return X86EMUL_UNHANDLEABLE;
++
+ 	/*
+ 	 * Get back to real mode, to prepare a safe state in which to load
+ 	 * CR0/CR3/CR4/EFER.  It's all a bit more complicated if the vCPU
+@@ -7827,20 +7823,18 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 	/* And finally go back to 32-bit mode.  */
+ 	emulator_set_msr(&vcpu->arch.emulate_ctxt, MSR_EFER, 0);
+ 
+-	smbase = vcpu->arch.smbase;
+-
+ 	/*
+ 	 * Give pre_leave_smm() a chance to make ISA-specific changes to the
+ 	 * vCPU state (e.g. enter guest mode) before loading state from the SMM
+ 	 * state-save area.
+ 	 */
+-	if (kvm_x86_ops->pre_leave_smm(vcpu, smbase))
++	if (kvm_x86_ops->pre_leave_smm(vcpu, buf))
+ 		return X86EMUL_UNHANDLEABLE;
+ 
+ 	if (guest_cpuid_has(vcpu, X86_FEATURE_LM))
+-		ret = rsm_load_state_64(vcpu, smbase + 0x8000);
++		ret = rsm_load_state_64(vcpu, buf);
+ 	else
+-		ret = rsm_load_state_32(vcpu, smbase + 0x8000);
++		ret = rsm_load_state_32(vcpu, buf);
+ 
+ 	if (ret != X86EMUL_CONTINUE) {
+ 		/* FIXME: should triple fault */
+
+From patchwork Thu Mar 28 17:55:57 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875639
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C12D51708
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:17 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A83F828CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:17 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 9C8A728D17; Thu, 28 Mar 2019 17:56:17 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3CBB828CC0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:17 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727647AbfC1R4P (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:15 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7260 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727572AbfC1R4J (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:09 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:56:07 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691217"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:56:07 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 18/18] KVM: x86: clear SMM flags before loading state
+ while leaving SMM
+Date: Thu, 28 Mar 2019 10:55:57 -0700
+Message-Id: <20190328175557.14408-19-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+References: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Reported-by: Jon Doron <arilou@gmail.com>
+Cc: Jim Mattson <jmattson@google.com>
+Cc: Liran Alon <liran.alon@oracle.com>
+Cc: Vitaly Kuznetsov <vkuznets@redhat.com>
+Fixes: 5bea5123cbf0 ("KVM: VMX: check nested state and CR4.VMXE against SMM")
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/svm.c     | 12 ++++--------
+ arch/x86/kvm/vmx/vmx.c |  2 --
+ arch/x86/kvm/x86.c     | 10 +++++-----
+ 3 files changed, 9 insertions(+), 15 deletions(-)
+
+diff --git a/arch/x86/kvm/svm.c b/arch/x86/kvm/svm.c
+index 33975e2aa486..b76c5d34a814 100644
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -6222,21 +6222,17 @@ static int svm_pre_leave_smm(struct kvm_vcpu *vcpu, const char *smstate)
+ 	struct page *page;
+ 	u64 guest;
+ 	u64 vmcb;
+-	int ret;
+ 
+ 	guest = GET_SMSTATE(u64, smsate, 0x7ed8);
+ 	vmcb = GET_SMSTATE(u64, smsate, 0x7ee0);
+ 
+ 	if (guest) {
+-		vcpu->arch.hflags &= ~HF_SMM_MASK;
+ 		nested_vmcb = nested_svm_map(svm, vmcb, &page);
+-		if (nested_vmcb)
+-			enter_svm_guest_mode(svm, vmcb, nested_vmcb, page);
+-		else
+-			ret = 1;
+-		vcpu->arch.hflags |= HF_SMM_MASK;
++		if (!nested_vmcb)
++			return 1;
++		enter_svm_guest_mode(svm, vmcb, nested_vmcb, page);
+ 	}
+-	return ret;
++	return 0;
+ }
+ 
+ static int enable_smi_window(struct kvm_vcpu *vcpu)
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 4612a1e7585e..eeed91a1efc6 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -7379,9 +7379,7 @@ static int vmx_pre_leave_smm(struct kvm_vcpu *vcpu, const char *smstate)
+ 	}
+ 
+ 	if (vmx->nested.smm.guest_mode) {
+-		vcpu->arch.hflags &= ~HF_SMM_MASK;
+ 		ret = nested_vmx_enter_non_root_mode(vcpu, false);
+-		vcpu->arch.hflags |= HF_SMM_MASK;
+ 		if (ret)
+ 			return ret;
+ 
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 1e510ca8a8e4..ef8ba625fea5 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7788,6 +7788,11 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 				sizeof(buf)))
+ 		return X86EMUL_UNHANDLEABLE;
+ 
++	if ((vcpu->arch.hflags & HF_SMM_INSIDE_NMI_MASK) == 0)
++		kvm_x86_ops->set_nmi_mask(vcpu, false);
++
++	vcpu->arch.hflags &= ~(HF_SMM_INSIDE_NMI_MASK | HF_SMM_MASK);
++
+ 	/*
+ 	 * Get back to real mode, to prepare a safe state in which to load
+ 	 * CR0/CR3/CR4/EFER.  It's all a bit more complicated if the vCPU
+@@ -7841,11 +7846,6 @@ static int leave_smm(struct kvm_vcpu *vcpu)
+ 		return X86EMUL_UNHANDLEABLE;
+ 	}
+ 
+-	if ((vcpu->arch.hflags & HF_SMM_INSIDE_NMI_MASK) == 0)
+-		kvm_x86_ops->set_nmi_mask(vcpu, false);
+-
+-	vcpu->arch.hflags &= ~(HF_SMM_INSIDE_NMI_MASK | HF_SMM_MASK);
+-
+ 	kvm_smm_changed(vcpu);
+ 
+ 	return X86EMUL_CONTINUE;

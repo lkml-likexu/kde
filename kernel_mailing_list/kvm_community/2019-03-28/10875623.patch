@@ -1,0 +1,125 @@
+From patchwork Thu Mar 28 17:55:39 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10875623
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B7140139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:07 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 9F3E228CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:07 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 9336028D27; Thu, 28 Mar 2019 17:56:07 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2ACDC28CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 17:56:07 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726441AbfC1R4F (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 13:56:05 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7260 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726298AbfC1R4F (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 13:56:05 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga003.fm.intel.com ([10.253.24.29])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Mar 2019 10:55:59 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,281,1549958400";
+   d="scan'208";a="144691161"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by FMSMGA003.fm.intel.com with ESMTP; 28 Mar 2019 10:55:59 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [RFC PATCH 00/18] KVM: x86: clear HF_SMM_MASK before loading state
+Date: Thu, 28 Mar 2019 10:55:39 -0700
+Message-Id: <20190328175557.14408-1-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Disclaimer: this is very much an RFC.  All patches are compile tested
+only, the changelogs are non-existent and the order of the patches is
+completely backwards in a lot of ways, e.g. the fix should really be
+squeezed in much earlier.  I'd like to get feedback on the idea before
+actually spending the effort to get it working.  Without further ado...
+
+RSM emulation is currently broken on VMX when the interrupted guest has
+CR4.VMXE=1.  There are a handful of ideas to fix the issue, but they are
+all undesirable in some way, e.g. hacky, ugly, fragile, etc...
+
+Rather than dance around the issue of HF_SMM_MASK being set when loading
+SMSTATE into architectural state, rework RSM emulation itself to clear
+HF_SMM_MASK prior to loading architectural state.  The basic concept is
+to move the guts of em_rsm() out of the emulator and into x86.c as
+leave_smm() so that leave_smm() can modify HF_SMM_MASK in a more granular
+way, i.e. clear HF_SMM_MASK without triggerring kvm_smm_changed().
+
+AFAICT, the only motivation for having HF_SMM_MASK set throughout is so
+that the memory access from GET_SMSTATE() are tagged with role.smm (though
+arguably even that is unnecessary).  This can be avoided by taking the
+enter_smm() approach of reading all of SMSTATE into a buffer and then
+loading state from the buffer.  Note, it's entirely possible this will
+break horribly, commit 660a5d517aaa ("KVM: x86: save/load state on SMM
+switch") does not provide any insight as to why enter_smm() buffers
+memory while em_rsm() reads it piecemeal.
+
+Almost all of the patches are unrelated cleanup to remove usage of
+emulator function as much as possible, and to make leave_smm() mirror
+enter_smm().
+
+Lastly, even if this approach works, it likely makes sense to take
+Vitaly's patch (to toggle HF_SMM_MASK when setting CR4 during RSM)
+so that the actual fix less risky and can be easily backported.
+
+Sean Christopherson (18):
+  KVM: x86: Move emulation of RSM, i.e. leave_smm, out of emulator
+  KVM: x86: Drop emulator_has_longmode()
+  KVM: x86: Drop emulator_pre_leave_smm()
+  KVM: x86: Drop emulator_set_hflags()
+  KVM: x86: Add emulator_is_smm()
+  KVM: x86: Add emulator_is_guest_mode()
+  KVM: x86: Drop emulator_get_hflags()
+  KVM: x86: Call set_nmi_mask() directly when leaving SMM
+  KVM: x86: Call kvm_{get,set}_cr*() directly when leaving SMM
+  KVM: x86: Call __kvm_set_dr() directly when leaving SMM
+  KVM: x86: Call kvm_x86_ops.set_*dt() directly when leaving SMM
+  KVM: x86: call emulator_set_msr() directly when leaving SMM
+  KVM: x86: Drop x86_emulate_ops.read_phys()
+  KVM: x86: Use kvm_set_segment() directly when leaving SMM
+  KVM: x86: Invert passing of vcpu and ctxt when leaving SMM
+  KVM: x86: Open code kvm_set_hflags
+  KVM: x86: Load SMRAM in a single shot when leaving SMM
+  KVM: x86: clear SMM flags before loading state while leaving SMM
+
+ arch/x86/include/asm/kvm_emulate.h |  23 +-
+ arch/x86/include/asm/kvm_host.h    |   5 +-
+ arch/x86/kvm/emulate.c             | 310 +-----------------------
+ arch/x86/kvm/svm.c                 |  30 +--
+ arch/x86/kvm/vmx/vmx.c             |   4 +-
+ arch/x86/kvm/x86.c                 | 377 ++++++++++++++++++++++++-----
+ 6 files changed, 348 insertions(+), 401 deletions(-)

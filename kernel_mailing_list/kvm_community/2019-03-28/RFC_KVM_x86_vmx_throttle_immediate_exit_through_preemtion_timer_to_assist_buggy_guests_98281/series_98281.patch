@@ -1,0 +1,202 @@
+From patchwork Thu Mar 28 20:31:10 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 10875939
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 0611014DE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 20:31:24 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id DA54B28C64
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 20:31:23 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id CE5D328E74; Thu, 28 Mar 2019 20:31:23 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-6.9 required=2.0 tests=BAYES_00,HEXHASH_WORD,
+	MAILING_LIST_MULTI,RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4A81D28C64
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Mar 2019 20:31:22 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726195AbfC1UbQ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Mar 2019 16:31:16 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:56318 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726100AbfC1UbQ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Mar 2019 16:31:16 -0400
+Received: from smtp.corp.redhat.com (int-mx01.intmail.prod.int.phx2.redhat.com
+ [10.5.11.11])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 26C7C3086272;
+        Thu, 28 Mar 2019 20:31:16 +0000 (UTC)
+Received: from vitty.brq.redhat.com (ovpn-204-50.brq.redhat.com
+ [10.40.204.50])
+        by smtp.corp.redhat.com (Postfix) with ESMTPS id 0521D600C0;
+        Thu, 28 Mar 2019 20:31:13 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Liran Alon <liran.alon@oracle.com>,
+ Sean Christopherson <sean.j.christopherson@intel.com>,
+ linux-kernel@vger.kernel.org
+Subject: [PATCH RFC] KVM: x86: vmx: throttle immediate exit through preemtion
+ timer to assist buggy guests
+Date: Thu, 28 Mar 2019 21:31:10 +0100
+Message-Id: <20190328203110.20655-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.11
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.49]);
+ Thu, 28 Mar 2019 20:31:16 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+This is embarassing but we have another Windows/Hyper-V issue to workaround
+in KVM (or QEMU). Hope "RFC" makes it less offensive.
+
+It was noticed that Hyper-V guest on q35 KVM/QEMU VM hangs on boot if e.g.
+'piix4-usb-uhci' device is attached. The problem with this device is that
+it uses level-triggered interrupts.
+
+The 'hang' scenario develops like this:
+1) Hyper-V boots and QEMU is trying to inject two irq simultaneously. One
+ of them is level-triggered. KVM injects the edge-triggered one and
+ requests immediate exit to inject the level-triggered:
+
+ kvm_set_irq:          gsi 23 level 1 source 0
+ kvm_msi_set_irq:      dst 0 vec 80 (Fixed|physical|level)
+ kvm_apic_accept_irq:  apicid 0 vec 80 (Fixed|edge)
+ kvm_msi_set_irq:      dst 0 vec 96 (Fixed|physical|edge)
+ kvm_apic_accept_irq:  apicid 0 vec 96 (Fixed|edge)
+ kvm_nested_vmexit_inject: reason EXTERNAL_INTERRUPT info1 0 info2 0 int_info 80000060 int_info_err 0
+
+2) Hyper-V requires one of its VMs to run to handle the situation but
+ immediate exit happens:
+
+ kvm_entry:            vcpu 0
+ kvm_exit:             reason VMRESUME rip 0xfffff80006a40115 info 0 0
+ kvm_entry:            vcpu 0
+ kvm_exit:             reason PREEMPTION_TIMER rip 0xfffff8022f3d8350 info 0 0
+ kvm_nested_vmexit:    rip fffff8022f3d8350 reason PREEMPTION_TIMER info1 0 info2 0 int_info 0 int_info_err 0
+ kvm_nested_vmexit_inject: reason EXTERNAL_INTERRUPT info1 0 info2 0 int_info 80000050 int_info_err 0
+
+3) Hyper-V doesn't want to deal with the second irq (as its VM still didn't
+ process the first one) so it just does 'EOI' for level-triggered interrupt
+ and this causes re-injection:
+
+ kvm_exit:             reason EOI_INDUCED rip 0xfffff80006a17e1a info 50 0
+ kvm_eoi:              apicid 0 vector 80
+ kvm_userspace_exit:   reason KVM_EXIT_IOAPIC_EOI (26)
+ kvm_set_irq:          gsi 23 level 1 source 0
+ kvm_msi_set_irq:      dst 0 vec 80 (Fixed|physical|level)
+ kvm_apic_accept_irq:  apicid 0 vec 80 (Fixed|edge)
+ kvm_entry:            vcpu 0
+
+4) As we arm preemtion timer again we get stuck in the infinite loop:
+
+ kvm_exit:             reason VMRESUME rip 0xfffff80006a40115 info 0 0
+ kvm_entry:            vcpu 0
+ kvm_exit:             reason PREEMPTION_TIMER rip 0xfffff8022f3d8350 info 0 0
+ kvm_nested_vmexit:    rip fffff8022f3d8350 reason PREEMPTION_TIMER info1 0 info2 0 int_info 0 int_info_err 0
+ kvm_nested_vmexit_inject: reason EXTERNAL_INTERRUPT info1 0 info2 0 int_info 80000050 int_info_err 0
+ kvm_entry:            vcpu 0
+ kvm_exit:             reason EOI_INDUCED rip 0xfffff80006a17e1a info 50 0
+ kvm_eoi:              apicid 0 vector 80
+ kvm_userspace_exit:   reason KVM_EXIT_IOAPIC_EOI (26)
+ kvm_set_irq:          gsi 23 level 1 source 0
+ kvm_msi_set_irq:      dst 0 vec 80 (Fixed|physical|level)
+ kvm_apic_accept_irq:  apicid 0 vec 80 (Fixed|edge)
+ kvm_entry:            vcpu 0
+ kvm_exit:             reason VMRESUME rip 0xfffff80006a40115 info 0 0
+ ...
+
+How does this work on hardware? I don't really know but it seems that we
+were dealing with similar issues before, see commit 184564efae4d7 ("kvm:
+ioapic: conditionally delay irq delivery duringeoi broadcast"). In case EOI
+doesn't always cause an *immediate* interrupt re-injection some progress
+can be made.
+
+An alternative approach would be to port the above mentioned commit to
+QEMU's ioapic implementation. I'm, however, not sure that level-triggered
+interrupts is a must to trigger the issue.
+
+HV_TIMER_THROTTLE/HV_TIMER_DELAY are more or less arbitrary. I haven't
+looked at SVM yet but their immediate exit implementation does
+smp_send_reschedule(), I'm not sure this can cause the above described
+lockup.
+
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ arch/x86/kvm/vmx/vmcs.h |  2 ++
+ arch/x86/kvm/vmx/vmx.c  | 24 +++++++++++++++++++++++-
+ 2 files changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/vmx/vmcs.h b/arch/x86/kvm/vmx/vmcs.h
+index cb6079f8a227..983dfc60c30c 100644
+--- a/arch/x86/kvm/vmx/vmcs.h
++++ b/arch/x86/kvm/vmx/vmcs.h
+@@ -54,6 +54,8 @@ struct loaded_vmcs {
+ 	bool launched;
+ 	bool nmi_known_unmasked;
+ 	bool hv_timer_armed;
++	unsigned long hv_timer_lastrip;
++	int hv_timer_lastrip_cnt;
+ 	/* Support for vnmi-less CPUs */
+ 	int soft_vnmi_blocked;
+ 	ktime_t entry_time;
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 617443c1c6d7..8a49ec14dd3a 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6321,14 +6321,36 @@ static void vmx_arm_hv_timer(struct vcpu_vmx *vmx, u32 val)
+ 	vmx->loaded_vmcs->hv_timer_armed = true;
+ }
+ 
++#define HV_TIMER_THROTTLE 100
++#define HV_TIMER_DELAY 1000
++
+ static void vmx_update_hv_timer(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+ 	u64 tscl;
+ 	u32 delta_tsc;
+ 
++	/*
++	 * Some guests are buggy and may behave in a way that causes KVM to
++	 * always request immediate exit (e.g. of a nested guest). At the same
++	 * time guest progress may be required to resolve the condition.
++	 * Throttling below makes sure we never get stuck completely.
++	 */
+ 	if (vmx->req_immediate_exit) {
+-		vmx_arm_hv_timer(vmx, 0);
++		unsigned long rip = kvm_rip_read(vcpu);
++
++		if (vmx->loaded_vmcs->hv_timer_lastrip == rip) {
++			++vmx->loaded_vmcs->hv_timer_lastrip_cnt;
++		} else {
++			vmx->loaded_vmcs->hv_timer_lastrip_cnt = 0;
++			vmx->loaded_vmcs->hv_timer_lastrip = rip;
++		}
++
++		if (vmx->loaded_vmcs->hv_timer_lastrip_cnt > HV_TIMER_THROTTLE)
++			vmx_arm_hv_timer(vmx, HV_TIMER_DELAY);
++		else
++			vmx_arm_hv_timer(vmx, 0);
++
+ 		return;
+ 	}
+ 
