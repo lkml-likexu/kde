@@ -1,0 +1,97 @@
+From patchwork Tue Apr  2 15:03:08 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10881841
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B11CC17E0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  2 Apr 2019 15:03:16 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 94038288AF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  2 Apr 2019 15:03:16 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 8475D28757; Tue,  2 Apr 2019 15:03:16 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2AB5128757
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  2 Apr 2019 15:03:16 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732306AbfDBPDO (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 2 Apr 2019 11:03:14 -0400
+Received: from mga18.intel.com ([134.134.136.126]:33168 "EHLO mga18.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726792AbfDBPDO (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 2 Apr 2019 11:03:14 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga008.fm.intel.com ([10.253.24.58])
+  by orsmga106.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 02 Apr 2019 08:03:13 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,301,1549958400";
+   d="scan'208";a="136946034"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by fmsmga008.fm.intel.com with ESMTP; 02 Apr 2019 08:03:12 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jon Doron <arilou@gmail.com>,
+        Jim Mattson <jmattson@google.com>,
+        Liran Alon <liran.alon@oracle.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>
+Subject: [PATCH 0/3] KVM: x86: clear HF_SMM_MASK before loading state
+Date: Tue,  2 Apr 2019 08:03:08 -0700
+Message-Id: <20190402150311.29481-1-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+RSM emulation is currently broken on VMX when the interrupted guest has
+CR4.VMXE=1.  Similar breakage has also occurred in the past due to
+HF_SMM_MASK being cleared only after RSM completes, i.e. loading non-SMM
+state while is_smm() returns true is unsurprisingly problematic.
+
+Rather than dance around the issue of HF_SMM_MASK being set when loading
+SMSTATE into architectural state, rework RSM emulation itself to clear
+HF_SMM_MASK prior to loading architectural state.   AFAICT, the only
+motivation for having HF_SMM_MASK set throughout is so that the memory
+access from GET_SMSTATE() are tagged with role.smm (though arguably even
+that is unnecessary).  Sidestep that particular issue by taking the
+enter_smm() approach of reading all of SMSTATE into a buffer and then
+loading state from the buffer.
+
+The actual fix is the same concept as an earlier RFC, but without first
+moving em_rsm() to x86.c, i.e. doesn't add a big pile of dependent patches
+before fixing the bug.  I'm still planning on sending a series to move
+the bulk of em_rsm() to x86.c, but it'll be a true cleanup.
+
+[1] https://patchwork.kernel.org/cover/10875623/
+
+Sean Christopherson (3):
+  KVM: x86: Load SMRAM in a single shot when leaving SMM
+  KVM: x86: Open code kvm_set_hflags
+  KVM: x86: clear SMM flags before loading state while leaving SMM
+
+ arch/x86/include/asm/kvm_emulate.h |   4 +-
+ arch/x86/include/asm/kvm_host.h    |   5 +-
+ arch/x86/kvm/emulate.c             | 160 +++++++++++++++--------------
+ arch/x86/kvm/svm.c                 |  30 ++----
+ arch/x86/kvm/vmx/vmx.c             |   4 +-
+ arch/x86/kvm/x86.c                 |  38 ++++---
+ 6 files changed, 118 insertions(+), 123 deletions(-)

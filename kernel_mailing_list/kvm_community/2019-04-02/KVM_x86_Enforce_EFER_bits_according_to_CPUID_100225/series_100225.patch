@@ -1,0 +1,244 @@
+From patchwork Tue Apr  2 15:19:15 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10881863
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id CB893922
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  2 Apr 2019 15:19:21 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B7D312860B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  2 Apr 2019 15:19:21 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id AC2412876C; Tue,  2 Apr 2019 15:19:21 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4A1902860B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  2 Apr 2019 15:19:21 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730488AbfDBPTT (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 2 Apr 2019 11:19:19 -0400
+Received: from mga11.intel.com ([192.55.52.93]:49284 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729625AbfDBPTS (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 2 Apr 2019 11:19:18 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga007.fm.intel.com ([10.253.24.52])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 02 Apr 2019 08:19:16 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,301,1549958400";
+   d="scan'208";a="139506968"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by fmsmga007.fm.intel.com with ESMTP; 02 Apr 2019 08:19:17 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org
+Subject: [PATCH 1/2] KVM: x86: Skip EFER vs. guest CPUID checks for
+ host-initiated writes
+Date: Tue,  2 Apr 2019 08:19:15 -0700
+Message-Id: <20190402151916.30109-2-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190402151916.30109-1-sean.j.christopherson@intel.com>
+References: <20190402151916.30109-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+KVM allows userspace to violate consistency checks related to the
+guest's CPUID model to some degree.  Generally speaking, userspace has
+carte blanche when it comes to guest state so long as jamming invalid
+state won't negatively affect the host.
+
+Currently this is seems to be a non-issue as most of the interesting
+EFER checks are missing, e.g. NX and LME, but those will be added
+shortly.  Proactively exempt userspace from the CPUID checks so as not
+to break userspace.
+
+Note, the efer_reserved_bits check still applies to userspace writes as
+that mask reflects the host's capabilities, e.g. KVM shouldn't allow a
+guest to run with NX=1 if it has been disabled in the host.
+
+Fixes: d80174745ba39 ("KVM: SVM: Only allow setting of EFER_SVME when CPUID SVM is set")
+Cc: stable@vger.kernel.org
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/x86.c | 37 ++++++++++++++++++++++++-------------
+ 1 file changed, 24 insertions(+), 13 deletions(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 83e644579aad..4e76bcac6ae6 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -1256,31 +1256,42 @@ static int do_get_msr_feature(struct kvm_vcpu *vcpu, unsigned index, u64 *data)
+ 	return 0;
+ }
+ 
+-bool kvm_valid_efer(struct kvm_vcpu *vcpu, u64 efer)
++static bool __kvm_valid_efer(struct kvm_vcpu *vcpu, u64 efer)
+ {
+-	if (efer & efer_reserved_bits)
+-		return false;
+-
+ 	if (efer & EFER_FFXSR && !guest_cpuid_has(vcpu, X86_FEATURE_FXSR_OPT))
+-			return false;
++		return false;
+ 
+ 	if (efer & EFER_SVME && !guest_cpuid_has(vcpu, X86_FEATURE_SVM))
+-			return false;
++		return false;
+ 
+ 	return true;
++
++}
++bool kvm_valid_efer(struct kvm_vcpu *vcpu, u64 efer)
++{
++	if (efer & efer_reserved_bits)
++		return false;
++
++	return __kvm_valid_efer(vcpu, efer);
+ }
+ EXPORT_SYMBOL_GPL(kvm_valid_efer);
+ 
+-static int set_efer(struct kvm_vcpu *vcpu, u64 efer)
++static int set_efer(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ {
+ 	u64 old_efer = vcpu->arch.efer;
++	u64 efer = msr_info->data;
+ 
+-	if (!kvm_valid_efer(vcpu, efer))
+-		return 1;
++	if (efer & efer_reserved_bits)
++		return false;
+ 
+-	if (is_paging(vcpu)
+-	    && (vcpu->arch.efer & EFER_LME) != (efer & EFER_LME))
+-		return 1;
++	if (!msr_info->host_initiated) {
++		if (!__kvm_valid_efer(vcpu, efer))
++			return 1;
++
++		if (is_paging(vcpu) &&
++		    (vcpu->arch.efer & EFER_LME) != (efer & EFER_LME))
++			return 1;
++	}
+ 
+ 	efer &= ~EFER_LMA;
+ 	efer |= vcpu->arch.efer & EFER_LMA;
+@@ -2450,7 +2461,7 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 		vcpu->arch.arch_capabilities = data;
+ 		break;
+ 	case MSR_EFER:
+-		return set_efer(vcpu, data);
++		return set_efer(vcpu, msr_info);
+ 	case MSR_K7_HWCR:
+ 		data &= ~(u64)0x40;	/* ignore flush filter disable */
+ 		data &= ~(u64)0x100;	/* ignore ignne emulation enable */
+
+From patchwork Tue Apr  2 15:19:16 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10881861
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 5E02318E8
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  2 Apr 2019 15:19:20 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4B0102860B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  2 Apr 2019 15:19:20 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 3EE582876C; Tue,  2 Apr 2019 15:19:20 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E27D728756
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  2 Apr 2019 15:19:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730544AbfDBPTT (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 2 Apr 2019 11:19:19 -0400
+Received: from mga11.intel.com ([192.55.52.93]:49284 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725991AbfDBPTS (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 2 Apr 2019 11:19:18 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga007.fm.intel.com ([10.253.24.52])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 02 Apr 2019 08:19:17 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,301,1549958400";
+   d="scan'208";a="139506969"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by fmsmga007.fm.intel.com with ESMTP; 02 Apr 2019 08:19:18 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org
+Subject: [PATCH 2/2] KVM: x86: Inject #GP if guest attempts to set unsupported
+ EFER bits
+Date: Tue,  2 Apr 2019 08:19:16 -0700
+Message-Id: <20190402151916.30109-3-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190402151916.30109-1-sean.j.christopherson@intel.com>
+References: <20190402151916.30109-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+EFER.LME and EFER.NX are considered reserved if their respective feature
+bits are not advertised to the guest.
+
+Fixes: 6aa8b732ca01c ("[PATCH] kvm: userspace interface")
+Cc: stable@vger.kernel.org
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/x86.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 4e76bcac6ae6..105d74a3786a 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -1264,6 +1264,13 @@ static bool __kvm_valid_efer(struct kvm_vcpu *vcpu, u64 efer)
+ 	if (efer & EFER_SVME && !guest_cpuid_has(vcpu, X86_FEATURE_SVM))
+ 		return false;
+ 
++	if (efer & (EFER_LME | EFER_LMA) &&
++	    !guest_cpuid_has(vcpu, X86_FEATURE_LM))
++		return false;
++
++	if (efer & EFER_NX && !guest_cpuid_has(vcpu, X86_FEATURE_NX))
++		return false;
++
+ 	return true;
+ 
+ }
