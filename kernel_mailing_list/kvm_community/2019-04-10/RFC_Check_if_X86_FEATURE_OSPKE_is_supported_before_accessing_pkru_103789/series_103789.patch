@@ -1,0 +1,125 @@
+From patchwork Wed Apr 10 15:43:12 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Xiexiangyou <xiexiangyou@huawei.com>
+X-Patchwork-Id: 10894283
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id AC644922
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 10 Apr 2019 15:43:29 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 932EC289FA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 10 Apr 2019 15:43:29 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 83DF528A32; Wed, 10 Apr 2019 15:43:29 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 00F2B289FA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 10 Apr 2019 15:43:27 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728967AbfDJPn0 convert rfc822-to-8bit (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 10 Apr 2019 11:43:26 -0400
+Received: from szxga01-in.huawei.com ([45.249.212.187]:2475 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1727583AbfDJPn0 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 10 Apr 2019 11:43:26 -0400
+Received: from DGGEMA401-HUB.china.huawei.com (unknown [172.30.72.55])
+        by Forcepoint Email with ESMTP id 1D3D96500056027700ED;
+        Wed, 10 Apr 2019 23:43:21 +0800 (CST)
+Received: from DGGEMA423-HUB.china.huawei.com (10.1.198.156) by
+ DGGEMA401-HUB.china.huawei.com (10.3.20.42) with Microsoft SMTP Server (TLS)
+ id 14.3.408.0; Wed, 10 Apr 2019 23:43:20 +0800
+Received: from DGGEMA521-MBX.china.huawei.com ([169.254.6.21]) by
+ dggema423-hub.china.huawei.com ([10.1.198.156]) with mapi id 14.03.0415.000;
+ Wed, 10 Apr 2019 23:43:12 +0800
+From: Xiexiangyou <xiexiangyou@huawei.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+CC: "kvm@vger.kernel.org" <kvm@vger.kernel.org>,
+        "Liujinsong (Paul)" <liu.jinsong@huawei.com>
+Subject: [RFC] Check if X86_FEATURE_OSPKE is supported before accessing pkru
+Thread-Topic: [RFC] Check if X86_FEATURE_OSPKE is supported before accessing
+ pkru
+Thread-Index: AdTvsOBhKR83guT5QsugPBBa0qpt9w==
+Date: Wed, 10 Apr 2019 15:43:12 +0000
+Message-ID: 
+ <7A2C95E1327F7148AB122F200A3EFA4081905E57@dggema521-mbx.china.huawei.com>
+Accept-Language: zh-CN, en-US
+Content-Language: zh-CN
+X-MS-Has-Attach: 
+X-MS-TNEF-Correlator: 
+x-originating-ip: [10.177.19.122]
+Content-Type: text/plain; charset="us-ascii"
+MIME-Version: 1.0
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Hi,
+
+Commit b9dd21e104bcd45e124acfe978a79df71259e59b describes guest_CR4.PKE=1 implies host_CR4.PKE=1, and there is no need to judge OSPKE on the host.
+
+However, I have found that the following scenarios may lead to inconsistencies with expectations:
+
+1. The VM is migrated from the A host to the B host. The A host is configured
+   with nopku but the B host is not.
+2. The VM has an internal restart on the B host. The "setup_pku" is executed
+   during the booting of the VM kernel. Because pku is supported, CR4.PKE is set.
+3. Next, migrate the VM from the B host back to the A host. Panic will be
+   triggered. Because vcpu vmexit will do host pkru restoring if guest_CR4.PKE
+   is enabled.
+
+static void vmx_vcpu_run(struct kvm_vcpu *vcpu) ...
+	if (static_cpu_has(X86_FEATURE_PKU) &&
+	    kvm_read_cr4_bits(vcpu, X86_CR4_PKE)) {
+		vcpu->arch.pkru = __read_pkru();
+		if (vcpu->arch.pkru != vmx->host_pkru)
+			__write_pkru(vmx->host_pkru);
+	}
+...
+
+Since hostos is configured with 'nopku', host CR4.PKE is 0, According to the intel manual, UD exception will occur when pkru is accessed in this case.
+
+It is more appropriate to check X86_FEATURE_OSPKE than X86_FEATURE_PKU before accessing pkru.
+
+Best Regards.
+---
+ arch/x86/kvm/vmx/vmx.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+--
+1.8.3.1
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c index 30a6bcd..c4d4b09 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6553,7 +6553,7 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ 	if (vcpu->guest_debug & KVM_GUESTDBG_SINGLESTEP)
+ 		vmx_set_interrupt_shadow(vcpu, 0);
+ 
+-	if (static_cpu_has(X86_FEATURE_PKU) &&
++	if (boot_cpu_has(X86_FEATURE_OSPKE) &&
+ 	    kvm_read_cr4_bits(vcpu, X86_CR4_PKE) &&
+ 	    vcpu->arch.pkru != vmx->host_pkru)
+ 		__write_pkru(vcpu->arch.pkru);
+@@ -6633,7 +6633,7 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ 	 * back on host, so it is safe to read guest PKRU from current
+ 	 * XSAVE.
+ 	 */
+-	if (static_cpu_has(X86_FEATURE_PKU) &&
++	if (boot_cpu_has(X86_FEATURE_OSPKE) &&
+ 	    kvm_read_cr4_bits(vcpu, X86_CR4_PKE)) {
+ 		vcpu->arch.pkru = __read_pkru();
+ 		if (vcpu->arch.pkru != vmx->host_pkru)

@@ -1,0 +1,464 @@
+From patchwork Thu Apr  4 10:58:35 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 10885429
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 70273139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Apr 2019 10:59:25 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5A60D1FF30
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Apr 2019 10:59:25 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4E9AB27EED; Thu,  4 Apr 2019 10:59:25 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id EC9571FF30
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Apr 2019 10:59:24 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729698AbfDDK6v (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 4 Apr 2019 06:58:51 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:51694 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726694AbfDDK6t (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 4 Apr 2019 06:58:49 -0400
+Received: from smtp.corp.redhat.com (int-mx07.intmail.prod.int.phx2.redhat.com
+ [10.5.11.22])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 480ED3164992;
+        Thu,  4 Apr 2019 10:58:49 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-117-25.ams2.redhat.com
+ [10.36.117.25])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 45CFB1001DC9;
+        Thu,  4 Apr 2019 10:58:47 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: netdev@vger.kernel.org
+Cc: Jason Wang <jasowang@redhat.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>, kvm@vger.kernel.org,
+        virtualization@lists.linux-foundation.org,
+        linux-kernel@vger.kernel.org,
+        "David S. Miller" <davem@davemloft.net>
+Subject: [PATCH RFC 1/4] vsock/virtio: reduce credit update messages
+Date: Thu,  4 Apr 2019 12:58:35 +0200
+Message-Id: <20190404105838.101559-2-sgarzare@redhat.com>
+In-Reply-To: <20190404105838.101559-1-sgarzare@redhat.com>
+References: <20190404105838.101559-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.22
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.41]);
+ Thu, 04 Apr 2019 10:58:49 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+In order to reduce the number of credit update messages,
+we send them only when the space available seen by the
+transmitter is less than VIRTIO_VSOCK_MAX_PKT_BUF_SIZE.
+
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+ include/linux/virtio_vsock.h            |  1 +
+ net/vmw_vsock/virtio_transport_common.c | 14 +++++++++++---
+ 2 files changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/include/linux/virtio_vsock.h b/include/linux/virtio_vsock.h
+index e223e2632edd..6d7a22cc20bf 100644
+--- a/include/linux/virtio_vsock.h
++++ b/include/linux/virtio_vsock.h
+@@ -37,6 +37,7 @@ struct virtio_vsock_sock {
+ 	u32 tx_cnt;
+ 	u32 buf_alloc;
+ 	u32 peer_fwd_cnt;
++	u32 last_fwd_cnt;
+ 	u32 peer_buf_alloc;
+ 
+ 	/* Protected by rx_lock */
+diff --git a/net/vmw_vsock/virtio_transport_common.c b/net/vmw_vsock/virtio_transport_common.c
+index 602715fc9a75..f32301d823f5 100644
+--- a/net/vmw_vsock/virtio_transport_common.c
++++ b/net/vmw_vsock/virtio_transport_common.c
+@@ -206,6 +206,7 @@ static void virtio_transport_dec_rx_pkt(struct virtio_vsock_sock *vvs,
+ void virtio_transport_inc_tx_pkt(struct virtio_vsock_sock *vvs, struct virtio_vsock_pkt *pkt)
+ {
+ 	spin_lock_bh(&vvs->tx_lock);
++	vvs->last_fwd_cnt = vvs->fwd_cnt;
+ 	pkt->hdr.fwd_cnt = cpu_to_le32(vvs->fwd_cnt);
+ 	pkt->hdr.buf_alloc = cpu_to_le32(vvs->buf_alloc);
+ 	spin_unlock_bh(&vvs->tx_lock);
+@@ -256,6 +257,7 @@ virtio_transport_stream_do_dequeue(struct vsock_sock *vsk,
+ 	struct virtio_vsock_sock *vvs = vsk->trans;
+ 	struct virtio_vsock_pkt *pkt;
+ 	size_t bytes, total = 0;
++	s64 free_space;
+ 	int err = -EFAULT;
+ 
+ 	spin_lock_bh(&vvs->rx_lock);
+@@ -288,9 +290,15 @@ virtio_transport_stream_do_dequeue(struct vsock_sock *vsk,
+ 	}
+ 	spin_unlock_bh(&vvs->rx_lock);
+ 
+-	/* Send a credit pkt to peer */
+-	virtio_transport_send_credit_update(vsk, VIRTIO_VSOCK_TYPE_STREAM,
+-					    NULL);
++	/* We send a credit update only when the space available seen
++	 * by the transmitter is less than VIRTIO_VSOCK_MAX_PKT_BUF_SIZE
++	 */
++	free_space = vvs->buf_alloc - (vvs->fwd_cnt - vvs->last_fwd_cnt);
++	if (free_space < VIRTIO_VSOCK_MAX_PKT_BUF_SIZE) {
++		virtio_transport_send_credit_update(vsk,
++						    VIRTIO_VSOCK_TYPE_STREAM,
++						    NULL);
++	}
+ 
+ 	return total;
+ 
+
+From patchwork Thu Apr  4 10:58:36 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 10885427
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3F0AF1708
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Apr 2019 10:59:18 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2813B1FF30
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Apr 2019 10:59:18 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 18AF427EED; Thu,  4 Apr 2019 10:59:18 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B1B8E1FF30
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Apr 2019 10:59:17 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729737AbfDDK6w (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 4 Apr 2019 06:58:52 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:38904 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729718AbfDDK6w (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 4 Apr 2019 06:58:52 -0400
+Received: from smtp.corp.redhat.com (int-mx07.intmail.prod.int.phx2.redhat.com
+ [10.5.11.22])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 091DC19D39B;
+        Thu,  4 Apr 2019 10:58:52 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-117-25.ams2.redhat.com
+ [10.36.117.25])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id B52FB1001E65;
+        Thu,  4 Apr 2019 10:58:49 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: netdev@vger.kernel.org
+Cc: Jason Wang <jasowang@redhat.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>, kvm@vger.kernel.org,
+        virtualization@lists.linux-foundation.org,
+        linux-kernel@vger.kernel.org,
+        "David S. Miller" <davem@davemloft.net>
+Subject: [PATCH RFC 2/4] vhost/vsock: split packets to send using multiple
+ buffers
+Date: Thu,  4 Apr 2019 12:58:36 +0200
+Message-Id: <20190404105838.101559-3-sgarzare@redhat.com>
+In-Reply-To: <20190404105838.101559-1-sgarzare@redhat.com>
+References: <20190404105838.101559-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.22
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.29]);
+ Thu, 04 Apr 2019 10:58:52 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+If the packets to sent to the guest are bigger than the buffer
+available, we can split them, using multiple buffers and fixing
+the length in the packet header.
+This is safe since virtio-vsock supports only stream sockets.
+
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+ drivers/vhost/vsock.c | 35 +++++++++++++++++++++++++++++------
+ 1 file changed, 29 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/vhost/vsock.c b/drivers/vhost/vsock.c
+index bb5fc0e9fbc2..9951b7e661f6 100644
+--- a/drivers/vhost/vsock.c
++++ b/drivers/vhost/vsock.c
+@@ -94,7 +94,7 @@ vhost_transport_do_send_pkt(struct vhost_vsock *vsock,
+ 		struct iov_iter iov_iter;
+ 		unsigned out, in;
+ 		size_t nbytes;
+-		size_t len;
++		size_t iov_len, payload_len;
+ 		int head;
+ 
+ 		spin_lock_bh(&vsock->send_pkt_list_lock);
+@@ -139,8 +139,18 @@ vhost_transport_do_send_pkt(struct vhost_vsock *vsock,
+ 			break;
+ 		}
+ 
+-		len = iov_length(&vq->iov[out], in);
+-		iov_iter_init(&iov_iter, READ, &vq->iov[out], in, len);
++		payload_len = pkt->len - pkt->off;
++		iov_len = iov_length(&vq->iov[out], in);
++		iov_iter_init(&iov_iter, READ, &vq->iov[out], in, iov_len);
++
++		/* If the packet is greater than the space available in the
++		 * buffer, we split it using multiple buffers.
++		 */
++		if (payload_len > iov_len - sizeof(pkt->hdr))
++			payload_len = iov_len - sizeof(pkt->hdr);
++
++		/* Set the correct length in the header */
++		pkt->hdr.len = cpu_to_le32(payload_len);
+ 
+ 		nbytes = copy_to_iter(&pkt->hdr, sizeof(pkt->hdr), &iov_iter);
+ 		if (nbytes != sizeof(pkt->hdr)) {
+@@ -149,16 +159,29 @@ vhost_transport_do_send_pkt(struct vhost_vsock *vsock,
+ 			break;
+ 		}
+ 
+-		nbytes = copy_to_iter(pkt->buf, pkt->len, &iov_iter);
+-		if (nbytes != pkt->len) {
++		nbytes = copy_to_iter(pkt->buf + pkt->off, payload_len,
++				      &iov_iter);
++		if (nbytes != payload_len) {
+ 			virtio_transport_free_pkt(pkt);
+ 			vq_err(vq, "Faulted on copying pkt buf\n");
+ 			break;
+ 		}
+ 
+-		vhost_add_used(vq, head, sizeof(pkt->hdr) + pkt->len);
++		vhost_add_used(vq, head, sizeof(pkt->hdr) + payload_len);
+ 		added = true;
+ 
++		pkt->off += payload_len;
++
++		/* If we didn't send all the payload we can requeue the packet
++		 * to send it with the next available buffer.
++		 */
++		if (pkt->off < pkt->len) {
++			spin_lock_bh(&vsock->send_pkt_list_lock);
++			list_add(&pkt->list, &vsock->send_pkt_list);
++			spin_unlock_bh(&vsock->send_pkt_list_lock);
++			continue;
++		}
++
+ 		if (pkt->reply) {
+ 			int val;
+ 
+
+From patchwork Thu Apr  4 10:58:37 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 10885425
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 7A7471708
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Apr 2019 10:59:13 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 654E11FF30
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Apr 2019 10:59:13 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 59A5827EED; Thu,  4 Apr 2019 10:59:13 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 11B8B1FF30
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Apr 2019 10:59:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729791AbfDDK65 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 4 Apr 2019 06:58:57 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:56924 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729585AbfDDK6y (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 4 Apr 2019 06:58:54 -0400
+Received: from smtp.corp.redhat.com (int-mx07.intmail.prod.int.phx2.redhat.com
+ [10.5.11.22])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id A752FC06586D;
+        Thu,  4 Apr 2019 10:58:54 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-117-25.ams2.redhat.com
+ [10.36.117.25])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 5AF601001DC9;
+        Thu,  4 Apr 2019 10:58:52 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: netdev@vger.kernel.org
+Cc: Jason Wang <jasowang@redhat.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>, kvm@vger.kernel.org,
+        virtualization@lists.linux-foundation.org,
+        linux-kernel@vger.kernel.org,
+        "David S. Miller" <davem@davemloft.net>
+Subject: [PATCH RFC 3/4] vsock/virtio: change the maximum packet size allowed
+Date: Thu,  4 Apr 2019 12:58:37 +0200
+Message-Id: <20190404105838.101559-4-sgarzare@redhat.com>
+In-Reply-To: <20190404105838.101559-1-sgarzare@redhat.com>
+References: <20190404105838.101559-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.22
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.32]);
+ Thu, 04 Apr 2019 10:58:54 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Since now we are able to split packets, we can avoid limiting
+their sizes to VIRTIO_VSOCK_DEFAULT_RX_BUF_SIZE.
+Instead, we can use VIRTIO_VSOCK_MAX_PKT_BUF_SIZE as the max
+packet size.
+
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+ net/vmw_vsock/virtio_transport_common.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/net/vmw_vsock/virtio_transport_common.c b/net/vmw_vsock/virtio_transport_common.c
+index f32301d823f5..822e5d07a4ec 100644
+--- a/net/vmw_vsock/virtio_transport_common.c
++++ b/net/vmw_vsock/virtio_transport_common.c
+@@ -167,8 +167,8 @@ static int virtio_transport_send_pkt_info(struct vsock_sock *vsk,
+ 	vvs = vsk->trans;
+ 
+ 	/* we can send less than pkt_len bytes */
+-	if (pkt_len > VIRTIO_VSOCK_DEFAULT_RX_BUF_SIZE)
+-		pkt_len = VIRTIO_VSOCK_DEFAULT_RX_BUF_SIZE;
++	if (pkt_len > VIRTIO_VSOCK_MAX_PKT_BUF_SIZE)
++		pkt_len = VIRTIO_VSOCK_MAX_PKT_BUF_SIZE;
+ 
+ 	/* virtio_transport_get_credit might return less than pkt_len credit */
+ 	pkt_len = virtio_transport_get_credit(vvs, pkt_len);
+
+From patchwork Thu Apr  4 10:58:38 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 10885423
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 07BE7139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Apr 2019 10:59:10 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E56C11FF30
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Apr 2019 10:59:09 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id D821F27EED; Thu,  4 Apr 2019 10:59:09 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 75E7B1FF30
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Apr 2019 10:59:09 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729805AbfDDK66 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 4 Apr 2019 06:58:58 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:38926 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729787AbfDDK65 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 4 Apr 2019 06:58:57 -0400
+Received: from smtp.corp.redhat.com (int-mx07.intmail.prod.int.phx2.redhat.com
+ [10.5.11.22])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 250AB90B18;
+        Thu,  4 Apr 2019 10:58:57 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-117-25.ams2.redhat.com
+ [10.36.117.25])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 1092A1001E65;
+        Thu,  4 Apr 2019 10:58:54 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: netdev@vger.kernel.org
+Cc: Jason Wang <jasowang@redhat.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>, kvm@vger.kernel.org,
+        virtualization@lists.linux-foundation.org,
+        linux-kernel@vger.kernel.org,
+        "David S. Miller" <davem@davemloft.net>
+Subject: [PATCH RFC 4/4] vsock/virtio: increase RX buffer size to 64 KiB
+Date: Thu,  4 Apr 2019 12:58:38 +0200
+Message-Id: <20190404105838.101559-5-sgarzare@redhat.com>
+In-Reply-To: <20190404105838.101559-1-sgarzare@redhat.com>
+References: <20190404105838.101559-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.22
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.29]);
+ Thu, 04 Apr 2019 10:58:57 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+In order to increase host -> guest throughput with large packets,
+we can use 64 KiB RX buffers.
+
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+ include/linux/virtio_vsock.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/include/linux/virtio_vsock.h b/include/linux/virtio_vsock.h
+index 6d7a22cc20bf..43cce304408e 100644
+--- a/include/linux/virtio_vsock.h
++++ b/include/linux/virtio_vsock.h
+@@ -10,7 +10,7 @@
+ #define VIRTIO_VSOCK_DEFAULT_MIN_BUF_SIZE	128
+ #define VIRTIO_VSOCK_DEFAULT_BUF_SIZE		(1024 * 256)
+ #define VIRTIO_VSOCK_DEFAULT_MAX_BUF_SIZE	(1024 * 256)
+-#define VIRTIO_VSOCK_DEFAULT_RX_BUF_SIZE	(1024 * 4)
++#define VIRTIO_VSOCK_DEFAULT_RX_BUF_SIZE	(1024 * 64)
+ #define VIRTIO_VSOCK_MAX_BUF_SIZE		0xFFFFFFFFUL
+ #define VIRTIO_VSOCK_MAX_PKT_BUF_SIZE		(1024 * 64)
+ 

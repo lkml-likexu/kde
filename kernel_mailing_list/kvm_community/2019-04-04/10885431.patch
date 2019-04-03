@@ -1,0 +1,140 @@
+From patchwork Thu Apr  4 10:58:34 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 10885431
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 5F8591708
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Apr 2019 10:59:31 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 491171FF30
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Apr 2019 10:59:31 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 3D1FB27EED; Thu,  4 Apr 2019 10:59:31 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id BEEC91FF30
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  4 Apr 2019 10:59:30 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729623AbfDDK6r (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 4 Apr 2019 06:58:47 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:45236 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726694AbfDDK6r (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 4 Apr 2019 06:58:47 -0400
+Received: from smtp.corp.redhat.com (int-mx07.intmail.prod.int.phx2.redhat.com
+ [10.5.11.22])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id E10DB5945B;
+        Thu,  4 Apr 2019 10:58:46 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-117-25.ams2.redhat.com
+ [10.36.117.25])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 490201001E65;
+        Thu,  4 Apr 2019 10:58:39 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: netdev@vger.kernel.org
+Cc: Jason Wang <jasowang@redhat.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>, kvm@vger.kernel.org,
+        virtualization@lists.linux-foundation.org,
+        linux-kernel@vger.kernel.org,
+        "David S. Miller" <davem@davemloft.net>
+Subject: [PATCH RFC 0/4] vsock/virtio: optimizations to increase the
+ throughput
+Date: Thu,  4 Apr 2019 12:58:34 +0200
+Message-Id: <20190404105838.101559-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.22
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.39]);
+ Thu, 04 Apr 2019 10:58:47 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+This series tries to increase the throughput of virtio-vsock with slight
+changes:
+ - patch 1/4: reduces the number of credit update messages sent to the
+              transmitter
+ - patch 2/4: allows the host to split packets on multiple buffers,
+              in this way, we can remove the packet size limit to
+              VIRTIO_VSOCK_DEFAULT_RX_BUF_SIZE
+ - patch 3/4: uses VIRTIO_VSOCK_MAX_PKT_BUF_SIZE as the max packet size
+              allowed
+ - patch 4/4: increases RX buffer size to 64 KiB (affects only host->guest)
+
+RFC:
+ - maybe patch 4 can be replaced with multiple queues with different
+   buffer sizes or using EWMA to adapt the buffer size to the traffic
+
+ - as Jason suggested in a previous thread [1] I'll evaluate to use
+   virtio-net as transport, but I need to understand better how to
+   interface with it, maybe introducing sk_buff in virtio-vsock.
+
+Any suggestions?
+
+Here some benchmarks step by step. I used iperf3 [2] modified with VSOCK
+support:
+
+                        host -> guest [Gbps]
+pkt_size    before opt.   patch 1   patches 2+3   patch 4
+  64            0.060       0.102       0.102       0.096
+  256           0.22        0.40        0.40        0.36
+  512           0.42        0.82        0.85        0.74
+  1K            0.7         1.6         1.6         1.5
+  2K            1.5         3.0         3.1         2.9
+  4K            2.5         5.2         5.3         5.3
+  8K            3.9         8.4         8.6         8.8
+  16K           6.6        11.1        11.3        12.8
+  32K           9.9        15.8        15.8        18.1
+  64K          13.5        17.4        17.7        21.4
+  128K         17.9        19.0        19.0        23.6
+  256K         18.0        19.4        19.8        24.4
+  512K         18.4        19.6        20.1        25.3
+
+                        guest -> host [Gbps]
+pkt_size    before opt.   patch 1   patches 2+3
+  64            0.088       0.100       0.101
+  256           0.35        0.36        0.41
+  512           0.70        0.74        0.73
+  1K            1.1         1.3         1.3
+  2K            2.4         2.4         2.6
+  4K            4.3         4.3         4.5
+  8K            7.3         7.4         7.6
+  16K           9.2         9.6        11.1
+  32K           8.3         8.9        18.1
+  64K           8.3         8.9        25.4
+  128K          7.2         8.7        26.7
+  256K          7.7         8.4        24.9
+  512K          7.7         8.5        25.0
+
+Thanks,
+Stefano
+
+[1] https://www.spinics.net/lists/netdev/msg531783.html
+[2] https://github.com/stefano-garzarella/iperf/
+
+Stefano Garzarella (4):
+  vsock/virtio: reduce credit update messages
+  vhost/vsock: split packets to send using multiple buffers
+  vsock/virtio: change the maximum packet size allowed
+  vsock/virtio: increase RX buffer size to 64 KiB
+
+ drivers/vhost/vsock.c                   | 35 ++++++++++++++++++++-----
+ include/linux/virtio_vsock.h            |  3 ++-
+ net/vmw_vsock/virtio_transport_common.c | 18 +++++++++----
+ 3 files changed, 44 insertions(+), 12 deletions(-)
