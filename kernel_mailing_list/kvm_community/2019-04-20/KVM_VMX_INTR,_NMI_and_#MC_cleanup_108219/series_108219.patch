@@ -1,0 +1,843 @@
+From patchwork Sat Apr 20 05:50:55 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10909953
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 15E0318FD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 20 Apr 2019 05:51:11 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 07F3628D9D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 20 Apr 2019 05:51:11 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id F0DB128DA2; Sat, 20 Apr 2019 05:51:10 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 60EE428D9D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 20 Apr 2019 05:51:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727838AbfDTFvC (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Sat, 20 Apr 2019 01:51:02 -0400
+Received: from mga03.intel.com ([134.134.136.65]:59341 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726953AbfDTFvB (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Sat, 20 Apr 2019 01:51:01 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 19 Apr 2019 22:51:00 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,372,1549958400";
+   d="scan'208";a="317462180"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by orsmga005.jf.intel.com with ESMTP; 19 Apr 2019 22:51:00 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>
+Subject: [PATCH 1/5] KVM: VMX: Fix handling of #MC that occurs during VM-Entry
+Date: Fri, 19 Apr 2019 22:50:55 -0700
+Message-Id: <20190420055059.16816-2-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190420055059.16816-1-sean.j.christopherson@intel.com>
+References: <20190420055059.16816-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+A previous fix to prevent KVM from consuming stale VMCS state after a
+failed VM-Entry inadvertantly blocked KVM's handling of machine checks
+that occur during VM-Entry.
+
+Per Intel's SDM, a #MC during VM-Entry is handled in one of three ways,
+depending on when the #MC is recognoized.  As it pertains to this bug
+fix, the third case explicitly states EXIT_REASON_MCE_DURING_VMENTRY
+is handled like any other VM-Exit during VM-Entry, i.e. sets bit 31 to
+indicate the VM-Entry failed.
+
+If a machine-check event occurs during a VM entry, one of the following occurs:
+ - The machine-check event is handled as if it occurred before the VM entry:
+        ...
+ - The machine-check event is handled after VM entry completes:
+        ...
+ - A VM-entry failure occurs as described in Section 26.7. The basic
+   exit reason is 41, for "VM-entry failure due to machine-check event".
+
+Explicitly handle EXIT_REASON_MCE_DURING_VMENTRY as a one-off case in
+vmx_vcpu_run() instead of binning it into vmx_complete_atomic_exit().
+Doing so allows vmx_vcpu_run() to handle VMX_EXIT_REASONS_FAILED_VMENTRY
+in a sane fashion and also simplifies vmx_complete_atomic_exit() since
+VMCS.VM_EXIT_INTR_INFO is guaranteed to be fresh.
+
+Fixes: b060ca3b2e9e7 ("kvm: vmx: Handle VMLAUNCH/VMRESUME failure properly")
+Cc: Jim Mattson <jmattson@google.com>
+Cc: stable@vger.kernel.org
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 20 ++++++++------------
+ 1 file changed, 8 insertions(+), 12 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index d8f101b58ab8..79ce9c7062f9 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6103,28 +6103,21 @@ static void vmx_apicv_post_state_restore(struct kvm_vcpu *vcpu)
+ 
+ static void vmx_complete_atomic_exit(struct vcpu_vmx *vmx)
+ {
+-	u32 exit_intr_info = 0;
+-	u16 basic_exit_reason = (u16)vmx->exit_reason;
+-
+-	if (!(basic_exit_reason == EXIT_REASON_MCE_DURING_VMENTRY
+-	      || basic_exit_reason == EXIT_REASON_EXCEPTION_NMI))
++	if (vmx->exit_reason != EXIT_REASON_EXCEPTION_NMI)
+ 		return;
+ 
+-	if (!(vmx->exit_reason & VMX_EXIT_REASONS_FAILED_VMENTRY))
+-		exit_intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
+-	vmx->exit_intr_info = exit_intr_info;
++	vmx->exit_intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
+ 
+ 	/* if exit due to PF check for async PF */
+-	if (is_page_fault(exit_intr_info))
++	if (is_page_fault(vmx->exit_intr_info))
+ 		vmx->vcpu.arch.apf.host_apf_reason = kvm_read_and_reset_pf_reason();
+ 
+ 	/* Handle machine checks before interrupts are enabled */
+-	if (basic_exit_reason == EXIT_REASON_MCE_DURING_VMENTRY ||
+-	    is_machine_check(exit_intr_info))
++	if (is_machine_check(vmx->exit_intr_info))
+ 		kvm_machine_check();
+ 
+ 	/* We need to handle NMIs before interrupts are enabled */
+-	if (is_nmi(exit_intr_info)) {
++	if (is_nmi(vmx->exit_intr_info)) {
+ 		kvm_before_interrupt(&vmx->vcpu);
+ 		asm("int $2");
+ 		kvm_after_interrupt(&vmx->vcpu);
+@@ -6527,6 +6520,9 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ 	vmx->idt_vectoring_info = 0;
+ 
+ 	vmx->exit_reason = vmx->fail ? 0xdead : vmcs_read32(VM_EXIT_REASON);
++	if ((u16)vmx->exit_reason == EXIT_REASON_MCE_DURING_VMENTRY)
++		kvm_machine_check();
++
+ 	if (vmx->fail || (vmx->exit_reason & VMX_EXIT_REASONS_FAILED_VMENTRY))
+ 		return;
+ 
+
+From patchwork Sat Apr 20 05:50:56 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10909949
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D258413B5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 20 Apr 2019 05:51:10 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C04B128DA0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 20 Apr 2019 05:51:10 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id B510728D9F; Sat, 20 Apr 2019 05:51:10 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4082F28D9F
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 20 Apr 2019 05:51:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727860AbfDTFvC (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Sat, 20 Apr 2019 01:51:02 -0400
+Received: from mga03.intel.com ([134.134.136.65]:59341 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727277AbfDTFvB (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Sat, 20 Apr 2019 01:51:01 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 19 Apr 2019 22:51:00 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,372,1549958400";
+   d="scan'208";a="317462182"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by orsmga005.jf.intel.com with ESMTP; 19 Apr 2019 22:51:00 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>
+Subject: [PATCH 2/5] KVM: VMX: Read cached VM-Exit reason to detect external
+ interrupt
+Date: Fri, 19 Apr 2019 22:50:56 -0700
+Message-Id: <20190420055059.16816-3-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190420055059.16816-1-sean.j.christopherson@intel.com>
+References: <20190420055059.16816-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Generic x86 code blindly invokes the dedicated external interrupt
+handler blindly, i.e. vmx_handle_external_intr() is called on all
+VM-Exits regardless of the actual exit type.  Use the already-cached
+EXIT_REASON to determine if the VM-Exit was due to an interrupt, thus
+avoiding an extra VMREAD (to query VM_EXIT_INTR_INFO) for all other
+types of VM-Exit.
+
+In addition to avoiding the extra VMREAD, checking the EXIT_REASON
+instead of VM_EXIT_INTR_INFO makes it more obvious that
+vmx_handle_external_intr() is called for all VM-Exits, e.g. someone
+unfamiliar with the flow might wonder under what condition(s)
+VM_EXIT_INTR_INFO does not contain a valid interrupt, which is
+simply not possible since KVM always runs with "ack interrupt on exit".
+
+WARN once if VM_EXIT_INTR_INFO doesn't contain a valid interrupt on
+an EXTERNAL_INTERRUPT VM-Exit, as such a condition would indicate a
+hardware bug.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmcs.h |  6 +++++
+ arch/x86/kvm/vmx/vmx.c  | 60 +++++++++++++++++++++--------------------
+ 2 files changed, 37 insertions(+), 29 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmcs.h b/arch/x86/kvm/vmx/vmcs.h
+index cb6079f8a227..971a46c69df4 100644
+--- a/arch/x86/kvm/vmx/vmcs.h
++++ b/arch/x86/kvm/vmx/vmcs.h
+@@ -115,6 +115,12 @@ static inline bool is_nmi(u32 intr_info)
+ 		== (INTR_TYPE_NMI_INTR | INTR_INFO_VALID_MASK);
+ }
+ 
++static inline bool is_external_intr(u32 intr_info)
++{
++	return (intr_info & (INTR_INFO_VALID_MASK | INTR_INFO_INTR_TYPE_MASK))
++		== (INTR_INFO_VALID_MASK | INTR_TYPE_EXT_INTR);
++}
++
+ enum vmcs_field_width {
+ 	VMCS_FIELD_WIDTH_U16 = 0,
+ 	VMCS_FIELD_WIDTH_U64 = 1,
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 79ce9c7062f9..58e83fc86ad6 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6126,42 +6126,44 @@ static void vmx_complete_atomic_exit(struct vcpu_vmx *vmx)
+ 
+ static void vmx_handle_external_intr(struct kvm_vcpu *vcpu)
+ {
+-	u32 exit_intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
+-
+-	if ((exit_intr_info & (INTR_INFO_VALID_MASK | INTR_INFO_INTR_TYPE_MASK))
+-			== (INTR_INFO_VALID_MASK | INTR_TYPE_EXT_INTR)) {
+-		unsigned int vector;
+-		unsigned long entry;
+-		gate_desc *desc;
+-		struct vcpu_vmx *vmx = to_vmx(vcpu);
++	unsigned int vector;
++	unsigned long entry;
+ #ifdef CONFIG_X86_64
+-		unsigned long tmp;
++	unsigned long tmp;
+ #endif
++	u32 intr_info;
++
++	if (to_vmx(vcpu)->exit_reason != EXIT_REASON_EXTERNAL_INTERRUPT)
++		return;
++
++	intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
++	if (WARN_ONCE(!is_external_intr(intr_info),
++	    "KVM: unexpected VM-Exit interrupt info: 0x%x", intr_info))
++		return;
++
++	vector = intr_info & INTR_INFO_VECTOR_MASK;
++	entry = gate_offset((gate_desc *)to_vmx(vcpu)->host_idt_base + vector);
+ 
+-		vector =  exit_intr_info & INTR_INFO_VECTOR_MASK;
+-		desc = (gate_desc *)vmx->host_idt_base + vector;
+-		entry = gate_offset(desc);
+-		asm volatile(
++	asm volatile(
+ #ifdef CONFIG_X86_64
+-			"mov %%" _ASM_SP ", %[sp]\n\t"
+-			"and $0xfffffffffffffff0, %%" _ASM_SP "\n\t"
+-			"push $%c[ss]\n\t"
+-			"push %[sp]\n\t"
++		"mov %%" _ASM_SP ", %[sp]\n\t"
++		"and $0xfffffffffffffff0, %%" _ASM_SP "\n\t"
++		"push $%c[ss]\n\t"
++		"push %[sp]\n\t"
+ #endif
+-			"pushf\n\t"
+-			__ASM_SIZE(push) " $%c[cs]\n\t"
+-			CALL_NOSPEC
+-			:
++		"pushf\n\t"
++		__ASM_SIZE(push) " $%c[cs]\n\t"
++		CALL_NOSPEC
++		:
+ #ifdef CONFIG_X86_64
+-			[sp]"=&r"(tmp),
++		[sp]"=&r"(tmp),
+ #endif
+-			ASM_CALL_CONSTRAINT
+-			:
+-			THUNK_TARGET(entry),
+-			[ss]"i"(__KERNEL_DS),
+-			[cs]"i"(__KERNEL_CS)
+-			);
+-	}
++		ASM_CALL_CONSTRAINT
++		:
++		THUNK_TARGET(entry),
++		[ss]"i"(__KERNEL_DS),
++		[cs]"i"(__KERNEL_CS)
++	);
+ }
+ STACK_FRAME_NON_STANDARD(vmx_handle_external_intr);
+ 
+
+From patchwork Sat Apr 20 05:50:57 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10909957
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 765FC48C0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 20 Apr 2019 05:51:11 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 65B9528D9F
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 20 Apr 2019 05:51:11 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 59C1528D9D; Sat, 20 Apr 2019 05:51:11 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id CBC5728DA1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 20 Apr 2019 05:51:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727900AbfDTFvF (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Sat, 20 Apr 2019 01:51:05 -0400
+Received: from mga03.intel.com ([134.134.136.65]:59341 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727295AbfDTFvC (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Sat, 20 Apr 2019 01:51:02 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 19 Apr 2019 22:51:00 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,372,1549958400";
+   d="scan'208";a="317462183"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by orsmga005.jf.intel.com with ESMTP; 19 Apr 2019 22:51:00 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>
+Subject: [PATCH 3/5] KVM: VMX: Store the host kernel's IDT base in a global
+ variable
+Date: Fri, 19 Apr 2019 22:50:57 -0700
+Message-Id: <20190420055059.16816-4-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190420055059.16816-1-sean.j.christopherson@intel.com>
+References: <20190420055059.16816-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Although the kernel may use multiple IDTs, KVM should only ever see the
+"real" IDT, e.g. the early init IDT is long gone by the time KVM runs
+and the debug stack IDT is only used for small windows of time in very
+specific flows.
+
+Before commit a547c6db4d2f1 ("KVM: VMX: Enable acknowledge interupt on
+vmexit"), the kernel's IDT base was consumed by KVM only when setting
+constant VMCS state, i.e. to set VMCS.HOST_IDTR_BASE.  Because constant
+host state is done once per vCPU, there was ostensibly no need to cache
+the kernel's IDT base.
+
+When support for "ack interrupt on exit" was introduced, KVM added a
+second consumer of the IDT base as handling already-acked interrupts
+requires directly calling the interrupt handler, i.e. KVM uses the IDT
+base to find the address of the handler.  Because interrupts are a fast
+path, KVM cached the IDT base to avoid having to VMREAD HOST_IDTR_BASE.
+Presumably, the IDT base was cached on a per-vCPU basis simply because
+the existing code grabbed the IDT base on a per-vCPU (VMCS) basis.
+
+Note, all post-boot IDTs use the same handlers for external interrupts,
+i.e. the "ack interrupt on exit" use of the IDT base would be unaffected
+even if the cached IDT somehow did not match the current IDT.  And as
+for the original use case of setting VMCS.HOST_IDTR_BASE, if any of the
+above analysis is wrong then KVM has had a bug since the beginning of
+time since KVM has effectively been caching the IDT at vCPU creation
+since commit a8b732ca01c ("[PATCH] kvm: userspace interface").
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 12 +++++++-----
+ arch/x86/kvm/vmx/vmx.h |  1 -
+ 2 files changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 58e83fc86ad6..897f360a4cfa 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -389,6 +389,7 @@ static const struct kvm_vmx_segment_field {
+ };
+ 
+ u64 host_efer;
++unsigned long host_idt_base;
+ 
+ /*
+  * Though SYSCALL is only supported in 64-bit mode on Intel CPUs, kvm
+@@ -3732,7 +3733,6 @@ void vmx_set_constant_host_state(struct vcpu_vmx *vmx)
+ {
+ 	u32 low32, high32;
+ 	unsigned long tmpl;
+-	struct desc_ptr dt;
+ 	unsigned long cr0, cr3, cr4;
+ 
+ 	cr0 = read_cr0();
+@@ -3768,9 +3768,7 @@ void vmx_set_constant_host_state(struct vcpu_vmx *vmx)
+ 	vmcs_write16(HOST_SS_SELECTOR, __KERNEL_DS);  /* 22.2.4 */
+ 	vmcs_write16(HOST_TR_SELECTOR, GDT_ENTRY_TSS*8);  /* 22.2.4 */
+ 
+-	store_idt(&dt);
+-	vmcs_writel(HOST_IDTR_BASE, dt.address);   /* 22.2.4 */
+-	vmx->host_idt_base = dt.address;
++	vmcs_writel(HOST_IDTR_BASE, host_idt_base);   /* 22.2.4 */
+ 
+ 	vmcs_writel(HOST_RIP, (unsigned long)vmx_vmexit); /* 22.2.5 */
+ 
+@@ -6142,7 +6140,7 @@ static void vmx_handle_external_intr(struct kvm_vcpu *vcpu)
+ 		return;
+ 
+ 	vector = intr_info & INTR_INFO_VECTOR_MASK;
+-	entry = gate_offset((gate_desc *)to_vmx(vcpu)->host_idt_base + vector);
++	entry = gate_offset((gate_desc *)host_idt_base + vector);
+ 
+ 	asm volatile(
+ #ifdef CONFIG_X86_64
+@@ -7443,10 +7441,14 @@ static bool vmx_need_emulation_on_page_fault(struct kvm_vcpu *vcpu)
+ static __init int hardware_setup(void)
+ {
+ 	unsigned long host_bndcfgs;
++	struct desc_ptr dt;
+ 	int r, i;
+ 
+ 	rdmsrl_safe(MSR_EFER, &host_efer);
+ 
++	store_idt(&dt);
++	host_idt_base = dt.address;
++
+ 	for (i = 0; i < ARRAY_SIZE(vmx_msr_index); ++i)
+ 		kvm_define_shared_msr(i, vmx_msr_index[i]);
+ 
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index 1e42f983e0f1..d66a0f453469 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -184,7 +184,6 @@ struct vcpu_vmx {
+ 	int                   nmsrs;
+ 	int                   save_nmsrs;
+ 	bool                  guest_msrs_dirty;
+-	unsigned long	      host_idt_base;
+ #ifdef CONFIG_X86_64
+ 	u64		      msr_host_kernel_gs_base;
+ 	u64		      msr_guest_kernel_gs_base;
+
+From patchwork Sat Apr 20 05:50:58 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10909959
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D147A13B5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 20 Apr 2019 05:51:11 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C0E8B28D9D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 20 Apr 2019 05:51:11 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id B563828D9F; Sat, 20 Apr 2019 05:51:11 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 815CC28D9E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 20 Apr 2019 05:51:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727811AbfDTFvC (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Sat, 20 Apr 2019 01:51:02 -0400
+Received: from mga03.intel.com ([134.134.136.65]:59341 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725910AbfDTFvB (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Sat, 20 Apr 2019 01:51:01 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 19 Apr 2019 22:51:00 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,372,1549958400";
+   d="scan'208";a="317462184"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by orsmga005.jf.intel.com with ESMTP; 19 Apr 2019 22:51:00 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>
+Subject: [PATCH 4/5] KVM: x86: Move kvm_{before,after}_interrupt() calls to
+ vendor code
+Date: Fri, 19 Apr 2019 22:50:58 -0700
+Message-Id: <20190420055059.16816-5-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190420055059.16816-1-sean.j.christopherson@intel.com>
+References: <20190420055059.16816-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+VMX can conditionally call kvm_{before,after}_interrupt() since KVM
+always uses "ack interrupt on exit" and therefore explicitly handles
+interrupts as opposed to blindly enabling irqs.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/svm.c     | 2 ++
+ arch/x86/kvm/vmx/vmx.c | 4 ++++
+ arch/x86/kvm/x86.c     | 2 --
+ 3 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/kvm/svm.c b/arch/x86/kvm/svm.c
+index 406b558abfef..38e1c7d382a1 100644
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -6162,6 +6162,7 @@ static int svm_check_intercept(struct kvm_vcpu *vcpu,
+ 
+ static void svm_handle_external_intr(struct kvm_vcpu *vcpu)
+ {
++	kvm_before_interrupt(vcpu);
+ 	local_irq_enable();
+ 	/*
+ 	 * We must have an instruction with interrupts enabled, so
+@@ -6169,6 +6170,7 @@ static void svm_handle_external_intr(struct kvm_vcpu *vcpu)
+ 	 */
+ 	asm("nop");
+ 	local_irq_disable();
++	kvm_after_interrupt(vcpu);
+ }
+ 
+ static void svm_sched_in(struct kvm_vcpu *vcpu, int cpu)
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 897f360a4cfa..1fbd5a5dd6af 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6142,6 +6142,8 @@ static void vmx_handle_external_intr(struct kvm_vcpu *vcpu)
+ 	vector = intr_info & INTR_INFO_VECTOR_MASK;
+ 	entry = gate_offset((gate_desc *)host_idt_base + vector);
+ 
++	kvm_before_interrupt(vcpu);
++
+ 	asm volatile(
+ #ifdef CONFIG_X86_64
+ 		"mov %%" _ASM_SP ", %[sp]\n\t"
+@@ -6162,6 +6164,8 @@ static void vmx_handle_external_intr(struct kvm_vcpu *vcpu)
+ 		[ss]"i"(__KERNEL_DS),
+ 		[cs]"i"(__KERNEL_CS)
+ 	);
++
++	kvm_after_interrupt(vcpu);
+ }
+ STACK_FRAME_NON_STANDARD(vmx_handle_external_intr);
+ 
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index c09507057743..7aa002b12f25 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7945,9 +7945,7 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+ 	vcpu->mode = OUTSIDE_GUEST_MODE;
+ 	smp_wmb();
+ 
+-	kvm_before_interrupt(vcpu);
+ 	kvm_x86_ops->handle_external_intr(vcpu);
+-	kvm_after_interrupt(vcpu);
+ 
+ 	++vcpu->stat.exits;
+ 
+
+From patchwork Sat Apr 20 05:50:59 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10909955
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 54EA117EE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 20 Apr 2019 05:51:11 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 406CE28D9D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 20 Apr 2019 05:51:11 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 349F228D9F; Sat, 20 Apr 2019 05:51:11 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id AB1D228DA4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 20 Apr 2019 05:51:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727873AbfDTFvD (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Sat, 20 Apr 2019 01:51:03 -0400
+Received: from mga03.intel.com ([134.134.136.65]:59342 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725910AbfDTFvC (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Sat, 20 Apr 2019 01:51:02 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 19 Apr 2019 22:51:00 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,372,1549958400";
+   d="scan'208";a="317462185"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by orsmga005.jf.intel.com with ESMTP; 19 Apr 2019 22:51:00 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>
+Cc: kvm@vger.kernel.org, Jim Mattson <jmattson@google.com>
+Subject: [PATCH 5/5] KVM: VMX: Handle NMIs,
+ #MCs and async #PFs in common irqs-disabled fn
+Date: Fri, 19 Apr 2019 22:50:59 -0700
+Message-Id: <20190420055059.16816-6-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+In-Reply-To: <20190420055059.16816-1-sean.j.christopherson@intel.com>
+References: <20190420055059.16816-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Per commit 1b6269db3f833 ("KVM: VMX: Handle NMIs before enabling
+interrupts and preemption"), NMIs are handled directly in vmx_vcpu_run()
+to "make sure we handle NMI on the current cpu, and that we don't
+service maskable interrupts before non-maskable ones".  The other
+exceptions handled by complete_atomic_exit(), e.g. async #PF and #MC,
+have similar requirements, and are located there to avoid extra VMREADs
+since VMX bins hardware exceptions and NMIs into a single exit reason.
+
+Clean up the code and eliminate the vaguely named complete_atomic_exit()
+by moving the interrupts-disabled exception and NMI handling into the
+existing handle_external_intrs() callback, and rename the callback to
+a more appropriate name.
+
+In addition to improving code readability, this also ensures the NMI
+handler is run with the host's debug registers loaded in the unlikely
+event that the user is debugging NMIs.  Accuracy of the last_guest_tsc
+field is also improved when handling NMIs (and #MCs) as the handler
+will run after updating said field.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  2 +-
+ arch/x86/kvm/svm.c              |  4 ++--
+ arch/x86/kvm/vmx/vmx.c          | 25 ++++++++++++++-----------
+ arch/x86/kvm/x86.c              |  2 +-
+ 4 files changed, 18 insertions(+), 15 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 8d68ba0cba0c..cd60c3ae7f66 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1109,7 +1109,7 @@ struct kvm_x86_ops {
+ 	int (*check_intercept)(struct kvm_vcpu *vcpu,
+ 			       struct x86_instruction_info *info,
+ 			       enum x86_intercept_stage stage);
+-	void (*handle_external_intr)(struct kvm_vcpu *vcpu);
++	void (*handle_events_irqs_disabled)(struct kvm_vcpu *vcpu);
+ 	bool (*mpx_supported)(void);
+ 	bool (*xsaves_supported)(void);
+ 	bool (*umip_emulated)(void);
+diff --git a/arch/x86/kvm/svm.c b/arch/x86/kvm/svm.c
+index 38e1c7d382a1..e117058eba87 100644
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -6160,7 +6160,7 @@ static int svm_check_intercept(struct kvm_vcpu *vcpu,
+ 	return ret;
+ }
+ 
+-static void svm_handle_external_intr(struct kvm_vcpu *vcpu)
++static void svm_handle_events_irqs_disabled(struct kvm_vcpu *vcpu)
+ {
+ 	kvm_before_interrupt(vcpu);
+ 	local_irq_enable();
+@@ -7256,7 +7256,7 @@ static struct kvm_x86_ops svm_x86_ops __ro_after_init = {
+ 	.set_tdp_cr3 = set_tdp_cr3,
+ 
+ 	.check_intercept = svm_check_intercept,
+-	.handle_external_intr = svm_handle_external_intr,
++	.handle_events_irqs_disabled = svm_handle_events_irqs_disabled,
+ 
+ 	.request_immediate_exit = __kvm_request_immediate_exit,
+ 
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 1fbd5a5dd6af..9b580749217f 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -4441,7 +4441,7 @@ static void kvm_machine_check(void)
+ 
+ static int handle_machine_check(struct kvm_vcpu *vcpu)
+ {
+-	/* already handled by vcpu_run */
++	/* handled by vmx_handle_events_irqs_disabled() */
+ 	return 1;
+ }
+ 
+@@ -4461,7 +4461,7 @@ static int handle_exception(struct kvm_vcpu *vcpu)
+ 		return handle_machine_check(vcpu);
+ 
+ 	if (is_nmi(intr_info))
+-		return 1;  /* already handled by vmx_vcpu_run() */
++		return 1; /* handled by vmx_handle_events_irqs_disabled() */
+ 
+ 	if (is_invalid_opcode(intr_info))
+ 		return handle_ud(vcpu);
+@@ -6099,11 +6099,8 @@ static void vmx_apicv_post_state_restore(struct kvm_vcpu *vcpu)
+ 	memset(vmx->pi_desc.pir, 0, sizeof(vmx->pi_desc.pir));
+ }
+ 
+-static void vmx_complete_atomic_exit(struct vcpu_vmx *vmx)
++static void vmx_handle_exception_nmi_irqs_disabled(struct vcpu_vmx *vmx)
+ {
+-	if (vmx->exit_reason != EXIT_REASON_EXCEPTION_NMI)
+-		return;
+-
+ 	vmx->exit_intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
+ 
+ 	/* if exit due to PF check for async PF */
+@@ -6131,9 +6128,6 @@ static void vmx_handle_external_intr(struct kvm_vcpu *vcpu)
+ #endif
+ 	u32 intr_info;
+ 
+-	if (to_vmx(vcpu)->exit_reason != EXIT_REASON_EXTERNAL_INTERRUPT)
+-		return;
+-
+ 	intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
+ 	if (WARN_ONCE(!is_external_intr(intr_info),
+ 	    "KVM: unexpected VM-Exit interrupt info: 0x%x", intr_info))
+@@ -6169,6 +6163,16 @@ static void vmx_handle_external_intr(struct kvm_vcpu *vcpu)
+ }
+ STACK_FRAME_NON_STANDARD(vmx_handle_external_intr);
+ 
++static void vmx_handle_events_irqs_disabled(struct kvm_vcpu *vcpu)
++{
++	struct vcpu_vmx *vmx = to_vmx(vcpu);
++
++	if (vmx->exit_reason == EXIT_REASON_EXCEPTION_NMI)
++		vmx_handle_exception_nmi_irqs_disabled(vmx);
++	else if (vmx->exit_reason == EXIT_REASON_EXTERNAL_INTERRUPT)
++		vmx_handle_external_intr(vcpu);
++}
++
+ static bool vmx_has_emulated_msr(int index)
+ {
+ 	switch (index) {
+@@ -6533,7 +6537,6 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ 	vmx->loaded_vmcs->launched = 1;
+ 	vmx->idt_vectoring_info = vmcs_read32(IDT_VECTORING_INFO_FIELD);
+ 
+-	vmx_complete_atomic_exit(vmx);
+ 	vmx_recover_nmi_blocking(vmx);
+ 	vmx_complete_interrupts(vmx);
+ }
+@@ -7708,7 +7711,7 @@ static struct kvm_x86_ops vmx_x86_ops __ro_after_init = {
+ 	.set_tdp_cr3 = vmx_set_cr3,
+ 
+ 	.check_intercept = vmx_check_intercept,
+-	.handle_external_intr = vmx_handle_external_intr,
++	.handle_events_irqs_disabled = vmx_handle_events_irqs_disabled,
+ 	.mpx_supported = vmx_mpx_supported,
+ 	.xsaves_supported = vmx_xsaves_supported,
+ 	.umip_emulated = vmx_umip_emulated,
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 7aa002b12f25..82d320f42b1d 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7945,7 +7945,7 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+ 	vcpu->mode = OUTSIDE_GUEST_MODE;
+ 	smp_wmb();
+ 
+-	kvm_x86_ops->handle_external_intr(vcpu);
++	kvm_x86_ops->handle_events_irqs_disabled(vcpu);
+ 
+ 	++vcpu->stat.exits;
+ 

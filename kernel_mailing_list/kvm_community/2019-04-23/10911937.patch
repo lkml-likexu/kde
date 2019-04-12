@@ -1,0 +1,114 @@
+From patchwork Tue Apr 23 05:54:14 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Jason Wang <jasowang@redhat.com>
+X-Patchwork-Id: 10911937
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D654C112C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 23 Apr 2019 05:54:45 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C7E0A28733
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 23 Apr 2019 05:54:45 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id BB3D428762; Tue, 23 Apr 2019 05:54:45 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7201D28733
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 23 Apr 2019 05:54:45 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1725970AbfDWFyc (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 23 Apr 2019 01:54:32 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:37488 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725888AbfDWFyc (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 23 Apr 2019 01:54:32 -0400
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id D805D20277;
+        Tue, 23 Apr 2019 05:54:31 +0000 (UTC)
+Received: from hp-dl380pg8-01.lab.eng.pek2.redhat.com
+ (hp-dl380pg8-01.lab.eng.pek2.redhat.com [10.73.8.10])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 7040E19C7E;
+        Tue, 23 Apr 2019 05:54:22 +0000 (UTC)
+From: Jason Wang <jasowang@redhat.com>
+To: mst@redhat.com, jasowang@redhat.com, kvm@vger.kernel.org,
+        virtualization@lists.linux-foundation.org, netdev@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Cc: peterx@redhat.com, aarcange@redhat.com,
+        James.Bottomley@hansenpartnership.com, hch@infradead.org,
+        davem@davemloft.net, jglisse@redhat.com, linux-mm@kvack.org,
+        linux-arm-kernel@lists.infradead.org, linux-parisc@vger.kernel.org,
+        christophe.de.dinechin@gmail.com, jrdr.linux@gmail.com
+Subject: [RFC PATCH V3 0/6] vhost: accelerate metadata access
+Date: Tue, 23 Apr 2019 01:54:14 -0400
+Message-Id: <20190423055420.26408-1-jasowang@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.29]);
+ Tue, 23 Apr 2019 05:54:32 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+This series tries to access virtqueue metadata through kernel virtual
+address instead of copy_user() friends since they had too much
+overheads like checks, spec barriers or even hardware feature
+toggling. This is done through setup kernel address through direct
+mapping and co-opreate VM management with MMU notifiers.
+
+Test shows about 23% improvement on TX PPS. TCP_STREAM doesn't see
+obvious improvement.
+
+Thanks
+
+Changes from RFC V2:
+- switch to use direct mapping instead of vmap()
+- switch to use spinlock + RCU to synchronize MMU notifier and vhost
+  data/control path
+- set dirty pages in the invalidation callbacks
+- always use copy_to/from_users() friends for the archs that may need
+  flush_dcache_pages()
+- various minor fixes
+Changes from V4:
+- use invalidate_range() instead of invalidate_range_start()
+- track dirty pages
+Changes from V3:
+- don't try to use vmap for file backed pages
+- rebase to master
+Changes from V2:
+- fix buggy range overlapping check
+- tear down MMU notifier during vhost ioctl to make sure invalidation
+  request can read metadata userspace address and vq size without
+  holding vq mutex.
+Changes from V1:
+- instead of pinning pages, use MMU notifier to invalidate vmaps and
+  remap duing metadata prefetch
+- fix build warning on MIPS
+
+Jason Wang (6):
+  vhost: generalize adding used elem
+  vhost: fine grain userspace memory accessors
+  vhost: rename vq_iotlb_prefetch() to vq_meta_prefetch()
+  vhost: introduce helpers to get the size of metadata area
+  vhost: factor out setting vring addr and num
+  vhost: access vq metadata through kernel virtual address
+
+ drivers/vhost/net.c   |   4 +-
+ drivers/vhost/vhost.c | 852 ++++++++++++++++++++++++++++++++++++------
+ drivers/vhost/vhost.h |  34 +-
+ 3 files changed, 764 insertions(+), 126 deletions(-)

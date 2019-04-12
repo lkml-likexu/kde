@@ -1,0 +1,203 @@
+From patchwork Fri Apr 12 07:55:39 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: WANG Chao <chao.wang@ucloud.cn>
+X-Patchwork-Id: 10897379
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3206E1708
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Apr 2019 07:57:15 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E2A9428818
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Apr 2019 07:57:14 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id D39CE28E54; Fri, 12 Apr 2019 07:57:14 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3ACD828818
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 12 Apr 2019 07:57:13 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726914AbfDLH5G (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 12 Apr 2019 03:57:06 -0400
+Received: from m97188.mail.qiye.163.com ([220.181.97.188]:16923 "EHLO
+        m97188.mail.qiye.163.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1726276AbfDLH5G (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 12 Apr 2019 03:57:06 -0400
+Received: from localhost (unknown [117.48.120.186])
+        by m97188.mail.qiye.163.com (Hmail) with ESMTPA id 5A25796743B;
+        Fri, 12 Apr 2019 15:56:24 +0800 (CST)
+From: WANG Chao <chao.wang@ucloud.cn>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Joerg Roedel <joro@8bytes.org>, Thomas Gleixner <tglx@linutronix.de>,
+ Ingo Molnar <mingo@redhat.com>, Borislav Petkov <bp@alien8.de>,
+ "H. Peter Anvin" <hpa@zytor.com>, linux-kernel@vger.kernel.org
+Subject: [PATCH] x86/kvm: move kvm_load/put_guest_xcr0 into atomic context
+Date: Fri, 12 Apr 2019 15:55:39 +0800
+Message-Id: <20190412075539.24624-1-chao.wang@ucloud.cn>
+X-Mailer: git-send-email 2.21.0
+MIME-Version: 1.0
+X-HM-Spam-Status: e1kIGBQJHllBS1VLV1koWUFJQjdXWS1ZQUlXWQkOFx4IWUFZMjUtOjcyP0
+        FLVUtZBg++
+X-HM-Sender-Digest: e1kMHhlZQR0aFwgeV1kSHx4VD1lBWUc6Phw6Fhw4FDgzSTIxHToyNhUp
+        LBdPCzxVSlVKTk5OS05OTENPTk9LVTMWGhIXVRgTGhRVDBoVHDsOGBcUDh9VGBVFWVdZEgtZQVlK
+        SkxVT0NVSklLVUpDTVlXWQgBWUFOTUtCNwY+
+X-HM-Tid: 0a6a108c31e120bckuqy5a25796743b
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+guest xcr0 could leak into host when MCE happens in guest mode. Because
+do_machine_check() could schedule out at a few places.
+
+For example:
+
+kvm_load_guest_xcr0
+...
+kvm_x86_ops->run(vcpu) {
+  vmx_vcpu_run
+    vmx_complete_atomic_exit
+      kvm_machine_check
+        do_machine_check
+          do_memory_failure
+            memory_failure
+              lock_page
+
+In this case, host_xcr0 is 0x2ff, guest vcpu xcr0 is 0xff. After schedule
+out, host cpu has guest xcr0 loaded (0xff).
+
+In __switch_to {
+     switch_fpu_finish
+       copy_kernel_to_fpregs
+         XRSTORS
+
+If any bit i in XSTATE_BV[i] == 1 and xcr0[i] == 0, XRSTORS will
+generate #GP (In this case, bit 9). Then ex_handler_fprestore kicks in
+and tries to reinitialize fpu by restoring init fpu state. Same story as
+last #GP, except we get DOUBLE FAULT this time.
+
+Cc: stable@vger.kernel.org
+Signed-off-by: WANG Chao <chao.wang@ucloud.cn>
+---
+ arch/x86/kvm/svm.c     |  2 ++
+ arch/x86/kvm/vmx/vmx.c |  4 ++++
+ arch/x86/kvm/x86.c     | 10 ++++------
+ arch/x86/kvm/x86.h     |  2 ++
+ 4 files changed, 12 insertions(+), 6 deletions(-)
+
+diff --git a/arch/x86/kvm/svm.c b/arch/x86/kvm/svm.c
+index e0a791c3d4fc..2bf73076de7f 100644
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -5621,6 +5621,7 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
+ 	svm->vmcb->save.cr2 = vcpu->arch.cr2;
+ 
+ 	clgi();
++	kvm_load_guest_xcr0(vcpu);
+ 
+ 	/*
+ 	 * If this vCPU has touched SPEC_CTRL, restore the guest's value if
+@@ -5766,6 +5767,7 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
+ 	if (unlikely(svm->vmcb->control.exit_code == SVM_EXIT_NMI))
+ 		kvm_before_interrupt(&svm->vcpu);
+ 
++	kvm_put_guest_xcr0(vcpu);
+ 	stgi();
+ 
+ 	/* Any pending NMI will happen here */
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index ab432a930ae8..3157598c52f1 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6410,6 +6410,8 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ 	if (vcpu->guest_debug & KVM_GUESTDBG_SINGLESTEP)
+ 		vmx_set_interrupt_shadow(vcpu, 0);
+ 
++	kvm_load_guest_xcr0(vcpu);
++
+ 	if (static_cpu_has(X86_FEATURE_PKU) &&
+ 	    kvm_read_cr4_bits(vcpu, X86_CR4_PKE) &&
+ 	    vcpu->arch.pkru != vmx->host_pkru)
+@@ -6506,6 +6508,8 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ 			__write_pkru(vmx->host_pkru);
+ 	}
+ 
++	kvm_put_guest_xcr0(vcpu);
++
+ 	vmx->nested.nested_run_pending = 0;
+ 	vmx->idt_vectoring_info = 0;
+ 
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 099b851dabaf..22f66e9a7dc5 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -800,7 +800,7 @@ void kvm_lmsw(struct kvm_vcpu *vcpu, unsigned long msw)
+ }
+ EXPORT_SYMBOL_GPL(kvm_lmsw);
+ 
+-static void kvm_load_guest_xcr0(struct kvm_vcpu *vcpu)
++void kvm_load_guest_xcr0(struct kvm_vcpu *vcpu)
+ {
+ 	if (kvm_read_cr4_bits(vcpu, X86_CR4_OSXSAVE) &&
+ 			!vcpu->guest_xcr0_loaded) {
+@@ -810,8 +810,9 @@ static void kvm_load_guest_xcr0(struct kvm_vcpu *vcpu)
+ 		vcpu->guest_xcr0_loaded = 1;
+ 	}
+ }
++EXPORT_SYMBOL_GPL(kvm_load_guest_xcr0);
+ 
+-static void kvm_put_guest_xcr0(struct kvm_vcpu *vcpu)
++void kvm_put_guest_xcr0(struct kvm_vcpu *vcpu)
+ {
+ 	if (vcpu->guest_xcr0_loaded) {
+ 		if (vcpu->arch.xcr0 != host_xcr0)
+@@ -819,6 +820,7 @@ static void kvm_put_guest_xcr0(struct kvm_vcpu *vcpu)
+ 		vcpu->guest_xcr0_loaded = 0;
+ 	}
+ }
++EXPORT_SYMBOL_GPL(kvm_put_guest_xcr0);
+ 
+ static int __kvm_set_xcr(struct kvm_vcpu *vcpu, u32 index, u64 xcr)
+ {
+@@ -7865,8 +7867,6 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+ 		goto cancel_injection;
+ 	}
+ 
+-	kvm_load_guest_xcr0(vcpu);
+-
+ 	if (req_immediate_exit) {
+ 		kvm_make_request(KVM_REQ_EVENT, vcpu);
+ 		kvm_x86_ops->request_immediate_exit(vcpu);
+@@ -7919,8 +7919,6 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+ 	vcpu->mode = OUTSIDE_GUEST_MODE;
+ 	smp_wmb();
+ 
+-	kvm_put_guest_xcr0(vcpu);
+-
+ 	kvm_before_interrupt(vcpu);
+ 	kvm_x86_ops->handle_external_intr(vcpu);
+ 	kvm_after_interrupt(vcpu);
+diff --git a/arch/x86/kvm/x86.h b/arch/x86/kvm/x86.h
+index 28406aa1136d..aedc5d0d4989 100644
+--- a/arch/x86/kvm/x86.h
++++ b/arch/x86/kvm/x86.h
+@@ -347,4 +347,6 @@ static inline void kvm_after_interrupt(struct kvm_vcpu *vcpu)
+ 	__this_cpu_write(current_vcpu, NULL);
+ }
+ 
++void kvm_load_guest_xcr0(struct kvm_vcpu *vcpu);
++void kvm_put_guest_xcr0(struct kvm_vcpu *vcpu);
+ #endif

@@ -1,0 +1,136 @@
+From patchwork Mon Apr 15 20:00:34 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 10901485
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3245813B5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 15 Apr 2019 20:00:38 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1834126247
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 15 Apr 2019 20:00:38 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 09630288C9; Mon, 15 Apr 2019 20:00:38 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 9CE6E26247
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 15 Apr 2019 20:00:37 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729035AbfDOUAg (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 15 Apr 2019 16:00:36 -0400
+Received: from mga06.intel.com ([134.134.136.31]:12921 "EHLO mga06.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728548AbfDOUAg (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 15 Apr 2019 16:00:36 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga007.jf.intel.com ([10.7.209.58])
+  by orsmga104.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 15 Apr 2019 13:00:35 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.60,354,1549958400";
+   d="scan'208";a="131627527"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.181])
+  by orsmga007.jf.intel.com with ESMTP; 15 Apr 2019 13:00:35 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: kvm@vger.kernel.org, Nadav Amit <nadav.amit@gmail.com>
+Subject: [kvm-unit-tests PATCH] x86: apic: Preserve APIC base and BSP bits
+ during x2APIC tests
+Date: Mon, 15 Apr 2019 13:00:34 -0700
+Message-Id: <20190415200034.6839-1-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.21.0
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+...and reset to xAPIC mode unless x2APIC was already enabled.  Make the
+"APIC disabled to APIC enabled" a reported subtest so that it's
+(slightly) more obviously that the vCPU is transitioning back to legacy
+xAPIC mode and that the APIC was disabled via a previous subtest, i.e.
+won't fault due to an illegal transition.
+
+Note, reset_apic() is overkill since the vCPU is already in legacy xAPIC
+mode, i.e. the test really just needs "apic_ops = &xapic_ops;".  But two
+MSR accesses are negligible in the grand scheme and using reset_apic() is
+less reliant on the exact flow of the test.
+
+Reported-by: Nadav Amit <nadav.amit@gmail.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ x86/apic.c | 30 +++++++++++++++++++++---------
+ 1 file changed, 21 insertions(+), 9 deletions(-)
+
+diff --git a/x86/apic.c b/x86/apic.c
+index 51744cf..7f711c0 100644
+--- a/x86/apic.c
++++ b/x86/apic.c
+@@ -69,32 +69,44 @@ static void do_write_apicbase(void *data)
+ 
+ static bool test_write_apicbase_exception(u64 data)
+ {
+-    data |= APIC_DEFAULT_PHYS_BASE | APIC_BSP;
+     return test_for_exception(GP_VECTOR, do_write_apicbase, &data);
+ }
+ 
+ static void test_enable_x2apic(void)
+ {
++    u64 orig_apicbase = rdmsr(MSR_IA32_APICBASE);
++    u64 apicbase;
++
+     if (enable_x2apic()) {
+         printf("x2apic enabled\n");
+ 
++        apicbase = orig_apicbase & ~(APIC_EN | APIC_EXTD);
+         report("x2apic enabled to invalid state",
+-               test_write_apicbase_exception(APIC_EXTD));
++               test_write_apicbase_exception(apicbase | APIC_EXTD));
+         report("x2apic enabled to apic enabled",
+-               test_write_apicbase_exception(APIC_EN));
++               test_write_apicbase_exception(apicbase | APIC_EN));
+ 
+         report("x2apic enabled to disabled state",
+-               !test_write_apicbase_exception(0));
++               !test_write_apicbase_exception(apicbase | 0));
+         report("disabled to invalid state",
+-               test_write_apicbase_exception(APIC_EXTD));
++               test_write_apicbase_exception(apicbase | APIC_EXTD));
+         report("disabled to x2apic enabled",
+-               test_write_apicbase_exception(APIC_EN | APIC_EXTD));
++               test_write_apicbase_exception(apicbase | APIC_EN | APIC_EXTD));
+ 
+-        wrmsr(MSR_IA32_APICBASE, APIC_EN);
++        report("apic disabled to apic enabled",
++               !test_write_apicbase_exception(apicbase | APIC_EN));
+         report("apic enabled to invalid state",
+-               test_write_apicbase_exception(APIC_EXTD));
++               test_write_apicbase_exception(apicbase | APIC_EXTD));
+ 
+-        wrmsr(MSR_IA32_APICBASE, APIC_EN | APIC_EXTD);
++        if (orig_apicbase & APIC_EXTD)
++            enable_x2apic();
++        else
++            reset_apic();
++
++        /*
++         * Disabling the APIC resets various APIC registers, restore them to
++         * their desired values.
++         */
+         apic_write(APIC_SPIV, 0x1ff);
+     } else {
+         printf("x2apic not detected\n");
