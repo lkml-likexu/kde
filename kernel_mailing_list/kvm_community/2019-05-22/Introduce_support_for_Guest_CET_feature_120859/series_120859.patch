@@ -1,0 +1,1183 @@
+From patchwork Wed May 22 07:00:54 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Yang Weijiang <weijiang.yang@intel.com>
+X-Patchwork-Id: 10955211
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B563E14C0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:37 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A50B828A26
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:37 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 98F1728A30; Wed, 22 May 2019 07:02:37 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2C81328A26
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:37 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728527AbfEVHB5 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 May 2019 03:01:57 -0400
+Received: from mga18.intel.com ([134.134.136.126]:31984 "EHLO mga18.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726552AbfEVHB4 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 May 2019 03:01:56 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga106.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 22 May 2019 00:01:56 -0700
+X-ExtLoop1: 1
+Received: from local-michael-cet-test.sh.intel.com ([10.239.159.128])
+  by fmsmga001.fm.intel.com with ESMTP; 22 May 2019 00:01:54 -0700
+From: Yang Weijiang <weijiang.yang@intel.com>
+To: pbonzini@redhat.com, sean.j.christopherson@intel.com,
+        mst@redhat.com, rkrcmar@redhat.com, jmattson@google.com,
+        linux-kernel@vger.kernel.org, kvm@vger.kernel.org,
+        yu-cheng.yu@intel.com
+Cc: weijiang.yang@intel.com
+Subject: [PATCH v5 1/8] KVM: VMX: Define CET VMCS fields and control bits
+Date: Wed, 22 May 2019 15:00:54 +0800
+Message-Id: <20190522070101.7636-2-weijiang.yang@intel.com>
+X-Mailer: git-send-email 2.17.2
+In-Reply-To: <20190522070101.7636-1-weijiang.yang@intel.com>
+References: <20190522070101.7636-1-weijiang.yang@intel.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+CET(Control-flow Enforcement Technology) is an upcoming Intel® processor
+family feature that blocks return/jump-oriented programming (ROP) attacks.
+It provides the following capabilities to defend
+against ROP/JOP style control-flow subversion attacks:
+
+- Shadow Stack (SHSTK):
+  A second stack for the program that is used exclusively for
+  control transfer operations.
+
+- Indirect Branch Tracking (IBT):
+  Free branch protection to defend against jump/call oriented
+  programming.
+
+Several new CET MSRs are defined in kernel to support CET:
+MSR_IA32_{U,S}_CET - MSRs to control the CET settings for user
+mode and suervisor mode respectively.
+
+MSR_IA32_PL{0,1,2,3}_SSP - MSRs to store shadow stack pointers for
+CPL-0,1,2,3 levels.
+
+MSR_IA32_INT_SSP_TAB - MSR to store base address of shadow stack
+pointer table.
+
+Two XSAVES state components are introduced for CET:
+IA32_XSS:[bit 11] - bit for save/restor user mode CET states
+IA32_XSS:[bit 12] - bit for save/restor supervisor mode CET states.
+
+6 VMCS fields are introduced for CET, {HOST,GUEST}_S_CET is to store
+CET settings in supervisor mode. {HOST,GUEST}_SSP is to store shadow
+stack pointers in supervisor mode. {HOST,GUEST}_INTR_SSP_TABLE is to
+store base address of shadow stack pointer table.
+
+If VM_EXIT_LOAD_HOST_CET_STATE = 1, the host's CET MSRs are restored
+from below VMCS fields at VM-Exit:
+- HOST_S_CET
+- HOST_SSP
+- HOST_INTR_SSP_TABLE
+
+If VM_ENTRY_LOAD_GUEST_CET_STATE = 1, the guest's CET MSRs are loaded
+from below VMCS fields at VM-Entry:
+- GUEST_S_CET
+- GUEST_SSP
+- GUEST_INTR_SSP_TABLE
+
+Apart from VMCS auto-load fields, KVM calls kvm_load_guest_fpu() and
+kvm_put_guest_fpu() to save/restore the guest CET MSR states at
+VM exit/entry. XSAVES/XRSTORS are executed underneath these functions
+if they are supported. The CET xsave area is consolidated with other
+XSAVE components in thread_struct.fpu field.
+
+When context switch happens during task switch/interrupt/exception etc.,
+Kernel also relies on above functions to switch CET states properly.
+
+Signed-off-by: Yang Weijiang <weijiang.yang@intel.com>
+Co-developed-by: Zhang Yi Z <yi.z.zhang@linux.intel.com>
+---
+ arch/x86/include/asm/vmx.h | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/arch/x86/include/asm/vmx.h b/arch/x86/include/asm/vmx.h
+index 4e4133e86484..d84804c7ddaa 100644
+--- a/arch/x86/include/asm/vmx.h
++++ b/arch/x86/include/asm/vmx.h
+@@ -103,6 +103,7 @@
+ #define VM_EXIT_CLEAR_BNDCFGS                   0x00800000
+ #define VM_EXIT_PT_CONCEAL_PIP			0x01000000
+ #define VM_EXIT_CLEAR_IA32_RTIT_CTL		0x02000000
++#define VM_EXIT_LOAD_HOST_CET_STATE             0x10000000
+ 
+ #define VM_EXIT_ALWAYSON_WITHOUT_TRUE_MSR	0x00036dff
+ 
+@@ -116,6 +117,7 @@
+ #define VM_ENTRY_LOAD_BNDCFGS                   0x00010000
+ #define VM_ENTRY_PT_CONCEAL_PIP			0x00020000
+ #define VM_ENTRY_LOAD_IA32_RTIT_CTL		0x00040000
++#define VM_ENTRY_LOAD_GUEST_CET_STATE           0x00100000
+ 
+ #define VM_ENTRY_ALWAYSON_WITHOUT_TRUE_MSR	0x000011ff
+ 
+@@ -334,6 +336,9 @@ enum vmcs_field {
+ 	GUEST_PENDING_DBG_EXCEPTIONS    = 0x00006822,
+ 	GUEST_SYSENTER_ESP              = 0x00006824,
+ 	GUEST_SYSENTER_EIP              = 0x00006826,
++	GUEST_S_CET                     = 0x00006828,
++	GUEST_SSP                       = 0x0000682a,
++	GUEST_INTR_SSP_TABLE            = 0x0000682c,
+ 	HOST_CR0                        = 0x00006c00,
+ 	HOST_CR3                        = 0x00006c02,
+ 	HOST_CR4                        = 0x00006c04,
+@@ -346,6 +351,9 @@ enum vmcs_field {
+ 	HOST_IA32_SYSENTER_EIP          = 0x00006c12,
+ 	HOST_RSP                        = 0x00006c14,
+ 	HOST_RIP                        = 0x00006c16,
++	HOST_S_CET                      = 0x00006c18,
++	HOST_SSP                        = 0x00006c1a,
++	HOST_INTR_SSP_TABLE             = 0x00006c1c
+ };
+ 
+ /*
+
+From patchwork Wed May 22 07:00:55 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Yang Weijiang <weijiang.yang@intel.com>
+X-Patchwork-Id: 10955209
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id CD3DF14C0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:35 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id BE31F28A26
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:35 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id B283328A30; Wed, 22 May 2019 07:02:35 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1F69228A26
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:35 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728560AbfEVHB7 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 May 2019 03:01:59 -0400
+Received: from mga18.intel.com ([134.134.136.126]:31984 "EHLO mga18.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726552AbfEVHB6 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 May 2019 03:01:58 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga106.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 22 May 2019 00:01:58 -0700
+X-ExtLoop1: 1
+Received: from local-michael-cet-test.sh.intel.com ([10.239.159.128])
+  by fmsmga001.fm.intel.com with ESMTP; 22 May 2019 00:01:56 -0700
+From: Yang Weijiang <weijiang.yang@intel.com>
+To: pbonzini@redhat.com, sean.j.christopherson@intel.com,
+        mst@redhat.com, rkrcmar@redhat.com, jmattson@google.com,
+        linux-kernel@vger.kernel.org, kvm@vger.kernel.org,
+        yu-cheng.yu@intel.com
+Cc: weijiang.yang@intel.com
+Subject: [PATCH v5 2/8] KVM: x86: Implement CET CPUID support for Guest
+Date: Wed, 22 May 2019 15:00:55 +0800
+Message-Id: <20190522070101.7636-3-weijiang.yang@intel.com>
+X-Mailer: git-send-email 2.17.2
+In-Reply-To: <20190522070101.7636-1-weijiang.yang@intel.com>
+References: <20190522070101.7636-1-weijiang.yang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+CET SHSTK and IBT features are introduced here so that
+CPUID.(EAX=7, ECX=0):ECX[bit 7] and EDX[bit 20] reflect them.
+CET xsave components for supervisor and user mode are reported
+via CPUID.(EAX=0xD, ECX=1):ECX[bit 11] and ECX[bit 12]
+respectively.
+
+To make the code look clean, wrap CPUID(0xD,n>=1) report code in
+a helper function now.
+
+Signed-off-by: Yang Weijiang <weijiang.yang@intel.com>
+Co-developed-by: Zhang Yi Z <yi.z.zhang@linux.intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  4 +-
+ arch/x86/kvm/cpuid.c            | 97 +++++++++++++++++++++------------
+ arch/x86/kvm/vmx/vmx.c          |  6 ++
+ arch/x86/kvm/x86.h              |  4 ++
+ 4 files changed, 76 insertions(+), 35 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index a5db4475e72d..8c3f0ddc7676 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -91,7 +91,8 @@
+ 			  | X86_CR4_PGE | X86_CR4_PCE | X86_CR4_OSFXSR | X86_CR4_PCIDE \
+ 			  | X86_CR4_OSXSAVE | X86_CR4_SMEP | X86_CR4_FSGSBASE \
+ 			  | X86_CR4_OSXMMEXCPT | X86_CR4_LA57 | X86_CR4_VMXE \
+-			  | X86_CR4_SMAP | X86_CR4_PKE | X86_CR4_UMIP))
++			  | X86_CR4_SMAP | X86_CR4_PKE | X86_CR4_UMIP \
++			  | X86_CR4_CET))
+ 
+ #define CR8_RESERVED_BITS (~(unsigned long)X86_CR8_TPR)
+ 
+@@ -1192,6 +1193,7 @@ struct kvm_x86_ops {
+ 	int (*nested_enable_evmcs)(struct kvm_vcpu *vcpu,
+ 				   uint16_t *vmcs_version);
+ 	uint16_t (*nested_get_evmcs_version)(struct kvm_vcpu *vcpu);
++	u64 (*supported_xss)(void);
+ };
+ 
+ struct kvm_arch_async_pf {
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index fd3951638ae4..b9fc967fe55a 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -65,6 +65,11 @@ u64 kvm_supported_xcr0(void)
+ 	return xcr0;
+ }
+ 
++u64 kvm_supported_xss(void)
++{
++	return KVM_SUPPORTED_XSS & kvm_x86_ops->supported_xss();
++}
++
+ #define F(x) bit(X86_FEATURE_##x)
+ 
+ int kvm_update_cpuid(struct kvm_vcpu *vcpu)
+@@ -316,6 +321,50 @@ static int __do_cpuid_ent_emulated(struct kvm_cpuid_entry2 *entry,
+ 	return 0;
+ }
+ 
++static inline int __do_cpuid_dx_leaf(struct kvm_cpuid_entry2 *entry, int *nent,
++				     int maxnent, u64 xss_mask, u64 xcr0_mask,
++				     u32 eax_mask)
++{
++	int idx, i;
++	u64 mask;
++	u64 supported;
++
++	for (idx = 1, i = 1; idx < 64; ++idx) {
++		mask = ((u64)1 << idx);
++		if (*nent >= maxnent)
++			return -EINVAL;
++
++		do_cpuid_1_ent(&entry[i], 0xD, idx);
++		if (idx == 1) {
++			entry[i].eax &= eax_mask;
++			cpuid_mask(&entry[i].eax, CPUID_D_1_EAX);
++			supported = xcr0_mask | xss_mask;
++			entry[i].ebx = 0;
++			entry[i].edx = 0;
++			entry[i].ecx &= xss_mask;
++			if (entry[i].eax & (F(XSAVES) | F(XSAVEC))) {
++				entry[i].ebx =
++					xstate_required_size(supported,
++							     true);
++			}
++		} else {
++			supported = (entry[i].ecx & 1) ? xss_mask :
++				     xcr0_mask;
++			if (entry[i].eax == 0 || !(supported & mask))
++				continue;
++			entry[i].ecx &= 1;
++			entry[i].edx = 0;
++			if (entry[i].ecx)
++				entry[i].ebx = 0;
++		}
++		entry[i].flags |=
++			KVM_CPUID_FLAG_SIGNIFCANT_INDEX;
++		++*nent;
++		++i;
++	}
++	return 0;
++}
++
+ static inline int __do_cpuid_ent(struct kvm_cpuid_entry2 *entry, u32 function,
+ 				 u32 index, int *nent, int maxnent)
+ {
+@@ -405,12 +454,13 @@ static inline int __do_cpuid_ent(struct kvm_cpuid_entry2 *entry, u32 function,
+ 		F(AVX512VBMI) | F(LA57) | F(PKU) | 0 /*OSPKE*/ |
+ 		F(AVX512_VPOPCNTDQ) | F(UMIP) | F(AVX512_VBMI2) | F(GFNI) |
+ 		F(VAES) | F(VPCLMULQDQ) | F(AVX512_VNNI) | F(AVX512_BITALG) |
+-		F(CLDEMOTE) | F(MOVDIRI) | F(MOVDIR64B);
++		F(CLDEMOTE) | F(MOVDIRI) | F(MOVDIR64B) | F(SHSTK);
+ 
+ 	/* cpuid 7.0.edx*/
+ 	const u32 kvm_cpuid_7_0_edx_x86_features =
+ 		F(AVX512_4VNNIW) | F(AVX512_4FMAPS) | F(SPEC_CTRL) |
+-		F(SPEC_CTRL_SSBD) | F(ARCH_CAPABILITIES) | F(INTEL_STIBP);
++		F(SPEC_CTRL_SSBD) | F(ARCH_CAPABILITIES) | F(INTEL_STIBP) |
++		F(IBT);
+ 
+ 	/* all calls to cpuid_count() should be made on the same cpu */
+ 	get_cpu();
+@@ -565,44 +615,23 @@ static inline int __do_cpuid_ent(struct kvm_cpuid_entry2 *entry, u32 function,
+ 		break;
+ 	}
+ 	case 0xd: {
+-		int idx, i;
+-		u64 supported = kvm_supported_xcr0();
++		u64 u_supported = kvm_supported_xcr0();
++		u64 s_supported = kvm_supported_xss();
++		u32 eax_mask = kvm_cpuid_D_1_eax_x86_features;
+ 
+-		entry->eax &= supported;
+-		entry->ebx = xstate_required_size(supported, false);
++		entry->eax &= u_supported;
++		entry->ebx = xstate_required_size(u_supported, false);
+ 		entry->ecx = entry->ebx;
+-		entry->edx &= supported >> 32;
++		entry->edx &= u_supported >> 32;
+ 		entry->flags |= KVM_CPUID_FLAG_SIGNIFCANT_INDEX;
+-		if (!supported)
++
++		if (!u_supported && !s_supported)
+ 			break;
+ 
+-		for (idx = 1, i = 1; idx < 64; ++idx) {
+-			u64 mask = ((u64)1 << idx);
+-			if (*nent >= maxnent)
+-				goto out;
++		if (__do_cpuid_dx_leaf(entry, nent, maxnent, s_supported,
++				       u_supported, eax_mask) < 0)
++			goto out;
+ 
+-			do_cpuid_1_ent(&entry[i], function, idx);
+-			if (idx == 1) {
+-				entry[i].eax &= kvm_cpuid_D_1_eax_x86_features;
+-				cpuid_mask(&entry[i].eax, CPUID_D_1_EAX);
+-				entry[i].ebx = 0;
+-				if (entry[i].eax & (F(XSAVES)|F(XSAVEC)))
+-					entry[i].ebx =
+-						xstate_required_size(supported,
+-								     true);
+-			} else {
+-				if (entry[i].eax == 0 || !(supported & mask))
+-					continue;
+-				if (WARN_ON_ONCE(entry[i].ecx & 1))
+-					continue;
+-			}
+-			entry[i].ecx = 0;
+-			entry[i].edx = 0;
+-			entry[i].flags |=
+-			       KVM_CPUID_FLAG_SIGNIFCANT_INDEX;
+-			++*nent;
+-			++i;
+-		}
+ 		break;
+ 	}
+ 	/* Intel PT */
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 7c015416fd58..574428375ff9 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -1637,6 +1637,11 @@ static inline bool vmx_feature_control_msr_valid(struct kvm_vcpu *vcpu,
+ 	return !(val & ~valid_bits);
+ }
+ 
++static __always_inline u64 vmx_supported_xss(void)
++{
++	return host_xss;
++}
++
+ static int vmx_get_msr_feature(struct kvm_msr_entry *msr)
+ {
+ 	switch (msr->index) {
+@@ -7711,6 +7716,7 @@ static struct kvm_x86_ops vmx_x86_ops __ro_after_init = {
+ 	.set_nested_state = NULL,
+ 	.get_vmcs12_pages = NULL,
+ 	.nested_enable_evmcs = NULL,
++	.supported_xss = vmx_supported_xss,
+ };
+ 
+ static void vmx_cleanup_l1d_flush(void)
+diff --git a/arch/x86/kvm/x86.h b/arch/x86/kvm/x86.h
+index 28406aa1136d..e96616149f84 100644
+--- a/arch/x86/kvm/x86.h
++++ b/arch/x86/kvm/x86.h
+@@ -288,6 +288,10 @@ int x86_emulate_instruction(struct kvm_vcpu *vcpu, unsigned long cr2,
+ 				| XFEATURE_MASK_YMM | XFEATURE_MASK_BNDREGS \
+ 				| XFEATURE_MASK_BNDCSR | XFEATURE_MASK_AVX512 \
+ 				| XFEATURE_MASK_PKRU)
++
++#define KVM_SUPPORTED_XSS	(XFEATURE_MASK_CET_USER \
++				| XFEATURE_MASK_CET_KERNEL)
++
+ extern u64 host_xcr0;
+ 
+ extern u64 kvm_supported_xcr0(void);
+
+From patchwork Wed May 22 07:00:56 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Yang Weijiang <weijiang.yang@intel.com>
+X-Patchwork-Id: 10955207
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 76BBF76
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:32 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 687FD28A26
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:32 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 5CC4F28A30; Wed, 22 May 2019 07:02:32 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 14C6128A26
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:32 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728615AbfEVHCB (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 May 2019 03:02:01 -0400
+Received: from mga18.intel.com ([134.134.136.126]:31984 "EHLO mga18.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728603AbfEVHCA (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 May 2019 03:02:00 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga106.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 22 May 2019 00:01:59 -0700
+X-ExtLoop1: 1
+Received: from local-michael-cet-test.sh.intel.com ([10.239.159.128])
+  by fmsmga001.fm.intel.com with ESMTP; 22 May 2019 00:01:58 -0700
+From: Yang Weijiang <weijiang.yang@intel.com>
+To: pbonzini@redhat.com, sean.j.christopherson@intel.com,
+        mst@redhat.com, rkrcmar@redhat.com, jmattson@google.com,
+        linux-kernel@vger.kernel.org, kvm@vger.kernel.org,
+        yu-cheng.yu@intel.com
+Cc: weijiang.yang@intel.com
+Subject: [PATCH v5 3/8] KVM: x86: Fix XSAVE size calculation issue
+Date: Wed, 22 May 2019 15:00:56 +0800
+Message-Id: <20190522070101.7636-4-weijiang.yang@intel.com>
+X-Mailer: git-send-email 2.17.2
+In-Reply-To: <20190522070101.7636-1-weijiang.yang@intel.com>
+References: <20190522070101.7636-1-weijiang.yang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+According to the SDM, Vol 2, CPUID(EAX=0xD,ECX=1) reports the
+XSAVE size containing all states enabled by XCR0|IA32_MSR_XSS.
+
+Signed-off-by: Yang Weijiang <weijiang.yang@intel.com>
+Co-developed-by: Zhang Yi Z <yi.z.zhang@linux.intel.com>
+---
+ arch/x86/kvm/cpuid.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index b9fc967fe55a..7be16ef0ea4a 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -123,7 +123,8 @@ int kvm_update_cpuid(struct kvm_vcpu *vcpu)
+ 
+ 	best = kvm_find_cpuid_entry(vcpu, 0xD, 1);
+ 	if (best && (best->eax & (F(XSAVES) | F(XSAVEC))))
+-		best->ebx = xstate_required_size(vcpu->arch.xcr0, true);
++		best->ebx = xstate_required_size(vcpu->arch.xcr0 |
++			    kvm_supported_xss(), true);
+ 
+ 	/*
+ 	 * The existing code assumes virtual address is 48-bit or 57-bit in the
+
+From patchwork Wed May 22 07:00:57 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Yang Weijiang <weijiang.yang@intel.com>
+X-Patchwork-Id: 10955205
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id DFDA914C0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:30 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D1BA728A26
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:30 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C640E28A30; Wed, 22 May 2019 07:02:30 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 6B92328A26
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:30 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728802AbfEVHC0 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 May 2019 03:02:26 -0400
+Received: from mga18.intel.com ([134.134.136.126]:31984 "EHLO mga18.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728628AbfEVHCB (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 May 2019 03:02:01 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga106.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 22 May 2019 00:02:01 -0700
+X-ExtLoop1: 1
+Received: from local-michael-cet-test.sh.intel.com ([10.239.159.128])
+  by fmsmga001.fm.intel.com with ESMTP; 22 May 2019 00:01:59 -0700
+From: Yang Weijiang <weijiang.yang@intel.com>
+To: pbonzini@redhat.com, sean.j.christopherson@intel.com,
+        mst@redhat.com, rkrcmar@redhat.com, jmattson@google.com,
+        linux-kernel@vger.kernel.org, kvm@vger.kernel.org,
+        yu-cheng.yu@intel.com
+Cc: weijiang.yang@intel.com
+Subject: [PATCH v5 4/8] KVM: VMX: Pass through CET related MSRs to Guest
+Date: Wed, 22 May 2019 15:00:57 +0800
+Message-Id: <20190522070101.7636-5-weijiang.yang@intel.com>
+X-Mailer: git-send-email 2.17.2
+In-Reply-To: <20190522070101.7636-1-weijiang.yang@intel.com>
+References: <20190522070101.7636-1-weijiang.yang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+CET MSRs pass through Guest directly to enhance performance.
+CET runtime control settings are stored in MSR_IA32_{U,S}_CET,
+Shadow Stack Pointer(SSP) are presented in MSR_IA32_PL{0,1,2,3}_SSP,
+SSP table base address is stored in MSR_IA32_INT_SSP_TAB,
+these MSRs are defined in kernel and re-used here.
+
+MSR_IA32_U_CET and MSR_IA32_PL3_SSP are used for user mode protection,
+the contents could differ from process to process, therefore,
+kernel needs to save/restore them during context switch, so it makes
+sense to pass through them so that the guest kernel can
+use xsaves/xrstors to operate them efficiently. Ohter MSRs are used
+for non-user mode protection. See CET spec for detailed info.
+
+The difference between CET VMCS state fields and xsave components is,
+the former used for CET state storage during VMEnter/VMExit,
+whereas the latter used for state retention between Guest task/process
+switch.
+
+Signed-off-by: Yang Weijiang <weijiang.yang@intel.com>
+Co-developed-by: Zhang Yi Z <yi.z.zhang@linux.intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 574428375ff9..9321da538f65 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6942,6 +6942,7 @@ static void update_intel_pt_cfg(struct kvm_vcpu *vcpu)
+ static void vmx_cpuid_update(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
++	unsigned long *msr_bitmap;
+ 
+ 	if (cpu_has_secondary_exec_ctrls()) {
+ 		vmx_compute_secondary_exec_control(vmx);
+@@ -6963,6 +6964,19 @@ static void vmx_cpuid_update(struct kvm_vcpu *vcpu)
+ 	if (boot_cpu_has(X86_FEATURE_INTEL_PT) &&
+ 			guest_cpuid_has(vcpu, X86_FEATURE_INTEL_PT))
+ 		update_intel_pt_cfg(vcpu);
++
++	msr_bitmap = vmx->vmcs01.msr_bitmap;
++
++	if (guest_cpuid_has(vcpu, X86_FEATURE_SHSTK) ||
++	    guest_cpuid_has(vcpu, X86_FEATURE_IBT)) {
++		vmx_disable_intercept_for_msr(msr_bitmap, MSR_IA32_U_CET, MSR_TYPE_RW);
++		vmx_disable_intercept_for_msr(msr_bitmap, MSR_IA32_S_CET, MSR_TYPE_RW);
++		vmx_disable_intercept_for_msr(msr_bitmap, MSR_IA32_INT_SSP_TAB, MSR_TYPE_RW);
++		vmx_disable_intercept_for_msr(msr_bitmap, MSR_IA32_PL0_SSP, MSR_TYPE_RW);
++		vmx_disable_intercept_for_msr(msr_bitmap, MSR_IA32_PL1_SSP, MSR_TYPE_RW);
++		vmx_disable_intercept_for_msr(msr_bitmap, MSR_IA32_PL2_SSP, MSR_TYPE_RW);
++		vmx_disable_intercept_for_msr(msr_bitmap, MSR_IA32_PL3_SSP, MSR_TYPE_RW);
++	}
+ }
+ 
+ static void vmx_set_supported_cpuid(u32 func, struct kvm_cpuid_entry2 *entry)
+@@ -7163,6 +7177,7 @@ static void __pi_post_block(struct kvm_vcpu *vcpu)
+ 		spin_unlock(&per_cpu(blocked_vcpu_on_cpu_lock, vcpu->pre_pcpu));
+ 		vcpu->pre_pcpu = -1;
+ 	}
++
+ }
+ 
+ /*
+
+From patchwork Wed May 22 07:00:58 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Yang Weijiang <weijiang.yang@intel.com>
+X-Patchwork-Id: 10955203
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id A717F14C0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:23 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 97E3228A26
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:23 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 8C13B28A30; Wed, 22 May 2019 07:02:23 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 32EF828A26
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:23 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728658AbfEVHCE (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 May 2019 03:02:04 -0400
+Received: from mga18.intel.com ([134.134.136.126]:31984 "EHLO mga18.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728603AbfEVHCD (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 May 2019 03:02:03 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga106.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 22 May 2019 00:02:03 -0700
+X-ExtLoop1: 1
+Received: from local-michael-cet-test.sh.intel.com ([10.239.159.128])
+  by fmsmga001.fm.intel.com with ESMTP; 22 May 2019 00:02:01 -0700
+From: Yang Weijiang <weijiang.yang@intel.com>
+To: pbonzini@redhat.com, sean.j.christopherson@intel.com,
+        mst@redhat.com, rkrcmar@redhat.com, jmattson@google.com,
+        linux-kernel@vger.kernel.org, kvm@vger.kernel.org,
+        yu-cheng.yu@intel.com
+Cc: weijiang.yang@intel.com
+Subject: [PATCH v5 5/8] KVM: VMX: Load Guest CET via VMCS when CET is enabled
+ in Guest
+Date: Wed, 22 May 2019 15:00:58 +0800
+Message-Id: <20190522070101.7636-6-weijiang.yang@intel.com>
+X-Mailer: git-send-email 2.17.2
+In-Reply-To: <20190522070101.7636-1-weijiang.yang@intel.com>
+References: <20190522070101.7636-1-weijiang.yang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+"Load Guest CET state" bit controls whether Guest CET states
+will be loaded at Guest entry. Before doing that, KVM needs
+to check if CPU CET feature is available to Guest.
+
+Note: SHSTK and IBT features share one control MSR:
+MSR_IA32_{U,S}_CET, which means it's difficult to hide
+one feature from another in the case of SHSTK != IBT,
+after discussed in community, it's agreed to allow Guest
+control two features independently as it won't introduce
+security hole.
+
+Signed-off-by: Yang Weijiang <weijiang.yang@intel.com>
+Co-developed-by: Zhang Yi Z <yi.z.zhang@linux.intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 9321da538f65..1c0d487a4037 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -47,6 +47,7 @@
+ #include <asm/spec-ctrl.h>
+ #include <asm/virtext.h>
+ #include <asm/vmx.h>
++#include <asm/cet.h>
+ 
+ #include "capabilities.h"
+ #include "cpuid.h"
+@@ -2929,6 +2930,17 @@ int vmx_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ 		if (!nested_vmx_allowed(vcpu) || is_smm(vcpu))
+ 			return 1;
+ 	}
++	if (guest_cpuid_has(vcpu, X86_FEATURE_SHSTK) ||
++	    guest_cpuid_has(vcpu, X86_FEATURE_IBT)) {
++		if (cr4 & X86_CR4_CET)
++			vmcs_set_bits(VM_ENTRY_CONTROLS,
++				      VM_ENTRY_LOAD_GUEST_CET_STATE);
++		else
++			vmcs_clear_bits(VM_ENTRY_CONTROLS,
++					VM_ENTRY_LOAD_GUEST_CET_STATE);
++	} else if (cr4 & X86_CR4_CET) {
++		return 1;
++	}
+ 
+ 	if (to_vmx(vcpu)->nested.vmxon && !nested_cr4_valid(vcpu, cr4))
+ 		return 1;
+
+From patchwork Wed May 22 07:00:59 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Yang Weijiang <weijiang.yang@intel.com>
+X-Patchwork-Id: 10955197
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id F15B914C0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:14 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id DE3DE28A26
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:14 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id CFDD628A30; Wed, 22 May 2019 07:02:14 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4311828A26
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:14 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728724AbfEVHCI (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 May 2019 03:02:08 -0400
+Received: from mga18.intel.com ([134.134.136.126]:31984 "EHLO mga18.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728670AbfEVHCF (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 May 2019 03:02:05 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga106.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 22 May 2019 00:02:04 -0700
+X-ExtLoop1: 1
+Received: from local-michael-cet-test.sh.intel.com ([10.239.159.128])
+  by fmsmga001.fm.intel.com with ESMTP; 22 May 2019 00:02:03 -0700
+From: Yang Weijiang <weijiang.yang@intel.com>
+To: pbonzini@redhat.com, sean.j.christopherson@intel.com,
+        mst@redhat.com, rkrcmar@redhat.com, jmattson@google.com,
+        linux-kernel@vger.kernel.org, kvm@vger.kernel.org,
+        yu-cheng.yu@intel.com
+Cc: weijiang.yang@intel.com
+Subject: [PATCH v5 6/8] KVM: x86: Allow Guest to set supported bits in XSS
+Date: Wed, 22 May 2019 15:00:59 +0800
+Message-Id: <20190522070101.7636-7-weijiang.yang@intel.com>
+X-Mailer: git-send-email 2.17.2
+In-Reply-To: <20190522070101.7636-1-weijiang.yang@intel.com>
+References: <20190522070101.7636-1-weijiang.yang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Now that KVM supports setting CET related bits in XSS.
+Previously, KVM did not support setting any bits in XSS
+so hardcoded its check to inject a #GP if Guest
+attempted to write a non-zero value to XSS.
+
+Signed-off-by: Yang Weijiang <weijiang.yang@intel.com>
+Co-developed-by: Zhang Yi Z <yi.z.zhang@linux.intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  1 +
+ arch/x86/kvm/cpuid.c            | 13 ++++++++++---
+ arch/x86/kvm/vmx/vmx.c          |  7 ++-----
+ 3 files changed, 13 insertions(+), 8 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 8c3f0ddc7676..035367694056 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -620,6 +620,7 @@ struct kvm_vcpu_arch {
+ 
+ 	u64 xcr0;
+ 	u64 guest_supported_xcr0;
++	u64 guest_supported_xss;
+ 	u32 guest_xstate_size;
+ 
+ 	struct kvm_pio_request pio;
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 7be16ef0ea4a..b645a143584f 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -122,9 +122,16 @@ int kvm_update_cpuid(struct kvm_vcpu *vcpu)
+ 	}
+ 
+ 	best = kvm_find_cpuid_entry(vcpu, 0xD, 1);
+-	if (best && (best->eax & (F(XSAVES) | F(XSAVEC))))
+-		best->ebx = xstate_required_size(vcpu->arch.xcr0 |
+-			    kvm_supported_xss(), true);
++	if (best) {
++		if (best->eax & (F(XSAVES) | F(XSAVEC)))
++			best->ebx = xstate_required_size(vcpu->arch.xcr0 |
++				    kvm_supported_xss(), true);
++
++		vcpu->arch.guest_supported_xss = best->ecx &
++			kvm_supported_xss();
++	} else {
++		vcpu->arch.guest_supported_xss = 0;
++	}
+ 
+ 	/*
+ 	 * The existing code assumes virtual address is 48-bit or 57-bit in the
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 1c0d487a4037..dec6bda20235 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -1945,12 +1945,9 @@ static int vmx_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 	case MSR_IA32_XSS:
+ 		if (!vmx_xsaves_supported())
+ 			return 1;
+-		/*
+-		 * The only supported bit as of Skylake is bit 8, but
+-		 * it is not supported on KVM.
+-		 */
+-		if (data != 0)
++		if (data & ~vcpu->arch.guest_supported_xss)
+ 			return 1;
++
+ 		vcpu->arch.ia32_xss = data;
+ 		if (vcpu->arch.ia32_xss != host_xss)
+ 			add_atomic_switch_msr(vmx, MSR_IA32_XSS,
+
+From patchwork Wed May 22 07:01:00 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Yang Weijiang <weijiang.yang@intel.com>
+X-Patchwork-Id: 10955201
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 5CE9E76
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:22 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4D27D28A26
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:22 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 416EB28A30; Wed, 22 May 2019 07:02:22 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D783A28A26
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:21 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728699AbfEVHCH (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 May 2019 03:02:07 -0400
+Received: from mga18.intel.com ([134.134.136.126]:31984 "EHLO mga18.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728625AbfEVHCG (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 May 2019 03:02:06 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga106.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 22 May 2019 00:02:06 -0700
+X-ExtLoop1: 1
+Received: from local-michael-cet-test.sh.intel.com ([10.239.159.128])
+  by fmsmga001.fm.intel.com with ESMTP; 22 May 2019 00:02:04 -0700
+From: Yang Weijiang <weijiang.yang@intel.com>
+To: pbonzini@redhat.com, sean.j.christopherson@intel.com,
+        mst@redhat.com, rkrcmar@redhat.com, jmattson@google.com,
+        linux-kernel@vger.kernel.org, kvm@vger.kernel.org,
+        yu-cheng.yu@intel.com
+Cc: weijiang.yang@intel.com
+Subject: [PATCH v5 7/8] KVM: x86: Load Guest fpu state when accessing MSRs
+ managed by XSAVES
+Date: Wed, 22 May 2019 15:01:00 +0800
+Message-Id: <20190522070101.7636-8-weijiang.yang@intel.com>
+X-Mailer: git-send-email 2.17.2
+In-Reply-To: <20190522070101.7636-1-weijiang.yang@intel.com>
+References: <20190522070101.7636-1-weijiang.yang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+
+A handful of CET MSRs are not context switched through "traditional"
+methods, e.g. VMCS or manual switching, but rather are passed through
+to the guest and are saved and restored by XSAVES/XRSTORS, i.e. the
+guest's FPU state.
+
+Load the guest's FPU state if userspace is accessing MSRs whose values
+are managed by XSAVES so that the MSR helper, e.g. vmx_{get,set}_msr(),
+can simply do {RD,WR}MSR to access the guest's value.
+
+Note that guest_cpuid_has() is not queried as host userspace is allowed
+to access MSRs that have not been exposed to the guest, e.g. it might do
+KVM_SET_MSRS prior to KVM_SET_CPUID2.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Co-developed-by: Yang Weijiang <weijiang.yang@intel.com>
+---
+ arch/x86/kvm/x86.c | 29 ++++++++++++++++++++++++++++-
+ 1 file changed, 28 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index c3fb4f6b678d..8f1bc65495a9 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -105,6 +105,8 @@ static void enter_smm(struct kvm_vcpu *vcpu);
+ static void __kvm_set_rflags(struct kvm_vcpu *vcpu, unsigned long rflags);
+ static void store_regs(struct kvm_vcpu *vcpu);
+ static int sync_regs(struct kvm_vcpu *vcpu);
++static void kvm_load_guest_fpu(struct kvm_vcpu *vcpu);
++static void kvm_put_guest_fpu(struct kvm_vcpu *vcpu);
+ 
+ struct kvm_x86_ops *kvm_x86_ops __read_mostly;
+ EXPORT_SYMBOL_GPL(kvm_x86_ops);
+@@ -2901,6 +2903,12 @@ int kvm_get_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ }
+ EXPORT_SYMBOL_GPL(kvm_get_msr_common);
+ 
++static bool is_xsaves_msr(u32 index)
++{
++	return index == MSR_IA32_U_CET ||
++	       (index >= MSR_IA32_PL0_SSP && index <= MSR_IA32_PL3_SSP);
++}
++
+ /*
+  * Read or write a bunch of msrs. All parameters are kernel addresses.
+  *
+@@ -2911,11 +2919,30 @@ static int __msr_io(struct kvm_vcpu *vcpu, struct kvm_msrs *msrs,
+ 		    int (*do_msr)(struct kvm_vcpu *vcpu,
+ 				  unsigned index, u64 *data))
+ {
++	bool fpu_loaded = false;
+ 	int i;
++	u64 cet_bits = XFEATURE_MASK_CET_USER | XFEATURE_MASK_CET_KERNEL;
++	u64 host_xss = 0;
++
++	for (i = 0; i < msrs->nmsrs; ++i) {
++		if (!fpu_loaded && is_xsaves_msr(entries[i].index)) {
++			if (!kvm_x86_ops->xsaves_supported() ||
++			    !kvm_x86_ops->supported_xss())
++				continue;
++
++			host_xss = kvm_x86_ops->supported_xss();
+ 
+-	for (i = 0; i < msrs->nmsrs; ++i)
++			if ((host_xss & cet_bits) != cet_bits)
++				continue;
++
++			kvm_load_guest_fpu(vcpu);
++			fpu_loaded = true;
++		}
+ 		if (do_msr(vcpu, entries[i].index, &entries[i].data))
+ 			break;
++	}
++	if (fpu_loaded)
++		kvm_put_guest_fpu(vcpu);
+ 
+ 	return i;
+ }
+
+From patchwork Wed May 22 07:01:01 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Yang Weijiang <weijiang.yang@intel.com>
+X-Patchwork-Id: 10955199
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3EE3776
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:16 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 305D928A26
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:16 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 2476928A30; Wed, 22 May 2019 07:02:16 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B6C3028A26
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 May 2019 07:02:15 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728774AbfEVHCN (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 May 2019 03:02:13 -0400
+Received: from mga18.intel.com ([134.134.136.126]:31984 "EHLO mga18.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728725AbfEVHCI (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 May 2019 03:02:08 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga106.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 22 May 2019 00:02:08 -0700
+X-ExtLoop1: 1
+Received: from local-michael-cet-test.sh.intel.com ([10.239.159.128])
+  by fmsmga001.fm.intel.com with ESMTP; 22 May 2019 00:02:06 -0700
+From: Yang Weijiang <weijiang.yang@intel.com>
+To: pbonzini@redhat.com, sean.j.christopherson@intel.com,
+        mst@redhat.com, rkrcmar@redhat.com, jmattson@google.com,
+        linux-kernel@vger.kernel.org, kvm@vger.kernel.org,
+        yu-cheng.yu@intel.com
+Cc: weijiang.yang@intel.com
+Subject: [PATCH v5 8/8] KVM: x86: Add user-space access interface for CET MSRs
+Date: Wed, 22 May 2019 15:01:01 +0800
+Message-Id: <20190522070101.7636-9-weijiang.yang@intel.com>
+X-Mailer: git-send-email 2.17.2
+In-Reply-To: <20190522070101.7636-1-weijiang.yang@intel.com>
+References: <20190522070101.7636-1-weijiang.yang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+There're two different places storing Guest CET states, the states
+managed with XSAVES/XRSTORS, as restored/saved
+in previous patch, can be read/write directly from/to the MSRs.
+For those stored in VMCS fields, they're access via vmcs_read/
+vmcs_write.
+
+Signed-off-by: Yang Weijiang <weijiang.yang@intel.com>
+---
+ arch/x86/include/asm/msr-index.h |  2 ++
+ arch/x86/kvm/vmx/vmx.c           | 43 ++++++++++++++++++++++++++++++++
+ 2 files changed, 45 insertions(+)
+
+diff --git a/arch/x86/include/asm/msr-index.h b/arch/x86/include/asm/msr-index.h
+index dc0a67c1ed80..53a4ef337846 100644
+--- a/arch/x86/include/asm/msr-index.h
++++ b/arch/x86/include/asm/msr-index.h
+@@ -827,6 +827,8 @@
+ #define MSR_IA32_U_CET		0x6a0 /* user mode cet setting */
+ #define MSR_IA32_S_CET		0x6a2 /* kernel mode cet setting */
+ #define MSR_IA32_PL0_SSP	0x6a4 /* kernel shstk pointer */
++#define MSR_IA32_PL1_SSP	0x6a5 /* ring 1 shstk pointer */
++#define MSR_IA32_PL2_SSP	0x6a6 /* ring 2 shstk pointer */
+ #define MSR_IA32_PL3_SSP	0x6a7 /* user shstk pointer */
+ #define MSR_IA32_INT_SSP_TAB	0x6a8 /* exception shstk table */
+ 
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index dec6bda20235..233f58af3878 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -1777,6 +1777,27 @@ static int vmx_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 		else
+ 			msr_info->data = vmx->pt_desc.guest.addr_a[index / 2];
+ 		break;
++	case MSR_IA32_S_CET:
++		msr_info->data = vmcs_readl(GUEST_S_CET);
++		break;
++	case MSR_IA32_U_CET:
++		rdmsrl(MSR_IA32_U_CET, msr_info->data);
++		break;
++	case MSR_IA32_INT_SSP_TAB:
++		msr_info->data = vmcs_readl(GUEST_INTR_SSP_TABLE);
++		break;
++	case MSR_IA32_PL0_SSP:
++		rdmsrl(MSR_IA32_PL0_SSP, msr_info->data);
++		break;
++	case MSR_IA32_PL1_SSP:
++		rdmsrl(MSR_IA32_PL1_SSP, msr_info->data);
++		break;
++	case MSR_IA32_PL2_SSP:
++		rdmsrl(MSR_IA32_PL2_SSP, msr_info->data);
++		break;
++	case MSR_IA32_PL3_SSP:
++		rdmsrl(MSR_IA32_PL3_SSP, msr_info->data);
++		break;
+ 	case MSR_TSC_AUX:
+ 		if (!msr_info->host_initiated &&
+ 		    !guest_cpuid_has(vcpu, X86_FEATURE_RDTSCP))
+@@ -2012,6 +2033,28 @@ static int vmx_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 		else
+ 			vmx->pt_desc.guest.addr_a[index / 2] = data;
+ 		break;
++	case MSR_IA32_S_CET:
++		vmcs_writel(GUEST_S_CET, data);
++		break;
++	case MSR_IA32_U_CET:
++		wrmsrl(MSR_IA32_U_CET, data);
++		break;
++	case MSR_IA32_INT_SSP_TAB:
++		vmcs_writel(GUEST_INTR_SSP_TABLE, data);
++		break;
++	case MSR_IA32_PL0_SSP:
++		wrmsrl(MSR_IA32_PL0_SSP, data);
++		break;
++	case MSR_IA32_PL1_SSP:
++		wrmsrl(MSR_IA32_PL1_SSP, data);
++		break;
++	case MSR_IA32_PL2_SSP:
++		wrmsrl(MSR_IA32_PL2_SSP, data);
++		break;
++	case MSR_IA32_PL3_SSP:
++		wrmsrl(MSR_IA32_PL3_SSP, data);
++		break;
++
+ 	case MSR_TSC_AUX:
+ 		if (!msr_info->host_initiated &&
+ 		    !guest_cpuid_has(vcpu, X86_FEATURE_RDTSCP))

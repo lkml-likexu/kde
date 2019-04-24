@@ -1,0 +1,2781 @@
+From patchwork Thu May 23 10:34:48 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sudeep Holla <Sudeep.Holla@arm.com>
+X-Patchwork-Id: 10957329
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 72D8A13AD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:37:01 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5439F28450
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:37:01 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 48A5228468; Thu, 23 May 2019 10:37:01 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=unavailable version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2B5B828450
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:47 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730365AbfEWKfZ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 May 2019 06:35:25 -0400
+Received: from foss.arm.com ([217.140.101.70]:43010 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727466AbfEWKfX (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 May 2019 06:35:23 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 4102DA78;
+        Thu, 23 May 2019 03:35:23 -0700 (PDT)
+Received: from usa.arm.com (e107155-lin.cambridge.arm.com [10.1.196.42])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 2CDA03F718;
+        Thu, 23 May 2019 03:35:21 -0700 (PDT)
+From: Sudeep Holla <sudeep.holla@arm.com>
+To: kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Cc: Sudeep Holla <sudeep.holla@arm.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Marc Zyngier <marc.zyngier@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Pouloze <suzuki.poulose@arm.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Will Deacon <will.deacon@arm.com>,
+        Julien Thierry <julien.thierry@arm.com>
+Subject: [PATCH v2 01/15] KVM: arm64: add {read,write}_sysreg_elx_s versions
+ for new registers
+Date: Thu, 23 May 2019 11:34:48 +0100
+Message-Id: <20190523103502.25925-2-sudeep.holla@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20190523103502.25925-1-sudeep.holla@arm.com>
+References: <20190523103502.25925-1-sudeep.holla@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+KVM provides {read,write}_sysreg_el1() to write to ${REG}_EL1 when we
+really want to read/write to the EL1 register without any VHE register
+redirection.
+
+SPE registers are not supported by many versions of GAS. For this reason
+we mostly use mrs_s macro which takes sys_reg() representation.
+
+However these SPE registers using sys_reg representation doesn't work
+well with existing {read,write}_sysreg_el1 macros. We need to add
+{read,write}_sysreg_el1_s versions so cope up with them.
+
+Signed-off-by: Sudeep Holla <sudeep.holla@arm.com>
+---
+ arch/arm64/include/asm/kvm_hyp.h | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/arch/arm64/include/asm/kvm_hyp.h b/arch/arm64/include/asm/kvm_hyp.h
+index 09fe8bd15f6e..f61378b77c9f 100644
+--- a/arch/arm64/include/asm/kvm_hyp.h
++++ b/arch/arm64/include/asm/kvm_hyp.h
+@@ -35,6 +35,15 @@
+ 			     : "=r" (reg));				\
+ 		reg;							\
+ 	})
++#define read_sysreg_elx_s(r,nvh,vh)					\
++	({								\
++		u64 reg;						\
++		asm volatile(ALTERNATIVE(__mrs_s("%0", r##nvh),		\
++					 __mrs_s("%0", r##vh),		\
++					 ARM64_HAS_VIRT_HOST_EXTN)	\
++			     : "=r" (reg));				\
++		reg;							\
++	})
+ 
+ #define write_sysreg_elx(v,r,nvh,vh)					\
+ 	do {								\
+@@ -44,6 +53,14 @@
+ 					 ARM64_HAS_VIRT_HOST_EXTN)	\
+ 					 : : "rZ" (__val));		\
+ 	} while (0)
++#define write_sysreg_elx_s(v,r,nvh,vh)					\
++	do {								\
++		u64 __val = (u64)(v);					\
++		asm volatile(ALTERNATIVE(__msr_s(r##nvh, "%x0"),	\
++					 __msr_s(r##vh, "%x0"),		\
++					 ARM64_HAS_VIRT_HOST_EXTN)	\
++					 : : "rZ" (__val));		\
++	} while (0)
+ 
+ /*
+  * Unified accessors for registers that have a different encoding
+@@ -72,7 +89,9 @@
+ #define read_sysreg_el0(r)	read_sysreg_elx(r, _EL0, _EL02)
+ #define write_sysreg_el0(v,r)	write_sysreg_elx(v, r, _EL0, _EL02)
+ #define read_sysreg_el1(r)	read_sysreg_elx(r, _EL1, _EL12)
++#define read_sysreg_el1_s(r)	read_sysreg_elx_s(r, _EL1, _EL12)
+ #define write_sysreg_el1(v,r)	write_sysreg_elx(v, r, _EL1, _EL12)
++#define write_sysreg_el1_s(v,r)	write_sysreg_elx_s(v, r, _EL1, _EL12)
+ 
+ /* The VHE specific system registers and their encoding */
+ #define sctlr_EL12              sys_reg(3, 5, 1, 0, 0)
+
+From patchwork Thu May 23 10:34:49 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sudeep Holla <Sudeep.Holla@arm.com>
+X-Patchwork-Id: 10957325
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8307876
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:54 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 6A2F927F82
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:54 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 5DD362845E; Thu, 23 May 2019 10:36:54 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 9480328433
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:44 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730405AbfEWKf0 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 May 2019 06:35:26 -0400
+Received: from foss.arm.com ([217.140.101.70]:43018 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730381AbfEWKf0 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 May 2019 06:35:26 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 9D9B9341;
+        Thu, 23 May 2019 03:35:25 -0700 (PDT)
+Received: from usa.arm.com (e107155-lin.cambridge.arm.com [10.1.196.42])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 7F6473F718;
+        Thu, 23 May 2019 03:35:23 -0700 (PDT)
+From: Sudeep Holla <sudeep.holla@arm.com>
+To: kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Cc: Sudeep Holla <sudeep.holla@arm.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Marc Zyngier <marc.zyngier@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Pouloze <suzuki.poulose@arm.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Will Deacon <will.deacon@arm.com>,
+        Julien Thierry <julien.thierry@arm.com>
+Subject: [PATCH v2 02/15] dt-bindings: ARM SPE: highlight the need for PPI
+ partitions on heterogeneous systems
+Date: Thu, 23 May 2019 11:34:49 +0100
+Message-Id: <20190523103502.25925-3-sudeep.holla@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20190523103502.25925-1-sudeep.holla@arm.com>
+References: <20190523103502.25925-1-sudeep.holla@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+It's not entirely clear for the binding document that the only way to
+express ARM SPE affined to a subset of CPUs on a heterogeneous systems
+is through the use of PPI partitions available in the interrupt
+controller bindings.
+
+Let's make it clear.
+
+Signed-off-by: Sudeep Holla <sudeep.holla@arm.com>
+---
+ Documentation/devicetree/bindings/arm/spe-pmu.txt | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/arm/spe-pmu.txt b/Documentation/devicetree/bindings/arm/spe-pmu.txt
+index 93372f2a7df9..4f4815800f6e 100644
+--- a/Documentation/devicetree/bindings/arm/spe-pmu.txt
++++ b/Documentation/devicetree/bindings/arm/spe-pmu.txt
+@@ -9,8 +9,9 @@ performance sample data using an in-memory trace buffer.
+ 	       "arm,statistical-profiling-extension-v1"
+ 
+ - interrupts : Exactly 1 PPI must be listed. For heterogeneous systems where
+-               SPE is only supported on a subset of the CPUs, please consult
+-	       the arm,gic-v3 binding for details on describing a PPI partition.
++               SPE is only supported on a subset of the CPUs, a PPI partition
++	       described in the arm,gic-v3 binding must be used to describe
++	       the set of CPUs this interrupt is affine to.
+ 
+ ** Example:
+ 
+
+From patchwork Thu May 23 10:34:50 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sudeep Holla <Sudeep.Holla@arm.com>
+X-Patchwork-Id: 10957323
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 2E68C76
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:53 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1432127F82
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:53 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 05D6A2846C; Thu, 23 May 2019 10:36:53 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7407527F82
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:44 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730477AbfEWKf3 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 May 2019 06:35:29 -0400
+Received: from usa-sjc-mx-foss1.foss.arm.com ([217.140.101.70]:43032 "EHLO
+        foss.arm.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730381AbfEWKf2 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 May 2019 06:35:28 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 043F3A78;
+        Thu, 23 May 2019 03:35:28 -0700 (PDT)
+Received: from usa.arm.com (e107155-lin.cambridge.arm.com [10.1.196.42])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ DC2023F718;
+        Thu, 23 May 2019 03:35:25 -0700 (PDT)
+From: Sudeep Holla <sudeep.holla@arm.com>
+To: kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Cc: Sudeep Holla <sudeep.holla@arm.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Marc Zyngier <marc.zyngier@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Pouloze <suzuki.poulose@arm.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Will Deacon <will.deacon@arm.com>,
+        Julien Thierry <julien.thierry@arm.com>
+Subject: [PATCH v2 03/15] arm64: KVM: reset E2PB correctly in MDCR_EL2 when
+ exiting the guest(VHE)
+Date: Thu, 23 May 2019 11:34:50 +0100
+Message-Id: <20190523103502.25925-4-sudeep.holla@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20190523103502.25925-1-sudeep.holla@arm.com>
+References: <20190523103502.25925-1-sudeep.holla@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+On VHE systems, the reset value for MDCR_EL2.E2PB=b00 which defaults
+to profiling buffer using the EL2 stage 1 translations. However if the
+guest are allowed to use profiling buffers changing E2PB settings, we
+need to ensure we resume back MDCR_EL2.E2PB=b00. Currently we just
+do bitwise '&' with MDCR_EL2_E2PB_MASK which will retain the value.
+
+So fix it by clearing all the bits in E2PB.
+
+Signed-off-by: Sudeep Holla <sudeep.holla@arm.com>
+---
+ arch/arm64/kvm/hyp/switch.c | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/arch/arm64/kvm/hyp/switch.c b/arch/arm64/kvm/hyp/switch.c
+index 22b4c335e0b2..9b2461138ddc 100644
+--- a/arch/arm64/kvm/hyp/switch.c
++++ b/arch/arm64/kvm/hyp/switch.c
+@@ -202,9 +202,7 @@ void deactivate_traps_vhe_put(void)
+ {
+ 	u64 mdcr_el2 = read_sysreg(mdcr_el2);
+ 
+-	mdcr_el2 &= MDCR_EL2_HPMN_MASK |
+-		    MDCR_EL2_E2PB_MASK << MDCR_EL2_E2PB_SHIFT |
+-		    MDCR_EL2_TPMS;
++	mdcr_el2 &= MDCR_EL2_HPMN_MASK | MDCR_EL2_TPMS;
+ 
+ 	write_sysreg(mdcr_el2, mdcr_el2);
+ 
+
+From patchwork Thu May 23 10:34:51 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sudeep Holla <Sudeep.Holla@arm.com>
+X-Patchwork-Id: 10957287
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id A188F112C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:35:41 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 89A7A28433
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:35:41 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 7D58628458; Thu, 23 May 2019 10:35:41 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 0FF7A28433
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:35:33 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730516AbfEWKfb (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 May 2019 06:35:31 -0400
+Received: from foss.arm.com ([217.140.101.70]:43046 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730499AbfEWKfa (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 May 2019 06:35:30 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 560BA341;
+        Thu, 23 May 2019 03:35:30 -0700 (PDT)
+Received: from usa.arm.com (e107155-lin.cambridge.arm.com [10.1.196.42])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 427FE3F718;
+        Thu, 23 May 2019 03:35:28 -0700 (PDT)
+From: Sudeep Holla <sudeep.holla@arm.com>
+To: kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Cc: Sudeep Holla <sudeep.holla@arm.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Marc Zyngier <marc.zyngier@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Pouloze <suzuki.poulose@arm.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Will Deacon <will.deacon@arm.com>,
+        Julien Thierry <julien.thierry@arm.com>
+Subject: [PATCH v2 04/15] arm64: KVM: define SPE data structure for each vcpu
+Date: Thu, 23 May 2019 11:34:51 +0100
+Message-Id: <20190523103502.25925-5-sudeep.holla@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20190523103502.25925-1-sudeep.holla@arm.com>
+References: <20190523103502.25925-1-sudeep.holla@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+In order to support virtual SPE for guest, so define some basic structs.
+This features depends on host having hardware with SPE support.
+
+Since we can support this only on ARM64, add a separate config symbol
+for the same.
+
+Signed-off-by: Sudeep Holla <sudeep.holla@arm.com>
+---
+ arch/arm64/include/asm/kvm_host.h |  2 ++
+ arch/arm64/kvm/Kconfig            |  7 +++++++
+ include/kvm/arm_spe.h             | 18 ++++++++++++++++++
+ 3 files changed, 27 insertions(+)
+ create mode 100644 include/kvm/arm_spe.h
+
+diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
+index 2a8d3f8ca22c..611a4884fb6c 100644
+--- a/arch/arm64/include/asm/kvm_host.h
++++ b/arch/arm64/include/asm/kvm_host.h
+@@ -46,6 +46,7 @@
+ #include <kvm/arm_vgic.h>
+ #include <kvm/arm_arch_timer.h>
+ #include <kvm/arm_pmu.h>
++#include <kvm/arm_spe.h>
+ 
+ #define KVM_MAX_VCPUS VGIC_V3_MAX_CPUS
+ 
+@@ -304,6 +305,7 @@ struct kvm_vcpu_arch {
+ 	struct vgic_cpu vgic_cpu;
+ 	struct arch_timer_cpu timer_cpu;
+ 	struct kvm_pmu pmu;
++	struct kvm_spe spe;
+ 
+ 	/*
+ 	 * Anything that is not used directly from assembly code goes
+diff --git a/arch/arm64/kvm/Kconfig b/arch/arm64/kvm/Kconfig
+index a67121d419a2..3e178894ddd8 100644
+--- a/arch/arm64/kvm/Kconfig
++++ b/arch/arm64/kvm/Kconfig
+@@ -33,6 +33,7 @@ config KVM
+ 	select HAVE_KVM_EVENTFD
+ 	select HAVE_KVM_IRQFD
+ 	select KVM_ARM_PMU if HW_PERF_EVENTS
++	select KVM_ARM_SPE if (HW_PERF_EVENTS && ARM_SPE_PMU)
+ 	select HAVE_KVM_MSI
+ 	select HAVE_KVM_IRQCHIP
+ 	select HAVE_KVM_IRQ_ROUTING
+@@ -57,6 +58,12 @@ config KVM_ARM_PMU
+ 	  Adds support for a virtual Performance Monitoring Unit (PMU) in
+ 	  virtual machines.
+ 
++config KVM_ARM_SPE
++	bool
++	---help---
++	  Adds support for a virtual Statistical Profiling Extension(SPE) in
++	  virtual machines.
++
+ config KVM_INDIRECT_VECTORS
+        def_bool KVM && (HARDEN_BRANCH_PREDICTOR || HARDEN_EL2_VECTORS)
+ 
+diff --git a/include/kvm/arm_spe.h b/include/kvm/arm_spe.h
+new file mode 100644
+index 000000000000..8c96bdfad6ac
+--- /dev/null
++++ b/include/kvm/arm_spe.h
+@@ -0,0 +1,18 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright (C) 2018 ARM Ltd.
++ */
++
++#ifndef __ASM_ARM_KVM_SPE_H
++#define __ASM_ARM_KVM_SPE_H
++
++#include <uapi/linux/kvm.h>
++#include <linux/kvm_host.h>
++
++struct kvm_spe {
++	int irq;
++	bool ready; /* indicates that SPE KVM instance is ready for use */
++	bool created; /* SPE KVM instance is created, may not be ready yet */
++};
++
++#endif /* __ASM_ARM_KVM_SPE_H */
+
+From patchwork Thu May 23 10:34:52 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sudeep Holla <Sudeep.Holla@arm.com>
+X-Patchwork-Id: 10957321
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B0D5313AD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:33 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 98D5D27F82
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:33 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 8CFC428450; Thu, 23 May 2019 10:36:33 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 16C1027F82
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:33 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730564AbfEWKfd (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 May 2019 06:35:33 -0400
+Received: from foss.arm.com ([217.140.101.70]:43060 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730555AbfEWKfd (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 May 2019 06:35:33 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id A6D45A78;
+        Thu, 23 May 2019 03:35:32 -0700 (PDT)
+Received: from usa.arm.com (e107155-lin.cambridge.arm.com [10.1.196.42])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 932363F718;
+        Thu, 23 May 2019 03:35:30 -0700 (PDT)
+From: Sudeep Holla <sudeep.holla@arm.com>
+To: kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Cc: Sudeep Holla <sudeep.holla@arm.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Marc Zyngier <marc.zyngier@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Pouloze <suzuki.poulose@arm.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Will Deacon <will.deacon@arm.com>,
+        Julien Thierry <julien.thierry@arm.com>
+Subject: [PATCH v2 05/15] arm64: KVM: add access handler for SPE system
+ registers
+Date: Thu, 23 May 2019 11:34:52 +0100
+Message-Id: <20190523103502.25925-6-sudeep.holla@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20190523103502.25925-1-sudeep.holla@arm.com>
+References: <20190523103502.25925-1-sudeep.holla@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+SPE Profiling Buffer owning EL is configurable and when MDCR_EL2.E2PB
+is configured to provide buffer ownership to EL1, the control registers
+are trapped.
+
+Add access handlers for the Statistical Profiling Extension(SPE)
+Profiling Buffer controls registers. This is need to support profiling
+using SPE in the guests.
+
+Signed-off-by: Sudeep Holla <sudeep.holla@arm.com>
+---
+ arch/arm64/include/asm/kvm_host.h | 13 ++++++++++++
+ arch/arm64/kvm/sys_regs.c         | 35 +++++++++++++++++++++++++++++++
+ include/kvm/arm_spe.h             | 15 +++++++++++++
+ 3 files changed, 63 insertions(+)
+
+diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
+index 611a4884fb6c..559aa6931291 100644
+--- a/arch/arm64/include/asm/kvm_host.h
++++ b/arch/arm64/include/asm/kvm_host.h
+@@ -147,6 +147,19 @@ enum vcpu_sysreg {
+ 	MDCCINT_EL1,	/* Monitor Debug Comms Channel Interrupt Enable Reg */
+ 	DISR_EL1,	/* Deferred Interrupt Status Register */
+ 
++	/* Statistical Profiling Extension Registers */
++
++	PMSCR_EL1,
++	PMSICR_EL1,
++	PMSIRR_EL1,
++	PMSFCR_EL1,
++	PMSEVFR_EL1,
++	PMSLATFR_EL1,
++	PMSIDR_EL1,
++	PMBLIMITR_EL1,
++	PMBPTR_EL1,
++	PMBSR_EL1,
++
+ 	/* Performance Monitors Registers */
+ 	PMCR_EL0,	/* Control Register */
+ 	PMSELR_EL0,	/* Event Counter Selection Register */
+diff --git a/arch/arm64/kvm/sys_regs.c b/arch/arm64/kvm/sys_regs.c
+index 857b226bcdde..dbf5056828d3 100644
+--- a/arch/arm64/kvm/sys_regs.c
++++ b/arch/arm64/kvm/sys_regs.c
+@@ -646,6 +646,30 @@ static void reset_pmcr(struct kvm_vcpu *vcpu, const struct sys_reg_desc *r)
+ 	__vcpu_sys_reg(vcpu, PMCR_EL0) = val;
+ }
+ 
++static bool access_pmsb_val(struct kvm_vcpu *vcpu, struct sys_reg_params *p,
++			    const struct sys_reg_desc *r)
++{
++	if (p->is_write)
++		vcpu_write_sys_reg(vcpu, p->regval, r->reg);
++	else
++		p->regval = vcpu_read_sys_reg(vcpu, r->reg);
++
++	return true;
++}
++
++static void reset_pmsb_val(struct kvm_vcpu *vcpu, const struct sys_reg_desc *r)
++{
++	if (!kvm_arm_support_spe_v1()) {
++		__vcpu_sys_reg(vcpu, r->reg) = 0;
++		return;
++	}
++
++	if (r->reg == PMSIDR_EL1)
++		__vcpu_sys_reg(vcpu, r->reg) = read_sysreg_s(SYS_PMSIDR_EL1);
++	else
++		__vcpu_sys_reg(vcpu, r->reg) = 0;
++}
++
+ static bool check_pmu_access_disabled(struct kvm_vcpu *vcpu, u64 flags)
+ {
+ 	u64 reg = __vcpu_sys_reg(vcpu, PMUSERENR_EL0);
+@@ -1513,6 +1537,17 @@ static const struct sys_reg_desc sys_reg_descs[] = {
+ 	{ SYS_DESC(SYS_FAR_EL1), access_vm_reg, reset_unknown, FAR_EL1 },
+ 	{ SYS_DESC(SYS_PAR_EL1), NULL, reset_unknown, PAR_EL1 },
+ 
++	{ SYS_DESC(SYS_PMSCR_EL1), access_pmsb_val, reset_pmsb_val, PMSCR_EL1 },
++	{ SYS_DESC(SYS_PMSICR_EL1), access_pmsb_val, reset_pmsb_val, PMSICR_EL1 },
++	{ SYS_DESC(SYS_PMSIRR_EL1), access_pmsb_val, reset_pmsb_val, PMSIRR_EL1 },
++	{ SYS_DESC(SYS_PMSFCR_EL1), access_pmsb_val, reset_pmsb_val, PMSFCR_EL1 },
++	{ SYS_DESC(SYS_PMSEVFR_EL1), access_pmsb_val, reset_pmsb_val, PMSEVFR_EL1},
++	{ SYS_DESC(SYS_PMSLATFR_EL1), access_pmsb_val, reset_pmsb_val, PMSLATFR_EL1 },
++	{ SYS_DESC(SYS_PMSIDR_EL1), access_pmsb_val, reset_pmsb_val, PMSIDR_EL1 },
++	{ SYS_DESC(SYS_PMBLIMITR_EL1), access_pmsb_val, reset_pmsb_val, PMBLIMITR_EL1 },
++	{ SYS_DESC(SYS_PMBPTR_EL1), access_pmsb_val, reset_pmsb_val, PMBPTR_EL1 },
++	{ SYS_DESC(SYS_PMBSR_EL1), access_pmsb_val, reset_pmsb_val, PMBSR_EL1 },
++
+ 	{ SYS_DESC(SYS_PMINTENSET_EL1), access_pminten, reset_unknown, PMINTENSET_EL1 },
+ 	{ SYS_DESC(SYS_PMINTENCLR_EL1), access_pminten, NULL, PMINTENSET_EL1 },
+ 
+diff --git a/include/kvm/arm_spe.h b/include/kvm/arm_spe.h
+index 8c96bdfad6ac..2440ff02f747 100644
+--- a/include/kvm/arm_spe.h
++++ b/include/kvm/arm_spe.h
+@@ -8,6 +8,7 @@
+ 
+ #include <uapi/linux/kvm.h>
+ #include <linux/kvm_host.h>
++#include <linux/cpufeature.h>
+ 
+ struct kvm_spe {
+ 	int irq;
+@@ -15,4 +16,18 @@ struct kvm_spe {
+ 	bool created; /* SPE KVM instance is created, may not be ready yet */
+ };
+ 
++#ifdef CONFIG_KVM_ARM_SPE
++
++static inline bool kvm_arm_support_spe_v1(void)
++{
++	u64 dfr0 = read_sanitised_ftr_reg(SYS_ID_AA64DFR0_EL1);
++
++	return !!cpuid_feature_extract_unsigned_field(dfr0,
++						      ID_AA64DFR0_PMSVER_SHIFT);
++}
++#else
++
++#define kvm_arm_support_spe_v1()	(false)
++#endif /* CONFIG_KVM_ARM_SPE */
++
+ #endif /* __ASM_ARM_KVM_SPE_H */
+
+From patchwork Thu May 23 10:34:53 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sudeep Holla <Sudeep.Holla@arm.com>
+X-Patchwork-Id: 10957289
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8B752112C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:35:48 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 73A3428450
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:35:48 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 6755D28458; Thu, 23 May 2019 10:35:48 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id EAC0828450
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:35:37 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730588AbfEWKfg (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 May 2019 06:35:36 -0400
+Received: from usa-sjc-mx-foss1.foss.arm.com ([217.140.101.70]:43072 "EHLO
+        foss.arm.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730594AbfEWKff (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 May 2019 06:35:35 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 04C95341;
+        Thu, 23 May 2019 03:35:35 -0700 (PDT)
+Received: from usa.arm.com (e107155-lin.cambridge.arm.com [10.1.196.42])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ E58CD3F718;
+        Thu, 23 May 2019 03:35:32 -0700 (PDT)
+From: Sudeep Holla <sudeep.holla@arm.com>
+To: kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Cc: Sudeep Holla <sudeep.holla@arm.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Marc Zyngier <marc.zyngier@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Pouloze <suzuki.poulose@arm.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Will Deacon <will.deacon@arm.com>,
+        Julien Thierry <julien.thierry@arm.com>
+Subject: [PATCH v2 06/15] arm64: KVM/VHE: enable the use PMSCR_EL12 on VHE
+ systems
+Date: Thu, 23 May 2019 11:34:53 +0100
+Message-Id: <20190523103502.25925-7-sudeep.holla@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20190523103502.25925-1-sudeep.holla@arm.com>
+References: <20190523103502.25925-1-sudeep.holla@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Currently, we are just using PMSCR_EL1 in the host for non VHE systems.
+We already have the {read,write}_sysreg_el*() accessors for accessing
+particular ELs' sysregs in the presence of VHE.
+
+Lets just define PMSCR_EL12 and start making use of it here which will
+access the right register on both VHE and non VHE systems. This change
+is required to add SPE guest support on VHE systems.
+
+Signed-off-by: Sudeep Holla <sudeep.holla@arm.com>
+---
+ arch/arm64/include/asm/kvm_hyp.h | 1 +
+ arch/arm64/kvm/hyp/debug-sr.c    | 6 +++---
+ 2 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm64/include/asm/kvm_hyp.h b/arch/arm64/include/asm/kvm_hyp.h
+index f61378b77c9f..782955db61dd 100644
+--- a/arch/arm64/include/asm/kvm_hyp.h
++++ b/arch/arm64/include/asm/kvm_hyp.h
+@@ -103,6 +103,7 @@
+ #define afsr1_EL12              sys_reg(3, 5, 5, 1, 1)
+ #define esr_EL12                sys_reg(3, 5, 5, 2, 0)
+ #define far_EL12                sys_reg(3, 5, 6, 0, 0)
++#define SYS_PMSCR_EL12          sys_reg(3, 5, 9, 9, 0)
+ #define mair_EL12               sys_reg(3, 5, 10, 2, 0)
+ #define amair_EL12              sys_reg(3, 5, 10, 3, 0)
+ #define vbar_EL12               sys_reg(3, 5, 12, 0, 0)
+diff --git a/arch/arm64/kvm/hyp/debug-sr.c b/arch/arm64/kvm/hyp/debug-sr.c
+index 50009766e5e5..fa51236ebcb3 100644
+--- a/arch/arm64/kvm/hyp/debug-sr.c
++++ b/arch/arm64/kvm/hyp/debug-sr.c
+@@ -89,8 +89,8 @@ static void __hyp_text __debug_save_spe_nvhe(u64 *pmscr_el1)
+ 		return;
+ 
+ 	/* Yes; save the control register and disable data generation */
+-	*pmscr_el1 = read_sysreg_s(SYS_PMSCR_EL1);
+-	write_sysreg_s(0, SYS_PMSCR_EL1);
++	*pmscr_el1 = read_sysreg_el1_s(SYS_PMSCR);
++	write_sysreg_el1_s(0, SYS_PMSCR);
+ 	isb();
+ 
+ 	/* Now drain all buffered data to memory */
+@@ -107,7 +107,7 @@ static void __hyp_text __debug_restore_spe_nvhe(u64 pmscr_el1)
+ 	isb();
+ 
+ 	/* Re-enable data generation */
+-	write_sysreg_s(pmscr_el1, SYS_PMSCR_EL1);
++	write_sysreg_el1_s(pmscr_el1, SYS_PMSCR);
+ }
+ 
+ static void __hyp_text __debug_save_state(struct kvm_vcpu *vcpu,
+
+From patchwork Thu May 23 10:34:54 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sudeep Holla <Sudeep.Holla@arm.com>
+X-Patchwork-Id: 10957317
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 7980376
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:29 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 5AD3727F82
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:29 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4B9B028450; Thu, 23 May 2019 10:36:29 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id AF64A27F82
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:28 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730627AbfEWKfj (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 May 2019 06:35:39 -0400
+Received: from usa-sjc-mx-foss1.foss.arm.com ([217.140.101.70]:43086 "EHLO
+        foss.arm.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730613AbfEWKfh (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 May 2019 06:35:37 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 5757AA78;
+        Thu, 23 May 2019 03:35:37 -0700 (PDT)
+Received: from usa.arm.com (e107155-lin.cambridge.arm.com [10.1.196.42])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 425933F718;
+        Thu, 23 May 2019 03:35:35 -0700 (PDT)
+From: Sudeep Holla <sudeep.holla@arm.com>
+To: kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Cc: Sudeep Holla <sudeep.holla@arm.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Marc Zyngier <marc.zyngier@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Pouloze <suzuki.poulose@arm.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Will Deacon <will.deacon@arm.com>,
+        Julien Thierry <julien.thierry@arm.com>
+Subject: [PATCH v2 07/15] arm64: KVM: split debug save restore across vm/traps
+ activation
+Date: Thu, 23 May 2019 11:34:54 +0100
+Message-Id: <20190523103502.25925-8-sudeep.holla@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20190523103502.25925-1-sudeep.holla@arm.com>
+References: <20190523103502.25925-1-sudeep.holla@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+If we enable profiling buffer controls at EL1 generate a trap exception
+to EL2, it also changes profiling buffer to use EL1&0 stage 1 translation
+regime in case of VHE. To support SPE both in the guest and host, we
+need to first stop profiling and flush the profiling buffers before
+we activate/switch vm or enable/disable the traps.
+
+In prepartion to do that, lets split the debug save restore functionality
+into 4 steps:
+1. debug_save_host_context - saves the host context
+2. debug_restore_guest_context - restore the guest context
+3. debug_save_guest_context - saves the guest context
+4. debug_restore_host_context - restores the host context
+
+Lets rename existing __debug_switch_to_{host,guest} to make sure it's
+aligned to the above and just add the place holders for new ones getting
+added here as we need them to support SPE in guests.
+
+Signed-off-by: Sudeep Holla <sudeep.holla@arm.com>
+---
+ arch/arm64/include/asm/kvm_hyp.h |  6 ++++--
+ arch/arm64/kvm/hyp/debug-sr.c    | 25 ++++++++++++++++---------
+ arch/arm64/kvm/hyp/switch.c      | 12 ++++++++----
+ 3 files changed, 28 insertions(+), 15 deletions(-)
+
+diff --git a/arch/arm64/include/asm/kvm_hyp.h b/arch/arm64/include/asm/kvm_hyp.h
+index 782955db61dd..1c5ed80fcbda 100644
+--- a/arch/arm64/include/asm/kvm_hyp.h
++++ b/arch/arm64/include/asm/kvm_hyp.h
+@@ -164,8 +164,10 @@ void sysreg_restore_guest_state_vhe(struct kvm_cpu_context *ctxt);
+ void __sysreg32_save_state(struct kvm_vcpu *vcpu);
+ void __sysreg32_restore_state(struct kvm_vcpu *vcpu);
+ 
+-void __debug_switch_to_guest(struct kvm_vcpu *vcpu);
+-void __debug_switch_to_host(struct kvm_vcpu *vcpu);
++void __debug_save_host_context(struct kvm_vcpu *vcpu);
++void __debug_restore_guest_context(struct kvm_vcpu *vcpu);
++void __debug_save_guest_context(struct kvm_vcpu *vcpu);
++void __debug_restore_host_context(struct kvm_vcpu *vcpu);
+ 
+ void __fpsimd_save_state(struct user_fpsimd_state *fp_regs);
+ void __fpsimd_restore_state(struct user_fpsimd_state *fp_regs);
+diff --git a/arch/arm64/kvm/hyp/debug-sr.c b/arch/arm64/kvm/hyp/debug-sr.c
+index fa51236ebcb3..618884df1dc4 100644
+--- a/arch/arm64/kvm/hyp/debug-sr.c
++++ b/arch/arm64/kvm/hyp/debug-sr.c
+@@ -149,20 +149,13 @@ static void __hyp_text __debug_restore_state(struct kvm_vcpu *vcpu,
+ 	write_sysreg(ctxt->sys_regs[MDCCINT_EL1], mdccint_el1);
+ }
+ 
+-void __hyp_text __debug_switch_to_guest(struct kvm_vcpu *vcpu)
++void __hyp_text __debug_restore_guest_context(struct kvm_vcpu *vcpu)
+ {
+ 	struct kvm_cpu_context *host_ctxt;
+ 	struct kvm_cpu_context *guest_ctxt;
+ 	struct kvm_guest_debug_arch *host_dbg;
+ 	struct kvm_guest_debug_arch *guest_dbg;
+ 
+-	/*
+-	 * Non-VHE: Disable and flush SPE data generation
+-	 * VHE: The vcpu can run, but it can't hide.
+-	 */
+-	if (!has_vhe())
+-		__debug_save_spe_nvhe(&vcpu->arch.host_debug_state.pmscr_el1);
+-
+ 	if (!(vcpu->arch.flags & KVM_ARM64_DEBUG_DIRTY))
+ 		return;
+ 
+@@ -175,7 +168,7 @@ void __hyp_text __debug_switch_to_guest(struct kvm_vcpu *vcpu)
+ 	__debug_restore_state(vcpu, guest_dbg, guest_ctxt);
+ }
+ 
+-void __hyp_text __debug_switch_to_host(struct kvm_vcpu *vcpu)
++void __hyp_text __debug_restore_host_context(struct kvm_vcpu *vcpu)
+ {
+ 	struct kvm_cpu_context *host_ctxt;
+ 	struct kvm_cpu_context *guest_ctxt;
+@@ -199,6 +192,20 @@ void __hyp_text __debug_switch_to_host(struct kvm_vcpu *vcpu)
+ 	vcpu->arch.flags &= ~KVM_ARM64_DEBUG_DIRTY;
+ }
+ 
++void __hyp_text __debug_save_host_context(struct kvm_vcpu *vcpu)
++{
++	/*
++	 * Non-VHE: Disable and flush SPE data generation
++	 * VHE: The vcpu can run, but it can't hide.
++	 */
++	if (!has_vhe())
++		__debug_save_spe_nvhe(&vcpu->arch.host_debug_state.pmscr_el1);
++}
++
++void __hyp_text __debug_save_guest_context(struct kvm_vcpu *vcpu)
++{
++}
++
+ u32 __hyp_text __kvm_get_mdcr_el2(void)
+ {
+ 	return read_sysreg(mdcr_el2);
+diff --git a/arch/arm64/kvm/hyp/switch.c b/arch/arm64/kvm/hyp/switch.c
+index 9b2461138ddc..844f0dd7a7f0 100644
+--- a/arch/arm64/kvm/hyp/switch.c
++++ b/arch/arm64/kvm/hyp/switch.c
+@@ -515,6 +515,7 @@ int kvm_vcpu_run_vhe(struct kvm_vcpu *vcpu)
+ 	guest_ctxt = &vcpu->arch.ctxt;
+ 
+ 	sysreg_save_host_state_vhe(host_ctxt);
++	__debug_save_host_context(vcpu);
+ 
+ 	/*
+ 	 * ARM erratum 1165522 requires us to configure both stage 1 and
+@@ -531,7 +532,7 @@ int kvm_vcpu_run_vhe(struct kvm_vcpu *vcpu)
+ 	__activate_traps(vcpu);
+ 
+ 	sysreg_restore_guest_state_vhe(guest_ctxt);
+-	__debug_switch_to_guest(vcpu);
++	__debug_restore_guest_context(vcpu);
+ 
+ 	__set_guest_arch_workaround_state(vcpu);
+ 
+@@ -545,6 +546,7 @@ int kvm_vcpu_run_vhe(struct kvm_vcpu *vcpu)
+ 	__set_host_arch_workaround_state(vcpu);
+ 
+ 	sysreg_save_guest_state_vhe(guest_ctxt);
++	__debug_save_guest_context(vcpu);
+ 
+ 	__deactivate_traps(vcpu);
+ 
+@@ -553,7 +555,7 @@ int kvm_vcpu_run_vhe(struct kvm_vcpu *vcpu)
+ 	if (vcpu->arch.flags & KVM_ARM64_FP_ENABLED)
+ 		__fpsimd_save_fpexc32(vcpu);
+ 
+-	__debug_switch_to_host(vcpu);
++	__debug_restore_host_context(vcpu);
+ 
+ 	return exit_code;
+ }
+@@ -587,6 +589,7 @@ int __hyp_text __kvm_vcpu_run_nvhe(struct kvm_vcpu *vcpu)
+ 	pmu_switch_needed = __pmu_switch_to_guest(host_ctxt);
+ 
+ 	__sysreg_save_state_nvhe(host_ctxt);
++	__debug_save_host_context(vcpu);
+ 
+ 	__activate_vm(kern_hyp_va(vcpu->kvm));
+ 	__activate_traps(vcpu);
+@@ -600,7 +603,7 @@ int __hyp_text __kvm_vcpu_run_nvhe(struct kvm_vcpu *vcpu)
+ 	 */
+ 	__sysreg32_restore_state(vcpu);
+ 	__sysreg_restore_state_nvhe(guest_ctxt);
+-	__debug_switch_to_guest(vcpu);
++	__debug_restore_guest_context(vcpu);
+ 
+ 	__set_guest_arch_workaround_state(vcpu);
+ 
+@@ -614,6 +617,7 @@ int __hyp_text __kvm_vcpu_run_nvhe(struct kvm_vcpu *vcpu)
+ 	__set_host_arch_workaround_state(vcpu);
+ 
+ 	__sysreg_save_state_nvhe(guest_ctxt);
++	__debug_save_guest_context(vcpu);
+ 	__sysreg32_save_state(vcpu);
+ 	__timer_disable_traps(vcpu);
+ 	__hyp_vgic_save_state(vcpu);
+@@ -630,7 +634,7 @@ int __hyp_text __kvm_vcpu_run_nvhe(struct kvm_vcpu *vcpu)
+ 	 * This must come after restoring the host sysregs, since a non-VHE
+ 	 * system may enable SPE here and make use of the TTBRs.
+ 	 */
+-	__debug_switch_to_host(vcpu);
++	__debug_restore_host_context(vcpu);
+ 
+ 	if (pmu_switch_needed)
+ 		__pmu_switch_to_host(host_ctxt);
+
+From patchwork Thu May 23 10:34:55 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sudeep Holla <Sudeep.Holla@arm.com>
+X-Patchwork-Id: 10957291
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6666113AD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:35:50 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 4E9E828433
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:35:50 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4302528455; Thu, 23 May 2019 10:35:50 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id BF03A28433
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:35:41 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730642AbfEWKfk (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 May 2019 06:35:40 -0400
+Received: from usa-sjc-mx-foss1.foss.arm.com ([217.140.101.70]:43094 "EHLO
+        foss.arm.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730631AbfEWKfk (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 May 2019 06:35:40 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id AAF9515AB;
+        Thu, 23 May 2019 03:35:39 -0700 (PDT)
+Received: from usa.arm.com (e107155-lin.cambridge.arm.com [10.1.196.42])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 958D83F718;
+        Thu, 23 May 2019 03:35:37 -0700 (PDT)
+From: Sudeep Holla <sudeep.holla@arm.com>
+To: kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Cc: Sudeep Holla <sudeep.holla@arm.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Marc Zyngier <marc.zyngier@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Pouloze <suzuki.poulose@arm.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Will Deacon <will.deacon@arm.com>,
+        Julien Thierry <julien.thierry@arm.com>
+Subject: [PATCH v2 08/15] arm64: KVM/debug: drop pmscr_el1 and use
+ sys_regs[PMSCR_EL1] in kvm_cpu_context
+Date: Thu, 23 May 2019 11:34:55 +0100
+Message-Id: <20190523103502.25925-9-sudeep.holla@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20190523103502.25925-1-sudeep.holla@arm.com>
+References: <20190523103502.25925-1-sudeep.holla@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+kvm_cpu_context now has support to stash the complete SPE buffer control
+context. We no longer need the pmscr_el1 kvm_vcpu_arch and it can be
+dropped.
+
+Signed-off-by: Sudeep Holla <sudeep.holla@arm.com>
+---
+ arch/arm64/include/asm/kvm_host.h |  2 --
+ arch/arm64/kvm/hyp/debug-sr.c     | 26 +++++++++++++++-----------
+ 2 files changed, 15 insertions(+), 13 deletions(-)
+
+diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
+index 559aa6931291..6921fdfd477b 100644
+--- a/arch/arm64/include/asm/kvm_host.h
++++ b/arch/arm64/include/asm/kvm_host.h
+@@ -310,8 +310,6 @@ struct kvm_vcpu_arch {
+ 	struct {
+ 		/* {Break,watch}point registers */
+ 		struct kvm_guest_debug_arch regs;
+-		/* Statistical profiling extension */
+-		u64 pmscr_el1;
+ 	} host_debug_state;
+ 
+ 	/* VGIC state */
+diff --git a/arch/arm64/kvm/hyp/debug-sr.c b/arch/arm64/kvm/hyp/debug-sr.c
+index 618884df1dc4..a2714a5eb3e9 100644
+--- a/arch/arm64/kvm/hyp/debug-sr.c
++++ b/arch/arm64/kvm/hyp/debug-sr.c
+@@ -66,19 +66,19 @@
+ 	default:	write_debug(ptr[0], reg, 0);			\
+ 	}
+ 
+-static void __hyp_text __debug_save_spe_nvhe(u64 *pmscr_el1)
++static void __hyp_text __debug_save_spe_nvhe(struct kvm_cpu_context *ctxt)
+ {
+ 	u64 reg;
+ 
+ 	/* Clear pmscr in case of early return */
+-	*pmscr_el1 = 0;
++	ctxt->sys_regs[PMSCR_EL1] = 0;
+ 
+ 	/* SPE present on this CPU? */
+ 	if (!cpuid_feature_extract_unsigned_field(read_sysreg(id_aa64dfr0_el1),
+ 						  ID_AA64DFR0_PMSVER_SHIFT))
+ 		return;
+ 
+-	/* Yes; is it owned by EL3? */
++	/* Yes; is it owned by higher EL? */
+ 	reg = read_sysreg_s(SYS_PMBIDR_EL1);
+ 	if (reg & BIT(SYS_PMBIDR_EL1_P_SHIFT))
+ 		return;
+@@ -89,7 +89,7 @@ static void __hyp_text __debug_save_spe_nvhe(u64 *pmscr_el1)
+ 		return;
+ 
+ 	/* Yes; save the control register and disable data generation */
+-	*pmscr_el1 = read_sysreg_el1_s(SYS_PMSCR);
++	ctxt->sys_regs[PMSCR_EL1] = read_sysreg_el1_s(SYS_PMSCR);
+ 	write_sysreg_el1_s(0, SYS_PMSCR);
+ 	isb();
+ 
+@@ -98,16 +98,16 @@ static void __hyp_text __debug_save_spe_nvhe(u64 *pmscr_el1)
+ 	dsb(nsh);
+ }
+ 
+-static void __hyp_text __debug_restore_spe_nvhe(u64 pmscr_el1)
++static void __hyp_text __debug_restore_spe_nvhe(struct kvm_cpu_context *ctxt)
+ {
+-	if (!pmscr_el1)
++	if (!ctxt->sys_regs[PMSCR_EL1])
+ 		return;
+ 
+ 	/* The host page table is installed, but not yet synchronised */
+ 	isb();
+ 
+ 	/* Re-enable data generation */
+-	write_sysreg_el1_s(pmscr_el1, SYS_PMSCR);
++	write_sysreg_el1_s(ctxt->sys_regs[PMSCR_EL1], SYS_PMSCR);
+ }
+ 
+ static void __hyp_text __debug_save_state(struct kvm_vcpu *vcpu,
+@@ -175,14 +175,15 @@ void __hyp_text __debug_restore_host_context(struct kvm_vcpu *vcpu)
+ 	struct kvm_guest_debug_arch *host_dbg;
+ 	struct kvm_guest_debug_arch *guest_dbg;
+ 
++	host_ctxt = kern_hyp_va(vcpu->arch.host_cpu_context);
++	guest_ctxt = &vcpu->arch.ctxt;
++
+ 	if (!has_vhe())
+-		__debug_restore_spe_nvhe(vcpu->arch.host_debug_state.pmscr_el1);
++		__debug_restore_spe_nvhe(host_ctxt);
+ 
+ 	if (!(vcpu->arch.flags & KVM_ARM64_DEBUG_DIRTY))
+ 		return;
+ 
+-	host_ctxt = kern_hyp_va(vcpu->arch.host_cpu_context);
+-	guest_ctxt = &vcpu->arch.ctxt;
+ 	host_dbg = &vcpu->arch.host_debug_state.regs;
+ 	guest_dbg = kern_hyp_va(vcpu->arch.debug_ptr);
+ 
+@@ -198,8 +199,11 @@ void __hyp_text __debug_save_host_context(struct kvm_vcpu *vcpu)
+ 	 * Non-VHE: Disable and flush SPE data generation
+ 	 * VHE: The vcpu can run, but it can't hide.
+ 	 */
++	struct kvm_cpu_context *host_ctxt;
++
++	host_ctxt = kern_hyp_va(vcpu->arch.host_cpu_context);
+ 	if (!has_vhe())
+-		__debug_save_spe_nvhe(&vcpu->arch.host_debug_state.pmscr_el1);
++		__debug_save_spe_nvhe(host_ctxt);
+ }
+ 
+ void __hyp_text __debug_save_guest_context(struct kvm_vcpu *vcpu)
+
+From patchwork Thu May 23 10:34:56 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sudeep Holla <Sudeep.Holla@arm.com>
+X-Patchwork-Id: 10957315
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id ED9C476
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:24 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D4AA427F82
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:24 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C8DA428450; Thu, 23 May 2019 10:36:24 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 536DF27F82
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:24 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730687AbfEWKgT (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 May 2019 06:36:19 -0400
+Received: from usa-sjc-mx-foss1.foss.arm.com ([217.140.101.70]:43118 "EHLO
+        foss.arm.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730618AbfEWKfm (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 May 2019 06:35:42 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 09CF7341;
+        Thu, 23 May 2019 03:35:42 -0700 (PDT)
+Received: from usa.arm.com (e107155-lin.cambridge.arm.com [10.1.196.42])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ E82C43F718;
+        Thu, 23 May 2019 03:35:39 -0700 (PDT)
+From: Sudeep Holla <sudeep.holla@arm.com>
+To: kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Cc: Sudeep Holla <sudeep.holla@arm.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Marc Zyngier <marc.zyngier@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Pouloze <suzuki.poulose@arm.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Will Deacon <will.deacon@arm.com>,
+        Julien Thierry <julien.thierry@arm.com>
+Subject: [PATCH v2 09/15] arm64: KVM: add support to save/restore SPE
+ profiling buffer controls
+Date: Thu, 23 May 2019 11:34:56 +0100
+Message-Id: <20190523103502.25925-10-sudeep.holla@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20190523103502.25925-1-sudeep.holla@arm.com>
+References: <20190523103502.25925-1-sudeep.holla@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Currently since we don't support profiling using SPE in the guests,
+we just save the PMSCR_EL1, flush the profiling buffers and disable
+sampling. However in order to support simultaneous sampling both in
+the host and guests, we need to save and reatore the complete SPE
+profiling buffer controls' context.
+
+Let's add the support for the same and keep it disabled for now.
+We can enable it conditionally only if guests are allowed to use
+SPE.
+
+Signed-off-by: Sudeep Holla <sudeep.holla@arm.com>
+---
+ arch/arm64/kvm/hyp/debug-sr.c | 44 ++++++++++++++++++++++++++++-------
+ 1 file changed, 35 insertions(+), 9 deletions(-)
+
+diff --git a/arch/arm64/kvm/hyp/debug-sr.c b/arch/arm64/kvm/hyp/debug-sr.c
+index a2714a5eb3e9..a4e6eaf5934f 100644
+--- a/arch/arm64/kvm/hyp/debug-sr.c
++++ b/arch/arm64/kvm/hyp/debug-sr.c
+@@ -66,7 +66,8 @@
+ 	default:	write_debug(ptr[0], reg, 0);			\
+ 	}
+ 
+-static void __hyp_text __debug_save_spe_nvhe(struct kvm_cpu_context *ctxt)
++static void __hyp_text
++__debug_save_spe_nvhe(struct kvm_cpu_context *ctxt, bool full_ctxt)
+ {
+ 	u64 reg;
+ 
+@@ -83,22 +84,37 @@ static void __hyp_text __debug_save_spe_nvhe(struct kvm_cpu_context *ctxt)
+ 	if (reg & BIT(SYS_PMBIDR_EL1_P_SHIFT))
+ 		return;
+ 
+-	/* No; is the host actually using the thing? */
+-	reg = read_sysreg_s(SYS_PMBLIMITR_EL1);
+-	if (!(reg & BIT(SYS_PMBLIMITR_EL1_E_SHIFT)))
++	/* Save the control register and disable data generation */
++	ctxt->sys_regs[PMSCR_EL1] = read_sysreg_el1_s(SYS_PMSCR);
++
++	if (!ctxt->sys_regs[PMSCR_EL1])
+ 		return;
+ 
+-	/* Yes; save the control register and disable data generation */
+-	ctxt->sys_regs[PMSCR_EL1] = read_sysreg_el1_s(SYS_PMSCR);
+ 	write_sysreg_el1_s(0, SYS_PMSCR);
+ 	isb();
+ 
+ 	/* Now drain all buffered data to memory */
+ 	psb_csync();
+ 	dsb(nsh);
++
++	if (!full_ctxt)
++		return;
++
++	ctxt->sys_regs[PMBLIMITR_EL1] = read_sysreg_s(SYS_PMBLIMITR_EL1);
++	write_sysreg_s(0, SYS_PMBLIMITR_EL1);
++	isb();
++
++	ctxt->sys_regs[PMSICR_EL1] = read_sysreg_s(SYS_PMSICR_EL1);
++	ctxt->sys_regs[PMSIRR_EL1] = read_sysreg_s(SYS_PMSIRR_EL1);
++	ctxt->sys_regs[PMSFCR_EL1] = read_sysreg_s(SYS_PMSFCR_EL1);
++	ctxt->sys_regs[PMSEVFR_EL1] = read_sysreg_s(SYS_PMSEVFR_EL1);
++	ctxt->sys_regs[PMSLATFR_EL1] = read_sysreg_s(SYS_PMSLATFR_EL1);
++	ctxt->sys_regs[PMBPTR_EL1] = read_sysreg_s(SYS_PMBPTR_EL1);
++	ctxt->sys_regs[PMBSR_EL1] = read_sysreg_s(SYS_PMBSR_EL1);
+ }
+ 
+-static void __hyp_text __debug_restore_spe_nvhe(struct kvm_cpu_context *ctxt)
++static void __hyp_text
++__debug_restore_spe_nvhe(struct kvm_cpu_context *ctxt, bool full_ctxt)
+ {
+ 	if (!ctxt->sys_regs[PMSCR_EL1])
+ 		return;
+@@ -107,6 +123,16 @@ static void __hyp_text __debug_restore_spe_nvhe(struct kvm_cpu_context *ctxt)
+ 	isb();
+ 
+ 	/* Re-enable data generation */
++	if (full_ctxt) {
++		write_sysreg_s(ctxt->sys_regs[PMBPTR_EL1], SYS_PMBPTR_EL1);
++		write_sysreg_s(ctxt->sys_regs[PMBLIMITR_EL1], SYS_PMBLIMITR_EL1);
++		write_sysreg_s(ctxt->sys_regs[PMSFCR_EL1], SYS_PMSFCR_EL1);
++		write_sysreg_s(ctxt->sys_regs[PMSEVFR_EL1], SYS_PMSEVFR_EL1);
++		write_sysreg_s(ctxt->sys_regs[PMSLATFR_EL1], SYS_PMSLATFR_EL1);
++		write_sysreg_s(ctxt->sys_regs[PMSIRR_EL1], SYS_PMSIRR_EL1);
++		write_sysreg_s(ctxt->sys_regs[PMSICR_EL1], SYS_PMSICR_EL1);
++		write_sysreg_s(ctxt->sys_regs[PMBSR_EL1], SYS_PMBSR_EL1);
++	}
+ 	write_sysreg_el1_s(ctxt->sys_regs[PMSCR_EL1], SYS_PMSCR);
+ }
+ 
+@@ -179,7 +205,7 @@ void __hyp_text __debug_restore_host_context(struct kvm_vcpu *vcpu)
+ 	guest_ctxt = &vcpu->arch.ctxt;
+ 
+ 	if (!has_vhe())
+-		__debug_restore_spe_nvhe(host_ctxt);
++		__debug_restore_spe_nvhe(host_ctxt, false);
+ 
+ 	if (!(vcpu->arch.flags & KVM_ARM64_DEBUG_DIRTY))
+ 		return;
+@@ -203,7 +229,7 @@ void __hyp_text __debug_save_host_context(struct kvm_vcpu *vcpu)
+ 
+ 	host_ctxt = kern_hyp_va(vcpu->arch.host_cpu_context);
+ 	if (!has_vhe())
+-		__debug_save_spe_nvhe(host_ctxt);
++		__debug_save_spe_nvhe(host_ctxt, false);
+ }
+ 
+ void __hyp_text __debug_save_guest_context(struct kvm_vcpu *vcpu)
+
+From patchwork Thu May 23 10:34:57 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sudeep Holla <Sudeep.Holla@arm.com>
+X-Patchwork-Id: 10957309
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 592561708
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:13 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3F37628433
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:13 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 3320728455; Thu, 23 May 2019 10:36:13 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A5A1C28450
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730679AbfEWKfr (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 May 2019 06:35:47 -0400
+Received: from usa-sjc-mx-foss1.foss.arm.com ([217.140.101.70]:43128 "EHLO
+        foss.arm.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730669AbfEWKfp (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 May 2019 06:35:45 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 61E02A78;
+        Thu, 23 May 2019 03:35:44 -0700 (PDT)
+Received: from usa.arm.com (e107155-lin.cambridge.arm.com [10.1.196.42])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 48CBD3F718;
+        Thu, 23 May 2019 03:35:42 -0700 (PDT)
+From: Sudeep Holla <sudeep.holla@arm.com>
+To: kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Cc: Sudeep Holla <sudeep.holla@arm.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Marc Zyngier <marc.zyngier@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Pouloze <suzuki.poulose@arm.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Will Deacon <will.deacon@arm.com>,
+        Julien Thierry <julien.thierry@arm.com>
+Subject: [PATCH v2 10/15] arm64: KVM: enable conditional save/restore full SPE
+ profiling buffer controls
+Date: Thu, 23 May 2019 11:34:57 +0100
+Message-Id: <20190523103502.25925-11-sudeep.holla@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20190523103502.25925-1-sudeep.holla@arm.com>
+References: <20190523103502.25925-1-sudeep.holla@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Now that we can save/restore the full SPE controls, we can enable it
+if SPE is setup and ready to use in KVM. It's supported in KVM only if
+all the CPUs in the system supports SPE.
+
+However to support heterogenous systems, we need to move the check if
+host supports SPE and do a partial save/restore.
+
+Signed-off-by: Sudeep Holla <sudeep.holla@arm.com>
+---
+ arch/arm64/kvm/hyp/debug-sr.c | 33 ++++++++++++++++-----------------
+ include/kvm/arm_spe.h         |  3 +++
+ 2 files changed, 19 insertions(+), 17 deletions(-)
+
+diff --git a/arch/arm64/kvm/hyp/debug-sr.c b/arch/arm64/kvm/hyp/debug-sr.c
+index a4e6eaf5934f..cd0a7571abc1 100644
+--- a/arch/arm64/kvm/hyp/debug-sr.c
++++ b/arch/arm64/kvm/hyp/debug-sr.c
+@@ -67,18 +67,13 @@
+ 	}
+ 
+ static void __hyp_text
+-__debug_save_spe_nvhe(struct kvm_cpu_context *ctxt, bool full_ctxt)
++__debug_save_spe_context(struct kvm_cpu_context *ctxt, bool full_ctxt)
+ {
+ 	u64 reg;
+ 
+ 	/* Clear pmscr in case of early return */
+ 	ctxt->sys_regs[PMSCR_EL1] = 0;
+ 
+-	/* SPE present on this CPU? */
+-	if (!cpuid_feature_extract_unsigned_field(read_sysreg(id_aa64dfr0_el1),
+-						  ID_AA64DFR0_PMSVER_SHIFT))
+-		return;
+-
+ 	/* Yes; is it owned by higher EL? */
+ 	reg = read_sysreg_s(SYS_PMBIDR_EL1);
+ 	if (reg & BIT(SYS_PMBIDR_EL1_P_SHIFT))
+@@ -114,7 +109,7 @@ __debug_save_spe_nvhe(struct kvm_cpu_context *ctxt, bool full_ctxt)
+ }
+ 
+ static void __hyp_text
+-__debug_restore_spe_nvhe(struct kvm_cpu_context *ctxt, bool full_ctxt)
++__debug_restore_spe_context(struct kvm_cpu_context *ctxt, bool full_ctxt)
+ {
+ 	if (!ctxt->sys_regs[PMSCR_EL1])
+ 		return;
+@@ -182,11 +177,14 @@ void __hyp_text __debug_restore_guest_context(struct kvm_vcpu *vcpu)
+ 	struct kvm_guest_debug_arch *host_dbg;
+ 	struct kvm_guest_debug_arch *guest_dbg;
+ 
++	host_ctxt = kern_hyp_va(vcpu->arch.host_cpu_context);
++	guest_ctxt = &vcpu->arch.ctxt;
++
++	__debug_restore_spe_context(guest_ctxt, kvm_arm_spe_v1_ready(vcpu));
++
+ 	if (!(vcpu->arch.flags & KVM_ARM64_DEBUG_DIRTY))
+ 		return;
+ 
+-	host_ctxt = kern_hyp_va(vcpu->arch.host_cpu_context);
+-	guest_ctxt = &vcpu->arch.ctxt;
+ 	host_dbg = &vcpu->arch.host_debug_state.regs;
+ 	guest_dbg = kern_hyp_va(vcpu->arch.debug_ptr);
+ 
+@@ -204,8 +202,7 @@ void __hyp_text __debug_restore_host_context(struct kvm_vcpu *vcpu)
+ 	host_ctxt = kern_hyp_va(vcpu->arch.host_cpu_context);
+ 	guest_ctxt = &vcpu->arch.ctxt;
+ 
+-	if (!has_vhe())
+-		__debug_restore_spe_nvhe(host_ctxt, false);
++	__debug_restore_spe_context(host_ctxt, kvm_arm_spe_v1_ready(vcpu));
+ 
+ 	if (!(vcpu->arch.flags & KVM_ARM64_DEBUG_DIRTY))
+ 		return;
+@@ -221,19 +218,21 @@ void __hyp_text __debug_restore_host_context(struct kvm_vcpu *vcpu)
+ 
+ void __hyp_text __debug_save_host_context(struct kvm_vcpu *vcpu)
+ {
+-	/*
+-	 * Non-VHE: Disable and flush SPE data generation
+-	 * VHE: The vcpu can run, but it can't hide.
+-	 */
+ 	struct kvm_cpu_context *host_ctxt;
+ 
+ 	host_ctxt = kern_hyp_va(vcpu->arch.host_cpu_context);
+-	if (!has_vhe())
+-		__debug_save_spe_nvhe(host_ctxt, false);
++	if (cpuid_feature_extract_unsigned_field(read_sysreg(id_aa64dfr0_el1),
++						 ID_AA64DFR0_PMSVER_SHIFT))
++		__debug_save_spe_context(host_ctxt, kvm_arm_spe_v1_ready(vcpu));
+ }
+ 
+ void __hyp_text __debug_save_guest_context(struct kvm_vcpu *vcpu)
+ {
++	bool kvm_spe_ready = kvm_arm_spe_v1_ready(vcpu);
++
++	/* SPE present on this vCPU? */
++	if (kvm_spe_ready)
++		__debug_save_spe_context(&vcpu->arch.ctxt, kvm_spe_ready);
+ }
+ 
+ u32 __hyp_text __kvm_get_mdcr_el2(void)
+diff --git a/include/kvm/arm_spe.h b/include/kvm/arm_spe.h
+index 2440ff02f747..fdcb0df1e0fd 100644
+--- a/include/kvm/arm_spe.h
++++ b/include/kvm/arm_spe.h
+@@ -18,6 +18,8 @@ struct kvm_spe {
+ 
+ #ifdef CONFIG_KVM_ARM_SPE
+ 
++#define kvm_arm_spe_v1_ready(v)		((v)->arch.spe.ready)
++
+ static inline bool kvm_arm_support_spe_v1(void)
+ {
+ 	u64 dfr0 = read_sanitised_ftr_reg(SYS_ID_AA64DFR0_EL1);
+@@ -27,6 +29,7 @@ static inline bool kvm_arm_support_spe_v1(void)
+ }
+ #else
+ 
++#define kvm_arm_spe_v1_ready(v)		(false)
+ #define kvm_arm_support_spe_v1()	(false)
+ #endif /* CONFIG_KVM_ARM_SPE */
+ 
+
+From patchwork Thu May 23 10:34:58 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sudeep Holla <Sudeep.Holla@arm.com>
+X-Patchwork-Id: 10957311
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 43C1D13AD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:14 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2B72C28433
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:14 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 1FD7A28455; Thu, 23 May 2019 10:36:14 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id C348B28433
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:13 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730780AbfEWKgN (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 May 2019 06:36:13 -0400
+Received: from foss.arm.com ([217.140.101.70]:43142 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730658AbfEWKfr (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 May 2019 06:35:47 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id BCCA415BF;
+        Thu, 23 May 2019 03:35:46 -0700 (PDT)
+Received: from usa.arm.com (e107155-lin.cambridge.arm.com [10.1.196.42])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ A06F23F718;
+        Thu, 23 May 2019 03:35:44 -0700 (PDT)
+From: Sudeep Holla <sudeep.holla@arm.com>
+To: kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Cc: Sudeep Holla <sudeep.holla@arm.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Marc Zyngier <marc.zyngier@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Pouloze <suzuki.poulose@arm.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Will Deacon <will.deacon@arm.com>,
+        Julien Thierry <julien.thierry@arm.com>
+Subject: [PATCH v2 11/15] arm64: KVM/debug: trap all accesses to SPE controls
+ at EL1
+Date: Thu, 23 May 2019 11:34:58 +0100
+Message-Id: <20190523103502.25925-12-sudeep.holla@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20190523103502.25925-1-sudeep.holla@arm.com>
+References: <20190523103502.25925-1-sudeep.holla@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Now that we have all the save/restore mechanism in place, lets enable
+trapping of accesses to SPE profiling buffer controls at EL1 to EL2.
+This will also change the translation regime used by buffer from EL2
+stage 1 to EL1 stage 1 on VHE systems.
+
+Signed-off-by: Sudeep Holla <sudeep.holla@arm.com>
+---
+ arch/arm64/kvm/hyp/switch.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/arm64/kvm/hyp/switch.c b/arch/arm64/kvm/hyp/switch.c
+index 844f0dd7a7f0..881901825a85 100644
+--- a/arch/arm64/kvm/hyp/switch.c
++++ b/arch/arm64/kvm/hyp/switch.c
+@@ -110,6 +110,7 @@ static void activate_traps_vhe(struct kvm_vcpu *vcpu)
+ 
+ 	write_sysreg(val, cpacr_el1);
+ 
++	write_sysreg(vcpu->arch.mdcr_el2 | 2 << MDCR_EL2_E2PB_SHIFT, mdcr_el2);
+ 	write_sysreg(kvm_get_hyp_vector(), vbar_el1);
+ }
+ NOKPROBE_SYMBOL(activate_traps_vhe);
+@@ -127,6 +128,7 @@ static void __hyp_text __activate_traps_nvhe(struct kvm_vcpu *vcpu)
+ 		__activate_traps_fpsimd32(vcpu);
+ 	}
+ 
++	write_sysreg(vcpu->arch.mdcr_el2 | 2 << MDCR_EL2_E2PB_SHIFT, mdcr_el2);
+ 	write_sysreg(val, cptr_el2);
+ }
+ 
+
+From patchwork Thu May 23 10:34:59 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sudeep Holla <Sudeep.Holla@arm.com>
+X-Patchwork-Id: 10957307
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 022FC76
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:13 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id DC34528433
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:12 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id CFE9628458; Thu, 23 May 2019 10:36:12 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D345D28433
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730698AbfEWKfu (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 May 2019 06:35:50 -0400
+Received: from foss.arm.com ([217.140.101.70]:43160 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730669AbfEWKft (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 May 2019 06:35:49 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 1C3CC165C;
+        Thu, 23 May 2019 03:35:49 -0700 (PDT)
+Received: from usa.arm.com (e107155-lin.cambridge.arm.com [10.1.196.42])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 073903F718;
+        Thu, 23 May 2019 03:35:46 -0700 (PDT)
+From: Sudeep Holla <sudeep.holla@arm.com>
+To: kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Cc: Sudeep Holla <sudeep.holla@arm.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Marc Zyngier <marc.zyngier@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Pouloze <suzuki.poulose@arm.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Will Deacon <will.deacon@arm.com>,
+        Julien Thierry <julien.thierry@arm.com>
+Subject: [PATCH v2 12/15] KVM: arm64: add a new vcpu device control group for
+ SPEv1
+Date: Thu, 23 May 2019 11:34:59 +0100
+Message-Id: <20190523103502.25925-13-sudeep.holla@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20190523103502.25925-1-sudeep.holla@arm.com>
+References: <20190523103502.25925-1-sudeep.holla@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+To configure the virtual SPEv1 overflow interrupt number, we use the
+vcpu kvm_device ioctl, encapsulating the KVM_ARM_VCPU_SPE_V1_IRQ
+attribute within the KVM_ARM_VCPU_SPE_V1_CTRL group.
+
+After configuring the SPEv1, call the vcpu ioctl with attribute
+KVM_ARM_VCPU_SPE_V1_INIT to initialize the SPEv1.
+
+Signed-off-by: Sudeep Holla <sudeep.holla@arm.com>
+---
+ Documentation/virtual/kvm/devices/vcpu.txt |  28 ++++
+ arch/arm64/include/asm/kvm_host.h          |   2 +-
+ arch/arm64/include/uapi/asm/kvm.h          |   4 +
+ arch/arm64/kvm/Makefile                    |   1 +
+ arch/arm64/kvm/guest.c                     |   9 ++
+ arch/arm64/kvm/reset.c                     |   3 +
+ include/kvm/arm_spe.h                      |  35 +++++
+ include/uapi/linux/kvm.h                   |   1 +
+ virt/kvm/arm/arm.c                         |   1 +
+ virt/kvm/arm/spe.c                         | 163 +++++++++++++++++++++
+ 10 files changed, 246 insertions(+), 1 deletion(-)
+ create mode 100644 virt/kvm/arm/spe.c
+
+diff --git a/Documentation/virtual/kvm/devices/vcpu.txt b/Documentation/virtual/kvm/devices/vcpu.txt
+index 2b5dab16c4f2..d1ece488aeee 100644
+--- a/Documentation/virtual/kvm/devices/vcpu.txt
++++ b/Documentation/virtual/kvm/devices/vcpu.txt
+@@ -60,3 +60,31 @@ time to use the number provided for a given timer, overwriting any previously
+ configured values on other VCPUs.  Userspace should configure the interrupt
+ numbers on at least one VCPU after creating all VCPUs and before running any
+ VCPUs.
++
++3. GROUP: KVM_ARM_VCPU_SPE_V1_CTRL
++Architectures: ARM64
++
++1.1. ATTRIBUTE: KVM_ARM_VCPU_SPE_V1_IRQ
++Parameters: in kvm_device_attr.addr the address for SPE buffer overflow interrupt
++	    is a pointer to an int
++Returns: -EBUSY: The SPE overflow interrupt is already set
++         -ENXIO: The overflow interrupt not set when attempting to get it
++         -ENODEV: SPEv1 not supported
++         -EINVAL: Invalid SPE overflow interrupt number supplied or
++                  trying to set the IRQ number without using an in-kernel
++                  irqchip.
++
++A value describing the SPEv1 (Statistical Profiling Extension v1) overflow
++interrupt number for this vcpu. This interrupt should be PPI and the interrupt
++type and number must be same for each vcpu.
++
++1.2 ATTRIBUTE: KVM_ARM_VCPU_SPE_V1_INIT
++Parameters: no additional parameter in kvm_device_attr.addr
++Returns: -ENODEV: SPEv1 not supported or GIC not initialized
++         -ENXIO: SPEv1 not properly configured or in-kernel irqchip not
++                 configured as required prior to calling this attribute
++         -EBUSY: SPEv1 already initialized
++
++Request the initialization of the SPEv1.  If using the SPEv1 with an in-kernel
++virtual GIC implementation, this must be done after initializing the in-kernel
++irqchip.
+diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
+index 6921fdfd477b..fc4ead0774b3 100644
+--- a/arch/arm64/include/asm/kvm_host.h
++++ b/arch/arm64/include/asm/kvm_host.h
+@@ -50,7 +50,7 @@
+ 
+ #define KVM_MAX_VCPUS VGIC_V3_MAX_CPUS
+ 
+-#define KVM_VCPU_MAX_FEATURES 7
++#define KVM_VCPU_MAX_FEATURES 8
+ 
+ #define KVM_REQ_SLEEP \
+ 	KVM_ARCH_REQ_FLAGS(0, KVM_REQUEST_WAIT | KVM_REQUEST_NO_WAKEUP)
+diff --git a/arch/arm64/include/uapi/asm/kvm.h b/arch/arm64/include/uapi/asm/kvm.h
+index 7b7ac0f6cec9..4c9e168de896 100644
+--- a/arch/arm64/include/uapi/asm/kvm.h
++++ b/arch/arm64/include/uapi/asm/kvm.h
+@@ -106,6 +106,7 @@ struct kvm_regs {
+ #define KVM_ARM_VCPU_SVE		4 /* enable SVE for this CPU */
+ #define KVM_ARM_VCPU_PTRAUTH_ADDRESS	5 /* VCPU uses address authentication */
+ #define KVM_ARM_VCPU_PTRAUTH_GENERIC	6 /* VCPU uses generic authentication */
++#define KVM_ARM_VCPU_SPE_V1		7 /* Support guest SPEv1 */
+ 
+ struct kvm_vcpu_init {
+ 	__u32 target;
+@@ -306,6 +307,9 @@ struct kvm_vcpu_events {
+ #define KVM_ARM_VCPU_TIMER_CTRL		1
+ #define   KVM_ARM_VCPU_TIMER_IRQ_VTIMER		0
+ #define   KVM_ARM_VCPU_TIMER_IRQ_PTIMER		1
++#define KVM_ARM_VCPU_SPE_V1_CTRL	2
++#define   KVM_ARM_VCPU_SPE_V1_IRQ	0
++#define   KVM_ARM_VCPU_SPE_V1_INIT	1
+ 
+ /* KVM_IRQ_LINE irq field index values */
+ #define KVM_ARM_IRQ_TYPE_SHIFT		24
+diff --git a/arch/arm64/kvm/Makefile b/arch/arm64/kvm/Makefile
+index 3ac1a64d2fb9..1ba6154dd8e1 100644
+--- a/arch/arm64/kvm/Makefile
++++ b/arch/arm64/kvm/Makefile
+@@ -35,3 +35,4 @@ kvm-$(CONFIG_KVM_ARM_HOST) += $(KVM)/arm/vgic/vgic-debug.o
+ kvm-$(CONFIG_KVM_ARM_HOST) += $(KVM)/irqchip.o
+ kvm-$(CONFIG_KVM_ARM_HOST) += $(KVM)/arm/arch_timer.o
+ kvm-$(CONFIG_KVM_ARM_PMU) += $(KVM)/arm/pmu.o
++kvm-$(CONFIG_KVM_ARM_SPE) += $(KVM)/arm/spe.o
+diff --git a/arch/arm64/kvm/guest.c b/arch/arm64/kvm/guest.c
+index 3ae2f82fca46..02c28a7eb332 100644
+--- a/arch/arm64/kvm/guest.c
++++ b/arch/arm64/kvm/guest.c
+@@ -848,6 +848,9 @@ int kvm_arm_vcpu_arch_set_attr(struct kvm_vcpu *vcpu,
+ 	case KVM_ARM_VCPU_TIMER_CTRL:
+ 		ret = kvm_arm_timer_set_attr(vcpu, attr);
+ 		break;
++	case KVM_ARM_VCPU_SPE_V1_CTRL:
++		ret = kvm_arm_spe_v1_set_attr(vcpu, attr);
++		break;
+ 	default:
+ 		ret = -ENXIO;
+ 		break;
+@@ -868,6 +871,9 @@ int kvm_arm_vcpu_arch_get_attr(struct kvm_vcpu *vcpu,
+ 	case KVM_ARM_VCPU_TIMER_CTRL:
+ 		ret = kvm_arm_timer_get_attr(vcpu, attr);
+ 		break;
++	case KVM_ARM_VCPU_SPE_V1_CTRL:
++		ret = kvm_arm_spe_v1_get_attr(vcpu, attr);
++		break;
+ 	default:
+ 		ret = -ENXIO;
+ 		break;
+@@ -888,6 +894,9 @@ int kvm_arm_vcpu_arch_has_attr(struct kvm_vcpu *vcpu,
+ 	case KVM_ARM_VCPU_TIMER_CTRL:
+ 		ret = kvm_arm_timer_has_attr(vcpu, attr);
+ 		break;
++	case KVM_ARM_VCPU_SPE_V1_CTRL:
++		ret = kvm_arm_spe_v1_has_attr(vcpu, attr);
++		break;
+ 	default:
+ 		ret = -ENXIO;
+ 		break;
+diff --git a/arch/arm64/kvm/reset.c b/arch/arm64/kvm/reset.c
+index 1140b4485575..33ce5248613e 100644
+--- a/arch/arm64/kvm/reset.c
++++ b/arch/arm64/kvm/reset.c
+@@ -91,6 +91,9 @@ int kvm_arch_vm_ioctl_check_extension(struct kvm *kvm, long ext)
+ 	case KVM_CAP_ARM_INJECT_SERROR_ESR:
+ 		r = cpus_have_const_cap(ARM64_HAS_RAS_EXTN);
+ 		break;
++	case KVM_CAP_ARM_SPE_V1:
++		r = kvm_arm_support_spe_v1();
++		break;
+ 	case KVM_CAP_SET_GUEST_DEBUG:
+ 	case KVM_CAP_VCPU_ATTRIBUTES:
+ 		r = 1;
+diff --git a/include/kvm/arm_spe.h b/include/kvm/arm_spe.h
+index fdcb0df1e0fd..8c2e8f10a965 100644
+--- a/include/kvm/arm_spe.h
++++ b/include/kvm/arm_spe.h
+@@ -19,6 +19,9 @@ struct kvm_spe {
+ #ifdef CONFIG_KVM_ARM_SPE
+ 
+ #define kvm_arm_spe_v1_ready(v)		((v)->arch.spe.ready)
++#define kvm_arm_spe_irq_initialized(v)		\
++	((v)->arch.spe.irq >= VGIC_NR_SGIS &&	\
++	(v)->arch.spe.irq <= VGIC_MAX_PRIVATE)
+ 
+ static inline bool kvm_arm_support_spe_v1(void)
+ {
+@@ -27,10 +30,42 @@ static inline bool kvm_arm_support_spe_v1(void)
+ 	return !!cpuid_feature_extract_unsigned_field(dfr0,
+ 						      ID_AA64DFR0_PMSVER_SHIFT);
+ }
++
++int kvm_arm_spe_v1_set_attr(struct kvm_vcpu *vcpu,
++			    struct kvm_device_attr *attr);
++int kvm_arm_spe_v1_get_attr(struct kvm_vcpu *vcpu,
++			    struct kvm_device_attr *attr);
++int kvm_arm_spe_v1_has_attr(struct kvm_vcpu *vcpu,
++			    struct kvm_device_attr *attr);
++int kvm_arm_spe_v1_enable(struct kvm_vcpu *vcpu);
+ #else
+ 
+ #define kvm_arm_spe_v1_ready(v)		(false)
+ #define kvm_arm_support_spe_v1()	(false)
++#define kvm_arm_spe_irq_initialized(v)	(false)
++
++static inline int kvm_arm_spe_v1_set_attr(struct kvm_vcpu *vcpu,
++					  struct kvm_device_attr *attr)
++{
++	return -ENXIO;
++}
++
++static inline int kvm_arm_spe_v1_get_attr(struct kvm_vcpu *vcpu,
++					  struct kvm_device_attr *attr)
++{
++	return -ENXIO;
++}
++
++static inline int kvm_arm_spe_v1_has_attr(struct kvm_vcpu *vcpu,
++					  struct kvm_device_attr *attr)
++{
++	return -ENXIO;
++}
++
++static inline int kvm_arm_spe_v1_enable(struct kvm_vcpu *vcpu)
++{
++	return 0;
++}
+ #endif /* CONFIG_KVM_ARM_SPE */
+ 
+ #endif /* __ASM_ARM_KVM_SPE_H */
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index 2fe12b40d503..698bcc2f96e3 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -993,6 +993,7 @@ struct kvm_ppc_resize_hpt {
+ #define KVM_CAP_ARM_SVE 170
+ #define KVM_CAP_ARM_PTRAUTH_ADDRESS 171
+ #define KVM_CAP_ARM_PTRAUTH_GENERIC 172
++#define KVM_CAP_ARM_SPE_V1 173
+ 
+ #ifdef KVM_CAP_IRQ_ROUTING
+ 
+diff --git a/virt/kvm/arm/arm.c b/virt/kvm/arm/arm.c
+index 90cedebaeb94..c5b711ef1cf8 100644
+--- a/virt/kvm/arm/arm.c
++++ b/virt/kvm/arm/arm.c
+@@ -34,6 +34,7 @@
+ #include <trace/events/kvm.h>
+ #include <kvm/arm_pmu.h>
+ #include <kvm/arm_psci.h>
++#include <kvm/arm_spe.h>
+ 
+ #define CREATE_TRACE_POINTS
+ #include "trace.h"
+diff --git a/virt/kvm/arm/spe.c b/virt/kvm/arm/spe.c
+new file mode 100644
+index 000000000000..87f02ed92426
+--- /dev/null
++++ b/virt/kvm/arm/spe.c
+@@ -0,0 +1,163 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright (C) 2018 ARM Ltd.
++ */
++
++#include <linux/cpu.h>
++#include <linux/kvm.h>
++#include <linux/kvm_host.h>
++#include <linux/uaccess.h>
++#include <asm/kvm_emulate.h>
++#include <kvm/arm_spe.h>
++#include <kvm/arm_vgic.h>
++
++int kvm_arm_spe_v1_enable(struct kvm_vcpu *vcpu)
++{
++	if (!vcpu->arch.spe.created)
++		return 0;
++
++	/*
++	 * A valid interrupt configuration for the SPE is either to have a
++	 * properly configured interrupt number and using an in-kernel irqchip.
++	 */
++	if (irqchip_in_kernel(vcpu->kvm)) {
++		int irq = vcpu->arch.spe.irq;
++
++		if (!kvm_arm_spe_irq_initialized(vcpu))
++			return -EINVAL;
++
++		if (!irq_is_ppi(irq))
++			return -EINVAL;
++	}
++
++	vcpu->arch.spe.ready = true;
++
++	return 0;
++}
++
++static int kvm_arm_spe_v1_init(struct kvm_vcpu *vcpu)
++{
++	if (!kvm_arm_support_spe_v1())
++		return -ENODEV;
++
++	if (!test_bit(KVM_ARM_VCPU_SPE_V1, vcpu->arch.features))
++		return -ENXIO;
++
++	if (vcpu->arch.spe.created)
++		return -EBUSY;
++
++	if (irqchip_in_kernel(vcpu->kvm)) {
++		int ret;
++
++		/*
++		 * If using the SPE with an in-kernel virtual GIC
++		 * implementation, we require the GIC to be already
++		 * initialized when initializing the SPE.
++		 */
++		if (!vgic_initialized(vcpu->kvm))
++			return -ENODEV;
++
++		ret = kvm_vgic_set_owner(vcpu, vcpu->arch.spe.irq,
++					 &vcpu->arch.spe);
++		if (ret)
++			return ret;
++	}
++
++	vcpu->arch.spe.created = true;
++	return 0;
++}
++
++/*
++ * For one VM the interrupt type must be same for each vcpu.
++ * As a PPI, the interrupt number is the same for all vcpus,
++ * while as an SPI it must be a separate number per vcpu.
++ */
++static bool spe_irq_is_valid(struct kvm *kvm, int irq)
++{
++	int i;
++	struct kvm_vcpu *vcpu;
++
++	kvm_for_each_vcpu(i, vcpu, kvm) {
++		if (!kvm_arm_spe_irq_initialized(vcpu))
++			continue;
++
++		if (vcpu->arch.spe.irq != irq)
++			return false;
++	}
++
++	return true;
++}
++
++int kvm_arm_spe_v1_set_attr(struct kvm_vcpu *vcpu, struct kvm_device_attr *attr)
++{
++	switch (attr->attr) {
++	case KVM_ARM_VCPU_SPE_V1_IRQ: {
++		int __user *uaddr = (int __user *)(long)attr->addr;
++		int irq;
++
++		if (!irqchip_in_kernel(vcpu->kvm))
++			return -EINVAL;
++
++		if (!test_bit(KVM_ARM_VCPU_SPE_V1, vcpu->arch.features))
++			return -ENODEV;
++
++		if (get_user(irq, uaddr))
++			return -EFAULT;
++
++		/* The SPE overflow interrupt can be a PPI only */
++		if (!(irq_is_ppi(irq)))
++			return -EINVAL;
++
++		if (!spe_irq_is_valid(vcpu->kvm, irq))
++			return -EINVAL;
++
++		if (kvm_arm_spe_irq_initialized(vcpu))
++			return -EBUSY;
++
++		kvm_debug("Set kvm ARM SPE irq: %d\n", irq);
++		vcpu->arch.spe.irq = irq;
++		return 0;
++	}
++	case KVM_ARM_VCPU_SPE_V1_INIT:
++		return kvm_arm_spe_v1_init(vcpu);
++	}
++
++	return -ENXIO;
++}
++
++int kvm_arm_spe_v1_get_attr(struct kvm_vcpu *vcpu, struct kvm_device_attr *attr)
++{
++	switch (attr->attr) {
++	case KVM_ARM_VCPU_SPE_V1_IRQ: {
++		int __user *uaddr = (int __user *)(long)attr->addr;
++		int irq;
++
++		if (!irqchip_in_kernel(vcpu->kvm))
++			return -EINVAL;
++
++		if (!test_bit(KVM_ARM_VCPU_SPE_V1, vcpu->arch.features))
++			return -ENODEV;
++
++		if (!kvm_arm_spe_irq_initialized(vcpu))
++			return -ENXIO;
++
++		irq = vcpu->arch.spe.irq;
++		return put_user(irq, uaddr);
++	}
++	}
++
++	return -ENXIO;
++}
++
++int kvm_arm_spe_v1_has_attr(struct kvm_vcpu *vcpu, struct kvm_device_attr *attr)
++{
++	switch (attr->attr) {
++	case KVM_ARM_VCPU_SPE_V1_IRQ:
++	case KVM_ARM_VCPU_SPE_V1_INIT:
++		if (kvm_arm_support_spe_v1() &&
++		    test_bit(KVM_ARM_VCPU_SPE_V1, vcpu->arch.features))
++			return 0;
++	}
++
++	return -ENXIO;
++}
+
+From patchwork Thu May 23 10:35:00 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sudeep Holla <Sudeep.Holla@arm.com>
+X-Patchwork-Id: 10957303
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9786913AD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:09 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 802D927F82
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:09 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 744A028450; Thu, 23 May 2019 10:36:09 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 211AD27F82
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:09 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730713AbfEWKfx (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 May 2019 06:35:53 -0400
+Received: from usa-sjc-mx-foss1.foss.arm.com ([217.140.101.70]:43174 "EHLO
+        foss.arm.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730692AbfEWKfv (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 May 2019 06:35:51 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 7757115AB;
+        Thu, 23 May 2019 03:35:51 -0700 (PDT)
+Received: from usa.arm.com (e107155-lin.cambridge.arm.com [10.1.196.42])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 5A9793F718;
+        Thu, 23 May 2019 03:35:49 -0700 (PDT)
+From: Sudeep Holla <sudeep.holla@arm.com>
+To: kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Cc: Sudeep Holla <sudeep.holla@arm.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Marc Zyngier <marc.zyngier@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Pouloze <suzuki.poulose@arm.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Will Deacon <will.deacon@arm.com>,
+        Julien Thierry <julien.thierry@arm.com>
+Subject: [PATCH v2 13/15] KVM: arm64: enable SPE support
+Date: Thu, 23 May 2019 11:35:00 +0100
+Message-Id: <20190523103502.25925-14-sudeep.holla@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20190523103502.25925-1-sudeep.holla@arm.com>
+References: <20190523103502.25925-1-sudeep.holla@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+We have all the bits and pieces to enable SPE for guest in place, so
+lets enable it.
+
+Signed-off-by: Sudeep Holla <sudeep.holla@arm.com>
+---
+ virt/kvm/arm/arm.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/virt/kvm/arm/arm.c b/virt/kvm/arm/arm.c
+index c5b711ef1cf8..935e2ed02b2e 100644
+--- a/virt/kvm/arm/arm.c
++++ b/virt/kvm/arm/arm.c
+@@ -577,6 +577,10 @@ static int kvm_vcpu_first_run_init(struct kvm_vcpu *vcpu)
+ 		return ret;
+ 
+ 	ret = kvm_arm_pmu_v3_enable(vcpu);
++	if (ret)
++		return ret;
++
++	ret = kvm_arm_spe_v1_enable(vcpu);
+ 
+ 	return ret;
+ }
+
+From patchwork Thu May 23 10:35:01 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sudeep Holla <Sudeep.Holla@arm.com>
+X-Patchwork-Id: 10957301
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D4F60112C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:05 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id BC40627F82
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:05 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id B02E328450; Thu, 23 May 2019 10:36:05 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 038C427F82
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:05 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730742AbfEWKfz (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 May 2019 06:35:55 -0400
+Received: from foss.arm.com ([217.140.101.70]:43190 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730732AbfEWKfy (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 May 2019 06:35:54 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id C9DEC1682;
+        Thu, 23 May 2019 03:35:53 -0700 (PDT)
+Received: from usa.arm.com (e107155-lin.cambridge.arm.com [10.1.196.42])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ B63B33F718;
+        Thu, 23 May 2019 03:35:51 -0700 (PDT)
+From: Sudeep Holla <sudeep.holla@arm.com>
+To: kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Cc: Sudeep Holla <sudeep.holla@arm.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Marc Zyngier <marc.zyngier@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Pouloze <suzuki.poulose@arm.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Will Deacon <will.deacon@arm.com>,
+        Julien Thierry <julien.thierry@arm.com>
+Subject: [PATCH v2 14/15][KVMTOOL] update_headers: Sync kvm UAPI headers with
+ linux v5.2-rc1
+Date: Thu, 23 May 2019 11:35:01 +0100
+Message-Id: <20190523103502.25925-15-sudeep.holla@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20190523103502.25925-1-sudeep.holla@arm.com>
+References: <20190523103502.25925-1-sudeep.holla@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+The local copies of the kvm user API headers are getting stale.
+
+In preparation for some arch-specific updated, this patch reflects
+a re-run of util/update_headers.sh to pull in upstream updates from
+linux v5.2-rc1.
+
+Signed-off-by: Sudeep Holla <sudeep.holla@arm.com>
+---
+ arm/aarch64/include/asm/kvm.h | 43 +++++++++++++++++++++++++++++++
+ include/linux/kvm.h           | 15 +++++++++--
+ powerpc/include/asm/kvm.h     | 48 +++++++++++++++++++++++++++++++++++
+ x86/include/asm/kvm.h         |  1 +
+ 4 files changed, 105 insertions(+), 2 deletions(-)
+
+diff --git a/arm/aarch64/include/asm/kvm.h b/arm/aarch64/include/asm/kvm.h
+index 97c3478ee6e7..7b7ac0f6cec9 100644
+--- a/arm/aarch64/include/asm/kvm.h
++++ b/arm/aarch64/include/asm/kvm.h
+@@ -35,6 +35,7 @@
+ #include <linux/psci.h>
+ #include <linux/types.h>
+ #include <asm/ptrace.h>
++#include <asm/sve_context.h>
+ 
+ #define __KVM_HAVE_GUEST_DEBUG
+ #define __KVM_HAVE_IRQ_LINE
+@@ -102,6 +103,9 @@ struct kvm_regs {
+ #define KVM_ARM_VCPU_EL1_32BIT		1 /* CPU running a 32bit VM */
+ #define KVM_ARM_VCPU_PSCI_0_2		2 /* CPU uses PSCI v0.2 */
+ #define KVM_ARM_VCPU_PMU_V3		3 /* Support guest PMUv3 */
++#define KVM_ARM_VCPU_SVE		4 /* enable SVE for this CPU */
++#define KVM_ARM_VCPU_PTRAUTH_ADDRESS	5 /* VCPU uses address authentication */
++#define KVM_ARM_VCPU_PTRAUTH_GENERIC	6 /* VCPU uses generic authentication */
+ 
+ struct kvm_vcpu_init {
+ 	__u32 target;
+@@ -226,6 +230,45 @@ struct kvm_vcpu_events {
+ 					 KVM_REG_ARM_FW | ((r) & 0xffff))
+ #define KVM_REG_ARM_PSCI_VERSION	KVM_REG_ARM_FW_REG(0)
+ 
++/* SVE registers */
++#define KVM_REG_ARM64_SVE		(0x15 << KVM_REG_ARM_COPROC_SHIFT)
++
++/* Z- and P-regs occupy blocks at the following offsets within this range: */
++#define KVM_REG_ARM64_SVE_ZREG_BASE	0
++#define KVM_REG_ARM64_SVE_PREG_BASE	0x400
++#define KVM_REG_ARM64_SVE_FFR_BASE	0x600
++
++#define KVM_ARM64_SVE_NUM_ZREGS		__SVE_NUM_ZREGS
++#define KVM_ARM64_SVE_NUM_PREGS		__SVE_NUM_PREGS
++
++#define KVM_ARM64_SVE_MAX_SLICES	32
++
++#define KVM_REG_ARM64_SVE_ZREG(n, i)					\
++	(KVM_REG_ARM64 | KVM_REG_ARM64_SVE | KVM_REG_ARM64_SVE_ZREG_BASE | \
++	 KVM_REG_SIZE_U2048 |						\
++	 (((n) & (KVM_ARM64_SVE_NUM_ZREGS - 1)) << 5) |			\
++	 ((i) & (KVM_ARM64_SVE_MAX_SLICES - 1)))
++
++#define KVM_REG_ARM64_SVE_PREG(n, i)					\
++	(KVM_REG_ARM64 | KVM_REG_ARM64_SVE | KVM_REG_ARM64_SVE_PREG_BASE | \
++	 KVM_REG_SIZE_U256 |						\
++	 (((n) & (KVM_ARM64_SVE_NUM_PREGS - 1)) << 5) |			\
++	 ((i) & (KVM_ARM64_SVE_MAX_SLICES - 1)))
++
++#define KVM_REG_ARM64_SVE_FFR(i)					\
++	(KVM_REG_ARM64 | KVM_REG_ARM64_SVE | KVM_REG_ARM64_SVE_FFR_BASE | \
++	 KVM_REG_SIZE_U256 |						\
++	 ((i) & (KVM_ARM64_SVE_MAX_SLICES - 1)))
++
++#define KVM_ARM64_SVE_VQ_MIN __SVE_VQ_MIN
++#define KVM_ARM64_SVE_VQ_MAX __SVE_VQ_MAX
++
++/* Vector lengths pseudo-register: */
++#define KVM_REG_ARM64_SVE_VLS		(KVM_REG_ARM64 | KVM_REG_ARM64_SVE | \
++					 KVM_REG_SIZE_U512 | 0xffff)
++#define KVM_ARM64_SVE_VLS_WORDS	\
++	((KVM_ARM64_SVE_VQ_MAX - KVM_ARM64_SVE_VQ_MIN) / 64 + 1)
++
+ /* Device Control API: ARM VGIC */
+ #define KVM_DEV_ARM_VGIC_GRP_ADDR	0
+ #define KVM_DEV_ARM_VGIC_GRP_DIST_REGS	1
+diff --git a/include/linux/kvm.h b/include/linux/kvm.h
+index 6d4ea4b6c922..2fe12b40d503 100644
+--- a/include/linux/kvm.h
++++ b/include/linux/kvm.h
+@@ -986,8 +986,13 @@ struct kvm_ppc_resize_hpt {
+ #define KVM_CAP_HYPERV_ENLIGHTENED_VMCS 163
+ #define KVM_CAP_EXCEPTION_PAYLOAD 164
+ #define KVM_CAP_ARM_VM_IPA_SIZE 165
+-#define KVM_CAP_MANUAL_DIRTY_LOG_PROTECT 166
++#define KVM_CAP_MANUAL_DIRTY_LOG_PROTECT 166 /* Obsolete */
+ #define KVM_CAP_HYPERV_CPUID 167
++#define KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2 168
++#define KVM_CAP_PPC_IRQ_XIVE 169
++#define KVM_CAP_ARM_SVE 170
++#define KVM_CAP_ARM_PTRAUTH_ADDRESS 171
++#define KVM_CAP_ARM_PTRAUTH_GENERIC 172
+ 
+ #ifdef KVM_CAP_IRQ_ROUTING
+ 
+@@ -1145,6 +1150,7 @@ struct kvm_dirty_tlb {
+ #define KVM_REG_SIZE_U256	0x0050000000000000ULL
+ #define KVM_REG_SIZE_U512	0x0060000000000000ULL
+ #define KVM_REG_SIZE_U1024	0x0070000000000000ULL
++#define KVM_REG_SIZE_U2048	0x0080000000000000ULL
+ 
+ struct kvm_reg_list {
+ 	__u64 n; /* number of regs */
+@@ -1211,6 +1217,8 @@ enum kvm_device_type {
+ #define KVM_DEV_TYPE_ARM_VGIC_V3	KVM_DEV_TYPE_ARM_VGIC_V3
+ 	KVM_DEV_TYPE_ARM_VGIC_ITS,
+ #define KVM_DEV_TYPE_ARM_VGIC_ITS	KVM_DEV_TYPE_ARM_VGIC_ITS
++	KVM_DEV_TYPE_XIVE,
++#define KVM_DEV_TYPE_XIVE		KVM_DEV_TYPE_XIVE
+ 	KVM_DEV_TYPE_MAX,
+ };
+ 
+@@ -1434,12 +1442,15 @@ struct kvm_enc_region {
+ #define KVM_GET_NESTED_STATE         _IOWR(KVMIO, 0xbe, struct kvm_nested_state)
+ #define KVM_SET_NESTED_STATE         _IOW(KVMIO,  0xbf, struct kvm_nested_state)
+ 
+-/* Available with KVM_CAP_MANUAL_DIRTY_LOG_PROTECT */
++/* Available with KVM_CAP_MANUAL_DIRTY_LOG_PROTECT_2 */
+ #define KVM_CLEAR_DIRTY_LOG          _IOWR(KVMIO, 0xc0, struct kvm_clear_dirty_log)
+ 
+ /* Available with KVM_CAP_HYPERV_CPUID */
+ #define KVM_GET_SUPPORTED_HV_CPUID _IOWR(KVMIO, 0xc1, struct kvm_cpuid2)
+ 
++/* Available with KVM_CAP_ARM_SVE */
++#define KVM_ARM_VCPU_FINALIZE	  _IOW(KVMIO,  0xc2, int)
++
+ /* Secure Encrypted Virtualization command */
+ enum sev_cmd_id {
+ 	/* Guest initialization commands */
+diff --git a/powerpc/include/asm/kvm.h b/powerpc/include/asm/kvm.h
+index 8c876c166ef2..b0f72dea8b11 100644
+--- a/powerpc/include/asm/kvm.h
++++ b/powerpc/include/asm/kvm.h
+@@ -463,10 +463,12 @@ struct kvm_ppc_cpu_char {
+ #define KVM_PPC_CPU_CHAR_BR_HINT_HONOURED	(1ULL << 58)
+ #define KVM_PPC_CPU_CHAR_MTTRIG_THR_RECONF	(1ULL << 57)
+ #define KVM_PPC_CPU_CHAR_COUNT_CACHE_DIS	(1ULL << 56)
++#define KVM_PPC_CPU_CHAR_BCCTR_FLUSH_ASSIST	(1ull << 54)
+ 
+ #define KVM_PPC_CPU_BEHAV_FAVOUR_SECURITY	(1ULL << 63)
+ #define KVM_PPC_CPU_BEHAV_L1D_FLUSH_PR		(1ULL << 62)
+ #define KVM_PPC_CPU_BEHAV_BNDS_CHK_SPEC_BAR	(1ULL << 61)
++#define KVM_PPC_CPU_BEHAV_FLUSH_COUNT_CACHE	(1ull << 58)
+ 
+ /* Per-vcpu XICS interrupt controller state */
+ #define KVM_REG_PPC_ICP_STATE	(KVM_REG_PPC | KVM_REG_SIZE_U64 | 0x8c)
+@@ -480,6 +482,8 @@ struct kvm_ppc_cpu_char {
+ #define  KVM_REG_PPC_ICP_PPRI_SHIFT	16	/* pending irq priority */
+ #define  KVM_REG_PPC_ICP_PPRI_MASK	0xff
+ 
++#define KVM_REG_PPC_VP_STATE	(KVM_REG_PPC | KVM_REG_SIZE_U128 | 0x8d)
++
+ /* Device control API: PPC-specific devices */
+ #define KVM_DEV_MPIC_GRP_MISC		1
+ #define   KVM_DEV_MPIC_BASE_ADDR	0	/* 64-bit */
+@@ -675,4 +679,48 @@ struct kvm_ppc_cpu_char {
+ #define  KVM_XICS_PRESENTED		(1ULL << 43)
+ #define  KVM_XICS_QUEUED		(1ULL << 44)
+ 
++/* POWER9 XIVE Native Interrupt Controller */
++#define KVM_DEV_XIVE_GRP_CTRL		1
++#define   KVM_DEV_XIVE_RESET		1
++#define   KVM_DEV_XIVE_EQ_SYNC		2
++#define KVM_DEV_XIVE_GRP_SOURCE		2	/* 64-bit source identifier */
++#define KVM_DEV_XIVE_GRP_SOURCE_CONFIG	3	/* 64-bit source identifier */
++#define KVM_DEV_XIVE_GRP_EQ_CONFIG	4	/* 64-bit EQ identifier */
++#define KVM_DEV_XIVE_GRP_SOURCE_SYNC	5       /* 64-bit source identifier */
++
++/* Layout of 64-bit XIVE source attribute values */
++#define KVM_XIVE_LEVEL_SENSITIVE	(1ULL << 0)
++#define KVM_XIVE_LEVEL_ASSERTED		(1ULL << 1)
++
++/* Layout of 64-bit XIVE source configuration attribute values */
++#define KVM_XIVE_SOURCE_PRIORITY_SHIFT	0
++#define KVM_XIVE_SOURCE_PRIORITY_MASK	0x7
++#define KVM_XIVE_SOURCE_SERVER_SHIFT	3
++#define KVM_XIVE_SOURCE_SERVER_MASK	0xfffffff8ULL
++#define KVM_XIVE_SOURCE_MASKED_SHIFT	32
++#define KVM_XIVE_SOURCE_MASKED_MASK	0x100000000ULL
++#define KVM_XIVE_SOURCE_EISN_SHIFT	33
++#define KVM_XIVE_SOURCE_EISN_MASK	0xfffffffe00000000ULL
++
++/* Layout of 64-bit EQ identifier */
++#define KVM_XIVE_EQ_PRIORITY_SHIFT	0
++#define KVM_XIVE_EQ_PRIORITY_MASK	0x7
++#define KVM_XIVE_EQ_SERVER_SHIFT	3
++#define KVM_XIVE_EQ_SERVER_MASK		0xfffffff8ULL
++
++/* Layout of EQ configuration values (64 bytes) */
++struct kvm_ppc_xive_eq {
++	__u32 flags;
++	__u32 qshift;
++	__u64 qaddr;
++	__u32 qtoggle;
++	__u32 qindex;
++	__u8  pad[40];
++};
++
++#define KVM_XIVE_EQ_ALWAYS_NOTIFY	0x00000001
++
++#define KVM_XIVE_TIMA_PAGE_OFFSET	0
++#define KVM_XIVE_ESB_PAGE_OFFSET	4
++
+ #endif /* __LINUX_KVM_POWERPC_H */
+diff --git a/x86/include/asm/kvm.h b/x86/include/asm/kvm.h
+index dabfcf7c3941..7a0e64ccd6ff 100644
+--- a/x86/include/asm/kvm.h
++++ b/x86/include/asm/kvm.h
+@@ -381,6 +381,7 @@ struct kvm_sync_regs {
+ #define KVM_X86_QUIRK_LINT0_REENABLED	(1 << 0)
+ #define KVM_X86_QUIRK_CD_NW_CLEARED	(1 << 1)
+ #define KVM_X86_QUIRK_LAPIC_MMIO_HOLE	(1 << 2)
++#define KVM_X86_QUIRK_OUT_7E_INC_RIP	(1 << 3)
+ 
+ #define KVM_STATE_NESTED_GUEST_MODE	0x00000001
+ #define KVM_STATE_NESTED_RUN_PENDING	0x00000002
+
+From patchwork Thu May 23 10:35:02 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sudeep Holla <Sudeep.Holla@arm.com>
+X-Patchwork-Id: 10957299
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9F30D1708
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:03 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 86C4427F82
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:03 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 7A82128433; Thu, 23 May 2019 10:36:03 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 723BD28458
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 May 2019 10:36:00 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730760AbfEWKf7 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 23 May 2019 06:35:59 -0400
+Received: from usa-sjc-mx-foss1.foss.arm.com ([217.140.101.70]:43202 "EHLO
+        foss.arm.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730749AbfEWKf4 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 23 May 2019 06:35:56 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.72.51.249])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 284E41688;
+        Thu, 23 May 2019 03:35:56 -0700 (PDT)
+Received: from usa.arm.com (e107155-lin.cambridge.arm.com [10.1.196.42])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 142383F718;
+        Thu, 23 May 2019 03:35:53 -0700 (PDT)
+From: Sudeep Holla <sudeep.holla@arm.com>
+To: kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Cc: Sudeep Holla <sudeep.holla@arm.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Marc Zyngier <marc.zyngier@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Pouloze <suzuki.poulose@arm.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Will Deacon <will.deacon@arm.com>,
+        Julien Thierry <julien.thierry@arm.com>
+Subject: [PATCH v2 15/15][KVMTOOL] kvm: add a vcpu feature for SPEv1 support
+Date: Thu, 23 May 2019 11:35:02 +0100
+Message-Id: <20190523103502.25925-16-sudeep.holla@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20190523103502.25925-1-sudeep.holla@arm.com>
+References: <20190523103502.25925-1-sudeep.holla@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+This is a runtime configurable for KVM tool to enable Statistical
+Profiling Extensions version 1 support in guest kernel. A command line
+option --spe is required to use the same.
+
+Signed-off-by: Sudeep Holla <sudeep.holla@arm.com>
+---
+ Makefile                                  |  2 +-
+ arm/aarch64/arm-cpu.c                     |  2 +
+ arm/aarch64/include/asm/kvm.h             |  4 ++
+ arm/aarch64/include/kvm/kvm-config-arch.h |  2 +
+ arm/aarch64/include/kvm/kvm-cpu-arch.h    |  3 +-
+ arm/include/arm-common/kvm-config-arch.h  |  1 +
+ arm/include/arm-common/spe.h              |  4 ++
+ arm/spe.c                                 | 81 +++++++++++++++++++++++
+ include/linux/kvm.h                       |  1 +
+ 9 files changed, 98 insertions(+), 2 deletions(-)
+ create mode 100644 arm/include/arm-common/spe.h
+ create mode 100644 arm/spe.c
+
+diff --git a/Makefile b/Makefile
+index 9e21a4e2b419..b7c7ad8caf20 100644
+--- a/Makefile
++++ b/Makefile
+@@ -158,7 +158,7 @@ endif
+ # ARM
+ OBJS_ARM_COMMON		:= arm/fdt.o arm/gic.o arm/gicv2m.o arm/ioport.o \
+ 			   arm/kvm.o arm/kvm-cpu.o arm/pci.o arm/timer.o \
+-			   arm/pmu.o
++			   arm/pmu.o arm/spe.o
+ HDRS_ARM_COMMON		:= arm/include
+ ifeq ($(ARCH), arm)
+ 	DEFINES		+= -DCONFIG_ARM
+diff --git a/arm/aarch64/arm-cpu.c b/arm/aarch64/arm-cpu.c
+index d7572b7790b1..6ccea033f361 100644
+--- a/arm/aarch64/arm-cpu.c
++++ b/arm/aarch64/arm-cpu.c
+@@ -6,6 +6,7 @@
+ #include "arm-common/gic.h"
+ #include "arm-common/timer.h"
+ #include "arm-common/pmu.h"
++#include "arm-common/spe.h"
+ 
+ #include <linux/byteorder.h>
+ #include <linux/types.h>
+@@ -17,6 +18,7 @@ static void generate_fdt_nodes(void *fdt, struct kvm *kvm)
+ 	gic__generate_fdt_nodes(fdt, kvm->cfg.arch.irqchip);
+ 	timer__generate_fdt_nodes(fdt, kvm, timer_interrupts);
+ 	pmu__generate_fdt_nodes(fdt, kvm);
++	spe__generate_fdt_nodes(fdt, kvm);
+ }
+ 
+ static int arm_cpu__vcpu_init(struct kvm_cpu *vcpu)
+diff --git a/arm/aarch64/include/asm/kvm.h b/arm/aarch64/include/asm/kvm.h
+index 7b7ac0f6cec9..4c9e168de896 100644
+--- a/arm/aarch64/include/asm/kvm.h
++++ b/arm/aarch64/include/asm/kvm.h
+@@ -106,6 +106,7 @@ struct kvm_regs {
+ #define KVM_ARM_VCPU_SVE		4 /* enable SVE for this CPU */
+ #define KVM_ARM_VCPU_PTRAUTH_ADDRESS	5 /* VCPU uses address authentication */
+ #define KVM_ARM_VCPU_PTRAUTH_GENERIC	6 /* VCPU uses generic authentication */
++#define KVM_ARM_VCPU_SPE_V1		7 /* Support guest SPEv1 */
+ 
+ struct kvm_vcpu_init {
+ 	__u32 target;
+@@ -306,6 +307,9 @@ struct kvm_vcpu_events {
+ #define KVM_ARM_VCPU_TIMER_CTRL		1
+ #define   KVM_ARM_VCPU_TIMER_IRQ_VTIMER		0
+ #define   KVM_ARM_VCPU_TIMER_IRQ_PTIMER		1
++#define KVM_ARM_VCPU_SPE_V1_CTRL	2
++#define   KVM_ARM_VCPU_SPE_V1_IRQ	0
++#define   KVM_ARM_VCPU_SPE_V1_INIT	1
+ 
+ /* KVM_IRQ_LINE irq field index values */
+ #define KVM_ARM_IRQ_TYPE_SHIFT		24
+diff --git a/arm/aarch64/include/kvm/kvm-config-arch.h b/arm/aarch64/include/kvm/kvm-config-arch.h
+index 04be43dfa9b2..9968e1666de5 100644
+--- a/arm/aarch64/include/kvm/kvm-config-arch.h
++++ b/arm/aarch64/include/kvm/kvm-config-arch.h
+@@ -6,6 +6,8 @@
+ 			"Run AArch32 guest"),				\
+ 	OPT_BOOLEAN('\0', "pmu", &(cfg)->has_pmuv3,			\
+ 			"Create PMUv3 device"),				\
++	OPT_BOOLEAN('\0', "spe", &(cfg)->has_spev1,			\
++			"Create SPEv1 device"),				\
+ 	OPT_U64('\0', "kaslr-seed", &(cfg)->kaslr_seed,			\
+ 			"Specify random seed for Kernel Address Space "	\
+ 			"Layout Randomization (KASLR)"),
+diff --git a/arm/aarch64/include/kvm/kvm-cpu-arch.h b/arm/aarch64/include/kvm/kvm-cpu-arch.h
+index a9d8563382c6..5abaf9505274 100644
+--- a/arm/aarch64/include/kvm/kvm-cpu-arch.h
++++ b/arm/aarch64/include/kvm/kvm-cpu-arch.h
+@@ -8,7 +8,8 @@
+ #define ARM_VCPU_FEATURE_FLAGS(kvm, cpuid)	{				\
+ 	[0] = ((!!(cpuid) << KVM_ARM_VCPU_POWER_OFF) |				\
+ 	       (!!(kvm)->cfg.arch.aarch32_guest << KVM_ARM_VCPU_EL1_32BIT) |	\
+-	       (!!(kvm)->cfg.arch.has_pmuv3 << KVM_ARM_VCPU_PMU_V3))		\
++	       (!!(kvm)->cfg.arch.has_pmuv3 << KVM_ARM_VCPU_PMU_V3) |		\
++	       (!!(kvm)->cfg.arch.has_spev1 << KVM_ARM_VCPU_SPE_V1))		\
+ }
+ 
+ #define ARM_MPIDR_HWID_BITMASK	0xFF00FFFFFFUL
+diff --git a/arm/include/arm-common/kvm-config-arch.h b/arm/include/arm-common/kvm-config-arch.h
+index 5734c46ab9e6..742733e289af 100644
+--- a/arm/include/arm-common/kvm-config-arch.h
++++ b/arm/include/arm-common/kvm-config-arch.h
+@@ -9,6 +9,7 @@ struct kvm_config_arch {
+ 	bool		virtio_trans_pci;
+ 	bool		aarch32_guest;
+ 	bool		has_pmuv3;
++	bool		has_spev1;
+ 	u64		kaslr_seed;
+ 	enum irqchip_type irqchip;
+ 	u64		fw_addr;
+diff --git a/arm/include/arm-common/spe.h b/arm/include/arm-common/spe.h
+new file mode 100644
+index 000000000000..bcfa40877f6f
+--- /dev/null
++++ b/arm/include/arm-common/spe.h
+@@ -0,0 +1,4 @@
++
++#define KVM_ARM_SPEV1_PPI			21
++
++void spe__generate_fdt_nodes(void *fdt, struct kvm *kvm);
+diff --git a/arm/spe.c b/arm/spe.c
+new file mode 100644
+index 000000000000..ec03b01a3866
+--- /dev/null
++++ b/arm/spe.c
+@@ -0,0 +1,81 @@
++#include "kvm/fdt.h"
++#include "kvm/kvm.h"
++#include "kvm/kvm-cpu.h"
++#include "kvm/util.h"
++
++#include "arm-common/gic.h"
++#include "arm-common/spe.h"
++
++#ifdef CONFIG_ARM64
++static int set_spe_attr(struct kvm *kvm, int vcpu_idx,
++			struct kvm_device_attr *attr)
++{
++	int ret, fd;
++
++	fd = kvm->cpus[vcpu_idx]->vcpu_fd;
++
++	ret = ioctl(fd, KVM_HAS_DEVICE_ATTR, attr);
++	if (!ret) {
++		ret = ioctl(fd, KVM_SET_DEVICE_ATTR, attr);
++		if (ret)
++			pr_err("SPE KVM_SET_DEVICE_ATTR failed (%d)\n", ret);
++	} else {
++		pr_err("Unsupported SPE on vcpu%d\n", vcpu_idx);
++	}
++
++	return ret;
++}
++
++void spe__generate_fdt_nodes(void *fdt, struct kvm *kvm)
++{
++	const char compatible[] = "arm,statistical-profiling-extension-v1";
++	int irq = KVM_ARM_SPEV1_PPI;
++	int i, ret;
++
++	u32 cpu_mask = (((1 << kvm->nrcpus) - 1) << GIC_FDT_IRQ_PPI_CPU_SHIFT) \
++		       & GIC_FDT_IRQ_PPI_CPU_MASK;
++	u32 irq_prop[] = {
++		cpu_to_fdt32(GIC_FDT_IRQ_TYPE_PPI),
++		cpu_to_fdt32(irq - 16),
++		cpu_to_fdt32(cpu_mask | IRQ_TYPE_LEVEL_HIGH),
++	};
++
++	if (!kvm->cfg.arch.has_spev1)
++		return;
++
++	if (!kvm__supports_extension(kvm, KVM_CAP_ARM_SPE_V1)) {
++		pr_info("SPE unsupported\n");
++		return;
++	}
++
++	for (i = 0; i < kvm->nrcpus; i++) {
++		struct kvm_device_attr spe_attr;
++
++		spe_attr = (struct kvm_device_attr){
++			.group	= KVM_ARM_VCPU_SPE_V1_CTRL,
++			.addr	= (u64)(unsigned long)&irq,
++			.attr	= KVM_ARM_VCPU_SPE_V1_IRQ,
++		};
++
++		ret = set_spe_attr(kvm, i, &spe_attr);
++		if (ret)
++			return;
++
++		spe_attr = (struct kvm_device_attr){
++			.group	= KVM_ARM_VCPU_SPE_V1_CTRL,
++			.attr	= KVM_ARM_VCPU_SPE_V1_INIT,
++		};
++
++		ret = set_spe_attr(kvm, i, &spe_attr);
++		if (ret)
++			return;
++	}
++
++	_FDT(fdt_begin_node(fdt, "spe"));
++	_FDT(fdt_property(fdt, "compatible", compatible, sizeof(compatible)));
++	_FDT(fdt_property(fdt, "interrupts", irq_prop, sizeof(irq_prop)));
++	_FDT(fdt_end_node(fdt));
++}
++#else
++void spe__generate_fdt_nodes(void *fdt, struct kvm *kvm) { }
++#endif
+diff --git a/include/linux/kvm.h b/include/linux/kvm.h
+index 2fe12b40d503..698bcc2f96e3 100644
+--- a/include/linux/kvm.h
++++ b/include/linux/kvm.h
+@@ -993,6 +993,7 @@ struct kvm_ppc_resize_hpt {
+ #define KVM_CAP_ARM_SVE 170
+ #define KVM_CAP_ARM_PTRAUTH_ADDRESS 171
+ #define KVM_CAP_ARM_PTRAUTH_GENERIC 172
++#define KVM_CAP_ARM_SPE_V1 173
+ 
+ #ifdef KVM_CAP_IRQ_ROUTING
+ 
