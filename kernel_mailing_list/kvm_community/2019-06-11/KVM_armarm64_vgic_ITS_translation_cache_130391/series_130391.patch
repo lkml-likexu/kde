@@ -1,0 +1,1260 @@
+From patchwork Tue Jun 11 17:03:28 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <Marc.Zyngier@arm.com>
+X-Patchwork-Id: 10987849
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id DF21114E5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:52 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id CB5C32807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:52 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id BFB8E285D4; Tue, 11 Jun 2019 17:03:52 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 348A5285A8
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:52 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2405670AbfFKRDv (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 11 Jun 2019 13:03:51 -0400
+Received: from foss.arm.com ([217.140.110.172]:37834 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2404282AbfFKRDu (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 11 Jun 2019 13:03:50 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 6BD07346;
+        Tue, 11 Jun 2019 10:03:49 -0700 (PDT)
+Received: from filthy-habits.cambridge.arm.com
+ (filthy-habits.cambridge.arm.com [10.1.197.61])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ F18333F73C;
+        Tue, 11 Jun 2019 10:03:47 -0700 (PDT)
+From: Marc Zyngier <marc.zyngier@arm.com>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: Julien Thierry <julien.thierry@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        Zenghui Yu <yuzenghui@huawei.com>,
+        "Raslan, KarimAllah" <karahmed@amazon.de>,
+        "Saidi, Ali" <alisaidi@amazon.com>
+Subject: [PATCH v2 1/9] KVM: arm/arm64: vgic: Add LPI translation cache
+ definition
+Date: Tue, 11 Jun 2019 18:03:28 +0100
+Message-Id: <20190611170336.121706-2-marc.zyngier@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190611170336.121706-1-marc.zyngier@arm.com>
+References: <20190611170336.121706-1-marc.zyngier@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Add the basic data structure that expresses an MSI to LPI
+translation as well as the allocation/release hooks.
+
+THe size of the cache is arbitrarily defined as 4*nr_vcpus.
+
+Signed-off-by: Marc Zyngier <marc.zyngier@arm.com>
+---
+ include/kvm/arm_vgic.h        |  3 +++
+ virt/kvm/arm/vgic/vgic-init.c |  5 ++++
+ virt/kvm/arm/vgic/vgic-its.c  | 49 +++++++++++++++++++++++++++++++++++
+ virt/kvm/arm/vgic/vgic.h      |  2 ++
+ 4 files changed, 59 insertions(+)
+
+diff --git a/include/kvm/arm_vgic.h b/include/kvm/arm_vgic.h
+index c36c86f1ec9a..ca7bcf52dc85 100644
+--- a/include/kvm/arm_vgic.h
++++ b/include/kvm/arm_vgic.h
+@@ -260,6 +260,9 @@ struct vgic_dist {
+ 	struct list_head	lpi_list_head;
+ 	int			lpi_list_count;
+ 
++	/* LPI translation cache */
++	struct list_head	lpi_translation_cache;
++
+ 	/* used by vgic-debug */
+ 	struct vgic_state_iter *iter;
+ 
+diff --git a/virt/kvm/arm/vgic/vgic-init.c b/virt/kvm/arm/vgic/vgic-init.c
+index 3bdb31eaed64..c7c4c77dd430 100644
+--- a/virt/kvm/arm/vgic/vgic-init.c
++++ b/virt/kvm/arm/vgic/vgic-init.c
+@@ -64,6 +64,7 @@ void kvm_vgic_early_init(struct kvm *kvm)
+ 	struct vgic_dist *dist = &kvm->arch.vgic;
+ 
+ 	INIT_LIST_HEAD(&dist->lpi_list_head);
++	INIT_LIST_HEAD(&dist->lpi_translation_cache);
+ 	raw_spin_lock_init(&dist->lpi_list_lock);
+ }
+ 
+@@ -305,6 +306,7 @@ int vgic_init(struct kvm *kvm)
+ 	}
+ 
+ 	if (vgic_has_its(kvm)) {
++		vgic_lpi_translation_cache_init(kvm);
+ 		ret = vgic_v4_init(kvm);
+ 		if (ret)
+ 			goto out;
+@@ -346,6 +348,9 @@ static void kvm_vgic_dist_destroy(struct kvm *kvm)
+ 		INIT_LIST_HEAD(&dist->rd_regions);
+ 	}
+ 
++	if (vgic_has_its(kvm))
++		vgic_lpi_translation_cache_destroy(kvm);
++
+ 	if (vgic_supports_direct_msis(kvm))
+ 		vgic_v4_teardown(kvm);
+ }
+diff --git a/virt/kvm/arm/vgic/vgic-its.c b/virt/kvm/arm/vgic/vgic-its.c
+index 44ceaccb18cf..ce9bcddeb7f1 100644
+--- a/virt/kvm/arm/vgic/vgic-its.c
++++ b/virt/kvm/arm/vgic/vgic-its.c
+@@ -149,6 +149,14 @@ struct its_ite {
+ 	u32 event_id;
+ };
+ 
++struct vgic_translation_cache_entry {
++	struct list_head	entry;
++	phys_addr_t		db;
++	u32			devid;
++	u32			eventid;
++	struct vgic_irq		*irq;
++};
++
+ /**
+  * struct vgic_its_abi - ITS abi ops and settings
+  * @cte_esz: collection table entry size
+@@ -1668,6 +1676,45 @@ static int vgic_register_its_iodev(struct kvm *kvm, struct vgic_its *its,
+ 	return ret;
+ }
+ 
++/* Default is 16 cached LPIs per vcpu */
++#define LPI_DEFAULT_PCPU_CACHE_SIZE	16
++
++void vgic_lpi_translation_cache_init(struct kvm *kvm)
++{
++	struct vgic_dist *dist = &kvm->arch.vgic;
++	unsigned int sz;
++	int i;
++
++	if (!list_empty(&dist->lpi_translation_cache))
++		return;
++
++	sz = atomic_read(&kvm->online_vcpus) * LPI_DEFAULT_PCPU_CACHE_SIZE;
++
++	for (i = 0; i < sz; i++) {
++		struct vgic_translation_cache_entry *cte;
++
++		/* An allocation failure is not fatal */
++		cte = kzalloc(sizeof(*cte), GFP_KERNEL);
++		if (WARN_ON(!cte))
++			break;
++
++		INIT_LIST_HEAD(&cte->entry);
++		list_add(&cte->entry, &dist->lpi_translation_cache);
++	}
++}
++
++void vgic_lpi_translation_cache_destroy(struct kvm *kvm)
++{
++	struct vgic_dist *dist = &kvm->arch.vgic;
++	struct vgic_translation_cache_entry *cte, *tmp;
++
++	list_for_each_entry_safe(cte, tmp,
++				 &dist->lpi_translation_cache, entry) {
++		list_del(&cte->entry);
++		kfree(cte);
++	}
++}
++
+ #define INITIAL_BASER_VALUE						  \
+ 	(GIC_BASER_CACHEABILITY(GITS_BASER, INNER, RaWb)		| \
+ 	 GIC_BASER_CACHEABILITY(GITS_BASER, OUTER, SameAsInner)		| \
+@@ -1696,6 +1743,8 @@ static int vgic_its_create(struct kvm_device *dev, u32 type)
+ 			kfree(its);
+ 			return ret;
+ 		}
++
++		vgic_lpi_translation_cache_init(dev->kvm);
+ 	}
+ 
+ 	mutex_init(&its->its_lock);
+diff --git a/virt/kvm/arm/vgic/vgic.h b/virt/kvm/arm/vgic/vgic.h
+index abeeffabc456..50aad705c4a9 100644
+--- a/virt/kvm/arm/vgic/vgic.h
++++ b/virt/kvm/arm/vgic/vgic.h
+@@ -316,6 +316,8 @@ int vgic_copy_lpi_list(struct kvm *kvm, struct kvm_vcpu *vcpu, u32 **intid_ptr);
+ int vgic_its_resolve_lpi(struct kvm *kvm, struct vgic_its *its,
+ 			 u32 devid, u32 eventid, struct vgic_irq **irq);
+ struct vgic_its *vgic_msi_to_its(struct kvm *kvm, struct kvm_msi *msi);
++void vgic_lpi_translation_cache_init(struct kvm *kvm);
++void vgic_lpi_translation_cache_destroy(struct kvm *kvm);
+ 
+ bool vgic_supports_direct_msis(struct kvm *kvm);
+ int vgic_v4_init(struct kvm *kvm);
+
+From patchwork Tue Jun 11 17:03:29 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <Marc.Zyngier@arm.com>
+X-Patchwork-Id: 10987851
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id AFD3514DB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:53 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 9BD632807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:53 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 8FDA3285D4; Tue, 11 Jun 2019 17:03:53 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 316892807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:53 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2405673AbfFKRDv (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 11 Jun 2019 13:03:51 -0400
+Received: from foss.arm.com ([217.140.110.172]:37850 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2405669AbfFKRDv (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 11 Jun 2019 13:03:51 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 1AC0AC1D;
+        Tue, 11 Jun 2019 10:03:51 -0700 (PDT)
+Received: from filthy-habits.cambridge.arm.com
+ (filthy-habits.cambridge.arm.com [10.1.197.61])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ A09473F73C;
+        Tue, 11 Jun 2019 10:03:49 -0700 (PDT)
+From: Marc Zyngier <marc.zyngier@arm.com>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: Julien Thierry <julien.thierry@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        Zenghui Yu <yuzenghui@huawei.com>,
+        "Raslan, KarimAllah" <karahmed@amazon.de>,
+        "Saidi, Ali" <alisaidi@amazon.com>
+Subject: [PATCH v2 2/9] KVM: arm/arm64: vgic: Add __vgic_put_lpi_locked
+ primitive
+Date: Tue, 11 Jun 2019 18:03:29 +0100
+Message-Id: <20190611170336.121706-3-marc.zyngier@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190611170336.121706-1-marc.zyngier@arm.com>
+References: <20190611170336.121706-1-marc.zyngier@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Our LPI translation cache needs to be able to drop the refcount
+on an LPI whilst already holding the lpi_list_lock.
+
+Let's add a new primitive for this.
+
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Signed-off-by: Marc Zyngier <marc.zyngier@arm.com>
+---
+ virt/kvm/arm/vgic/vgic.c | 26 +++++++++++++++++---------
+ virt/kvm/arm/vgic/vgic.h |  1 +
+ 2 files changed, 18 insertions(+), 9 deletions(-)
+
+diff --git a/virt/kvm/arm/vgic/vgic.c b/virt/kvm/arm/vgic/vgic.c
+index 191deccf60bf..376a297e2169 100644
+--- a/virt/kvm/arm/vgic/vgic.c
++++ b/virt/kvm/arm/vgic/vgic.c
+@@ -130,6 +130,22 @@ static void vgic_irq_release(struct kref *ref)
+ {
+ }
+ 
++/*
++ * Drop the refcount on the LPI. Must be called with lpi_list_lock held.
++ */
++void __vgic_put_lpi_locked(struct kvm *kvm, struct vgic_irq *irq)
++{
++	struct vgic_dist *dist = &kvm->arch.vgic;
++
++	if (!kref_put(&irq->refcount, vgic_irq_release))
++		return;
++
++	list_del(&irq->lpi_list);
++	dist->lpi_list_count--;
++
++	kfree(irq);
++}
++
+ void vgic_put_irq(struct kvm *kvm, struct vgic_irq *irq)
+ {
+ 	struct vgic_dist *dist = &kvm->arch.vgic;
+@@ -139,16 +155,8 @@ void vgic_put_irq(struct kvm *kvm, struct vgic_irq *irq)
+ 		return;
+ 
+ 	raw_spin_lock_irqsave(&dist->lpi_list_lock, flags);
+-	if (!kref_put(&irq->refcount, vgic_irq_release)) {
+-		raw_spin_unlock_irqrestore(&dist->lpi_list_lock, flags);
+-		return;
+-	};
+-
+-	list_del(&irq->lpi_list);
+-	dist->lpi_list_count--;
++	__vgic_put_lpi_locked(kvm, irq);
+ 	raw_spin_unlock_irqrestore(&dist->lpi_list_lock, flags);
+-
+-	kfree(irq);
+ }
+ 
+ void vgic_flush_pending_lpis(struct kvm_vcpu *vcpu)
+diff --git a/virt/kvm/arm/vgic/vgic.h b/virt/kvm/arm/vgic/vgic.h
+index 50aad705c4a9..afac2fed7df4 100644
+--- a/virt/kvm/arm/vgic/vgic.h
++++ b/virt/kvm/arm/vgic/vgic.h
+@@ -172,6 +172,7 @@ vgic_get_mmio_region(struct kvm_vcpu *vcpu, struct vgic_io_device *iodev,
+ 		     gpa_t addr, int len);
+ struct vgic_irq *vgic_get_irq(struct kvm *kvm, struct kvm_vcpu *vcpu,
+ 			      u32 intid);
++void __vgic_put_lpi_locked(struct kvm *kvm, struct vgic_irq *irq);
+ void vgic_put_irq(struct kvm *kvm, struct vgic_irq *irq);
+ bool vgic_get_phys_line_level(struct vgic_irq *irq);
+ void vgic_irq_set_phys_pending(struct vgic_irq *irq, bool pending);
+
+From patchwork Tue Jun 11 17:03:30 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <Marc.Zyngier@arm.com>
+X-Patchwork-Id: 10987853
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6BB1776
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:55 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 57BB12807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:55 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 4B7CD285D4; Tue, 11 Jun 2019 17:03:55 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E45922807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:54 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2405684AbfFKRDx (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 11 Jun 2019 13:03:53 -0400
+Received: from foss.arm.com ([217.140.110.172]:37868 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2404885AbfFKRDx (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 11 Jun 2019 13:03:53 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id BE236DA7;
+        Tue, 11 Jun 2019 10:03:52 -0700 (PDT)
+Received: from filthy-habits.cambridge.arm.com
+ (filthy-habits.cambridge.arm.com [10.1.197.61])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 4FB183F73C;
+        Tue, 11 Jun 2019 10:03:51 -0700 (PDT)
+From: Marc Zyngier <marc.zyngier@arm.com>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: Julien Thierry <julien.thierry@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        Zenghui Yu <yuzenghui@huawei.com>,
+        "Raslan, KarimAllah" <karahmed@amazon.de>,
+        "Saidi, Ali" <alisaidi@amazon.com>
+Subject: [PATCH v2 3/9] KVM: arm/arm64: vgic-its: Add MSI-LPI translation
+ cache invalidation
+Date: Tue, 11 Jun 2019 18:03:30 +0100
+Message-Id: <20190611170336.121706-4-marc.zyngier@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190611170336.121706-1-marc.zyngier@arm.com>
+References: <20190611170336.121706-1-marc.zyngier@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+There's a number of cases where we need to invalidate the caching
+of translations, so let's add basic support for that.
+
+Signed-off-by: Marc Zyngier <marc.zyngier@arm.com>
+---
+ virt/kvm/arm/vgic/vgic-its.c | 23 +++++++++++++++++++++++
+ virt/kvm/arm/vgic/vgic.h     |  1 +
+ 2 files changed, 24 insertions(+)
+
+diff --git a/virt/kvm/arm/vgic/vgic-its.c b/virt/kvm/arm/vgic/vgic-its.c
+index ce9bcddeb7f1..9b6b66204b97 100644
+--- a/virt/kvm/arm/vgic/vgic-its.c
++++ b/virt/kvm/arm/vgic/vgic-its.c
+@@ -546,6 +546,29 @@ static unsigned long vgic_mmio_read_its_idregs(struct kvm *kvm,
+ 	return 0;
+ }
+ 
++void vgic_its_invalidate_cache(struct kvm *kvm)
++{
++	struct vgic_dist *dist = &kvm->arch.vgic;
++	struct vgic_translation_cache_entry *cte;
++	unsigned long flags;
++
++	raw_spin_lock_irqsave(&dist->lpi_list_lock, flags);
++
++	list_for_each_entry(cte, &dist->lpi_translation_cache, entry) {
++		/*
++		 * If we hit a NULL entry, there is nothing after this
++		 * point.
++		 */
++		if (!cte->irq)
++			break;
++
++		__vgic_put_lpi_locked(kvm, cte->irq);
++		cte->irq = NULL;
++	}
++
++	raw_spin_unlock_irqrestore(&dist->lpi_list_lock, flags);
++}
++
+ int vgic_its_resolve_lpi(struct kvm *kvm, struct vgic_its *its,
+ 			 u32 devid, u32 eventid, struct vgic_irq **irq)
+ {
+diff --git a/virt/kvm/arm/vgic/vgic.h b/virt/kvm/arm/vgic/vgic.h
+index afac2fed7df4..072f810dc441 100644
+--- a/virt/kvm/arm/vgic/vgic.h
++++ b/virt/kvm/arm/vgic/vgic.h
+@@ -319,6 +319,7 @@ int vgic_its_resolve_lpi(struct kvm *kvm, struct vgic_its *its,
+ struct vgic_its *vgic_msi_to_its(struct kvm *kvm, struct kvm_msi *msi);
+ void vgic_lpi_translation_cache_init(struct kvm *kvm);
+ void vgic_lpi_translation_cache_destroy(struct kvm *kvm);
++void vgic_its_invalidate_cache(struct kvm *kvm);
+ 
+ bool vgic_supports_direct_msis(struct kvm *kvm);
+ int vgic_v4_init(struct kvm *kvm);
+
+From patchwork Tue Jun 11 17:03:31 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <Marc.Zyngier@arm.com>
+X-Patchwork-Id: 10987855
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 0E6A476
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:57 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id EE8C52807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:56 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id E31B7285D4; Tue, 11 Jun 2019 17:03:56 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 8C5042807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:56 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2405703AbfFKRDz (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 11 Jun 2019 13:03:55 -0400
+Received: from foss.arm.com ([217.140.110.172]:37888 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2405706AbfFKRDz (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 11 Jun 2019 13:03:55 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 6E275ED1;
+        Tue, 11 Jun 2019 10:03:54 -0700 (PDT)
+Received: from filthy-habits.cambridge.arm.com
+ (filthy-habits.cambridge.arm.com [10.1.197.61])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ F32953F73C;
+        Tue, 11 Jun 2019 10:03:52 -0700 (PDT)
+From: Marc Zyngier <marc.zyngier@arm.com>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: Julien Thierry <julien.thierry@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        Zenghui Yu <yuzenghui@huawei.com>,
+        "Raslan, KarimAllah" <karahmed@amazon.de>,
+        "Saidi, Ali" <alisaidi@amazon.com>
+Subject: [PATCH v2 4/9] KVM: arm/arm64: vgic-its: Invalidate MSI-LPI
+ translation cache on specific commands
+Date: Tue, 11 Jun 2019 18:03:31 +0100
+Message-Id: <20190611170336.121706-5-marc.zyngier@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190611170336.121706-1-marc.zyngier@arm.com>
+References: <20190611170336.121706-1-marc.zyngier@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+The LPI translation cache needs to be discarded when an ITS command
+may affect the translation of an LPI (DISCARD and MAPD with V=0) or
+the routing of an LPI to a redistributor with disabled LPIs (MOVI,
+MOVALL).
+
+We decide to perform a full invalidation of the cache, irrespective
+of the LPI that is affected. Commands are supposed to be rare enough
+that it doesn't matter.
+
+Signed-off-by: Marc Zyngier <marc.zyngier@arm.com>
+---
+ virt/kvm/arm/vgic/vgic-its.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/virt/kvm/arm/vgic/vgic-its.c b/virt/kvm/arm/vgic/vgic-its.c
+index 9b6b66204b97..5254bb762e1b 100644
+--- a/virt/kvm/arm/vgic/vgic-its.c
++++ b/virt/kvm/arm/vgic/vgic-its.c
+@@ -733,6 +733,8 @@ static int vgic_its_cmd_handle_discard(struct kvm *kvm, struct vgic_its *its,
+ 		 * don't bother here since we clear the ITTE anyway and the
+ 		 * pending state is a property of the ITTE struct.
+ 		 */
++		vgic_its_invalidate_cache(kvm);
++
+ 		its_free_ite(kvm, ite);
+ 		return 0;
+ 	}
+@@ -768,6 +770,8 @@ static int vgic_its_cmd_handle_movi(struct kvm *kvm, struct vgic_its *its,
+ 	ite->collection = collection;
+ 	vcpu = kvm_get_vcpu(kvm, collection->target_addr);
+ 
++	vgic_its_invalidate_cache(kvm);
++
+ 	return update_affinity(ite->irq, vcpu);
+ }
+ 
+@@ -996,6 +1000,8 @@ static void vgic_its_free_device(struct kvm *kvm, struct its_device *device)
+ 	list_for_each_entry_safe(ite, temp, &device->itt_head, ite_list)
+ 		its_free_ite(kvm, ite);
+ 
++	vgic_its_invalidate_cache(kvm);
++
+ 	list_del(&device->dev_list);
+ 	kfree(device);
+ }
+@@ -1249,6 +1255,8 @@ static int vgic_its_cmd_handle_movall(struct kvm *kvm, struct vgic_its *its,
+ 		vgic_put_irq(kvm, irq);
+ 	}
+ 
++	vgic_its_invalidate_cache(kvm);
++
+ 	kfree(intids);
+ 	return 0;
+ }
+
+From patchwork Tue Jun 11 17:03:32 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <Marc.Zyngier@arm.com>
+X-Patchwork-Id: 10987859
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B729014DB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:58 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id A3A4C2807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:58 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 97C58285D4; Tue, 11 Jun 2019 17:03:58 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 476462807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:58 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2405681AbfFKRD5 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 11 Jun 2019 13:03:57 -0400
+Received: from foss.arm.com ([217.140.110.172]:37912 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2404885AbfFKRD4 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 11 Jun 2019 13:03:56 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 1DBD1EBD;
+        Tue, 11 Jun 2019 10:03:56 -0700 (PDT)
+Received: from filthy-habits.cambridge.arm.com
+ (filthy-habits.cambridge.arm.com [10.1.197.61])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ A30143F73C;
+        Tue, 11 Jun 2019 10:03:54 -0700 (PDT)
+From: Marc Zyngier <marc.zyngier@arm.com>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: Julien Thierry <julien.thierry@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        Zenghui Yu <yuzenghui@huawei.com>,
+        "Raslan, KarimAllah" <karahmed@amazon.de>,
+        "Saidi, Ali" <alisaidi@amazon.com>
+Subject: [PATCH v2 5/9] KVM: arm/arm64: vgic-its: Invalidate MSI-LPI
+ translation cache on disabling LPIs
+Date: Tue, 11 Jun 2019 18:03:32 +0100
+Message-Id: <20190611170336.121706-6-marc.zyngier@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190611170336.121706-1-marc.zyngier@arm.com>
+References: <20190611170336.121706-1-marc.zyngier@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+If a vcpu disables LPIs at its redistributor level, we need to make sure
+we won't pend more interrupts. For this, we need to invalidate the LPI
+translation cache.
+
+Signed-off-by: Marc Zyngier <marc.zyngier@arm.com>
+---
+ virt/kvm/arm/vgic/vgic-mmio-v3.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/virt/kvm/arm/vgic/vgic-mmio-v3.c b/virt/kvm/arm/vgic/vgic-mmio-v3.c
+index 936962abc38d..cb60da48810d 100644
+--- a/virt/kvm/arm/vgic/vgic-mmio-v3.c
++++ b/virt/kvm/arm/vgic/vgic-mmio-v3.c
+@@ -192,8 +192,10 @@ static void vgic_mmio_write_v3r_ctlr(struct kvm_vcpu *vcpu,
+ 
+ 	vgic_cpu->lpis_enabled = val & GICR_CTLR_ENABLE_LPIS;
+ 
+-	if (was_enabled && !vgic_cpu->lpis_enabled)
++	if (was_enabled && !vgic_cpu->lpis_enabled) {
+ 		vgic_flush_pending_lpis(vcpu);
++		vgic_its_invalidate_cache(vcpu->kvm);
++	}
+ 
+ 	if (!was_enabled && vgic_cpu->lpis_enabled)
+ 		vgic_enable_lpis(vcpu);
+
+From patchwork Tue Jun 11 17:03:33 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <Marc.Zyngier@arm.com>
+X-Patchwork-Id: 10987861
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1336914DB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:04:00 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id F3AB82807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:59 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id E78E6285D4; Tue, 11 Jun 2019 17:03:59 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 91CEC2807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:03:59 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2405721AbfFKRD6 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 11 Jun 2019 13:03:58 -0400
+Received: from foss.arm.com ([217.140.110.172]:37928 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2404885AbfFKRD6 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 11 Jun 2019 13:03:58 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id C1404FEC;
+        Tue, 11 Jun 2019 10:03:57 -0700 (PDT)
+Received: from filthy-habits.cambridge.arm.com
+ (filthy-habits.cambridge.arm.com [10.1.197.61])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 530743F73C;
+        Tue, 11 Jun 2019 10:03:56 -0700 (PDT)
+From: Marc Zyngier <marc.zyngier@arm.com>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: Julien Thierry <julien.thierry@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        Zenghui Yu <yuzenghui@huawei.com>,
+        "Raslan, KarimAllah" <karahmed@amazon.de>,
+        "Saidi, Ali" <alisaidi@amazon.com>
+Subject: [PATCH v2 6/9] KVM: arm/arm64: vgic-its: Invalidate MSI-LPI
+ translation cache on vgic teardown
+Date: Tue, 11 Jun 2019 18:03:33 +0100
+Message-Id: <20190611170336.121706-7-marc.zyngier@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190611170336.121706-1-marc.zyngier@arm.com>
+References: <20190611170336.121706-1-marc.zyngier@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+In order to avoid leaking vgic_irq structures on teardown, we need to
+drop all references to LPIs before deallocating the cache itself.
+
+This is done by invalidating the cache on vgic teardown.
+
+Signed-off-by: Marc Zyngier <marc.zyngier@arm.com>
+---
+ virt/kvm/arm/vgic/vgic-its.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/virt/kvm/arm/vgic/vgic-its.c b/virt/kvm/arm/vgic/vgic-its.c
+index 5254bb762e1b..0aa0cbbc3af6 100644
+--- a/virt/kvm/arm/vgic/vgic-its.c
++++ b/virt/kvm/arm/vgic/vgic-its.c
+@@ -1739,6 +1739,8 @@ void vgic_lpi_translation_cache_destroy(struct kvm *kvm)
+ 	struct vgic_dist *dist = &kvm->arch.vgic;
+ 	struct vgic_translation_cache_entry *cte, *tmp;
+ 
++	vgic_its_invalidate_cache(kvm);
++
+ 	list_for_each_entry_safe(cte, tmp,
+ 				 &dist->lpi_translation_cache, entry) {
+ 		list_del(&cte->entry);
+
+From patchwork Tue Jun 11 17:03:34 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <Marc.Zyngier@arm.com>
+X-Patchwork-Id: 10987867
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E5BEB14DB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:04:13 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id D0E652807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:04:13 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C4AB228600; Tue, 11 Jun 2019 17:04:13 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 58F282807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:04:13 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2405767AbfFKREA (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 11 Jun 2019 13:04:00 -0400
+Received: from foss.arm.com ([217.140.110.172]:37946 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2405734AbfFKREA (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 11 Jun 2019 13:04:00 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 71D67105A;
+        Tue, 11 Jun 2019 10:03:59 -0700 (PDT)
+Received: from filthy-habits.cambridge.arm.com
+ (filthy-habits.cambridge.arm.com [10.1.197.61])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 028F23F73C;
+        Tue, 11 Jun 2019 10:03:57 -0700 (PDT)
+From: Marc Zyngier <marc.zyngier@arm.com>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: Julien Thierry <julien.thierry@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        Zenghui Yu <yuzenghui@huawei.com>,
+        "Raslan, KarimAllah" <karahmed@amazon.de>,
+        "Saidi, Ali" <alisaidi@amazon.com>
+Subject: [PATCH v2 7/9] KVM: arm/arm64: vgic-its: Cache successful MSI->LPI
+ translation
+Date: Tue, 11 Jun 2019 18:03:34 +0100
+Message-Id: <20190611170336.121706-8-marc.zyngier@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190611170336.121706-1-marc.zyngier@arm.com>
+References: <20190611170336.121706-1-marc.zyngier@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+On a successful translation, preserve the parameters in the LPI
+translation cache. Each translation is reusing the last slot
+in the list, naturally evincting the least recently used entry.
+
+Signed-off-by: Marc Zyngier <marc.zyngier@arm.com>
+---
+ virt/kvm/arm/vgic/vgic-its.c | 86 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 86 insertions(+)
+
+diff --git a/virt/kvm/arm/vgic/vgic-its.c b/virt/kvm/arm/vgic/vgic-its.c
+index 0aa0cbbc3af6..62932458476a 100644
+--- a/virt/kvm/arm/vgic/vgic-its.c
++++ b/virt/kvm/arm/vgic/vgic-its.c
+@@ -546,6 +546,90 @@ static unsigned long vgic_mmio_read_its_idregs(struct kvm *kvm,
+ 	return 0;
+ }
+ 
++static struct vgic_irq *__vgic_its_check_cache(struct vgic_dist *dist,
++					       phys_addr_t db,
++					       u32 devid, u32 eventid)
++{
++	struct vgic_translation_cache_entry *cte;
++	struct vgic_irq *irq = NULL;
++
++	list_for_each_entry(cte, &dist->lpi_translation_cache, entry) {
++		/*
++		 * If we hit a NULL entry, there is nothing after this
++		 * point.
++		 */
++		if (!cte->irq)
++			break;
++
++		if (cte->db == db &&
++		    cte->devid == devid &&
++		    cte->eventid == eventid) {
++			/*
++			 * Move this entry to the head, as it is the
++			 * most recently used.
++			 */
++			list_move(&cte->entry, &dist->lpi_translation_cache);
++			irq = cte->irq;
++			break;
++		}
++	}
++
++	return irq;
++}
++
++static void vgic_its_cache_translation(struct kvm *kvm, struct vgic_its *its,
++				       u32 devid, u32 eventid,
++				       struct vgic_irq *irq)
++{
++	struct vgic_dist *dist = &kvm->arch.vgic;
++	struct vgic_translation_cache_entry *cte;
++	unsigned long flags;
++	phys_addr_t db;
++
++	/* Do not cache a directly injected interrupt */
++	if (irq->hw)
++		return;
++
++	raw_spin_lock_irqsave(&dist->lpi_list_lock, flags);
++
++	if (unlikely(list_empty(&dist->lpi_translation_cache)))
++		goto out;
++
++	/*
++	 * We could have raced with another CPU caching the same
++	 * translation behind our back, so let's check it is not in
++	 * already
++	 */
++	db = its->vgic_its_base + GITS_TRANSLATER;
++	if (__vgic_its_check_cache(dist, db, devid, eventid))
++		goto out;
++
++	/* Always reuse the last entry (LRU policy) */
++	cte = list_last_entry(&dist->lpi_translation_cache,
++			      typeof(*cte), entry);
++
++	/*
++	 * Caching the translation implies having an extra reference
++	 * to the interrupt, so drop the potential reference on what
++	 * was in the cache, and increment it on the new interrupt.
++	 */
++	if (cte->irq)
++		__vgic_put_lpi_locked(kvm, cte->irq);
++
++	vgic_get_irq_kref(irq);
++
++	cte->db		= db;
++	cte->devid	= devid;
++	cte->eventid	= eventid;
++	cte->irq	= irq;
++
++	/* Move the new translation to the head of the list */
++	list_move(&cte->entry, &dist->lpi_translation_cache);
++
++out:
++	raw_spin_unlock_irqrestore(&dist->lpi_list_lock, flags);
++}
++
+ void vgic_its_invalidate_cache(struct kvm *kvm)
+ {
+ 	struct vgic_dist *dist = &kvm->arch.vgic;
+@@ -589,6 +673,8 @@ int vgic_its_resolve_lpi(struct kvm *kvm, struct vgic_its *its,
+ 	if (!vcpu->arch.vgic_cpu.lpis_enabled)
+ 		return -EBUSY;
+ 
++	vgic_its_cache_translation(kvm, its, devid, eventid, ite->irq);
++
+ 	*irq = ite->irq;
+ 	return 0;
+ }
+
+From patchwork Tue Jun 11 17:03:35 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <Marc.Zyngier@arm.com>
+X-Patchwork-Id: 10987863
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 4223676
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:04:04 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 2EAD32807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:04:04 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 22A71285D4; Tue, 11 Jun 2019 17:04:04 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B12452807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:04:03 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2405752AbfFKREC (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 11 Jun 2019 13:04:02 -0400
+Received: from foss.arm.com ([217.140.110.172]:37960 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2405780AbfFKREB (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 11 Jun 2019 13:04:01 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 21131106F;
+        Tue, 11 Jun 2019 10:04:01 -0700 (PDT)
+Received: from filthy-habits.cambridge.arm.com
+ (filthy-habits.cambridge.arm.com [10.1.197.61])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ A61783F73C;
+        Tue, 11 Jun 2019 10:03:59 -0700 (PDT)
+From: Marc Zyngier <marc.zyngier@arm.com>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: Julien Thierry <julien.thierry@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        Zenghui Yu <yuzenghui@huawei.com>,
+        "Raslan, KarimAllah" <karahmed@amazon.de>,
+        "Saidi, Ali" <alisaidi@amazon.com>
+Subject: [PATCH v2 8/9] KVM: arm/arm64: vgic-its: Check the LPI translation
+ cache on MSI injection
+Date: Tue, 11 Jun 2019 18:03:35 +0100
+Message-Id: <20190611170336.121706-9-marc.zyngier@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190611170336.121706-1-marc.zyngier@arm.com>
+References: <20190611170336.121706-1-marc.zyngier@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+When performing an MSI injection, let's first check if the translation
+is already in the cache. If so, let's inject it quickly without
+going through the whole translation process.
+
+Signed-off-by: Marc Zyngier <marc.zyngier@arm.com>
+---
+ virt/kvm/arm/vgic/vgic-its.c | 36 ++++++++++++++++++++++++++++++++++++
+ virt/kvm/arm/vgic/vgic.h     |  1 +
+ 2 files changed, 37 insertions(+)
+
+diff --git a/virt/kvm/arm/vgic/vgic-its.c b/virt/kvm/arm/vgic/vgic-its.c
+index 62932458476a..83d80ec33473 100644
+--- a/virt/kvm/arm/vgic/vgic-its.c
++++ b/virt/kvm/arm/vgic/vgic-its.c
+@@ -577,6 +577,20 @@ static struct vgic_irq *__vgic_its_check_cache(struct vgic_dist *dist,
+ 	return irq;
+ }
+ 
++static struct vgic_irq *vgic_its_check_cache(struct kvm *kvm, phys_addr_t db,
++					     u32 devid, u32 eventid)
++{
++	struct vgic_dist *dist = &kvm->arch.vgic;
++	struct vgic_irq *irq;
++	unsigned long flags;
++
++	raw_spin_lock_irqsave(&dist->lpi_list_lock, flags);
++	irq = __vgic_its_check_cache(dist, db, devid, eventid);
++	raw_spin_unlock_irqrestore(&dist->lpi_list_lock, flags);
++
++	return irq;
++}
++
+ static void vgic_its_cache_translation(struct kvm *kvm, struct vgic_its *its,
+ 				       u32 devid, u32 eventid,
+ 				       struct vgic_irq *irq)
+@@ -736,6 +750,25 @@ static int vgic_its_trigger_msi(struct kvm *kvm, struct vgic_its *its,
+ 	return 0;
+ }
+ 
++int vgic_its_inject_cached_translation(struct kvm *kvm, struct kvm_msi *msi)
++{
++	struct vgic_irq *irq;
++	unsigned long flags;
++	phys_addr_t db;
++
++	db = (u64)msi->address_hi << 32 | msi->address_lo;
++	irq = vgic_its_check_cache(kvm, db, msi->devid, msi->data);
++
++	if (!irq)
++		return -1;
++
++	raw_spin_lock_irqsave(&irq->irq_lock, flags);
++	irq->pending_latch = true;
++	vgic_queue_irq_unlock(kvm, irq, flags);
++
++	return 0;
++}
++
+ /*
+  * Queries the KVM IO bus framework to get the ITS pointer from the given
+  * doorbell address.
+@@ -747,6 +780,9 @@ int vgic_its_inject_msi(struct kvm *kvm, struct kvm_msi *msi)
+ 	struct vgic_its *its;
+ 	int ret;
+ 
++	if (!vgic_its_inject_cached_translation(kvm, msi))
++		return 1;
++
+ 	its = vgic_msi_to_its(kvm, msi);
+ 	if (IS_ERR(its))
+ 		return PTR_ERR(its);
+diff --git a/virt/kvm/arm/vgic/vgic.h b/virt/kvm/arm/vgic/vgic.h
+index 072f810dc441..ad6eba1e2beb 100644
+--- a/virt/kvm/arm/vgic/vgic.h
++++ b/virt/kvm/arm/vgic/vgic.h
+@@ -317,6 +317,7 @@ int vgic_copy_lpi_list(struct kvm *kvm, struct kvm_vcpu *vcpu, u32 **intid_ptr);
+ int vgic_its_resolve_lpi(struct kvm *kvm, struct vgic_its *its,
+ 			 u32 devid, u32 eventid, struct vgic_irq **irq);
+ struct vgic_its *vgic_msi_to_its(struct kvm *kvm, struct kvm_msi *msi);
++int vgic_its_inject_cached_translation(struct kvm *kvm, struct kvm_msi *msi);
+ void vgic_lpi_translation_cache_init(struct kvm *kvm);
+ void vgic_lpi_translation_cache_destroy(struct kvm *kvm);
+ void vgic_its_invalidate_cache(struct kvm *kvm);
+
+From patchwork Tue Jun 11 17:03:36 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <Marc.Zyngier@arm.com>
+X-Patchwork-Id: 10987865
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8DE5F76
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:04:05 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 7A9612807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:04:05 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 6EF8B285D4; Tue, 11 Jun 2019 17:04:05 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1419A2807B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 11 Jun 2019 17:04:05 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2405785AbfFKREE (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 11 Jun 2019 13:04:04 -0400
+Received: from foss.arm.com ([217.140.110.172]:37978 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2405780AbfFKRED (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 11 Jun 2019 13:04:03 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id C54CC11B3;
+        Tue, 11 Jun 2019 10:04:02 -0700 (PDT)
+Received: from filthy-habits.cambridge.arm.com
+ (filthy-habits.cambridge.arm.com [10.1.197.61])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 56A513F73C;
+        Tue, 11 Jun 2019 10:04:01 -0700 (PDT)
+From: Marc Zyngier <marc.zyngier@arm.com>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: Julien Thierry <julien.thierry@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        Zenghui Yu <yuzenghui@huawei.com>,
+        "Raslan, KarimAllah" <karahmed@amazon.de>,
+        "Saidi, Ali" <alisaidi@amazon.com>
+Subject: [PATCH v2 9/9] KVM: arm/arm64: vgic-irqfd: Implement
+ kvm_arch_set_irq_inatomic
+Date: Tue, 11 Jun 2019 18:03:36 +0100
+Message-Id: <20190611170336.121706-10-marc.zyngier@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190611170336.121706-1-marc.zyngier@arm.com>
+References: <20190611170336.121706-1-marc.zyngier@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+Now that we have a cache of MSI->LPI translations, it is pretty
+easy to implement kvm_arch_set_irq_inatomic (this cache can be
+parsed without sleeping).
+
+Hopefully, this will improve some LPI-heavy workloads.
+
+Signed-off-by: Marc Zyngier <marc.zyngier@arm.com>
+---
+ virt/kvm/arm/vgic/vgic-irqfd.c | 36 ++++++++++++++++++++++++++++------
+ 1 file changed, 30 insertions(+), 6 deletions(-)
+
+diff --git a/virt/kvm/arm/vgic/vgic-irqfd.c b/virt/kvm/arm/vgic/vgic-irqfd.c
+index 99e026d2dade..9f203ed8c8f3 100644
+--- a/virt/kvm/arm/vgic/vgic-irqfd.c
++++ b/virt/kvm/arm/vgic/vgic-irqfd.c
+@@ -77,6 +77,15 @@ int kvm_set_routing_entry(struct kvm *kvm,
+ 	return r;
+ }
+ 
++static void kvm_populate_msi(struct kvm_kernel_irq_routing_entry *e,
++			     struct kvm_msi *msi)
++{
++	msi->address_lo = e->msi.address_lo;
++	msi->address_hi = e->msi.address_hi;
++	msi->data = e->msi.data;
++	msi->flags = e->msi.flags;
++	msi->devid = e->msi.devid;
++}
+ /**
+  * kvm_set_msi: inject the MSI corresponding to the
+  * MSI routing entry
+@@ -90,21 +99,36 @@ int kvm_set_msi(struct kvm_kernel_irq_routing_entry *e,
+ {
+ 	struct kvm_msi msi;
+ 
+-	msi.address_lo = e->msi.address_lo;
+-	msi.address_hi = e->msi.address_hi;
+-	msi.data = e->msi.data;
+-	msi.flags = e->msi.flags;
+-	msi.devid = e->msi.devid;
+-
+ 	if (!vgic_has_its(kvm))
+ 		return -ENODEV;
+ 
+ 	if (!level)
+ 		return -1;
+ 
++	kvm_populate_msi(e, &msi);
+ 	return vgic_its_inject_msi(kvm, &msi);
+ }
+ 
++/**
++ * kvm_arch_set_irq_inatomic: fast-path for irqfd injection
++ *
++ * Currently only direct MSI injecton is supported.
++ */
++int kvm_arch_set_irq_inatomic(struct kvm_kernel_irq_routing_entry *e,
++			      struct kvm *kvm, int irq_source_id, int level,
++			      bool line_status)
++{
++	if (e->type == KVM_IRQ_ROUTING_MSI && vgic_has_its(kvm) && level) {
++		struct kvm_msi msi;
++
++		kvm_populate_msi(e, &msi);
++		if (!vgic_its_inject_cached_translation(kvm, &msi))
++			return 0;
++	}
++
++	return -EWOULDBLOCK;
++}
++
+ int kvm_vgic_setup_default_irq_routing(struct kvm *kvm)
+ {
+ 	struct kvm_irq_routing_entry *entries;
