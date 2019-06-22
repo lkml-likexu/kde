@@ -1,0 +1,509 @@
+From patchwork Fri Jun 21 05:57:45 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Tao Xu <tao3.xu@intel.com>
+X-Patchwork-Id: 11008443
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 85C681580
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 21 Jun 2019 06:00:48 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 77385285F0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 21 Jun 2019 06:00:48 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id 6739B28897; Fri, 21 Jun 2019 06:00:48 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E72942876C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 21 Jun 2019 06:00:47 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726147AbfFUGA0 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 21 Jun 2019 02:00:26 -0400
+Received: from mga04.intel.com ([192.55.52.120]:51060 "EHLO mga04.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726008AbfFUGA0 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 21 Jun 2019 02:00:26 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga104.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 20 Jun 2019 23:00:26 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.63,399,1557212400";
+   d="scan'208";a="165563319"
+Received: from tao-optiplex-7060.sh.intel.com ([10.239.13.104])
+  by orsmga006.jf.intel.com with ESMTP; 20 Jun 2019 23:00:23 -0700
+From: Tao Xu <tao3.xu@intel.com>
+To: pbonzini@redhat.com, rkrcmar@redhat.com, corbet@lwn.net,
+        tglx@linutronix.de, mingo@redhat.com, bp@alien8.de, hpa@zytor.com,
+        sean.j.christopherson@intel.com
+Cc: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        fenghua.yu@intel.com, xiaoyao.li@linux.intel.com,
+        jingqi.liu@intel.com, tao3.xu@intel.com
+Subject: [PATCH v6 1/3] KVM: x86: add support for user wait instructions
+Date: Fri, 21 Jun 2019 13:57:45 +0800
+Message-Id: <20190621055747.17060-2-tao3.xu@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190621055747.17060-1-tao3.xu@intel.com>
+References: <20190621055747.17060-1-tao3.xu@intel.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+UMONITOR, UMWAIT and TPAUSE are a set of user wait instructions.
+This patch adds support for user wait instructions in KVM. Availability
+of the user wait instructions is indicated by the presence of the CPUID
+feature flag WAITPKG CPUID.0x07.0x0:ECX[5]. User wait instructions may
+be executed at any privilege level, and use IA32_UMWAIT_CONTROL MSR to
+set the maximum time.
+
+The behavior of user wait instructions in VMX non-root operation is
+determined first by the setting of the "enable user wait and pause"
+secondary processor-based VM-execution control bit 26.
+	If the VM-execution control is 0, UMONITOR/UMWAIT/TPAUSE cause
+an invalid-opcode exception (#UD).
+	If the VM-execution control is 1, treatment is based on the
+setting of the “RDTSC exiting” VM-execution control. Because KVM never
+enables RDTSC exiting, if the instruction causes a delay, the amount of
+time delayed is called here the physical delay. The physical delay is
+first computed by determining the virtual delay. If
+IA32_UMWAIT_CONTROL[31:2] is zero, the virtual delay is the value in
+EDX:EAX minus the value that RDTSC would return; if
+IA32_UMWAIT_CONTROL[31:2] is not zero, the virtual delay is the minimum
+of that difference and AND(IA32_UMWAIT_CONTROL,FFFFFFFCH).
+
+Because umwait and tpause can put a (psysical) CPU into a power saving
+state, by default we dont't expose it to kvm and enable it only when
+guest CPUID has it.
+
+Detailed information about user wait instructions can be found in the
+latest Intel 64 and IA-32 Architectures Software Developer's Manual.
+
+Reviewed-by: Xiaoyao Li <xiaoyao.li@linux.intel.com>
+Co-developed-by: Jingqi Liu <jingqi.liu@intel.com>
+Signed-off-by: Jingqi Liu <jingqi.liu@intel.com>
+Signed-off-by: Tao Xu <tao3.xu@intel.com>
+---
+
+No changes in v6
+---
+ arch/x86/include/asm/vmx.h | 1 +
+ arch/x86/kvm/cpuid.c       | 2 +-
+ arch/x86/kvm/vmx/vmx.c     | 4 ++++
+ 3 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/vmx.h b/arch/x86/include/asm/vmx.h
+index a39136b0d509..8f00882664d3 100644
+--- a/arch/x86/include/asm/vmx.h
++++ b/arch/x86/include/asm/vmx.h
+@@ -69,6 +69,7 @@
+ #define SECONDARY_EXEC_PT_USE_GPA		0x01000000
+ #define SECONDARY_EXEC_MODE_BASED_EPT_EXEC	0x00400000
+ #define SECONDARY_EXEC_TSC_SCALING              0x02000000
++#define SECONDARY_EXEC_ENABLE_USR_WAIT_PAUSE	0x04000000
+ 
+ #define PIN_BASED_EXT_INTR_MASK                 0x00000001
+ #define PIN_BASED_NMI_EXITING                   0x00000008
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index e18a9f9f65b5..48bd851a6ae5 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -405,7 +405,7 @@ static inline int __do_cpuid_ent(struct kvm_cpuid_entry2 *entry, u32 function,
+ 		F(AVX512VBMI) | F(LA57) | F(PKU) | 0 /*OSPKE*/ |
+ 		F(AVX512_VPOPCNTDQ) | F(UMIP) | F(AVX512_VBMI2) | F(GFNI) |
+ 		F(VAES) | F(VPCLMULQDQ) | F(AVX512_VNNI) | F(AVX512_BITALG) |
+-		F(CLDEMOTE) | F(MOVDIRI) | F(MOVDIR64B);
++		F(CLDEMOTE) | F(MOVDIRI) | F(MOVDIR64B) | 0 /*WAITPKG*/;
+ 
+ 	/* cpuid 7.0.edx*/
+ 	const u32 kvm_cpuid_7_0_edx_x86_features =
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index b93e36ddee5e..b35bfac30a34 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -2250,6 +2250,7 @@ static __init int setup_vmcs_config(struct vmcs_config *vmcs_conf,
+ 			SECONDARY_EXEC_RDRAND_EXITING |
+ 			SECONDARY_EXEC_ENABLE_PML |
+ 			SECONDARY_EXEC_TSC_SCALING |
++			SECONDARY_EXEC_ENABLE_USR_WAIT_PAUSE |
+ 			SECONDARY_EXEC_PT_USE_GPA |
+ 			SECONDARY_EXEC_PT_CONCEAL_VMX |
+ 			SECONDARY_EXEC_ENABLE_VMFUNC |
+@@ -3987,6 +3988,9 @@ static void vmx_compute_secondary_exec_control(struct vcpu_vmx *vmx)
+ 		}
+ 	}
+ 
++	if (!guest_cpuid_has(vcpu, X86_FEATURE_WAITPKG))
++		exec_control &= ~SECONDARY_EXEC_ENABLE_USR_WAIT_PAUSE;
++
+ 	vmx->secondary_exec_control = exec_control;
+ }
+ 
+
+From patchwork Fri Jun 21 05:57:46 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Tao Xu <tao3.xu@intel.com>
+X-Patchwork-Id: 11008449
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 030ED14BB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 21 Jun 2019 06:00:50 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id E7F88285F0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 21 Jun 2019 06:00:49 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id DC5352876C; Fri, 21 Jun 2019 06:00:49 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 1237B2885E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 21 Jun 2019 06:00:48 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726219AbfFUGA3 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 21 Jun 2019 02:00:29 -0400
+Received: from mga04.intel.com ([192.55.52.120]:51060 "EHLO mga04.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726008AbfFUGA3 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 21 Jun 2019 02:00:29 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga104.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 20 Jun 2019 23:00:29 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.63,399,1557212400";
+   d="scan'208";a="165563341"
+Received: from tao-optiplex-7060.sh.intel.com ([10.239.13.104])
+  by orsmga006.jf.intel.com with ESMTP; 20 Jun 2019 23:00:26 -0700
+From: Tao Xu <tao3.xu@intel.com>
+To: pbonzini@redhat.com, rkrcmar@redhat.com, corbet@lwn.net,
+        tglx@linutronix.de, mingo@redhat.com, bp@alien8.de, hpa@zytor.com,
+        sean.j.christopherson@intel.com
+Cc: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        fenghua.yu@intel.com, xiaoyao.li@linux.intel.com,
+        jingqi.liu@intel.com, tao3.xu@intel.com
+Subject: [PATCH v6 2/3] KVM: vmx: Emulate MSR IA32_UMWAIT_CONTROL
+Date: Fri, 21 Jun 2019 13:57:46 +0800
+Message-Id: <20190621055747.17060-3-tao3.xu@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190621055747.17060-1-tao3.xu@intel.com>
+References: <20190621055747.17060-1-tao3.xu@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+UMWAIT and TPAUSE instructions use IA32_UMWAIT_CONTROL at MSR index E1H
+to determines the maximum time in TSC-quanta that the processor can reside
+in either C0.1 or C0.2.
+
+This patch emulates MSR IA32_UMWAIT_CONTROL in guest and differentiate
+IA32_UMWAIT_CONTROL between host and guest. The variable
+mwait_control_cached in arch/x86/power/umwait.c caches the MSR value, so
+this patch uses it to avoid frequently rdmsr of IA32_UMWAIT_CONTROL.
+
+Co-developed-by: Jingqi Liu <jingqi.liu@intel.com>
+Signed-off-by: Jingqi Liu <jingqi.liu@intel.com>
+Signed-off-by: Tao Xu <tao3.xu@intel.com>
+---
+
+Changes in v6:
+	add check msr_info->host_initiated in get/set msr(Xiaoyao)
+	restore the atomic_switch_umwait_control_msr()(Xiaoyao)
+	rebase the patch because the kernel dependcy patch updated to
+	v5: https://lkml.org/lkml/2019/6/19/972
+---
+ arch/x86/kernel/cpu/umwait.c |  3 ++-
+ arch/x86/kvm/vmx/vmx.c       | 33 +++++++++++++++++++++++++++++++++
+ arch/x86/kvm/vmx/vmx.h       |  3 +++
+ arch/x86/kvm/x86.c           |  1 +
+ 4 files changed, 39 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kernel/cpu/umwait.c b/arch/x86/kernel/cpu/umwait.c
+index 4b2aff7b2d4d..db5c193ef136 100644
+--- a/arch/x86/kernel/cpu/umwait.c
++++ b/arch/x86/kernel/cpu/umwait.c
+@@ -15,7 +15,8 @@
+  * MSR value. By default, umwait max time is 100000 in TSC-quanta and C0.2
+  * is enabled
+  */
+-static u32 umwait_control_cached = UMWAIT_CTRL_VAL(100000, UMWAIT_C02_ENABLED);
++u32 umwait_control_cached = UMWAIT_CTRL_VAL(100000, UMWAIT_C02_ENABLED);
++EXPORT_SYMBOL_GPL(umwait_control_cached);
+ 
+ /*
+  * Serialize access to umwait_control_cached and IA32_UMWAIT_CONTROL MSR
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index b35bfac30a34..0d81cb9b96cf 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -1679,6 +1679,13 @@ static int vmx_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ #endif
+ 	case MSR_EFER:
+ 		return kvm_get_msr_common(vcpu, msr_info);
++	case MSR_IA32_UMWAIT_CONTROL:
++		if (!msr_info->host_initiated &&
++		    !guest_cpuid_has(vcpu, X86_FEATURE_WAITPKG))
++			return 1;
++
++		msr_info->data = vmx->msr_ia32_umwait_control;
++		break;
+ 	case MSR_IA32_SPEC_CTRL:
+ 		if (!msr_info->host_initiated &&
+ 		    !guest_cpuid_has(vcpu, X86_FEATURE_SPEC_CTRL))
+@@ -1841,6 +1848,17 @@ static int vmx_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 			return 1;
+ 		vmcs_write64(GUEST_BNDCFGS, data);
+ 		break;
++	case MSR_IA32_UMWAIT_CONTROL:
++		if (!msr_info->host_initiated &&
++		    !guest_cpuid_has(vcpu, X86_FEATURE_WAITPKG))
++			return 1;
++
++		/* The reserved bit IA32_UMWAIT_CONTROL[1] should be zero */
++		if (data & BIT_ULL(1))
++			return 1;
++
++		vmx->msr_ia32_umwait_control = data;
++		break;
+ 	case MSR_IA32_SPEC_CTRL:
+ 		if (!msr_info->host_initiated &&
+ 		    !guest_cpuid_has(vcpu, X86_FEATURE_SPEC_CTRL))
+@@ -4126,6 +4144,8 @@ static void vmx_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
+ 	vmx->rmode.vm86_active = 0;
+ 	vmx->spec_ctrl = 0;
+ 
++	vmx->msr_ia32_umwait_control = 0;
++
+ 	vcpu->arch.microcode_version = 0x100000000ULL;
+ 	vmx->vcpu.arch.regs[VCPU_REGS_RDX] = get_rdx_init_val();
+ 	kvm_set_cr8(vcpu, 0);
+@@ -6339,6 +6359,16 @@ static void atomic_switch_perf_msrs(struct vcpu_vmx *vmx)
+ 					msrs[i].host, false);
+ }
+ 
++static void atomic_switch_umwait_control_msr(struct vcpu_vmx *vmx)
++{
++	if (vmx->msr_ia32_umwait_control != umwait_control_cached)
++		add_atomic_switch_msr(vmx, MSR_IA32_UMWAIT_CONTROL,
++			vmx->msr_ia32_umwait_control,
++			umwait_control_cached, false);
++	else
++		clear_atomic_switch_msr(vmx, MSR_IA32_UMWAIT_CONTROL);
++}
++
+ static void vmx_arm_hv_timer(struct vcpu_vmx *vmx, u32 val)
+ {
+ 	vmcs_write32(VMX_PREEMPTION_TIMER_VALUE, val);
+@@ -6447,6 +6477,9 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ 
+ 	atomic_switch_perf_msrs(vmx);
+ 
++	if (guest_cpuid_has(vcpu, X86_FEATURE_WAITPKG))
++		atomic_switch_umwait_control_msr(vmx);
++
+ 	vmx_update_hv_timer(vcpu);
+ 
+ 	/*
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index 61128b48c503..8485bec7c38a 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -14,6 +14,8 @@
+ extern const u32 vmx_msr_index[];
+ extern u64 host_efer;
+ 
++extern u32 umwait_control_cached;
++
+ #define MSR_TYPE_R	1
+ #define MSR_TYPE_W	2
+ #define MSR_TYPE_RW	3
+@@ -194,6 +196,7 @@ struct vcpu_vmx {
+ #endif
+ 
+ 	u64		      spec_ctrl;
++	u64		      msr_ia32_umwait_control;
+ 
+ 	u32 vm_entry_controls_shadow;
+ 	u32 vm_exit_controls_shadow;
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 83aefd759846..4480de459bf4 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -1138,6 +1138,7 @@ static u32 msrs_to_save[] = {
+ 	MSR_IA32_RTIT_ADDR1_A, MSR_IA32_RTIT_ADDR1_B,
+ 	MSR_IA32_RTIT_ADDR2_A, MSR_IA32_RTIT_ADDR2_B,
+ 	MSR_IA32_RTIT_ADDR3_A, MSR_IA32_RTIT_ADDR3_B,
++	MSR_IA32_UMWAIT_CONTROL,
+ };
+ 
+ static unsigned num_msrs_to_save;
+
+From patchwork Fri Jun 21 05:57:47 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Tao Xu <tao3.xu@intel.com>
+X-Patchwork-Id: 11008447
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C5E9B13AF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 21 Jun 2019 06:00:48 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B5E08285F0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 21 Jun 2019 06:00:48 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id AA4332888C; Fri, 21 Jun 2019 06:00:48 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id 3162628880
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 21 Jun 2019 06:00:48 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726260AbfFUGAd (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 21 Jun 2019 02:00:33 -0400
+Received: from mga04.intel.com ([192.55.52.120]:51060 "EHLO mga04.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726256AbfFUGAc (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 21 Jun 2019 02:00:32 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga104.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 20 Jun 2019 23:00:32 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.63,399,1557212400";
+   d="scan'208";a="165563363"
+Received: from tao-optiplex-7060.sh.intel.com ([10.239.13.104])
+  by orsmga006.jf.intel.com with ESMTP; 20 Jun 2019 23:00:29 -0700
+From: Tao Xu <tao3.xu@intel.com>
+To: pbonzini@redhat.com, rkrcmar@redhat.com, corbet@lwn.net,
+        tglx@linutronix.de, mingo@redhat.com, bp@alien8.de, hpa@zytor.com,
+        sean.j.christopherson@intel.com
+Cc: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        fenghua.yu@intel.com, xiaoyao.li@linux.intel.com,
+        jingqi.liu@intel.com, tao3.xu@intel.com
+Subject: [PATCH v6 3/3] KVM: vmx: handle vm-exit for UMWAIT and TPAUSE
+Date: Fri, 21 Jun 2019 13:57:47 +0800
+Message-Id: <20190621055747.17060-4-tao3.xu@intel.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190621055747.17060-1-tao3.xu@intel.com>
+References: <20190621055747.17060-1-tao3.xu@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+As the latest Intel 64 and IA-32 Architectures Software Developer's
+Manual, UMWAIT and TPAUSE instructions cause a VM exit if the
+RDTSC exiting and enable user wait and pause VM-execution
+controls are both 1.
+
+This patch is to handle the vm-exit for UMWAIT and TPAUSE as this
+should never happen.
+
+Co-developed-by: Jingqi Liu <jingqi.liu@intel.com>
+Signed-off-by: Jingqi Liu <jingqi.liu@intel.com>
+Signed-off-by: Tao Xu <tao3.xu@intel.com>
+---
+
+No changes in v6
+---
+ arch/x86/include/uapi/asm/vmx.h |  6 +++++-
+ arch/x86/kvm/vmx/vmx.c          | 16 ++++++++++++++++
+ 2 files changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/uapi/asm/vmx.h b/arch/x86/include/uapi/asm/vmx.h
+index d213ec5c3766..d88d7a68849b 100644
+--- a/arch/x86/include/uapi/asm/vmx.h
++++ b/arch/x86/include/uapi/asm/vmx.h
+@@ -85,6 +85,8 @@
+ #define EXIT_REASON_PML_FULL            62
+ #define EXIT_REASON_XSAVES              63
+ #define EXIT_REASON_XRSTORS             64
++#define EXIT_REASON_UMWAIT              67
++#define EXIT_REASON_TPAUSE              68
+ 
+ #define VMX_EXIT_REASONS \
+ 	{ EXIT_REASON_EXCEPTION_NMI,         "EXCEPTION_NMI" }, \
+@@ -142,7 +144,9 @@
+ 	{ EXIT_REASON_RDSEED,                "RDSEED" }, \
+ 	{ EXIT_REASON_PML_FULL,              "PML_FULL" }, \
+ 	{ EXIT_REASON_XSAVES,                "XSAVES" }, \
+-	{ EXIT_REASON_XRSTORS,               "XRSTORS" }
++	{ EXIT_REASON_XRSTORS,               "XRSTORS" }, \
++	{ EXIT_REASON_UMWAIT,                "UMWAIT" }, \
++	{ EXIT_REASON_TPAUSE,                "TPAUSE" }
+ 
+ #define VMX_ABORT_SAVE_GUEST_MSR_FAIL        1
+ #define VMX_ABORT_LOAD_HOST_PDPTE_FAIL       2
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 0d81cb9b96cf..26696679f4ca 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -5338,6 +5338,20 @@ static int handle_monitor(struct kvm_vcpu *vcpu)
+ 	return handle_nop(vcpu);
+ }
+ 
++static int handle_umwait(struct kvm_vcpu *vcpu)
++{
++	kvm_skip_emulated_instruction(vcpu);
++	WARN(1, "this should never happen\n");
++	return 1;
++}
++
++static int handle_tpause(struct kvm_vcpu *vcpu)
++{
++	kvm_skip_emulated_instruction(vcpu);
++	WARN(1, "this should never happen\n");
++	return 1;
++}
++
+ static int handle_invpcid(struct kvm_vcpu *vcpu)
+ {
+ 	u32 vmx_instruction_info;
+@@ -5548,6 +5562,8 @@ static int (*kvm_vmx_exit_handlers[])(struct kvm_vcpu *vcpu) = {
+ 	[EXIT_REASON_VMFUNC]		      = handle_vmx_instruction,
+ 	[EXIT_REASON_PREEMPTION_TIMER]	      = handle_preemption_timer,
+ 	[EXIT_REASON_ENCLS]		      = handle_encls,
++	[EXIT_REASON_UMWAIT]                  = handle_umwait,
++	[EXIT_REASON_TPAUSE]                  = handle_tpause,
+ };
+ 
+ static const int kvm_vmx_max_exit_handlers =
