@@ -1,0 +1,109 @@
+From patchwork Fri Jul 19 20:41:05 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11050585
+Return-Path: <kvm-owner@kernel.org>
+Received: from mail.wl.linuxfoundation.org (pdx-wl-mail.web.codeaurora.org
+ [172.30.200.125])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id DD156912
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jul 2019 20:41:51 +0000 (UTC)
+Received: from mail.wl.linuxfoundation.org (localhost [127.0.0.1])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id CF0B82898C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jul 2019 20:41:51 +0000 (UTC)
+Received: by mail.wl.linuxfoundation.org (Postfix, from userid 486)
+	id C3679289A0; Fri, 19 Jul 2019 20:41:51 +0000 (UTC)
+X-Spam-Checker-Version: SpamAssassin 3.3.1 (2010-03-16) on
+	pdx-wl-mail.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-7.9 required=2.0 tests=BAYES_00,MAILING_LIST_MULTI,
+	RCVD_IN_DNSWL_HI autolearn=ham version=3.3.1
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.wl.linuxfoundation.org (Postfix) with ESMTP id B08EC2898C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jul 2019 20:41:50 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731247AbfGSUlU (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 19 Jul 2019 16:41:20 -0400
+Received: from mga12.intel.com ([192.55.52.136]:46747 "EHLO mga12.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728051AbfGSUlU (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 19 Jul 2019 16:41:20 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga008.fm.intel.com ([10.253.24.58])
+  by fmsmga106.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 19 Jul 2019 13:41:20 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.64,283,1559545200";
+   d="scan'208";a="168655824"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.165])
+  by fmsmga008.fm.intel.com with ESMTP; 19 Jul 2019 13:41:19 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>,
+ Thomas Gleixner <tglx@linutronix.de>, Ingo Molnar <mingo@redhat.com>,
+ Borislav Petkov <bp@alien8.de>, x86@kernel.org,
+ Josh Poimboeuf <jpoimboe@redhat.com>, Peter Zijlstra <peterz@infradead.org>
+Cc: "H. Peter Anvin" <hpa@zytor.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v2 0/5] KVM: VMX: Optimize VMX instrs error/fault handling
+Date: Fri, 19 Jul 2019 13:41:05 -0700
+Message-Id: <20190719204110.18306-1-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.22.0
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+X-Virus-Scanned: ClamAV using ClamSMTP
+
+A recent commit reworked __kvm_handle_fault_on_reboot() to play nice with
+objtool.  An unfortunate side effect is that JMP is now inserted after
+most VMX instructions so that the reboot macro can use an actual CALL to
+kvm_spurious_fault() instead of a funky PUSH+JMP facsimile in .fixup.
+
+Rework the low level VMX instruction helpers to handle unexpected faults
+manually instead of relying on the "fault on reboot" macro.  By using
+asm-goto, most helpers can branch directly to an in-function call to
+kvm_spurious_fault(), which can then be optimized by compilers to reside
+out-of-line at the end of the function instead of inline as done by
+"fault on reboot".
+
+The net impact relative to the current code base is more or less a nop
+when building with a compiler that supports __GCC_ASM_FLAG_OUTPUTS__.
+A bunch of code that was previously in .fixup gets moved into the slow
+paths of functions, but the fast paths are more basically unchanged.
+
+Without __GCC_ASM_FLAG_OUTPUTS__, manually coding the Jcc is a net
+positive as CC_SET() without compiler support almost always generates a
+SETcc+CMP+Jcc sequence, which is now replaced with a single Jcc.
+
+A small bonus is that the Jcc instrs are hinted to predict that the VMX
+instr will be successful.
+
+v2:
+  - Rebased to x86/master, commit eceffd88ca20 ("Merge branch 'x86/urgent'")
+  - Reworded changelogs to reference the commit instead lkml link for
+    the recent changes to __kvm_handle_fault_on_reboot().
+  - Added Paolo's acks for patch 1-4
+  - Added patch 5 to do more cleanup, which was made possible by rebasing
+    on top of the __kvm_handle_fault_on_reboot() changes.
+  
+Sean Christopherson (5):
+  objtool: KVM: x86: Check kvm_rebooting in kvm_spurious_fault()
+  KVM: VMX: Optimize VMX instruction error and fault handling
+  KVM: VMX: Add error handling to VMREAD helper
+  KVM: x86: Drop ____kvm_handle_fault_on_reboot()
+  KVM: x86: Don't check kvm_rebooting in __kvm_handle_fault_on_reboot()
+
+ arch/x86/include/asm/kvm_host.h | 16 ++----
+ arch/x86/kvm/vmx/ops.h          | 93 ++++++++++++++++++++-------------
+ arch/x86/kvm/vmx/vmx.c          | 42 +++++++++++++++
+ arch/x86/kvm/x86.c              |  3 +-
+ tools/objtool/check.c           |  1 -
+ 5 files changed, 104 insertions(+), 51 deletions(-)
