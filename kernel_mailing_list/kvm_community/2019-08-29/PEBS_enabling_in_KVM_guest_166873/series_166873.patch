@@ -1,0 +1,1425 @@
+From patchwork Thu Aug 29 05:34:01 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Kang, Luwei" <luwei.kang@intel.com>
+X-Patchwork-Id: 11120325
+Return-Path: <SRS0=pZ1+=WZ=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B48F01395
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:38:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 9D4E4233FF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:38:58 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727380AbfH2Fiy (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 29 Aug 2019 01:38:54 -0400
+Received: from mga05.intel.com ([192.55.52.43]:33970 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725847AbfH2Fiy (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 29 Aug 2019 01:38:54 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Aug 2019 22:38:53 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.64,442,1559545200";
+   d="scan'208";a="210416115"
+Received: from icl-2s.bj.intel.com ([10.240.193.48])
+  by fmsmga002.fm.intel.com with ESMTP; 28 Aug 2019 22:38:47 -0700
+From: Luwei Kang <luwei.kang@intel.com>
+To: pbonzini@redhat.com, rkrcmar@redhat.com
+Cc: sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        tglx@linutronix.de, mingo@redhat.com, bp@alien8.de, hpa@zytor.com,
+        x86@kernel.org, ak@linux.intel.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Luwei Kang <luwei.kang@intel.com>
+Subject: [RFC v1 1/9] KVM: x86: Add base address parameter for get_fixed_pmc
+ function
+Date: Thu, 29 Aug 2019 13:34:01 +0800
+Message-Id: <1567056849-14608-2-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+References: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+PEBS output Inte PT introduces some new MSRs (MSR_RELOAD_FIXED_CTRx)
+for fixed function counters that use for autoload the preset value
+after writing out a PEBS event.
+
+Introduce base MSRs address parameter to make this function can get
+performance monitor counter structure by MSR_RELOAD_FIXED_CTRx registers.
+
+Signed-off-by: Luwei Kang <luwei.kang@intel.com>
+---
+ arch/x86/kvm/pmu.h           |  5 ++---
+ arch/x86/kvm/vmx/pmu_intel.c | 14 +++++++++-----
+ 2 files changed, 11 insertions(+), 8 deletions(-)
+
+diff --git a/arch/x86/kvm/pmu.h b/arch/x86/kvm/pmu.h
+index 58265f7..c62a1ff 100644
+--- a/arch/x86/kvm/pmu.h
++++ b/arch/x86/kvm/pmu.h
+@@ -93,10 +93,9 @@ static inline struct kvm_pmc *get_gp_pmc(struct kvm_pmu *pmu, u32 msr,
+ }
+ 
+ /* returns fixed PMC with the specified MSR */
+-static inline struct kvm_pmc *get_fixed_pmc(struct kvm_pmu *pmu, u32 msr)
++static inline struct kvm_pmc *get_fixed_pmc(struct kvm_pmu *pmu, u32 msr,
++								int base)
+ {
+-	int base = MSR_CORE_PERF_FIXED_CTR0;
+-
+ 	if (msr >= base && msr < base + pmu->nr_arch_fixed_counters)
+ 		return &pmu->fixed_counters[msr - base];
+ 
+diff --git a/arch/x86/kvm/vmx/pmu_intel.c b/arch/x86/kvm/vmx/pmu_intel.c
+index 4dea0e0..01441be 100644
+--- a/arch/x86/kvm/vmx/pmu_intel.c
++++ b/arch/x86/kvm/vmx/pmu_intel.c
+@@ -41,7 +41,8 @@ static void reprogram_fixed_counters(struct kvm_pmu *pmu, u64 data)
+ 		u8 old_ctrl = fixed_ctrl_field(pmu->fixed_ctr_ctrl, i);
+ 		struct kvm_pmc *pmc;
+ 
+-		pmc = get_fixed_pmc(pmu, MSR_CORE_PERF_FIXED_CTR0 + i);
++		pmc = get_fixed_pmc(pmu, MSR_CORE_PERF_FIXED_CTR0 + i,
++						MSR_CORE_PERF_FIXED_CTR0);
+ 
+ 		if (old_ctrl == new_ctrl)
+ 			continue;
+@@ -106,7 +107,8 @@ static struct kvm_pmc *intel_pmc_idx_to_pmc(struct kvm_pmu *pmu, int pmc_idx)
+ 	else {
+ 		u32 idx = pmc_idx - INTEL_PMC_IDX_FIXED;
+ 
+-		return get_fixed_pmc(pmu, idx + MSR_CORE_PERF_FIXED_CTR0);
++		return get_fixed_pmc(pmu, idx + MSR_CORE_PERF_FIXED_CTR0,
++						MSR_CORE_PERF_FIXED_CTR0);
+ 	}
+ }
+ 
+@@ -155,7 +157,7 @@ static bool intel_is_valid_msr(struct kvm_vcpu *vcpu, u32 msr)
+ 	default:
+ 		ret = get_gp_pmc(pmu, msr, MSR_IA32_PERFCTR0) ||
+ 			get_gp_pmc(pmu, msr, MSR_P6_EVNTSEL0) ||
+-			get_fixed_pmc(pmu, msr);
++			get_fixed_pmc(pmu, msr, MSR_CORE_PERF_FIXED_CTR0);
+ 		break;
+ 	}
+ 
+@@ -185,7 +187,8 @@ static int intel_pmu_get_msr(struct kvm_vcpu *vcpu, u32 msr, u64 *data)
+ 			u64 val = pmc_read_counter(pmc);
+ 			*data = val & pmu->counter_bitmask[KVM_PMC_GP];
+ 			return 0;
+-		} else if ((pmc = get_fixed_pmc(pmu, msr))) {
++		} else if ((pmc = get_fixed_pmc(pmu, msr,
++						MSR_CORE_PERF_FIXED_CTR0))) {
+ 			u64 val = pmc_read_counter(pmc);
+ 			*data = val & pmu->counter_bitmask[KVM_PMC_FIXED];
+ 			return 0;
+@@ -243,7 +246,8 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 			else
+ 				pmc->counter = (s32)data;
+ 			return 0;
+-		} else if ((pmc = get_fixed_pmc(pmu, msr))) {
++		} else if ((pmc = get_fixed_pmc(pmu, msr,
++						MSR_CORE_PERF_FIXED_CTR0))) {
+ 			pmc->counter = data;
+ 			return 0;
+ 		} else if ((pmc = get_gp_pmc(pmu, msr, MSR_P6_EVNTSEL0))) {
+
+From patchwork Thu Aug 29 05:34:02 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Kang, Luwei" <luwei.kang@intel.com>
+X-Patchwork-Id: 11120327
+Return-Path: <SRS0=pZ1+=WZ=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id CE1311395
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:39:06 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id B6F722189D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:39:05 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727437AbfH2FjC (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 29 Aug 2019 01:39:02 -0400
+Received: from mga01.intel.com ([192.55.52.88]:3590 "EHLO mga01.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727417AbfH2FjB (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 29 Aug 2019 01:39:01 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by fmsmga101.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Aug 2019 22:39:01 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.64,442,1559545200";
+   d="scan'208";a="210416167"
+Received: from icl-2s.bj.intel.com ([10.240.193.48])
+  by fmsmga002.fm.intel.com with ESMTP; 28 Aug 2019 22:38:55 -0700
+From: Luwei Kang <luwei.kang@intel.com>
+To: pbonzini@redhat.com, rkrcmar@redhat.com
+Cc: sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        tglx@linutronix.de, mingo@redhat.com, bp@alien8.de, hpa@zytor.com,
+        x86@kernel.org, ak@linux.intel.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Luwei Kang <luwei.kang@intel.com>
+Subject: [RFC v1 2/9] KVM: x86: PEBS via Intel PT HW feature detection
+Date: Thu, 29 Aug 2019 13:34:02 +0800
+Message-Id: <1567056849-14608-3-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+References: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+PEBS can be enabled in KVM guest by direct PEBS record into the Intel
+Processor Trace output buffer. This patch adds a new flag to detect
+if PEBS can be supported in KVM guest. It not only need HW support PEBS
+output Intel PT (IA32_PERF_CAPABILITIES.PEBS_OUTPUT_PT_AVAIL[16]=1)
+but also depends on:
+1. PEBS feature is supported by HW (IA32_MISC_ENABLE[Bit12]=0);
+2. Intel PT must be working in HOST_GUEST mode.
+
+Signed-off-by: Luwei Kang <luwei.kang@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h  |  1 +
+ arch/x86/include/asm/msr-index.h |  3 +++
+ arch/x86/kvm/vmx/capabilities.h  | 11 +++++++++++
+ arch/x86/kvm/vmx/pmu_intel.c     |  7 ++++++-
+ 4 files changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 74e88e5..3463326 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -472,6 +472,7 @@ struct kvm_pmu {
+ 	u64 global_ovf_ctrl_mask;
+ 	u64 reserved_bits;
+ 	u8 version;
++	bool pebs_pt;	/* PEBS output to Intel PT */
+ 	struct kvm_pmc gp_counters[INTEL_PMC_MAX_GENERIC];
+ 	struct kvm_pmc fixed_counters[INTEL_PMC_MAX_FIXED];
+ 	struct irq_work irq_work;
+diff --git a/arch/x86/include/asm/msr-index.h b/arch/x86/include/asm/msr-index.h
+index 271d837..3dd166a 100644
+--- a/arch/x86/include/asm/msr-index.h
++++ b/arch/x86/include/asm/msr-index.h
+@@ -134,6 +134,7 @@
+ #define MSR_IA32_PEBS_ENABLE		0x000003f1
+ #define MSR_PEBS_DATA_CFG		0x000003f2
+ #define MSR_IA32_DS_AREA		0x00000600
++#define MSR_IA32_PERF_CAP_PEBS_OUTPUT_PT	(1UL << 16)
+ #define MSR_IA32_PERF_CAPABILITIES	0x00000345
+ #define MSR_PEBS_LD_LAT_THRESHOLD	0x000003f6
+ 
+@@ -660,6 +661,8 @@
+ #define MSR_IA32_MISC_ENABLE_FERR			(1ULL << MSR_IA32_MISC_ENABLE_FERR_BIT)
+ #define MSR_IA32_MISC_ENABLE_FERR_MULTIPLEX_BIT		10
+ #define MSR_IA32_MISC_ENABLE_FERR_MULTIPLEX		(1ULL << MSR_IA32_MISC_ENABLE_FERR_MULTIPLEX_BIT)
++#define MSR_IA32_MISC_ENABLE_PEBS_BIT			12
++#define MSR_IA32_MISC_ENABLE_PEBS			(1ULL << MSR_IA32_MISC_ENABLE_PEBS_BIT)
+ #define MSR_IA32_MISC_ENABLE_TM2_BIT			13
+ #define MSR_IA32_MISC_ENABLE_TM2			(1ULL << MSR_IA32_MISC_ENABLE_TM2_BIT)
+ #define MSR_IA32_MISC_ENABLE_ADJ_PREF_DISABLE_BIT	19
+diff --git a/arch/x86/kvm/vmx/capabilities.h b/arch/x86/kvm/vmx/capabilities.h
+index d6664ee..4bcb6b4 100644
+--- a/arch/x86/kvm/vmx/capabilities.h
++++ b/arch/x86/kvm/vmx/capabilities.h
+@@ -342,4 +342,15 @@ static inline bool cpu_has_vmx_intel_pt(void)
+ 		(vmcs_config.vmentry_ctrl & VM_ENTRY_LOAD_IA32_RTIT_CTL);
+ }
+ 
++static inline bool cpu_has_vmx_pebs_output_pt(void)
++{
++	u64 misc, perf_cap;
++
++	rdmsrl(MSR_IA32_MISC_ENABLE, misc);
++	rdmsrl(MSR_IA32_PERF_CAPABILITIES, perf_cap);
++
++	return (!(misc & MSR_IA32_MISC_ENABLE_PEBS) &&
++		(perf_cap & MSR_IA32_PERF_CAP_PEBS_OUTPUT_PT));
++}
++
+ #endif /* __KVM_X86_VMX_CAPS_H */
+diff --git a/arch/x86/kvm/vmx/pmu_intel.c b/arch/x86/kvm/vmx/pmu_intel.c
+index 01441be..e1c987f 100644
+--- a/arch/x86/kvm/vmx/pmu_intel.c
++++ b/arch/x86/kvm/vmx/pmu_intel.c
+@@ -12,6 +12,7 @@
+ #include <linux/kvm_host.h>
+ #include <linux/perf_event.h>
+ #include <asm/perf_event.h>
++#include "capabilities.h"
+ #include "x86.h"
+ #include "cpuid.h"
+ #include "lapic.h"
+@@ -309,10 +310,14 @@ static void intel_pmu_refresh(struct kvm_vcpu *vcpu)
+ 	pmu->global_ovf_ctrl_mask = pmu->global_ctrl_mask
+ 			& ~(MSR_CORE_PERF_GLOBAL_OVF_CTRL_OVF_BUF |
+ 			    MSR_CORE_PERF_GLOBAL_OVF_CTRL_COND_CHGD);
+-	if (kvm_x86_ops->pt_supported())
++	if (kvm_x86_ops->pt_supported()) {
+ 		pmu->global_ovf_ctrl_mask &=
+ 				~MSR_CORE_PERF_GLOBAL_OVF_CTRL_TRACE_TOPA_PMI;
+ 
++		if (cpu_has_vmx_pebs_output_pt())
++			pmu->pebs_pt = true;
++	}
++
+ 	entry = kvm_find_cpuid_entry(vcpu, 7, 0);
+ 	if (entry &&
+ 	    (boot_cpu_has(X86_FEATURE_HLE) || boot_cpu_has(X86_FEATURE_RTM)) &&
+
+From patchwork Thu Aug 29 05:34:03 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Kang, Luwei" <luwei.kang@intel.com>
+X-Patchwork-Id: 11120329
+Return-Path: <SRS0=pZ1+=WZ=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id AFA581395
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:39:12 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 98C31233A1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:39:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727505AbfH2FjI (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 29 Aug 2019 01:39:08 -0400
+Received: from mga17.intel.com ([192.55.52.151]:42121 "EHLO mga17.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727447AbfH2FjI (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 29 Aug 2019 01:39:08 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by fmsmga107.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Aug 2019 22:39:07 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.64,442,1559545200";
+   d="scan'208";a="210416213"
+Received: from icl-2s.bj.intel.com ([10.240.193.48])
+  by fmsmga002.fm.intel.com with ESMTP; 28 Aug 2019 22:39:02 -0700
+From: Luwei Kang <luwei.kang@intel.com>
+To: pbonzini@redhat.com, rkrcmar@redhat.com
+Cc: sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        tglx@linutronix.de, mingo@redhat.com, bp@alien8.de, hpa@zytor.com,
+        x86@kernel.org, ak@linux.intel.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Luwei Kang <luwei.kang@intel.com>
+Subject: [RFC v1 3/9] KVM: x86: Implement MSR_IA32_PEBS_ENABLE read/write
+ emulation
+Date: Thu, 29 Aug 2019 13:34:03 +0800
+Message-Id: <1567056849-14608-4-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+References: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This patch implements the MSR_IA32_PEBS_ENABLE register
+read/write emulation for KVM guest. MSR_IA32_PEBS_ENABLE
+register can be accessed only when PEBS is supported in KVM.
+
+VMM need to reprogram the counter when the value of this MSR
+changed because some of the counters will be created or destroyed.
+
+Signed-off-by: Luwei Kang <luwei.kang@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h  |  2 ++
+ arch/x86/include/asm/msr-index.h |  3 +++
+ arch/x86/kvm/vmx/pmu_intel.c     | 42 +++++++++++++++++++++++++++++++++++++---
+ 3 files changed, 44 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 3463326..df966c9 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -471,6 +471,8 @@ struct kvm_pmu {
+ 	u64 global_ctrl_mask;
+ 	u64 global_ovf_ctrl_mask;
+ 	u64 reserved_bits;
++	u64 pebs_enable;
++	u64 pebs_enable_mask;
+ 	u8 version;
+ 	bool pebs_pt;	/* PEBS output to Intel PT */
+ 	struct kvm_pmc gp_counters[INTEL_PMC_MAX_GENERIC];
+diff --git a/arch/x86/include/asm/msr-index.h b/arch/x86/include/asm/msr-index.h
+index 3dd166a..a9e8720 100644
+--- a/arch/x86/include/asm/msr-index.h
++++ b/arch/x86/include/asm/msr-index.h
+@@ -131,6 +131,9 @@
+ #define LBR_INFO_ABORT			BIT_ULL(61)
+ #define LBR_INFO_CYCLES			0xffff
+ 
++#define MSR_IA32_PEBS_PMI_AFTER_REC	(1UL << 60)
++#define MSR_IA32_PEBS_OUTPUT_PT		(1UL << 61)
++#define MSR_IA32_PEBS_OUTPUT_MASK	(3UL << 61)
+ #define MSR_IA32_PEBS_ENABLE		0x000003f1
+ #define MSR_PEBS_DATA_CFG		0x000003f2
+ #define MSR_IA32_DS_AREA		0x00000600
+diff --git a/arch/x86/kvm/vmx/pmu_intel.c b/arch/x86/kvm/vmx/pmu_intel.c
+index e1c987f..fc79cc6 100644
+--- a/arch/x86/kvm/vmx/pmu_intel.c
++++ b/arch/x86/kvm/vmx/pmu_intel.c
+@@ -66,6 +66,20 @@ static void global_ctrl_changed(struct kvm_pmu *pmu, u64 data)
+ 		reprogram_counter(pmu, bit);
+ }
+ 
++static void pebs_enable_changed(struct kvm_pmu *pmu, u64 data)
++{
++	int bit;
++	u64 mask = ((1ull << pmu->nr_arch_gp_counters) - 1) |
++		(((1ull << pmu->nr_arch_fixed_counters) - 1) <<
++						INTEL_PMC_IDX_FIXED);
++	u64 diff = (pmu->pebs_enable ^ data) & mask;
++
++	pmu->pebs_enable = data;
++
++	for_each_set_bit(bit, (unsigned long *)&diff, X86_PMC_IDX_MAX)
++		reprogram_counter(pmu, bit);
++}
++
+ static unsigned intel_find_arch_event(struct kvm_pmu *pmu,
+ 				      u8 event_select,
+ 				      u8 unit_mask)
+@@ -155,6 +169,9 @@ static bool intel_is_valid_msr(struct kvm_vcpu *vcpu, u32 msr)
+ 	case MSR_CORE_PERF_GLOBAL_OVF_CTRL:
+ 		ret = pmu->version > 1;
+ 		break;
++	case MSR_IA32_PEBS_ENABLE:
++		ret = pmu->pebs_pt;
++		break;
+ 	default:
+ 		ret = get_gp_pmc(pmu, msr, MSR_IA32_PERFCTR0) ||
+ 			get_gp_pmc(pmu, msr, MSR_P6_EVNTSEL0) ||
+@@ -183,6 +200,9 @@ static int intel_pmu_get_msr(struct kvm_vcpu *vcpu, u32 msr, u64 *data)
+ 	case MSR_CORE_PERF_GLOBAL_OVF_CTRL:
+ 		*data = pmu->global_ovf_ctrl;
+ 		return 0;
++	case MSR_IA32_PEBS_ENABLE:
++		*data = pmu->pebs_enable;
++		return 0;
+ 	default:
+ 		if ((pmc = get_gp_pmc(pmu, msr, MSR_IA32_PERFCTR0))) {
+ 			u64 val = pmc_read_counter(pmc);
+@@ -240,6 +260,16 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 			return 0;
+ 		}
+ 		break;
++	case MSR_IA32_PEBS_ENABLE:
++		if (pmu->pebs_enable == data)
++			return 0;
++		if (!(data & pmu->pebs_enable_mask) &&
++		     (data & MSR_IA32_PEBS_OUTPUT_MASK) ==
++						MSR_IA32_PEBS_OUTPUT_PT) {
++			pebs_enable_changed(pmu, data);
++			return 0;
++		}
++		break;
+ 	default:
+ 		if ((pmc = get_gp_pmc(pmu, msr, MSR_IA32_PERFCTR0))) {
+ 			if (msr_info->host_initiated)
+@@ -270,6 +300,7 @@ static void intel_pmu_refresh(struct kvm_vcpu *vcpu)
+ 	struct kvm_cpuid_entry2 *entry;
+ 	union cpuid10_eax eax;
+ 	union cpuid10_edx edx;
++	u64 cnts_mask;
+ 
+ 	pmu->nr_arch_gp_counters = 0;
+ 	pmu->nr_arch_fixed_counters = 0;
+@@ -304,9 +335,10 @@ static void intel_pmu_refresh(struct kvm_vcpu *vcpu)
+ 			((u64)1 << edx.split.bit_width_fixed) - 1;
+ 	}
+ 
+-	pmu->global_ctrl = ((1ull << pmu->nr_arch_gp_counters) - 1) |
++	cnts_mask = ((1ull << pmu->nr_arch_gp_counters) - 1) |
+ 		(((1ull << pmu->nr_arch_fixed_counters) - 1) << INTEL_PMC_IDX_FIXED);
+-	pmu->global_ctrl_mask = ~pmu->global_ctrl;
++
++	pmu->global_ctrl_mask = ~cnts_mask;
+ 	pmu->global_ovf_ctrl_mask = pmu->global_ctrl_mask
+ 			& ~(MSR_CORE_PERF_GLOBAL_OVF_CTRL_OVF_BUF |
+ 			    MSR_CORE_PERF_GLOBAL_OVF_CTRL_COND_CHGD);
+@@ -314,8 +346,12 @@ static void intel_pmu_refresh(struct kvm_vcpu *vcpu)
+ 		pmu->global_ovf_ctrl_mask &=
+ 				~MSR_CORE_PERF_GLOBAL_OVF_CTRL_TRACE_TOPA_PMI;
+ 
+-		if (cpu_has_vmx_pebs_output_pt())
++		if (cpu_has_vmx_pebs_output_pt()) {
+ 			pmu->pebs_pt = true;
++			pmu->pebs_enable_mask = ~(cnts_mask |
++					MSR_IA32_PEBS_PMI_AFTER_REC |
++					MSR_IA32_PEBS_OUTPUT_MASK);
++		}
+ 	}
+ 
+ 	entry = kvm_find_cpuid_entry(vcpu, 7, 0);
+
+From patchwork Thu Aug 29 05:34:04 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Kang, Luwei" <luwei.kang@intel.com>
+X-Patchwork-Id: 11120331
+Return-Path: <SRS0=pZ1+=WZ=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 4CFCD1395
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:39:17 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 35FC72341B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:39:17 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727551AbfH2FjM (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 29 Aug 2019 01:39:12 -0400
+Received: from mga17.intel.com ([192.55.52.151]:42121 "EHLO mga17.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727487AbfH2FjM (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 29 Aug 2019 01:39:12 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by fmsmga107.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Aug 2019 22:39:11 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.64,442,1559545200";
+   d="scan'208";a="210416244"
+Received: from icl-2s.bj.intel.com ([10.240.193.48])
+  by fmsmga002.fm.intel.com with ESMTP; 28 Aug 2019 22:39:09 -0700
+From: Luwei Kang <luwei.kang@intel.com>
+To: pbonzini@redhat.com, rkrcmar@redhat.com
+Cc: sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        tglx@linutronix.de, mingo@redhat.com, bp@alien8.de, hpa@zytor.com,
+        x86@kernel.org, ak@linux.intel.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Luwei Kang <luwei.kang@intel.com>
+Subject: [RFC v1 4/9] KVM: x86: Implement counter reload MSRs read/write
+ emulation
+Date: Thu, 29 Aug 2019 13:34:04 +0800
+Message-Id: <1567056849-14608-5-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+References: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This patch implements the counter reload register
+MSR_RELOAD_PMCx/FIXED_CTRx read/write emulation. These registers
+can be accessed only when PEBS is supported in KVM.
+
+VMM need to reprogram the counters to make the host PMU framework
+load the value to real hardware after configuration has been changed.
+
+Signed-off-by: Luwei Kang <luwei.kang@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h  |  1 +
+ arch/x86/include/asm/msr-index.h |  3 +++
+ arch/x86/kvm/vmx/pmu_intel.c     | 22 +++++++++++++++++++++-
+ 3 files changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index df966c9..9b930b5 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -454,6 +454,7 @@ struct kvm_pmc {
+ 	enum pmc_type type;
+ 	u8 idx;
+ 	u64 counter;
++	u64 reload_cnt;
+ 	u64 eventsel;
+ 	struct perf_event *perf_event;
+ 	struct kvm_vcpu *vcpu;
+diff --git a/arch/x86/include/asm/msr-index.h b/arch/x86/include/asm/msr-index.h
+index a9e8720..6321acb 100644
+--- a/arch/x86/include/asm/msr-index.h
++++ b/arch/x86/include/asm/msr-index.h
+@@ -141,6 +141,9 @@
+ #define MSR_IA32_PERF_CAPABILITIES	0x00000345
+ #define MSR_PEBS_LD_LAT_THRESHOLD	0x000003f6
+ 
++#define MSR_IA32_RELOAD_PMC0		0x000014c1
++#define MSR_IA32_RELOAD_FIXED_CTR0	0x00001309
++
+ #define MSR_IA32_RTIT_CTL		0x00000570
+ #define RTIT_CTL_TRACEEN		BIT(0)
+ #define RTIT_CTL_CYCLEACC		BIT(1)
+diff --git a/arch/x86/kvm/vmx/pmu_intel.c b/arch/x86/kvm/vmx/pmu_intel.c
+index fc79cc6..ebd3efc 100644
+--- a/arch/x86/kvm/vmx/pmu_intel.c
++++ b/arch/x86/kvm/vmx/pmu_intel.c
+@@ -175,7 +175,9 @@ static bool intel_is_valid_msr(struct kvm_vcpu *vcpu, u32 msr)
+ 	default:
+ 		ret = get_gp_pmc(pmu, msr, MSR_IA32_PERFCTR0) ||
+ 			get_gp_pmc(pmu, msr, MSR_P6_EVNTSEL0) ||
+-			get_fixed_pmc(pmu, msr, MSR_CORE_PERF_FIXED_CTR0);
++			get_fixed_pmc(pmu, msr, MSR_CORE_PERF_FIXED_CTR0) ||
++			get_gp_pmc(pmu, msr, MSR_IA32_RELOAD_PMC0) ||
++			get_fixed_pmc(pmu, msr, MSR_IA32_RELOAD_FIXED_CTR0);
+ 		break;
+ 	}
+ 
+@@ -216,6 +218,11 @@ static int intel_pmu_get_msr(struct kvm_vcpu *vcpu, u32 msr, u64 *data)
+ 		} else if ((pmc = get_gp_pmc(pmu, msr, MSR_P6_EVNTSEL0))) {
+ 			*data = pmc->eventsel;
+ 			return 0;
++		} else if ((pmc = get_gp_pmc(pmu, msr, MSR_IA32_RELOAD_PMC0)) ||
++			   (pmc = get_fixed_pmc(pmu, msr,
++						MSR_IA32_RELOAD_FIXED_CTR0))) {
++			*data = pmc->reload_cnt;
++			return 0;
+ 		}
+ 	}
+ 
+@@ -288,6 +295,19 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 				reprogram_gp_counter(pmc, data);
+ 				return 0;
+ 			}
++		} else if ((pmc = get_gp_pmc(pmu, msr, MSR_IA32_RELOAD_PMC0)) ||
++			   (pmc = get_fixed_pmc(pmu, msr,
++						MSR_IA32_RELOAD_FIXED_CTR0))) {
++			if (data == pmc->reload_cnt)
++				return 0;
++			if (!(data & ~pmc_bitmask(pmc))) {
++				int pmc_idx = pmc_is_fixed(pmc) ?
++					pmc->idx + INTEL_PMC_IDX_FIXED :
++								pmc->idx;
++				pmc->reload_cnt = data;
++				reprogram_counter(pmu, pmc_idx);
++				return 0;
++			}
+ 		}
+ 	}
+ 
+
+From patchwork Thu Aug 29 05:34:05 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Kang, Luwei" <luwei.kang@intel.com>
+X-Patchwork-Id: 11120333
+Return-Path: <SRS0=pZ1+=WZ=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9D1FE184E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:39:17 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 86A0F2341B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:39:17 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727608AbfH2FjQ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 29 Aug 2019 01:39:16 -0400
+Received: from mga17.intel.com ([192.55.52.151]:42121 "EHLO mga17.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727603AbfH2FjQ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 29 Aug 2019 01:39:16 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by fmsmga107.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Aug 2019 22:39:15 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.64,442,1559545200";
+   d="scan'208";a="210416267"
+Received: from icl-2s.bj.intel.com ([10.240.193.48])
+  by fmsmga002.fm.intel.com with ESMTP; 28 Aug 2019 22:39:12 -0700
+From: Luwei Kang <luwei.kang@intel.com>
+To: pbonzini@redhat.com, rkrcmar@redhat.com
+Cc: sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        tglx@linutronix.de, mingo@redhat.com, bp@alien8.de, hpa@zytor.com,
+        x86@kernel.org, ak@linux.intel.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Luwei Kang <luwei.kang@intel.com>
+Subject: [RFC v1 5/9] KVM: x86: Allocate performance counter for PEBS event
+Date: Thu, 29 Aug 2019 13:34:05 +0800
+Message-Id: <1567056849-14608-6-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+References: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This patch add a new parameter "pebs" that to make the host
+PMU framework allocate performance counter for guest PEBS event.
+
+Signed-off-by: Luwei Kang <luwei.kang@intel.com>
+---
+ arch/x86/kvm/pmu.c           | 23 +++++++++++++++--------
+ arch/x86/kvm/pmu.h           |  5 +++--
+ arch/x86/kvm/pmu_amd.c       |  2 +-
+ arch/x86/kvm/vmx/pmu_intel.c |  7 +++++--
+ 4 files changed, 24 insertions(+), 13 deletions(-)
+
+diff --git a/arch/x86/kvm/pmu.c b/arch/x86/kvm/pmu.c
+index 46875bb..6bdc282 100644
+--- a/arch/x86/kvm/pmu.c
++++ b/arch/x86/kvm/pmu.c
+@@ -99,7 +99,7 @@ static void kvm_perf_overflow_intr(struct perf_event *perf_event,
+ static void pmc_reprogram_counter(struct kvm_pmc *pmc, u32 type,
+ 				  unsigned config, bool exclude_user,
+ 				  bool exclude_kernel, bool intr,
+-				  bool in_tx, bool in_tx_cp)
++				  bool in_tx, bool in_tx_cp, bool pebs)
+ {
+ 	struct perf_event *event;
+ 	struct perf_event_attr attr = {
+@@ -111,9 +111,12 @@ static void pmc_reprogram_counter(struct kvm_pmc *pmc, u32 type,
+ 		.exclude_user = exclude_user,
+ 		.exclude_kernel = exclude_kernel,
+ 		.config = config,
++		.precise_ip = pebs ? 1 : 0,
++		.aux_output = pebs ? 1 : 0,
+ 	};
+ 
+-	attr.sample_period = (-pmc->counter) & pmc_bitmask(pmc);
++	attr.sample_period = pebs ? (-pmc->reload_cnt) & pmc_bitmask(pmc) :
++					(-pmc->counter) & pmc_bitmask(pmc);
+ 
+ 	if (in_tx)
+ 		attr.config |= HSW_IN_TX;
+@@ -140,7 +143,7 @@ static void pmc_reprogram_counter(struct kvm_pmc *pmc, u32 type,
+ 	clear_bit(pmc->idx, (unsigned long*)&pmc_to_pmu(pmc)->reprogram_pmi);
+ }
+ 
+-void reprogram_gp_counter(struct kvm_pmc *pmc, u64 eventsel)
++void reprogram_gp_counter(struct kvm_pmc *pmc, u64 eventsel, bool pebs)
+ {
+ 	unsigned config, type = PERF_TYPE_RAW;
+ 	u8 event_select, unit_mask;
+@@ -198,11 +201,12 @@ void reprogram_gp_counter(struct kvm_pmc *pmc, u64 eventsel)
+ 			      !(eventsel & ARCH_PERFMON_EVENTSEL_OS),
+ 			      eventsel & ARCH_PERFMON_EVENTSEL_INT,
+ 			      (eventsel & HSW_IN_TX),
+-			      (eventsel & HSW_IN_TX_CHECKPOINTED));
++			      (eventsel & HSW_IN_TX_CHECKPOINTED),
++			      pebs);
+ }
+ EXPORT_SYMBOL_GPL(reprogram_gp_counter);
+ 
+-void reprogram_fixed_counter(struct kvm_pmc *pmc, u8 ctrl, int idx)
++void reprogram_fixed_counter(struct kvm_pmc *pmc, u8 ctrl, int idx, bool pebs)
+ {
+ 	unsigned en_field = ctrl & 0x3;
+ 	bool pmi = ctrl & 0x8;
+@@ -228,7 +232,8 @@ void reprogram_fixed_counter(struct kvm_pmc *pmc, u8 ctrl, int idx)
+ 			      kvm_x86_ops->pmu_ops->find_fixed_event(idx),
+ 			      !(en_field & 0x2), /* exclude user */
+ 			      !(en_field & 0x1), /* exclude kernel */
+-			      pmi, false, false);
++			      pmi, false, false,
++			      pebs);
+ }
+ EXPORT_SYMBOL_GPL(reprogram_fixed_counter);
+ 
+@@ -240,12 +245,14 @@ void reprogram_counter(struct kvm_pmu *pmu, int pmc_idx)
+ 		return;
+ 
+ 	if (pmc_is_gp(pmc))
+-		reprogram_gp_counter(pmc, pmc->eventsel);
++		reprogram_gp_counter(pmc, pmc->eventsel,
++				(pmu->pebs_enable & (1ul << pmc_idx)));
+ 	else {
+ 		int idx = pmc_idx - INTEL_PMC_IDX_FIXED;
+ 		u8 ctrl = fixed_ctrl_field(pmu->fixed_ctr_ctrl, idx);
+ 
+-		reprogram_fixed_counter(pmc, ctrl, idx);
++		reprogram_fixed_counter(pmc, ctrl, idx,
++				(pmu->pebs_enable & (1ul << pmc_idx)));
+ 	}
+ }
+ EXPORT_SYMBOL_GPL(reprogram_counter);
+diff --git a/arch/x86/kvm/pmu.h b/arch/x86/kvm/pmu.h
+index c62a1ff..0c59a15 100644
+--- a/arch/x86/kvm/pmu.h
++++ b/arch/x86/kvm/pmu.h
+@@ -102,8 +102,9 @@ static inline struct kvm_pmc *get_fixed_pmc(struct kvm_pmu *pmu, u32 msr,
+ 	return NULL;
+ }
+ 
+-void reprogram_gp_counter(struct kvm_pmc *pmc, u64 eventsel);
+-void reprogram_fixed_counter(struct kvm_pmc *pmc, u8 ctrl, int fixed_idx);
++void reprogram_gp_counter(struct kvm_pmc *pmc, u64 eventsel, bool pebs);
++void reprogram_fixed_counter(struct kvm_pmc *pmc, u8 ctrl, int fixed_idx,
++								bool pebs);
+ void reprogram_counter(struct kvm_pmu *pmu, int pmc_idx);
+ 
+ void kvm_pmu_deliver_pmi(struct kvm_vcpu *vcpu);
+diff --git a/arch/x86/kvm/pmu_amd.c b/arch/x86/kvm/pmu_amd.c
+index c838838..7b3e307 100644
+--- a/arch/x86/kvm/pmu_amd.c
++++ b/arch/x86/kvm/pmu_amd.c
+@@ -248,7 +248,7 @@ static int amd_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 		if (data == pmc->eventsel)
+ 			return 0;
+ 		if (!(data & pmu->reserved_bits)) {
+-			reprogram_gp_counter(pmc, data);
++			reprogram_gp_counter(pmc, data, false);
+ 			return 0;
+ 		}
+ 	}
+diff --git a/arch/x86/kvm/vmx/pmu_intel.c b/arch/x86/kvm/vmx/pmu_intel.c
+index ebd3efc..1dea0cf 100644
+--- a/arch/x86/kvm/vmx/pmu_intel.c
++++ b/arch/x86/kvm/vmx/pmu_intel.c
+@@ -48,7 +48,8 @@ static void reprogram_fixed_counters(struct kvm_pmu *pmu, u64 data)
+ 		if (old_ctrl == new_ctrl)
+ 			continue;
+ 
+-		reprogram_fixed_counter(pmc, new_ctrl, i);
++		reprogram_fixed_counter(pmc, new_ctrl, i, (pmu->pebs_enable &
++					(1ul << (i + INTEL_PMC_IDX_FIXED))));
+ 	}
+ 
+ 	pmu->fixed_ctr_ctrl = data;
+@@ -292,7 +293,9 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 			if (data == pmc->eventsel)
+ 				return 0;
+ 			if (!(data & pmu->reserved_bits)) {
+-				reprogram_gp_counter(pmc, data);
++				reprogram_gp_counter(pmc, data,
++					(pmu->pebs_enable &
++					(1ul << (msr - MSR_P6_EVNTSEL0))));
+ 				return 0;
+ 			}
+ 		} else if ((pmc = get_gp_pmc(pmu, msr, MSR_IA32_RELOAD_PMC0)) ||
+
+From patchwork Thu Aug 29 05:34:06 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Kang, Luwei" <luwei.kang@intel.com>
+X-Patchwork-Id: 11120335
+Return-Path: <SRS0=pZ1+=WZ=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 199CB1395
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:39:25 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 03A8423403
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:39:25 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727647AbfH2FjU (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 29 Aug 2019 01:39:20 -0400
+Received: from mga17.intel.com ([192.55.52.151]:42165 "EHLO mga17.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727603AbfH2FjU (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 29 Aug 2019 01:39:20 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by fmsmga107.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Aug 2019 22:39:19 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.64,442,1559545200";
+   d="scan'208";a="210416286"
+Received: from icl-2s.bj.intel.com ([10.240.193.48])
+  by fmsmga002.fm.intel.com with ESMTP; 28 Aug 2019 22:39:16 -0700
+From: Luwei Kang <luwei.kang@intel.com>
+To: pbonzini@redhat.com, rkrcmar@redhat.com
+Cc: sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        tglx@linutronix.de, mingo@redhat.com, bp@alien8.de, hpa@zytor.com,
+        x86@kernel.org, ak@linux.intel.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Luwei Kang <luwei.kang@intel.com>
+Subject: [RFC v1 6/9] KVM: x86: Add shadow value of PEBS status
+Date: Thu, 29 Aug 2019 13:34:06 +0800
+Message-Id: <1567056849-14608-7-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+References: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The performance counter used by guest perspective may different
+with the counter allocated from real hardware (e.g. Guest driver
+get counter 0 for PEBS but the host PMU driver may alloc other
+counters for this event).
+
+Introduce a new parameter for the mapping of PEBS enable status from
+guest to real hardware. Update the shadow value of PEBS before
+VM-entry when PT is enabled in guest.
+
+Signed-off-by: Luwei Kang <luwei.kang@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  1 +
+ arch/x86/kvm/pmu.c              | 34 ++++++++++++++++++++++++++++++++++
+ arch/x86/kvm/pmu.h              |  1 +
+ arch/x86/kvm/vmx/vmx.c          |  8 +++++++-
+ 4 files changed, 43 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 9b930b5..07d3b21 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -473,6 +473,7 @@ struct kvm_pmu {
+ 	u64 global_ovf_ctrl_mask;
+ 	u64 reserved_bits;
+ 	u64 pebs_enable;
++	u64 pebs_enable_shadow;
+ 	u64 pebs_enable_mask;
+ 	u8 version;
+ 	bool pebs_pt;	/* PEBS output to Intel PT */
+diff --git a/arch/x86/kvm/pmu.c b/arch/x86/kvm/pmu.c
+index 6bdc282..89d3e4c 100644
+--- a/arch/x86/kvm/pmu.c
++++ b/arch/x86/kvm/pmu.c
+@@ -257,6 +257,40 @@ void reprogram_counter(struct kvm_pmu *pmu, int pmc_idx)
+ }
+ EXPORT_SYMBOL_GPL(reprogram_counter);
+ 
++void kvm_pmu_pebs_shadow(struct kvm_vcpu *vcpu)
++{
++	struct kvm_pmu *pmu = vcpu_to_pmu(vcpu);
++	struct perf_event *event;
++	int i;
++
++	if (!pmu->pebs_pt)
++		return;
++
++	pmu->pebs_enable_shadow = MSR_IA32_PEBS_OUTPUT_PT;
++
++	for (i = 0; i < pmu->nr_arch_gp_counters; i++) {
++		if (!test_bit(i, (unsigned long *)&pmu->pebs_enable))
++			continue;
++
++		event = pmu->gp_counters[i].perf_event;
++		if (event && (event->hw.idx != -1))
++			set_bit(event->hw.idx,
++				(unsigned long *)&pmu->pebs_enable_shadow);
++	}
++
++	for (i = 0; i < pmu->nr_arch_fixed_counters; i++) {
++		if (!test_bit(i + INTEL_PMC_IDX_FIXED,
++					(unsigned long *)&pmu->pebs_enable))
++			continue;
++
++		event = pmu->fixed_counters[i].perf_event;
++		if (event && (event->hw.idx != -1))
++			set_bit(event->hw.idx,
++				(unsigned long *)&pmu->pebs_enable_shadow);
++	}
++}
++EXPORT_SYMBOL_GPL(kvm_pmu_pebs_shadow);
++
+ void kvm_pmu_handle_event(struct kvm_vcpu *vcpu)
+ {
+ 	struct kvm_pmu *pmu = vcpu_to_pmu(vcpu);
+diff --git a/arch/x86/kvm/pmu.h b/arch/x86/kvm/pmu.h
+index 0c59a15..81c35c9 100644
+--- a/arch/x86/kvm/pmu.h
++++ b/arch/x86/kvm/pmu.h
+@@ -119,6 +119,7 @@ void reprogram_fixed_counter(struct kvm_pmc *pmc, u8 ctrl, int fixed_idx,
+ void kvm_pmu_init(struct kvm_vcpu *vcpu);
+ void kvm_pmu_destroy(struct kvm_vcpu *vcpu);
+ int kvm_vm_ioctl_set_pmu_event_filter(struct kvm *kvm, void __user *argp);
++void kvm_pmu_pebs_shadow(struct kvm_vcpu *vcpu);
+ 
+ bool is_vmware_backdoor_pmc(u32 pmc_idx);
+ 
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index c030c96..4090c08 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -1019,6 +1019,7 @@ static void pt_guest_enter(struct vcpu_vmx *vmx)
+ 		wrmsrl(MSR_IA32_RTIT_CTL, 0);
+ 		pt_save_msr(&vmx->pt_desc.host, vmx->pt_desc.addr_range);
+ 		pt_load_msr(&vmx->pt_desc.guest, vmx->pt_desc.addr_range);
++		kvm_pmu_pebs_shadow(&vmx->vcpu);
+ 	}
+ }
+ 
+@@ -6365,12 +6366,17 @@ static void atomic_switch_perf_msrs(struct vcpu_vmx *vmx)
+ 	if (!msrs)
+ 		return;
+ 
+-	for (i = 0; i < nr_msrs; i++)
++	for (i = 0; i < nr_msrs; i++) {
++		if (msrs[i].msr == MSR_IA32_PEBS_ENABLE)
++			msrs[i].guest =
++				vcpu_to_pmu(&vmx->vcpu)->pebs_enable_shadow;
++
+ 		if (msrs[i].host == msrs[i].guest)
+ 			clear_atomic_switch_msr(vmx, msrs[i].msr);
+ 		else
+ 			add_atomic_switch_msr(vmx, msrs[i].msr, msrs[i].guest,
+ 					msrs[i].host, false);
++	}
+ }
+ 
+ static void vmx_update_hv_timer(struct kvm_vcpu *vcpu)
+
+From patchwork Thu Aug 29 05:34:07 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Kang, Luwei" <luwei.kang@intel.com>
+X-Patchwork-Id: 11120337
+Return-Path: <SRS0=pZ1+=WZ=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 0DD7C1395
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:39:29 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id EBDAD233FF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:39:28 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727716AbfH2FjY (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 29 Aug 2019 01:39:24 -0400
+Received: from mga17.intel.com ([192.55.52.151]:42165 "EHLO mga17.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727361AbfH2FjY (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 29 Aug 2019 01:39:24 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by fmsmga107.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Aug 2019 22:39:23 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.64,442,1559545200";
+   d="scan'208";a="210416315"
+Received: from icl-2s.bj.intel.com ([10.240.193.48])
+  by fmsmga002.fm.intel.com with ESMTP; 28 Aug 2019 22:39:20 -0700
+From: Luwei Kang <luwei.kang@intel.com>
+To: pbonzini@redhat.com, rkrcmar@redhat.com
+Cc: sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        tglx@linutronix.de, mingo@redhat.com, bp@alien8.de, hpa@zytor.com,
+        x86@kernel.org, ak@linux.intel.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Luwei Kang <luwei.kang@intel.com>
+Subject: [RFC v1 7/9] KVM: X86: Expose PDCM cpuid to guest
+Date: Thu, 29 Aug 2019 13:34:07 +0800
+Message-Id: <1567056849-14608-8-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+References: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+PDCM (Perfmon and Debug Capability) indicates the processor
+supports the performance and debug feature indication
+MSR IA32_PERF_CAPABILITIES.
+
+PEBS enabling in KVM guest depend on PEBS via PT, and
+PEBS via PT is detected by IA32_PERF_CAPABILITIES[Bit16].
+
+Signed-off-by: Luwei Kang <luwei.kang@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  1 +
+ arch/x86/kvm/cpuid.c            |  3 ++-
+ arch/x86/kvm/svm.c              |  6 ++++++
+ arch/x86/kvm/vmx/capabilities.h | 10 ++++++++++
+ arch/x86/kvm/vmx/vmx.c          |  1 +
+ 5 files changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 07d3b21..2d9b0f9 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1129,6 +1129,7 @@ struct kvm_x86_ops {
+ 	bool (*xsaves_supported)(void);
+ 	bool (*umip_emulated)(void);
+ 	bool (*pt_supported)(void);
++	bool (*pdcm_supported)(void);
+ 
+ 	int (*check_nested_events)(struct kvm_vcpu *vcpu, bool external_intr);
+ 	void (*request_immediate_exit)(struct kvm_vcpu *vcpu);
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 22c2720..d12e7af 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -430,6 +430,7 @@ static inline int __do_cpuid_func(struct kvm_cpuid_entry2 *entry, u32 function,
+ 	unsigned f_rdtscp = kvm_x86_ops->rdtscp_supported() ? F(RDTSCP) : 0;
+ 	unsigned f_xsaves = kvm_x86_ops->xsaves_supported() ? F(XSAVES) : 0;
+ 	unsigned f_intel_pt = kvm_x86_ops->pt_supported() ? F(INTEL_PT) : 0;
++	unsigned f_pdcm = kvm_x86_ops->pdcm_supported() ? F(PDCM) : 0;
+ 
+ 	/* cpuid 1.edx */
+ 	const u32 kvm_cpuid_1_edx_x86_features =
+@@ -458,7 +459,7 @@ static inline int __do_cpuid_func(struct kvm_cpuid_entry2 *entry, u32 function,
+ 		F(XMM3) | F(PCLMULQDQ) | 0 /* DTES64, MONITOR */ |
+ 		0 /* DS-CPL, VMX, SMX, EST */ |
+ 		0 /* TM2 */ | F(SSSE3) | 0 /* CNXT-ID */ | 0 /* Reserved */ |
+-		F(FMA) | F(CX16) | 0 /* xTPR Update, PDCM */ |
++		F(FMA) | F(CX16) | 0 /* xTPR Update */ | f_pdcm |
+ 		F(PCID) | 0 /* Reserved, DCA */ | F(XMM4_1) |
+ 		F(XMM4_2) | F(X2APIC) | F(MOVBE) | F(POPCNT) |
+ 		0 /* Reserved*/ | F(AES) | F(XSAVE) | 0 /* OSXSAVE */ | F(AVX) |
+diff --git a/arch/x86/kvm/svm.c b/arch/x86/kvm/svm.c
+index e036807..8ae6716 100644
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -6005,6 +6005,11 @@ static bool svm_pt_supported(void)
+ 	return false;
+ }
+ 
++static bool svm_pdcm_supported(void)
++{
++	return false;
++}
++
+ static bool svm_has_wbinvd_exit(void)
+ {
+ 	return true;
+@@ -7293,6 +7298,7 @@ static bool svm_need_emulation_on_page_fault(struct kvm_vcpu *vcpu)
+ 	.xsaves_supported = svm_xsaves_supported,
+ 	.umip_emulated = svm_umip_emulated,
+ 	.pt_supported = svm_pt_supported,
++	.pdcm_supported = svm_pdcm_supported,
+ 
+ 	.set_supported_cpuid = svm_set_supported_cpuid,
+ 
+diff --git a/arch/x86/kvm/vmx/capabilities.h b/arch/x86/kvm/vmx/capabilities.h
+index 4bcb6b4..82ca51d 100644
+--- a/arch/x86/kvm/vmx/capabilities.h
++++ b/arch/x86/kvm/vmx/capabilities.h
+@@ -353,4 +353,14 @@ static inline bool cpu_has_vmx_pebs_output_pt(void)
+ 		(perf_cap & MSR_IA32_PERF_CAP_PEBS_OUTPUT_PT));
+ }
+ 
++static inline bool vmx_pebs_supported(void)
++{
++	return (cpu_has_vmx_pebs_output_pt() && pt_mode == PT_MODE_HOST_GUEST);
++}
++
++static inline bool vmx_pdcm_supported(void)
++{
++	return boot_cpu_has(X86_FEATURE_PDCM) && vmx_pebs_supported();
++}
++
+ #endif /* __KVM_X86_VMX_CAPS_H */
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 4090c08..dbff8f0 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -7768,6 +7768,7 @@ static __exit void hardware_unsetup(void)
+ 	.xsaves_supported = vmx_xsaves_supported,
+ 	.umip_emulated = vmx_umip_emulated,
+ 	.pt_supported = vmx_pt_supported,
++	.pdcm_supported = vmx_pdcm_supported,
+ 
+ 	.request_immediate_exit = vmx_request_immediate_exit,
+ 
+
+From patchwork Thu Aug 29 05:34:08 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Kang, Luwei" <luwei.kang@intel.com>
+X-Patchwork-Id: 11120341
+Return-Path: <SRS0=pZ1+=WZ=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id F31BF14D5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:39:36 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id DDCA5233FF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:39:36 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727751AbfH2Fj2 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 29 Aug 2019 01:39:28 -0400
+Received: from mga17.intel.com ([192.55.52.151]:42165 "EHLO mga17.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727736AbfH2Fj1 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 29 Aug 2019 01:39:27 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by fmsmga107.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Aug 2019 22:39:27 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.64,442,1559545200";
+   d="scan'208";a="210416346"
+Received: from icl-2s.bj.intel.com ([10.240.193.48])
+  by fmsmga002.fm.intel.com with ESMTP; 28 Aug 2019 22:39:24 -0700
+From: Luwei Kang <luwei.kang@intel.com>
+To: pbonzini@redhat.com, rkrcmar@redhat.com
+Cc: sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        tglx@linutronix.de, mingo@redhat.com, bp@alien8.de, hpa@zytor.com,
+        x86@kernel.org, ak@linux.intel.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Luwei Kang <luwei.kang@intel.com>
+Subject: [RFC v1 8/9] KVM: X86: MSR_IA32_PERF_CAPABILITIES MSR emulation
+Date: Thu, 29 Aug 2019 13:34:08 +0800
+Message-Id: <1567056849-14608-9-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+References: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Expose some bits of definition which relate with enable
+PEBS to KVM guest especially PEBS via PT feature.
+
+Signed-off-by: Luwei Kang <luwei.kang@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h  |  1 +
+ arch/x86/include/asm/msr-index.h |  3 +++
+ arch/x86/kvm/vmx/vmx.c           | 14 ++++++++++++++
+ 3 files changed, 18 insertions(+)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 2d9b0f9..94af338 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -576,6 +576,7 @@ struct kvm_vcpu_arch {
+ 	u64 ia32_xss;
+ 	u64 microcode_version;
+ 	u64 arch_capabilities;
++	u64 ia32_perf_capabilities;
+ 
+ 	/*
+ 	 * Paging state of the vcpu
+diff --git a/arch/x86/include/asm/msr-index.h b/arch/x86/include/asm/msr-index.h
+index 6321acb..4932dec 100644
+--- a/arch/x86/include/asm/msr-index.h
++++ b/arch/x86/include/asm/msr-index.h
+@@ -137,6 +137,9 @@
+ #define MSR_IA32_PEBS_ENABLE		0x000003f1
+ #define MSR_PEBS_DATA_CFG		0x000003f2
+ #define MSR_IA32_DS_AREA		0x00000600
++#define MSR_IA32_PERF_CAP_PEBS_TRAP	(1UL << 6)
++#define MSR_IA32_PERF_CAP_PEBS_ARCH_REG	(1UL << 7)
++#define MSR_IA32_PERF_CAP_PEBS_REC_FMT	(0xfUL << 8)
+ #define MSR_IA32_PERF_CAP_PEBS_OUTPUT_PT	(1UL << 16)
+ #define MSR_IA32_PERF_CAPABILITIES	0x00000345
+ #define MSR_PEBS_LD_LAT_THRESHOLD	0x000003f6
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index dbff8f0..71e3d42 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -1737,6 +1737,16 @@ static int vmx_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 			return 1;
+ 		msr_info->data = vcpu->arch.ia32_xss;
+ 		break;
++	case MSR_IA32_PERF_CAPABILITIES:
++		if (!vmx_pdcm_supported() || !vmx_pebs_supported())
++			return 1;
++		rdmsrl(MSR_IA32_PERF_CAPABILITIES, msr_info->data);
++		msr_info->data = msr_info->data &
++			(MSR_IA32_PERF_CAP_PEBS_TRAP |
++			 MSR_IA32_PERF_CAP_PEBS_ARCH_REG |
++			 MSR_IA32_PERF_CAP_PEBS_REC_FMT |
++			 MSR_IA32_PERF_CAP_PEBS_OUTPUT_PT);
++		break;
+ 	case MSR_IA32_RTIT_CTL:
+ 		if (pt_mode != PT_MODE_HOST_GUEST)
+ 			return 1;
+@@ -1981,6 +1991,10 @@ static int vmx_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 		else
+ 			clear_atomic_switch_msr(vmx, MSR_IA32_XSS);
+ 		break;
++	case MSR_IA32_PERF_CAPABILITIES:
++		if (!vmx_pdcm_supported() || !vmx_pebs_supported())
++			return 1;
++		break;
+ 	case MSR_IA32_RTIT_CTL:
+ 		if ((pt_mode != PT_MODE_HOST_GUEST) ||
+ 			vmx_rtit_ctl_check(vcpu, data) ||
+
+From patchwork Thu Aug 29 05:34:09 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Kang, Luwei" <luwei.kang@intel.com>
+X-Patchwork-Id: 11120339
+Return-Path: <SRS0=pZ1+=WZ=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 080A514D5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:39:36 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id E59572189D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 29 Aug 2019 05:39:35 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727779AbfH2Fjc (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 29 Aug 2019 01:39:32 -0400
+Received: from mga17.intel.com ([192.55.52.151]:42165 "EHLO mga17.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727701AbfH2Fjb (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 29 Aug 2019 01:39:31 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by fmsmga107.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 28 Aug 2019 22:39:31 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.64,442,1559545200";
+   d="scan'208";a="210416373"
+Received: from icl-2s.bj.intel.com ([10.240.193.48])
+  by fmsmga002.fm.intel.com with ESMTP; 28 Aug 2019 22:39:28 -0700
+From: Luwei Kang <luwei.kang@intel.com>
+To: pbonzini@redhat.com, rkrcmar@redhat.com
+Cc: sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        tglx@linutronix.de, mingo@redhat.com, bp@alien8.de, hpa@zytor.com,
+        x86@kernel.org, ak@linux.intel.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Luwei Kang <luwei.kang@intel.com>
+Subject: [RFC v1 9/9] KVM: x86: Expose PEBS feature to guest
+Date: Thu, 29 Aug 2019 13:34:09 +0800
+Message-Id: <1567056849-14608-10-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+References: <1567056849-14608-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Expose PEBS feature to guest by IA32_MISC_ENABLE[bit12].
+IA32_MISC_ENABLE[bit12] is Processor Event Based Sampling (PEBS)
+Unavailable (RO) flag:
+1 = PEBS is not supported; 0 = PEBS is supported.
+
+Signed-off-by: Luwei Kang <luwei.kang@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  1 +
+ arch/x86/kvm/svm.c              |  6 ++++++
+ arch/x86/kvm/vmx/vmx.c          |  1 +
+ arch/x86/kvm/x86.c              | 22 +++++++++++++++++-----
+ 4 files changed, 25 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 94af338..f6a5630 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1130,6 +1130,7 @@ struct kvm_x86_ops {
+ 	bool (*xsaves_supported)(void);
+ 	bool (*umip_emulated)(void);
+ 	bool (*pt_supported)(void);
++	bool (*pebs_supported)(void);
+ 	bool (*pdcm_supported)(void);
+ 
+ 	int (*check_nested_events)(struct kvm_vcpu *vcpu, bool external_intr);
+diff --git a/arch/x86/kvm/svm.c b/arch/x86/kvm/svm.c
+index 8ae6716..2b271fc 100644
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -6005,6 +6005,11 @@ static bool svm_pt_supported(void)
+ 	return false;
+ }
+ 
++static bool svm_pebs_supported(void)
++{
++	return false;
++}
++
+ static bool svm_pdcm_supported(void)
+ {
+ 	return false;
+@@ -7298,6 +7303,7 @@ static bool svm_need_emulation_on_page_fault(struct kvm_vcpu *vcpu)
+ 	.xsaves_supported = svm_xsaves_supported,
+ 	.umip_emulated = svm_umip_emulated,
+ 	.pt_supported = svm_pt_supported,
++	.pebs_supported = svm_pebs_supported,
+ 	.pdcm_supported = svm_pdcm_supported,
+ 
+ 	.set_supported_cpuid = svm_set_supported_cpuid,
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 71e3d42..d85f19b 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -7782,6 +7782,7 @@ static __exit void hardware_unsetup(void)
+ 	.xsaves_supported = vmx_xsaves_supported,
+ 	.umip_emulated = vmx_umip_emulated,
+ 	.pt_supported = vmx_pt_supported,
++	.pebs_supported = vmx_pebs_supported,
+ 	.pdcm_supported = vmx_pdcm_supported,
+ 
+ 	.request_immediate_exit = vmx_request_immediate_exit,
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 290c3c3..8ad501d 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -2483,6 +2483,7 @@ static void record_steal_time(struct kvm_vcpu *vcpu)
+ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ {
+ 	bool pr = false;
++	bool update_cpuid = false;
+ 	u32 msr = msr_info->index;
+ 	u64 data = msr_info->data;
+ 
+@@ -2563,11 +2564,17 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 		    ((vcpu->arch.ia32_misc_enable_msr ^ data) & MSR_IA32_MISC_ENABLE_MWAIT)) {
+ 			if (!guest_cpuid_has(vcpu, X86_FEATURE_XMM3))
+ 				return 1;
+-			vcpu->arch.ia32_misc_enable_msr = data;
+-			kvm_update_cpuid(vcpu);
+-		} else {
+-			vcpu->arch.ia32_misc_enable_msr = data;
++			update_cpuid = true;
+ 		}
++
++		if (kvm_x86_ops->pebs_supported())
++			data &=  ~MSR_IA32_MISC_ENABLE_PEBS;
++		else
++			data |= MSR_IA32_MISC_ENABLE_PEBS;
++
++		vcpu->arch.ia32_misc_enable_msr = data;
++		if (update_cpuid)
++			kvm_update_cpuid(vcpu);
+ 		break;
+ 	case MSR_IA32_SMBASE:
+ 		if (!msr_info->host_initiated)
+@@ -2875,7 +2882,12 @@ int kvm_get_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 		msr_info->data = (u64)vcpu->arch.ia32_tsc_adjust_msr;
+ 		break;
+ 	case MSR_IA32_MISC_ENABLE:
+-		msr_info->data = vcpu->arch.ia32_misc_enable_msr;
++		if (kvm_x86_ops->pebs_supported())
++			msr_info->data = (vcpu->arch.ia32_misc_enable_msr &
++						~MSR_IA32_MISC_ENABLE_PEBS);
++		else
++			msr_info->data = (vcpu->arch.ia32_misc_enable_msr |
++						MSR_IA32_MISC_ENABLE_PEBS);
+ 		break;
+ 	case MSR_IA32_SMBASE:
+ 		if (!msr_info->host_initiated)
