@@ -1,0 +1,2342 @@
+From patchwork Mon Sep  9 13:47:51 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137957
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 835C014E5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:48:55 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 626C320828
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:48:55 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036935;
+	bh=4yZn87fpEEnXq5D1OD3Q0UBfkHK4SN/5Z2OkawoffDA=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=FL4TPOFvgVCaNtL7K/aRJ2EkUPnblyqxxZlw4ijHeJ3WAQWmihcqiS+VB6h7RE1/a
+	 1s3LvDHNSM8B6m3PSs7HeJMLhQAyrwncs3MIzlrCUHNCnFxrlc3+lYzvvF7gWhaEnY
+	 AZG5XA7EfO7rMpA8uZMq7dJ8eOGvjpHqbf+aMOzc=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731219AbfIINsy (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:48:54 -0400
+Received: from foss.arm.com ([217.140.110.172]:50504 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727854AbfIINsx (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:48:53 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 21E221570;
+        Mon,  9 Sep 2019 06:48:53 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ BFB6F3F59C;
+        Mon,  9 Sep 2019 06:48:50 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 01/17] KVM: arm/arm64: vgic: Add LPI translation cache
+ definition
+Date: Mon,  9 Sep 2019 14:47:51 +0100
+Message-Id: <20190909134807.27978-2-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Add the basic data structure that expresses an MSI to LPI
+translation as well as the allocation/release hooks.
+
+The size of the cache is arbitrarily defined as 16*nr_vcpus.
+
+Tested-by: Andre Przywara <andre.przywara@arm.com>
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ include/kvm/arm_vgic.h        |  3 +++
+ virt/kvm/arm/vgic/vgic-init.c |  5 ++++
+ virt/kvm/arm/vgic/vgic-its.c  | 49 +++++++++++++++++++++++++++++++++++
+ virt/kvm/arm/vgic/vgic.h      |  2 ++
+ 4 files changed, 59 insertions(+)
+
+diff --git a/include/kvm/arm_vgic.h b/include/kvm/arm_vgic.h
+index 7a30524a80ee..ded50a30e2d5 100644
+--- a/include/kvm/arm_vgic.h
++++ b/include/kvm/arm_vgic.h
+@@ -249,6 +249,9 @@ struct vgic_dist {
+ 	struct list_head	lpi_list_head;
+ 	int			lpi_list_count;
+ 
++	/* LPI translation cache */
++	struct list_head	lpi_translation_cache;
++
+ 	/* used by vgic-debug */
+ 	struct vgic_state_iter *iter;
+ 
+diff --git a/virt/kvm/arm/vgic/vgic-init.c b/virt/kvm/arm/vgic/vgic-init.c
+index bdbc297d06fb..80127ca9269f 100644
+--- a/virt/kvm/arm/vgic/vgic-init.c
++++ b/virt/kvm/arm/vgic/vgic-init.c
+@@ -53,6 +53,7 @@ void kvm_vgic_early_init(struct kvm *kvm)
+ 	struct vgic_dist *dist = &kvm->arch.vgic;
+ 
+ 	INIT_LIST_HEAD(&dist->lpi_list_head);
++	INIT_LIST_HEAD(&dist->lpi_translation_cache);
+ 	raw_spin_lock_init(&dist->lpi_list_lock);
+ }
+ 
+@@ -294,6 +295,7 @@ int vgic_init(struct kvm *kvm)
+ 	}
+ 
+ 	if (vgic_has_its(kvm)) {
++		vgic_lpi_translation_cache_init(kvm);
+ 		ret = vgic_v4_init(kvm);
+ 		if (ret)
+ 			goto out;
+@@ -335,6 +337,9 @@ static void kvm_vgic_dist_destroy(struct kvm *kvm)
+ 		INIT_LIST_HEAD(&dist->rd_regions);
+ 	}
+ 
++	if (vgic_has_its(kvm))
++		vgic_lpi_translation_cache_destroy(kvm);
++
+ 	if (vgic_supports_direct_msis(kvm))
+ 		vgic_v4_teardown(kvm);
+ }
+diff --git a/virt/kvm/arm/vgic/vgic-its.c b/virt/kvm/arm/vgic/vgic-its.c
+index 482036612adf..0e5c1519bbe2 100644
+--- a/virt/kvm/arm/vgic/vgic-its.c
++++ b/virt/kvm/arm/vgic/vgic-its.c
+@@ -138,6 +138,14 @@ struct its_ite {
+ 	u32 event_id;
+ };
+ 
++struct vgic_translation_cache_entry {
++	struct list_head	entry;
++	phys_addr_t		db;
++	u32			devid;
++	u32			eventid;
++	struct vgic_irq		*irq;
++};
++
+ /**
+  * struct vgic_its_abi - ITS abi ops and settings
+  * @cte_esz: collection table entry size
+@@ -1657,6 +1665,45 @@ static int vgic_register_its_iodev(struct kvm *kvm, struct vgic_its *its,
+ 	return ret;
+ }
+ 
++/* Default is 16 cached LPIs per vcpu */
++#define LPI_DEFAULT_PCPU_CACHE_SIZE	16
++
++void vgic_lpi_translation_cache_init(struct kvm *kvm)
++{
++	struct vgic_dist *dist = &kvm->arch.vgic;
++	unsigned int sz;
++	int i;
++
++	if (!list_empty(&dist->lpi_translation_cache))
++		return;
++
++	sz = atomic_read(&kvm->online_vcpus) * LPI_DEFAULT_PCPU_CACHE_SIZE;
++
++	for (i = 0; i < sz; i++) {
++		struct vgic_translation_cache_entry *cte;
++
++		/* An allocation failure is not fatal */
++		cte = kzalloc(sizeof(*cte), GFP_KERNEL);
++		if (WARN_ON(!cte))
++			break;
++
++		INIT_LIST_HEAD(&cte->entry);
++		list_add(&cte->entry, &dist->lpi_translation_cache);
++	}
++}
++
++void vgic_lpi_translation_cache_destroy(struct kvm *kvm)
++{
++	struct vgic_dist *dist = &kvm->arch.vgic;
++	struct vgic_translation_cache_entry *cte, *tmp;
++
++	list_for_each_entry_safe(cte, tmp,
++				 &dist->lpi_translation_cache, entry) {
++		list_del(&cte->entry);
++		kfree(cte);
++	}
++}
++
+ #define INITIAL_BASER_VALUE						  \
+ 	(GIC_BASER_CACHEABILITY(GITS_BASER, INNER, RaWb)		| \
+ 	 GIC_BASER_CACHEABILITY(GITS_BASER, OUTER, SameAsInner)		| \
+@@ -1685,6 +1732,8 @@ static int vgic_its_create(struct kvm_device *dev, u32 type)
+ 			kfree(its);
+ 			return ret;
+ 		}
++
++		vgic_lpi_translation_cache_init(dev->kvm);
+ 	}
+ 
+ 	mutex_init(&its->its_lock);
+diff --git a/virt/kvm/arm/vgic/vgic.h b/virt/kvm/arm/vgic/vgic.h
+index 797e05004d80..a25b790ffa4e 100644
+--- a/virt/kvm/arm/vgic/vgic.h
++++ b/virt/kvm/arm/vgic/vgic.h
+@@ -307,6 +307,8 @@ int vgic_copy_lpi_list(struct kvm *kvm, struct kvm_vcpu *vcpu, u32 **intid_ptr);
+ int vgic_its_resolve_lpi(struct kvm *kvm, struct vgic_its *its,
+ 			 u32 devid, u32 eventid, struct vgic_irq **irq);
+ struct vgic_its *vgic_msi_to_its(struct kvm *kvm, struct kvm_msi *msi);
++void vgic_lpi_translation_cache_init(struct kvm *kvm);
++void vgic_lpi_translation_cache_destroy(struct kvm *kvm);
+ 
+ bool vgic_supports_direct_msis(struct kvm *kvm);
+ int vgic_v4_init(struct kvm *kvm);
+
+From patchwork Mon Sep  9 13:47:52 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137961
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9F1D876
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:48:57 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 7D77D21A4C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:48:57 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036937;
+	bh=MihzNajMlZwfLxDWVCFUcFPY75/uj2TcsvHqecXvh5Q=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=HdxlIznGvUGxpdcGZkYNQ8sTaPaYooWBBZiOm8JTw6RaU/IrR3vdDLX5VqdZr41nI
+	 ax8Kq/VMFoIwRDITp4wyJcYNO5S7rArOuPcC0EWgnRccrBEXPi+U7zIC35UI+9hALT
+	 vZPvw44VgWrTVt0NNqfrgDrjI8aqHX7h8un1S72I=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731238AbfIINs4 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:48:56 -0400
+Received: from foss.arm.com ([217.140.110.172]:50522 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731232AbfIINs4 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:48:56 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id CE4141576;
+        Mon,  9 Sep 2019 06:48:55 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 74A993F59C;
+        Mon,  9 Sep 2019 06:48:53 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 02/17] KVM: arm/arm64: vgic: Add __vgic_put_lpi_locked
+ primitive
+Date: Mon,  9 Sep 2019 14:47:52 +0100
+Message-Id: <20190909134807.27978-3-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Our LPI translation cache needs to be able to drop the refcount
+on an LPI whilst already holding the lpi_list_lock.
+
+Let's add a new primitive for this.
+
+Tested-by: Andre Przywara <andre.przywara@arm.com>
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ virt/kvm/arm/vgic/vgic.c | 26 +++++++++++++++++---------
+ virt/kvm/arm/vgic/vgic.h |  1 +
+ 2 files changed, 18 insertions(+), 9 deletions(-)
+
+diff --git a/virt/kvm/arm/vgic/vgic.c b/virt/kvm/arm/vgic/vgic.c
+index 13d4b38a94ec..846bb680fd45 100644
+--- a/virt/kvm/arm/vgic/vgic.c
++++ b/virt/kvm/arm/vgic/vgic.c
+@@ -119,6 +119,22 @@ static void vgic_irq_release(struct kref *ref)
+ {
+ }
+ 
++/*
++ * Drop the refcount on the LPI. Must be called with lpi_list_lock held.
++ */
++void __vgic_put_lpi_locked(struct kvm *kvm, struct vgic_irq *irq)
++{
++	struct vgic_dist *dist = &kvm->arch.vgic;
++
++	if (!kref_put(&irq->refcount, vgic_irq_release))
++		return;
++
++	list_del(&irq->lpi_list);
++	dist->lpi_list_count--;
++
++	kfree(irq);
++}
++
+ void vgic_put_irq(struct kvm *kvm, struct vgic_irq *irq)
+ {
+ 	struct vgic_dist *dist = &kvm->arch.vgic;
+@@ -128,16 +144,8 @@ void vgic_put_irq(struct kvm *kvm, struct vgic_irq *irq)
+ 		return;
+ 
+ 	raw_spin_lock_irqsave(&dist->lpi_list_lock, flags);
+-	if (!kref_put(&irq->refcount, vgic_irq_release)) {
+-		raw_spin_unlock_irqrestore(&dist->lpi_list_lock, flags);
+-		return;
+-	};
+-
+-	list_del(&irq->lpi_list);
+-	dist->lpi_list_count--;
++	__vgic_put_lpi_locked(kvm, irq);
+ 	raw_spin_unlock_irqrestore(&dist->lpi_list_lock, flags);
+-
+-	kfree(irq);
+ }
+ 
+ void vgic_flush_pending_lpis(struct kvm_vcpu *vcpu)
+diff --git a/virt/kvm/arm/vgic/vgic.h b/virt/kvm/arm/vgic/vgic.h
+index a25b790ffa4e..8e9413e317b8 100644
+--- a/virt/kvm/arm/vgic/vgic.h
++++ b/virt/kvm/arm/vgic/vgic.h
+@@ -161,6 +161,7 @@ vgic_get_mmio_region(struct kvm_vcpu *vcpu, struct vgic_io_device *iodev,
+ 		     gpa_t addr, int len);
+ struct vgic_irq *vgic_get_irq(struct kvm *kvm, struct kvm_vcpu *vcpu,
+ 			      u32 intid);
++void __vgic_put_lpi_locked(struct kvm *kvm, struct vgic_irq *irq);
+ void vgic_put_irq(struct kvm *kvm, struct vgic_irq *irq);
+ bool vgic_get_phys_line_level(struct vgic_irq *irq);
+ void vgic_irq_set_phys_pending(struct vgic_irq *irq, bool pending);
+
+From patchwork Mon Sep  9 13:47:53 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137965
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 86F7B76
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:00 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 669E921D79
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:00 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036940;
+	bh=K9wmKv4fvg3Cc3ydquunMwFHjiARtHb7oyfRF8FzEr0=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=bM3w8yNmQogvI/UR+P50Hq122Gq8irNb8JcLywILceom3jhyXDaoh0HLZFD+xGolJ
+	 KONARkjWy3VQrBC4nuvqAPq62hZCmDCFOKUIhQAKIluMWFASEXjv/aMqfknD3ds2of
+	 ot3ocVdjRBNAg6IRwc6a0I++gfKWH4BtXaX5odIY=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731284AbfIINs7 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:48:59 -0400
+Received: from foss.arm.com ([217.140.110.172]:50540 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731246AbfIINs7 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:48:59 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 67FDD15BE;
+        Mon,  9 Sep 2019 06:48:58 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 27C403F59C;
+        Mon,  9 Sep 2019 06:48:56 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 03/17] KVM: arm/arm64: vgic-its: Add MSI-LPI translation cache
+ invalidation
+Date: Mon,  9 Sep 2019 14:47:53 +0100
+Message-Id: <20190909134807.27978-4-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+There's a number of cases where we need to invalidate the caching
+of translations, so let's add basic support for that.
+
+Tested-by: Andre Przywara <andre.przywara@arm.com>
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ virt/kvm/arm/vgic/vgic-its.c | 23 +++++++++++++++++++++++
+ virt/kvm/arm/vgic/vgic.h     |  1 +
+ 2 files changed, 24 insertions(+)
+
+diff --git a/virt/kvm/arm/vgic/vgic-its.c b/virt/kvm/arm/vgic/vgic-its.c
+index 0e5c1519bbe2..cc6b5e49a312 100644
+--- a/virt/kvm/arm/vgic/vgic-its.c
++++ b/virt/kvm/arm/vgic/vgic-its.c
+@@ -535,6 +535,29 @@ static unsigned long vgic_mmio_read_its_idregs(struct kvm *kvm,
+ 	return 0;
+ }
+ 
++void vgic_its_invalidate_cache(struct kvm *kvm)
++{
++	struct vgic_dist *dist = &kvm->arch.vgic;
++	struct vgic_translation_cache_entry *cte;
++	unsigned long flags;
++
++	raw_spin_lock_irqsave(&dist->lpi_list_lock, flags);
++
++	list_for_each_entry(cte, &dist->lpi_translation_cache, entry) {
++		/*
++		 * If we hit a NULL entry, there is nothing after this
++		 * point.
++		 */
++		if (!cte->irq)
++			break;
++
++		__vgic_put_lpi_locked(kvm, cte->irq);
++		cte->irq = NULL;
++	}
++
++	raw_spin_unlock_irqrestore(&dist->lpi_list_lock, flags);
++}
++
+ int vgic_its_resolve_lpi(struct kvm *kvm, struct vgic_its *its,
+ 			 u32 devid, u32 eventid, struct vgic_irq **irq)
+ {
+diff --git a/virt/kvm/arm/vgic/vgic.h b/virt/kvm/arm/vgic/vgic.h
+index 8e9413e317b8..c7fb4da2ab3b 100644
+--- a/virt/kvm/arm/vgic/vgic.h
++++ b/virt/kvm/arm/vgic/vgic.h
+@@ -310,6 +310,7 @@ int vgic_its_resolve_lpi(struct kvm *kvm, struct vgic_its *its,
+ struct vgic_its *vgic_msi_to_its(struct kvm *kvm, struct kvm_msi *msi);
+ void vgic_lpi_translation_cache_init(struct kvm *kvm);
+ void vgic_lpi_translation_cache_destroy(struct kvm *kvm);
++void vgic_its_invalidate_cache(struct kvm *kvm);
+ 
+ bool vgic_supports_direct_msis(struct kvm *kvm);
+ int vgic_v4_init(struct kvm *kvm);
+
+From patchwork Mon Sep  9 13:47:54 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137967
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id DCFB614E5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:02 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id BB3D62196E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:02 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036942;
+	bh=ixQpB2A8n1rW0A8A8NRz/XSE8VL46qpecjwMZVyNFhg=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=OjZAvQiXvUoOvXaaYISxlyD2qcHQRIE/iHA3tn9aL2DzCb31dENngxuRTsluZh4tP
+	 V8GTVFwbgxLRv8dGVzqNzr81bGMqvCoaigJuEtCWpNnbgGN8zqlA9VZGOpqkaFj72M
+	 Kbv/pctQ35lEmUfWUwzmNHipwEAhWhqvKar99W2M=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731246AbfIINtC (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:49:02 -0400
+Received: from foss.arm.com ([217.140.110.172]:50562 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730866AbfIINtB (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:49:01 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 04A201650;
+        Mon,  9 Sep 2019 06:49:01 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ BE2F13F59C;
+        Mon,  9 Sep 2019 06:48:58 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 04/17] KVM: arm/arm64: vgic-its: Invalidate MSI-LPI
+ translation cache on specific commands
+Date: Mon,  9 Sep 2019 14:47:54 +0100
+Message-Id: <20190909134807.27978-5-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The LPI translation cache needs to be discarded when an ITS command
+may affect the translation of an LPI (DISCARD, MAPC and MAPD with V=0)
+or the routing of an LPI to a redistributor with disabled LPIs (MOVI,
+MOVALL).
+
+We decide to perform a full invalidation of the cache, irrespective
+of the LPI that is affected. Commands are supposed to be rare enough
+that it doesn't matter.
+
+Tested-by: Andre Przywara <andre.przywara@arm.com>
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ virt/kvm/arm/vgic/vgic-its.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/virt/kvm/arm/vgic/vgic-its.c b/virt/kvm/arm/vgic/vgic-its.c
+index cc6b5e49a312..09a179820816 100644
+--- a/virt/kvm/arm/vgic/vgic-its.c
++++ b/virt/kvm/arm/vgic/vgic-its.c
+@@ -722,6 +722,8 @@ static int vgic_its_cmd_handle_discard(struct kvm *kvm, struct vgic_its *its,
+ 		 * don't bother here since we clear the ITTE anyway and the
+ 		 * pending state is a property of the ITTE struct.
+ 		 */
++		vgic_its_invalidate_cache(kvm);
++
+ 		its_free_ite(kvm, ite);
+ 		return 0;
+ 	}
+@@ -757,6 +759,8 @@ static int vgic_its_cmd_handle_movi(struct kvm *kvm, struct vgic_its *its,
+ 	ite->collection = collection;
+ 	vcpu = kvm_get_vcpu(kvm, collection->target_addr);
+ 
++	vgic_its_invalidate_cache(kvm);
++
+ 	return update_affinity(ite->irq, vcpu);
+ }
+ 
+@@ -985,6 +989,8 @@ static void vgic_its_free_device(struct kvm *kvm, struct its_device *device)
+ 	list_for_each_entry_safe(ite, temp, &device->itt_head, ite_list)
+ 		its_free_ite(kvm, ite);
+ 
++	vgic_its_invalidate_cache(kvm);
++
+ 	list_del(&device->dev_list);
+ 	kfree(device);
+ }
+@@ -1090,6 +1096,7 @@ static int vgic_its_cmd_handle_mapc(struct kvm *kvm, struct vgic_its *its,
+ 
+ 	if (!valid) {
+ 		vgic_its_free_collection(its, coll_id);
++		vgic_its_invalidate_cache(kvm);
+ 	} else {
+ 		collection = find_collection(its, coll_id);
+ 
+@@ -1238,6 +1245,8 @@ static int vgic_its_cmd_handle_movall(struct kvm *kvm, struct vgic_its *its,
+ 		vgic_put_irq(kvm, irq);
+ 	}
+ 
++	vgic_its_invalidate_cache(kvm);
++
+ 	kfree(intids);
+ 	return 0;
+ }
+
+From patchwork Mon Sep  9 13:47:55 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137969
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 47CB014E5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:05 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 1A9D22196E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:05 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036945;
+	bh=4+Ob16ejLDbmgrK0zm38KixtnU6OyZfuzlAn5+qwvr8=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=TcCV1vccwkHExFU1msYXBwWUh42d0CdG9TV8NzSGDVmWqyZOmWsfyL2DzlSW+d9fB
+	 x31ea/xYNGJa7ZE0B1ojLjKmz1ZD9E4VCfPo2sdav7B49ZO6iaUbXoxePUREPFcwtM
+	 M/S0yiTTOHL+kAVQg+Da0VxPypRJXKWjF1Nu2/Ig=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731312AbfIINtE (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:49:04 -0400
+Received: from foss.arm.com ([217.140.110.172]:50586 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731247AbfIINtE (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:49:04 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 8C6971688;
+        Mon,  9 Sep 2019 06:49:03 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 587723F59C;
+        Mon,  9 Sep 2019 06:49:01 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 05/17] KVM: arm/arm64: vgic-its: Invalidate MSI-LPI
+ translation cache on disabling LPIs
+Date: Mon,  9 Sep 2019 14:47:55 +0100
+Message-Id: <20190909134807.27978-6-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+If a vcpu disables LPIs at its redistributor level, we need to make sure
+we won't pend more interrupts. For this, we need to invalidate the LPI
+translation cache.
+
+Tested-by: Andre Przywara <andre.przywara@arm.com>
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ virt/kvm/arm/vgic/vgic-mmio-v3.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/virt/kvm/arm/vgic/vgic-mmio-v3.c b/virt/kvm/arm/vgic/vgic-mmio-v3.c
+index c45e2d7e942f..fdcfb7ae4491 100644
+--- a/virt/kvm/arm/vgic/vgic-mmio-v3.c
++++ b/virt/kvm/arm/vgic/vgic-mmio-v3.c
+@@ -192,8 +192,10 @@ static void vgic_mmio_write_v3r_ctlr(struct kvm_vcpu *vcpu,
+ 
+ 	vgic_cpu->lpis_enabled = val & GICR_CTLR_ENABLE_LPIS;
+ 
+-	if (was_enabled && !vgic_cpu->lpis_enabled)
++	if (was_enabled && !vgic_cpu->lpis_enabled) {
+ 		vgic_flush_pending_lpis(vcpu);
++		vgic_its_invalidate_cache(vcpu->kvm);
++	}
+ 
+ 	if (!was_enabled && vgic_cpu->lpis_enabled)
+ 		vgic_enable_lpis(vcpu);
+
+From patchwork Mon Sep  9 13:47:56 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137971
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1CC3B76
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:08 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id E633221D79
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:07 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036948;
+	bh=diTZjBVWZiLAyJzJ8O9+cl1acNmPNl9R1Y8TyAo1i9U=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=TpqpW3DdYSYaVYFcfknPbIyaCVhPV1sJi9OIg0mspgJXAD7V5gEpcTukWFr/gTn1z
+	 iAcH6O8TXJayl6qVYk887j2lf1AjM9j6qJIE4Crv5b5Vh9TudZBgPaA9khKz4amf9v
+	 uvo8IDWglZJYgSjAalA26uOMRBBsm5qZzdByJ6ZQ=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731355AbfIINtG (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:49:06 -0400
+Received: from foss.arm.com ([217.140.110.172]:50604 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731318AbfIINtG (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:49:06 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 3A5B31682;
+        Mon,  9 Sep 2019 06:49:06 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ F41003F59C;
+        Mon,  9 Sep 2019 06:49:03 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 06/17] KVM: arm/arm64: vgic-its: Invalidate MSI-LPI
+ translation cache on ITS disable
+Date: Mon,  9 Sep 2019 14:47:56 +0100
+Message-Id: <20190909134807.27978-7-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+If an ITS gets disabled, we need to make sure that further interrupts
+won't hit in the cache. For that, we invalidate the translation cache
+when the ITS is disabled.
+
+Tested-by: Andre Przywara <andre.przywara@arm.com>
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ virt/kvm/arm/vgic/vgic-its.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/virt/kvm/arm/vgic/vgic-its.c b/virt/kvm/arm/vgic/vgic-its.c
+index 09a179820816..05406bd92ce9 100644
+--- a/virt/kvm/arm/vgic/vgic-its.c
++++ b/virt/kvm/arm/vgic/vgic-its.c
+@@ -1597,6 +1597,8 @@ static void vgic_mmio_write_its_ctlr(struct kvm *kvm, struct vgic_its *its,
+ 		goto out;
+ 
+ 	its->enabled = !!(val & GITS_CTLR_ENABLE);
++	if (!its->enabled)
++		vgic_its_invalidate_cache(kvm);
+ 
+ 	/*
+ 	 * Try to process any pending commands. This function bails out early
+
+From patchwork Mon Sep  9 13:47:57 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137973
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 87FBA14E5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:10 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 5954221924
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:10 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036950;
+	bh=35m+JIavlpmNWR+qtvsDBMt5RPB555ztmiaK46CLO0s=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=mCEzfPDgYOPtYn5t17pphwMtUkqsAoqDjT7/eVNY+Q1U7PUlF0YQZno8Ao/7/EuAE
+	 avi0VwLps57feSKnlvqmMeThvujXypExYQvFuBVKy2ew/iCB/06LpXhYepYUnXUPRj
+	 16vNrjD02RTIeQqq16xKLjsknyifuq3Eu8rvM4zY=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729304AbfIINtJ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:49:09 -0400
+Received: from foss.arm.com ([217.140.110.172]:50626 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731318AbfIINtJ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:49:09 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id CF3E1168F;
+        Mon,  9 Sep 2019 06:49:08 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 88A023F59C;
+        Mon,  9 Sep 2019 06:49:06 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 07/17] KVM: arm/arm64: vgic-its: Invalidate MSI-LPI
+ translation cache on vgic teardown
+Date: Mon,  9 Sep 2019 14:47:57 +0100
+Message-Id: <20190909134807.27978-8-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+In order to avoid leaking vgic_irq structures on teardown, we need to
+drop all references to LPIs before deallocating the cache itself.
+
+This is done by invalidating the cache on vgic teardown.
+
+Tested-by: Andre Przywara <andre.przywara@arm.com>
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ virt/kvm/arm/vgic/vgic-its.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/virt/kvm/arm/vgic/vgic-its.c b/virt/kvm/arm/vgic/vgic-its.c
+index 05406bd92ce9..d3e90a9d0a7a 100644
+--- a/virt/kvm/arm/vgic/vgic-its.c
++++ b/virt/kvm/arm/vgic/vgic-its.c
+@@ -1731,6 +1731,8 @@ void vgic_lpi_translation_cache_destroy(struct kvm *kvm)
+ 	struct vgic_dist *dist = &kvm->arch.vgic;
+ 	struct vgic_translation_cache_entry *cte, *tmp;
+ 
++	vgic_its_invalidate_cache(kvm);
++
+ 	list_for_each_entry_safe(cte, tmp,
+ 				 &dist->lpi_translation_cache, entry) {
+ 		list_del(&cte->entry);
+
+From patchwork Mon Sep  9 13:47:58 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137975
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 649FF14E5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:13 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 43DF321920
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:13 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036953;
+	bh=JHeiPDRhKs+cohjC2m4uKlvj7IQf2DYpLNr0bwcNG8A=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=rlkKHAutp1AqRNF9+5M01WG8pVyVpc6SkR0N4l1tMLi7PEbEIWXsMF1ndrwWulEqU
+	 We4+s2IJv0iCgRKIIr+hpalxWwI6EHE9c8haHIhB5CdMHL3HMwUEArUzY5ZMub1+yC
+	 E7/FLs7rJYGJp0z1yBKLE6hfv0fU7y6+sjcxsQog=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404908AbfIINtM (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:49:12 -0400
+Received: from foss.arm.com ([217.140.110.172]:50646 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2404887AbfIINtM (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:49:12 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 705771713;
+        Mon,  9 Sep 2019 06:49:11 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 37F293F59C;
+        Mon,  9 Sep 2019 06:49:09 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 08/17] KVM: arm/arm64: vgic-its: Cache successful MSI->LPI
+ translation
+Date: Mon,  9 Sep 2019 14:47:58 +0100
+Message-Id: <20190909134807.27978-9-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+On a successful translation, preserve the parameters in the LPI
+translation cache. Each translation is reusing the last slot
+in the list, naturally evicting the least recently used entry.
+
+Tested-by: Andre Przywara <andre.przywara@arm.com>
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ virt/kvm/arm/vgic/vgic-its.c | 86 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 86 insertions(+)
+
+diff --git a/virt/kvm/arm/vgic/vgic-its.c b/virt/kvm/arm/vgic/vgic-its.c
+index d3e90a9d0a7a..e61d3ea0ab40 100644
+--- a/virt/kvm/arm/vgic/vgic-its.c
++++ b/virt/kvm/arm/vgic/vgic-its.c
+@@ -535,6 +535,90 @@ static unsigned long vgic_mmio_read_its_idregs(struct kvm *kvm,
+ 	return 0;
+ }
+ 
++static struct vgic_irq *__vgic_its_check_cache(struct vgic_dist *dist,
++					       phys_addr_t db,
++					       u32 devid, u32 eventid)
++{
++	struct vgic_translation_cache_entry *cte;
++
++	list_for_each_entry(cte, &dist->lpi_translation_cache, entry) {
++		/*
++		 * If we hit a NULL entry, there is nothing after this
++		 * point.
++		 */
++		if (!cte->irq)
++			break;
++
++		if (cte->db != db || cte->devid != devid ||
++		    cte->eventid != eventid)
++			continue;
++
++		/*
++		 * Move this entry to the head, as it is the most
++		 * recently used.
++		 */
++		if (!list_is_first(&cte->entry, &dist->lpi_translation_cache))
++			list_move(&cte->entry, &dist->lpi_translation_cache);
++
++		return cte->irq;
++	}
++
++	return NULL;
++}
++
++static void vgic_its_cache_translation(struct kvm *kvm, struct vgic_its *its,
++				       u32 devid, u32 eventid,
++				       struct vgic_irq *irq)
++{
++	struct vgic_dist *dist = &kvm->arch.vgic;
++	struct vgic_translation_cache_entry *cte;
++	unsigned long flags;
++	phys_addr_t db;
++
++	/* Do not cache a directly injected interrupt */
++	if (irq->hw)
++		return;
++
++	raw_spin_lock_irqsave(&dist->lpi_list_lock, flags);
++
++	if (unlikely(list_empty(&dist->lpi_translation_cache)))
++		goto out;
++
++	/*
++	 * We could have raced with another CPU caching the same
++	 * translation behind our back, so let's check it is not in
++	 * already
++	 */
++	db = its->vgic_its_base + GITS_TRANSLATER;
++	if (__vgic_its_check_cache(dist, db, devid, eventid))
++		goto out;
++
++	/* Always reuse the last entry (LRU policy) */
++	cte = list_last_entry(&dist->lpi_translation_cache,
++			      typeof(*cte), entry);
++
++	/*
++	 * Caching the translation implies having an extra reference
++	 * to the interrupt, so drop the potential reference on what
++	 * was in the cache, and increment it on the new interrupt.
++	 */
++	if (cte->irq)
++		__vgic_put_lpi_locked(kvm, cte->irq);
++
++	vgic_get_irq_kref(irq);
++
++	cte->db		= db;
++	cte->devid	= devid;
++	cte->eventid	= eventid;
++	cte->irq	= irq;
++
++	/* Move the new translation to the head of the list */
++	list_move(&cte->entry, &dist->lpi_translation_cache);
++
++out:
++	raw_spin_unlock_irqrestore(&dist->lpi_list_lock, flags);
++}
++
+ void vgic_its_invalidate_cache(struct kvm *kvm)
+ {
+ 	struct vgic_dist *dist = &kvm->arch.vgic;
+@@ -578,6 +662,8 @@ int vgic_its_resolve_lpi(struct kvm *kvm, struct vgic_its *its,
+ 	if (!vcpu->arch.vgic_cpu.lpis_enabled)
+ 		return -EBUSY;
+ 
++	vgic_its_cache_translation(kvm, its, devid, eventid, ite->irq);
++
+ 	*irq = ite->irq;
+ 	return 0;
+ }
+
+From patchwork Mon Sep  9 13:47:59 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137977
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id CFAA376
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:15 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id AB9622196E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:15 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036955;
+	bh=aCut+kg9eLddnPnMuhhtEhTF6osKYIaelaOG2coXljQ=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=Ia9G4lbDe+5UaGisYGy/ExVsnIpWvPZmkAbafq0KvohTFhqVeLjW0MIrTSodUs8KM
+	 VtKSQttiszt3ECUSNeMWDfHtQh2MWqkyPhl+PY8hoxIkpkbUb8z7cLQoy0bDwpTRwk
+	 umsiHKsfVnCDfPHt+9CfRXKGG+5cPBmVgMPqALXg=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731377AbfIINtO (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:49:14 -0400
+Received: from foss.arm.com ([217.140.110.172]:50664 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2404876AbfIINtO (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:49:14 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 12FE41715;
+        Mon,  9 Sep 2019 06:49:14 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ C49CF3F59C;
+        Mon,  9 Sep 2019 06:49:11 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 09/17] KVM: arm/arm64: vgic-its: Check the LPI translation
+ cache on MSI injection
+Date: Mon,  9 Sep 2019 14:47:59 +0100
+Message-Id: <20190909134807.27978-10-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+When performing an MSI injection, let's first check if the translation
+is already in the cache. If so, let's inject it quickly without
+going through the whole translation process.
+
+Tested-by: Andre Przywara <andre.przywara@arm.com>
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ virt/kvm/arm/vgic/vgic-its.c | 36 ++++++++++++++++++++++++++++++++++++
+ virt/kvm/arm/vgic/vgic.h     |  1 +
+ 2 files changed, 37 insertions(+)
+
+diff --git a/virt/kvm/arm/vgic/vgic-its.c b/virt/kvm/arm/vgic/vgic-its.c
+index e61d3ea0ab40..2be6b66b3856 100644
+--- a/virt/kvm/arm/vgic/vgic-its.c
++++ b/virt/kvm/arm/vgic/vgic-its.c
+@@ -566,6 +566,20 @@ static struct vgic_irq *__vgic_its_check_cache(struct vgic_dist *dist,
+ 	return NULL;
+ }
+ 
++static struct vgic_irq *vgic_its_check_cache(struct kvm *kvm, phys_addr_t db,
++					     u32 devid, u32 eventid)
++{
++	struct vgic_dist *dist = &kvm->arch.vgic;
++	struct vgic_irq *irq;
++	unsigned long flags;
++
++	raw_spin_lock_irqsave(&dist->lpi_list_lock, flags);
++	irq = __vgic_its_check_cache(dist, db, devid, eventid);
++	raw_spin_unlock_irqrestore(&dist->lpi_list_lock, flags);
++
++	return irq;
++}
++
+ static void vgic_its_cache_translation(struct kvm *kvm, struct vgic_its *its,
+ 				       u32 devid, u32 eventid,
+ 				       struct vgic_irq *irq)
+@@ -725,6 +739,25 @@ static int vgic_its_trigger_msi(struct kvm *kvm, struct vgic_its *its,
+ 	return 0;
+ }
+ 
++int vgic_its_inject_cached_translation(struct kvm *kvm, struct kvm_msi *msi)
++{
++	struct vgic_irq *irq;
++	unsigned long flags;
++	phys_addr_t db;
++
++	db = (u64)msi->address_hi << 32 | msi->address_lo;
++	irq = vgic_its_check_cache(kvm, db, msi->devid, msi->data);
++
++	if (!irq)
++		return -1;
++
++	raw_spin_lock_irqsave(&irq->irq_lock, flags);
++	irq->pending_latch = true;
++	vgic_queue_irq_unlock(kvm, irq, flags);
++
++	return 0;
++}
++
+ /*
+  * Queries the KVM IO bus framework to get the ITS pointer from the given
+  * doorbell address.
+@@ -736,6 +769,9 @@ int vgic_its_inject_msi(struct kvm *kvm, struct kvm_msi *msi)
+ 	struct vgic_its *its;
+ 	int ret;
+ 
++	if (!vgic_its_inject_cached_translation(kvm, msi))
++		return 1;
++
+ 	its = vgic_msi_to_its(kvm, msi);
+ 	if (IS_ERR(its))
+ 		return PTR_ERR(its);
+diff --git a/virt/kvm/arm/vgic/vgic.h b/virt/kvm/arm/vgic/vgic.h
+index c7fb4da2ab3b..83066a81b16a 100644
+--- a/virt/kvm/arm/vgic/vgic.h
++++ b/virt/kvm/arm/vgic/vgic.h
+@@ -308,6 +308,7 @@ int vgic_copy_lpi_list(struct kvm *kvm, struct kvm_vcpu *vcpu, u32 **intid_ptr);
+ int vgic_its_resolve_lpi(struct kvm *kvm, struct vgic_its *its,
+ 			 u32 devid, u32 eventid, struct vgic_irq **irq);
+ struct vgic_its *vgic_msi_to_its(struct kvm *kvm, struct kvm_msi *msi);
++int vgic_its_inject_cached_translation(struct kvm *kvm, struct kvm_msi *msi);
+ void vgic_lpi_translation_cache_init(struct kvm *kvm);
+ void vgic_lpi_translation_cache_destroy(struct kvm *kvm);
+ void vgic_its_invalidate_cache(struct kvm *kvm);
+
+From patchwork Mon Sep  9 13:48:00 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137981
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 49EA376
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:18 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 2777921A4C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:18 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036958;
+	bh=4MuyJkfIMwzK0H9RwinYo0l4KYwDf5jZScz8YGy3v8s=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=ss127FVC4HI5B3DJdF1a8YIkkxF/G10MDa77WPptRY8ileWyLH1EpD9i6perauNs3
+	 0Bx7sgHr/JbYIHe/yJzFvisHCNnf2AnovcNgzzyRYD6gOS37gJ3CQIqhbW+bUlRdS6
+	 RdGzJaTTcG0jyfnv7/T0BsAaH2aZjyvnsKydN2XE=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404876AbfIINtR (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:49:17 -0400
+Received: from foss.arm.com ([217.140.110.172]:50676 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731376AbfIINtR (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:49:17 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 72D2719BF;
+        Mon,  9 Sep 2019 06:49:16 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 5FDCE3F59C;
+        Mon,  9 Sep 2019 06:49:14 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 10/17] KVM: arm/arm64: vgic-irqfd: Implement
+ kvm_arch_set_irq_inatomic
+Date: Mon,  9 Sep 2019 14:48:00 +0100
+Message-Id: <20190909134807.27978-11-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Now that we have a cache of MSI->LPI translations, it is pretty
+easy to implement kvm_arch_set_irq_inatomic (this cache can be
+parsed without sleeping).
+
+Hopefully, this will improve some LPI-heavy workloads.
+
+Tested-by: Andre Przywara <andre.przywara@arm.com>
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ virt/kvm/arm/vgic/vgic-irqfd.c | 36 ++++++++++++++++++++++++++++------
+ 1 file changed, 30 insertions(+), 6 deletions(-)
+
+diff --git a/virt/kvm/arm/vgic/vgic-irqfd.c b/virt/kvm/arm/vgic/vgic-irqfd.c
+index c9304b88e720..d8cdfea5cc96 100644
+--- a/virt/kvm/arm/vgic/vgic-irqfd.c
++++ b/virt/kvm/arm/vgic/vgic-irqfd.c
+@@ -66,6 +66,15 @@ int kvm_set_routing_entry(struct kvm *kvm,
+ 	return r;
+ }
+ 
++static void kvm_populate_msi(struct kvm_kernel_irq_routing_entry *e,
++			     struct kvm_msi *msi)
++{
++	msi->address_lo = e->msi.address_lo;
++	msi->address_hi = e->msi.address_hi;
++	msi->data = e->msi.data;
++	msi->flags = e->msi.flags;
++	msi->devid = e->msi.devid;
++}
+ /**
+  * kvm_set_msi: inject the MSI corresponding to the
+  * MSI routing entry
+@@ -79,21 +88,36 @@ int kvm_set_msi(struct kvm_kernel_irq_routing_entry *e,
+ {
+ 	struct kvm_msi msi;
+ 
+-	msi.address_lo = e->msi.address_lo;
+-	msi.address_hi = e->msi.address_hi;
+-	msi.data = e->msi.data;
+-	msi.flags = e->msi.flags;
+-	msi.devid = e->msi.devid;
+-
+ 	if (!vgic_has_its(kvm))
+ 		return -ENODEV;
+ 
+ 	if (!level)
+ 		return -1;
+ 
++	kvm_populate_msi(e, &msi);
+ 	return vgic_its_inject_msi(kvm, &msi);
+ }
+ 
++/**
++ * kvm_arch_set_irq_inatomic: fast-path for irqfd injection
++ *
++ * Currently only direct MSI injection is supported.
++ */
++int kvm_arch_set_irq_inatomic(struct kvm_kernel_irq_routing_entry *e,
++			      struct kvm *kvm, int irq_source_id, int level,
++			      bool line_status)
++{
++	if (e->type == KVM_IRQ_ROUTING_MSI && vgic_has_its(kvm) && level) {
++		struct kvm_msi msi;
++
++		kvm_populate_msi(e, &msi);
++		if (!vgic_its_inject_cached_translation(kvm, &msi))
++			return 0;
++	}
++
++	return -EWOULDBLOCK;
++}
++
+ int kvm_vgic_setup_default_irq_routing(struct kvm *kvm)
+ {
+ 	struct kvm_irq_routing_entry *entries;
+
+From patchwork Mon Sep  9 13:48:01 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137983
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 810EB76
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:20 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 5DFB921A4C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:20 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036960;
+	bh=n/hW42NWXZIxAG6/+tQLQuIQjG58M4GNNOnl3MG6hRc=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=oLSls4Z31cfdbbj7XJVjHJDRrVKoHsH4Arx6//SaBigdV5ykPhJv4VA7NKMfZhhTa
+	 BnxodiFahB3/vJUYIAMrQdDp0mXFS9vLEnFAuh7WJAw51xrp0sQWcYJ3+hexvskVun
+	 vt3z8XoGRncFCeu1Y6o+56ciCSPLOWGrKRrVbkg4=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404748AbfIINtT (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:49:19 -0400
+Received: from foss.arm.com ([217.140.110.172]:50702 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729775AbfIINtT (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:49:19 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id F126319F6;
+        Mon,  9 Sep 2019 06:49:18 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ C2A6F3F59C;
+        Mon,  9 Sep 2019 06:49:16 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 11/17] arm64/kvm: Remove VMID rollover I-cache maintenance
+Date: Mon,  9 Sep 2019 14:48:01 +0100
+Message-Id: <20190909134807.27978-12-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Mark Rutland <mark.rutland@arm.com>
+
+For VPIPT I-caches, we need I-cache maintenance on VMID rollover to
+avoid an ABA problem. Consider a single vCPU VM, with a pinned stage-2,
+running with an idmap VA->IPA and idmap IPA->PA. If we don't do
+maintenance on rollover:
+
+        // VMID A
+        Writes insn X to PA 0xF
+        Invalidates PA 0xF (for VMID A)
+
+        I$ contains [{A,F}->X]
+
+        [VMID ROLLOVER]
+
+        // VMID B
+        Writes insn Y to PA 0xF
+        Invalidates PA 0xF (for VMID B)
+
+        I$ contains [{A,F}->X, {B,F}->Y]
+
+        [VMID ROLLOVER]
+
+        // VMID A
+        I$ contains [{A,F}->X, {B,F}->Y]
+
+        Unexpectedly hits stale I$ line {A,F}->X.
+
+However, for PIPT and VIPT I-caches, the VMID doesn't affect lookup or
+constrain maintenance. Given the VMID doesn't affect PIPT and VIPT
+I-caches, and given VMID rollover is independent of changes to stage-2
+mappings, I-cache maintenance cannot be necessary on VMID rollover for
+PIPT or VIPT I-caches.
+
+This patch removes the maintenance on rollover for VIPT and PIPT
+I-caches. At the same time, the unnecessary colons are removed from the
+asm statement to make it more legible.
+
+Signed-off-by: Mark Rutland <mark.rutland@arm.com>
+Cc: Christoffer Dall <christoffer.dall@arm.com>
+Reviewed-by: James Morse <james.morse@arm.com>
+Cc: Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: Suzuki K Poulose <suzuki.poulose@arm.com>
+Cc: kvmarm@lists.cs.columbia.edu
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/kvm/hyp/tlb.c | 14 +++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/kvm/hyp/tlb.c b/arch/arm64/kvm/hyp/tlb.c
+index d49a14497715..c466060b76d6 100644
+--- a/arch/arm64/kvm/hyp/tlb.c
++++ b/arch/arm64/kvm/hyp/tlb.c
+@@ -193,6 +193,18 @@ void __hyp_text __kvm_flush_vm_context(void)
+ {
+ 	dsb(ishst);
+ 	__tlbi(alle1is);
+-	asm volatile("ic ialluis" : : );
++
++	/*
++	 * VIPT and PIPT caches are not affected by VMID, so no maintenance
++	 * is necessary across a VMID rollover.
++	 *
++	 * VPIPT caches constrain lookup and maintenance to the active VMID,
++	 * so we need to invalidate lines with a stale VMID to avoid an ABA
++	 * race after multiple rollovers.
++	 *
++	 */
++	if (icache_is_vpipt())
++		asm volatile("ic ialluis");
++
+ 	dsb(ish);
+ }
+
+From patchwork Mon Sep  9 13:48:02 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137985
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 94B0276
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:23 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 7397D21D79
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:23 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036963;
+	bh=GO758I822D9ogVbd5WVk1C6BnMU2djARbcrBHr3/stw=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=ActzLGrIMtEqISdU4RGMJUjr07pIiMx/o1Y5KfiV/m/8Ont7mcGgm0M0Zkh9T2G1k
+	 kszZ00YX3HaXYIZhI6MbQCi3f0F9zeZYNN6uRe16aNpHfnOrLnjSZaL3xh3dPIxAi/
+	 2ZaDlb57cdq1KIjygsAT4g6j2fXP1ABqKJlyzdxw=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404923AbfIINtW (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:49:22 -0400
+Received: from foss.arm.com ([217.140.110.172]:50722 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2404916AbfIINtW (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:49:22 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id B7B5E1AED;
+        Mon,  9 Sep 2019 06:49:21 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 5DC553F59C;
+        Mon,  9 Sep 2019 06:49:19 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 12/17] KVM: arm/arm64: vgic: Make function comments match
+ function declarations
+Date: Mon,  9 Sep 2019 14:48:02 +0100
+Message-Id: <20190909134807.27978-13-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+
+Since commit 503a62862e8f ("KVM: arm/arm64: vgic: Rely on the GIC driver to
+parse the firmware tables"), the vgic_v{2,3}_probe functions stopped using
+a DT node. Commit 909777324588 ("KVM: arm/arm64: vgic-new: vgic_init:
+implement kvm_vgic_hyp_init") changed the functions again, and now they
+require exactly one argument, a struct gic_kvm_info populated by the GIC
+driver. Unfortunately the comments regressed and state that a DT node is
+used instead. Change the function comments to reflect the current
+prototypes.
+
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ virt/kvm/arm/vgic/vgic-v2.c | 7 ++++---
+ virt/kvm/arm/vgic/vgic-v3.c | 7 ++++---
+ 2 files changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/virt/kvm/arm/vgic/vgic-v2.c b/virt/kvm/arm/vgic/vgic-v2.c
+index 96aab77d0471..e67945020b45 100644
+--- a/virt/kvm/arm/vgic/vgic-v2.c
++++ b/virt/kvm/arm/vgic/vgic-v2.c
+@@ -354,10 +354,11 @@ int vgic_v2_map_resources(struct kvm *kvm)
+ DEFINE_STATIC_KEY_FALSE(vgic_v2_cpuif_trap);
+ 
+ /**
+- * vgic_v2_probe - probe for a GICv2 compatible interrupt controller in DT
+- * @node:	pointer to the DT node
++ * vgic_v2_probe - probe for a VGICv2 compatible interrupt controller
++ * @info:	pointer to the GIC description
+  *
+- * Returns 0 if a GICv2 has been found, returns an error code otherwise
++ * Returns 0 if the VGICv2 has been probed successfully, returns an error code
++ * otherwise
+  */
+ int vgic_v2_probe(const struct gic_kvm_info *info)
+ {
+diff --git a/virt/kvm/arm/vgic/vgic-v3.c b/virt/kvm/arm/vgic/vgic-v3.c
+index 0c653a1e5215..30955d162a01 100644
+--- a/virt/kvm/arm/vgic/vgic-v3.c
++++ b/virt/kvm/arm/vgic/vgic-v3.c
+@@ -570,10 +570,11 @@ static int __init early_gicv4_enable(char *buf)
+ early_param("kvm-arm.vgic_v4_enable", early_gicv4_enable);
+ 
+ /**
+- * vgic_v3_probe - probe for a GICv3 compatible interrupt controller in DT
+- * @node:	pointer to the DT node
++ * vgic_v3_probe - probe for a VGICv3 compatible interrupt controller
++ * @info:	pointer to the GIC description
+  *
+- * Returns 0 if a GICv3 has been found, returns an error code otherwise
++ * Returns 0 if the VGICv3 has been probed successfully, returns an error code
++ * otherwise
+  */
+ int vgic_v3_probe(const struct gic_kvm_info *info)
+ {
+
+From patchwork Mon Sep  9 13:48:03 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137987
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 26FD914E5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:26 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 0211120828
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:26 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036966;
+	bh=DyqUvs5n5vZlYBUiIS+yVwEOdZUEafyi7zk2O3h9puo=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=ORGBNEGrF5GxsJVW8OH41fP2wQN+2k+/hhT7fGYkfgetU6Yka1jO7edLimLXca9VP
+	 Sh5sA6y+DHey7Uo6luqme0ncNPScXyidsj9ZXRwsLKlbFYuSndlYYcxOQw4eMSgTZZ
+	 6H2+HsPRW79zMDMpWcrid0bY1RT9SddmCTWJLE7I=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404926AbfIINtZ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:49:25 -0400
+Received: from foss.arm.com ([217.140.110.172]:50742 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2404913AbfIINtY (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:49:24 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 30E621B8E;
+        Mon,  9 Sep 2019 06:49:24 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 126283F59C;
+        Mon,  9 Sep 2019 06:49:21 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 13/17] KVM: Call kvm_arch_vcpu_blocking early into the
+ blocking sequence
+Date: Mon,  9 Sep 2019 14:48:03 +0100
+Message-Id: <20190909134807.27978-14-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+When a vpcu is about to block by calling kvm_vcpu_block, we call
+back into the arch code to allow any form of synchronization that
+may be required at this point (SVN stops the AVIC, ARM synchronises
+the VMCR and enables GICv4 doorbells). But this synchronization
+comes in quite late, as we've potentially waited for halt_poll_ns
+to expire.
+
+Instead, let's move kvm_arch_vcpu_blocking() to the beginning of
+kvm_vcpu_block(), which on ARM has several benefits:
+
+- VMCR gets synchronised early, meaning that any interrupt delivered
+  during the polling window will be evaluated with the correct guest
+  PMR
+- GICv4 doorbells are enabled, which means that any guest interrupt
+  directly injected during that window will be immediately recognised
+
+Tang Nianyao ran some tests on a GICv4 machine to evaluate such
+change, and reported up to a 10% improvement for netperf:
+
+<quote>
+	netperf result:
+	D06 as server, intel 8180 server as client
+	with change:
+	package 512 bytes - 5500 Mbits/s
+	package 64 bytes - 760 Mbits/s
+	without change:
+	package 512 bytes - 5000 Mbits/s
+	package 64 bytes - 710 Mbits/s
+</quote>
+
+Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ virt/kvm/kvm_main.c | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index c6a91b044d8d..e6de3159e682 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -2321,6 +2321,8 @@ void kvm_vcpu_block(struct kvm_vcpu *vcpu)
+ 	bool waited = false;
+ 	u64 block_ns;
+ 
++	kvm_arch_vcpu_blocking(vcpu);
++
+ 	start = cur = ktime_get();
+ 	if (vcpu->halt_poll_ns && !kvm_arch_no_poll(vcpu)) {
+ 		ktime_t stop = ktime_add_ns(ktime_get(), vcpu->halt_poll_ns);
+@@ -2341,8 +2343,6 @@ void kvm_vcpu_block(struct kvm_vcpu *vcpu)
+ 		} while (single_task_running() && ktime_before(cur, stop));
+ 	}
+ 
+-	kvm_arch_vcpu_blocking(vcpu);
+-
+ 	for (;;) {
+ 		prepare_to_swait_exclusive(&vcpu->wq, &wait, TASK_INTERRUPTIBLE);
+ 
+@@ -2355,9 +2355,8 @@ void kvm_vcpu_block(struct kvm_vcpu *vcpu)
+ 
+ 	finish_swait(&vcpu->wq, &wait);
+ 	cur = ktime_get();
+-
+-	kvm_arch_vcpu_unblocking(vcpu);
+ out:
++	kvm_arch_vcpu_unblocking(vcpu);
+ 	block_ns = ktime_to_ns(cur) - ktime_to_ns(start);
+ 
+ 	if (!vcpu_valid_wakeup(vcpu))
+
+From patchwork Mon Sep  9 13:48:04 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137989
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D9BCD14E5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:28 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id B69D221D6C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:28 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036968;
+	bh=QTaAHo6Hz5kPABhpV1zWZE9L3v/4s3xF9KeFEFi+o9s=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=VLwKj2Yqk7EU37UiOdb/196q38d1niBEE+7/2d/T1pBFHLENjtY8j7YJZNc7CcpbG
+	 Os9ZTBs3LUXMcf0z/88Jy7hsmgpqmud3VONSVtneWP3QRayrPjISIwJF0gp4iummsm
+	 SEaG6pefUPGJ7ocCX408V8avfx6Hv70n/itIr8Oc=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404919AbfIINt1 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:49:27 -0400
+Received: from foss.arm.com ([217.140.110.172]:50764 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2404916AbfIINt1 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:49:27 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id EE14D1BA8;
+        Mon,  9 Sep 2019 06:49:26 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 93F893F59C;
+        Mon,  9 Sep 2019 06:49:24 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 14/17] KVM: arm/arm64: vgic: Remove spurious semicolons
+Date: Mon,  9 Sep 2019 14:48:04 +0100
+Message-Id: <20190909134807.27978-15-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Detected by Coccinelle (and Will Deacon) using
+scripts/coccinelle/misc/semicolon.cocci.
+
+Reported-by: Will Deacon <will@kernel.org>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ virt/kvm/arm/vgic/vgic-init.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/virt/kvm/arm/vgic/vgic-init.c b/virt/kvm/arm/vgic/vgic-init.c
+index 80127ca9269f..9175bfd83263 100644
+--- a/virt/kvm/arm/vgic/vgic-init.c
++++ b/virt/kvm/arm/vgic/vgic-init.c
+@@ -510,7 +510,7 @@ int kvm_vgic_hyp_init(void)
+ 		break;
+ 	default:
+ 		ret = -ENODEV;
+-	};
++	}
+ 
+ 	if (ret)
+ 		return ret;
+
+From patchwork Mon Sep  9 13:48:05 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137991
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E067C76
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:31 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id B555A21924
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:31 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036971;
+	bh=inhWGkMoozy07I5szOUsF2l3cXURCS8p/HMea0b74K0=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=ek2v8lS1k/x4wm9qK6fzLSNzCaeu0b6/tvRwzAUIMKz1ZG1WKHBqHKNx69uUb83yr
+	 UIBRZDRxt4Ps0x3nOZpJ+0LZzV+P93Bz1cDW+nzJ8F0AWrwU0iYjiKVLgvb9mYJ4yA
+	 EoMI96SgXV46bv7lXyGhGc+NiGWKuHauG4+2FpEI=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404932AbfIINta (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:49:30 -0400
+Received: from foss.arm.com ([217.140.110.172]:50782 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2404916AbfIINta (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:49:30 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 9B93E1BB0;
+        Mon,  9 Sep 2019 06:49:29 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 471783F59C;
+        Mon,  9 Sep 2019 06:49:27 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 15/17] KVM: arm/arm64: vgic: Use a single IO device per
+ redistributor
+Date: Mon,  9 Sep 2019 14:48:05 +0100
+Message-Id: <20190909134807.27978-16-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Eric Auger <eric.auger@redhat.com>
+
+At the moment we use 2 IO devices per GICv3 redistributor: one
+one for the RD_base frame and one for the SGI_base frame.
+
+Instead we can use a single IO device per redistributor (the 2
+frames are contiguous). This saves slots on the KVM_MMIO_BUS
+which is currently limited to NR_IOBUS_DEVS (1000).
+
+This change allows to instantiate up to 512 redistributors and may
+speed the guest boot with a large number of VCPUs.
+
+Signed-off-by: Eric Auger <eric.auger@redhat.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ include/kvm/arm_vgic.h           |  1 -
+ virt/kvm/arm/vgic/vgic-init.c    |  1 -
+ virt/kvm/arm/vgic/vgic-mmio-v3.c | 81 ++++++++++----------------------
+ 3 files changed, 24 insertions(+), 59 deletions(-)
+
+diff --git a/include/kvm/arm_vgic.h b/include/kvm/arm_vgic.h
+index ded50a30e2d5..af4f09c02bf1 100644
+--- a/include/kvm/arm_vgic.h
++++ b/include/kvm/arm_vgic.h
+@@ -314,7 +314,6 @@ struct vgic_cpu {
+ 	 * parts of the redistributor.
+ 	 */
+ 	struct vgic_io_device	rd_iodev;
+-	struct vgic_io_device	sgi_iodev;
+ 	struct vgic_redist_region *rdreg;
+ 
+ 	/* Contains the attributes and gpa of the LPI pending tables. */
+diff --git a/virt/kvm/arm/vgic/vgic-init.c b/virt/kvm/arm/vgic/vgic-init.c
+index 9175bfd83263..958e2f0d2207 100644
+--- a/virt/kvm/arm/vgic/vgic-init.c
++++ b/virt/kvm/arm/vgic/vgic-init.c
+@@ -193,7 +193,6 @@ int kvm_vgic_vcpu_init(struct kvm_vcpu *vcpu)
+ 	int i;
+ 
+ 	vgic_cpu->rd_iodev.base_addr = VGIC_ADDR_UNDEF;
+-	vgic_cpu->sgi_iodev.base_addr = VGIC_ADDR_UNDEF;
+ 
+ 	INIT_LIST_HEAD(&vgic_cpu->ap_list_head);
+ 	raw_spin_lock_init(&vgic_cpu->ap_list_lock);
+diff --git a/virt/kvm/arm/vgic/vgic-mmio-v3.c b/virt/kvm/arm/vgic/vgic-mmio-v3.c
+index fdcfb7ae4491..7dfd15dbb308 100644
+--- a/virt/kvm/arm/vgic/vgic-mmio-v3.c
++++ b/virt/kvm/arm/vgic/vgic-mmio-v3.c
+@@ -517,7 +517,8 @@ static const struct vgic_register_region vgic_v3_dist_registers[] = {
+ 		VGIC_ACCESS_32bit),
+ };
+ 
+-static const struct vgic_register_region vgic_v3_rdbase_registers[] = {
++static const struct vgic_register_region vgic_v3_rd_registers[] = {
++	/* RD_base registers */
+ 	REGISTER_DESC_WITH_LENGTH(GICR_CTLR,
+ 		vgic_mmio_read_v3r_ctlr, vgic_mmio_write_v3r_ctlr, 4,
+ 		VGIC_ACCESS_32bit),
+@@ -542,44 +543,42 @@ static const struct vgic_register_region vgic_v3_rdbase_registers[] = {
+ 	REGISTER_DESC_WITH_LENGTH(GICR_IDREGS,
+ 		vgic_mmio_read_v3_idregs, vgic_mmio_write_wi, 48,
+ 		VGIC_ACCESS_32bit),
+-};
+-
+-static const struct vgic_register_region vgic_v3_sgibase_registers[] = {
+-	REGISTER_DESC_WITH_LENGTH(GICR_IGROUPR0,
++	/* SGI_base registers */
++	REGISTER_DESC_WITH_LENGTH(SZ_64K + GICR_IGROUPR0,
+ 		vgic_mmio_read_group, vgic_mmio_write_group, 4,
+ 		VGIC_ACCESS_32bit),
+-	REGISTER_DESC_WITH_LENGTH(GICR_ISENABLER0,
++	REGISTER_DESC_WITH_LENGTH(SZ_64K + GICR_ISENABLER0,
+ 		vgic_mmio_read_enable, vgic_mmio_write_senable, 4,
+ 		VGIC_ACCESS_32bit),
+-	REGISTER_DESC_WITH_LENGTH(GICR_ICENABLER0,
++	REGISTER_DESC_WITH_LENGTH(SZ_64K + GICR_ICENABLER0,
+ 		vgic_mmio_read_enable, vgic_mmio_write_cenable, 4,
+ 		VGIC_ACCESS_32bit),
+-	REGISTER_DESC_WITH_LENGTH_UACCESS(GICR_ISPENDR0,
++	REGISTER_DESC_WITH_LENGTH_UACCESS(SZ_64K + GICR_ISPENDR0,
+ 		vgic_mmio_read_pending, vgic_mmio_write_spending,
+ 		vgic_v3_uaccess_read_pending, vgic_v3_uaccess_write_pending, 4,
+ 		VGIC_ACCESS_32bit),
+-	REGISTER_DESC_WITH_LENGTH_UACCESS(GICR_ICPENDR0,
++	REGISTER_DESC_WITH_LENGTH_UACCESS(SZ_64K + GICR_ICPENDR0,
+ 		vgic_mmio_read_pending, vgic_mmio_write_cpending,
+ 		vgic_mmio_read_raz, vgic_mmio_uaccess_write_wi, 4,
+ 		VGIC_ACCESS_32bit),
+-	REGISTER_DESC_WITH_LENGTH_UACCESS(GICR_ISACTIVER0,
++	REGISTER_DESC_WITH_LENGTH_UACCESS(SZ_64K + GICR_ISACTIVER0,
+ 		vgic_mmio_read_active, vgic_mmio_write_sactive,
+ 		NULL, vgic_mmio_uaccess_write_sactive,
+ 		4, VGIC_ACCESS_32bit),
+-	REGISTER_DESC_WITH_LENGTH_UACCESS(GICR_ICACTIVER0,
++	REGISTER_DESC_WITH_LENGTH_UACCESS(SZ_64K + GICR_ICACTIVER0,
+ 		vgic_mmio_read_active, vgic_mmio_write_cactive,
+ 		NULL, vgic_mmio_uaccess_write_cactive,
+ 		4, VGIC_ACCESS_32bit),
+-	REGISTER_DESC_WITH_LENGTH(GICR_IPRIORITYR0,
++	REGISTER_DESC_WITH_LENGTH(SZ_64K + GICR_IPRIORITYR0,
+ 		vgic_mmio_read_priority, vgic_mmio_write_priority, 32,
+ 		VGIC_ACCESS_32bit | VGIC_ACCESS_8bit),
+-	REGISTER_DESC_WITH_LENGTH(GICR_ICFGR0,
++	REGISTER_DESC_WITH_LENGTH(SZ_64K + GICR_ICFGR0,
+ 		vgic_mmio_read_config, vgic_mmio_write_config, 8,
+ 		VGIC_ACCESS_32bit),
+-	REGISTER_DESC_WITH_LENGTH(GICR_IGRPMODR0,
++	REGISTER_DESC_WITH_LENGTH(SZ_64K + GICR_IGRPMODR0,
+ 		vgic_mmio_read_raz, vgic_mmio_write_wi, 4,
+ 		VGIC_ACCESS_32bit),
+-	REGISTER_DESC_WITH_LENGTH(GICR_NSACR,
++	REGISTER_DESC_WITH_LENGTH(SZ_64K + GICR_NSACR,
+ 		vgic_mmio_read_raz, vgic_mmio_write_wi, 4,
+ 		VGIC_ACCESS_32bit),
+ };
+@@ -609,9 +608,8 @@ int vgic_register_redist_iodev(struct kvm_vcpu *vcpu)
+ 	struct vgic_dist *vgic = &kvm->arch.vgic;
+ 	struct vgic_cpu *vgic_cpu = &vcpu->arch.vgic_cpu;
+ 	struct vgic_io_device *rd_dev = &vcpu->arch.vgic_cpu.rd_iodev;
+-	struct vgic_io_device *sgi_dev = &vcpu->arch.vgic_cpu.sgi_iodev;
+ 	struct vgic_redist_region *rdreg;
+-	gpa_t rd_base, sgi_base;
++	gpa_t rd_base;
+ 	int ret;
+ 
+ 	if (!IS_VGIC_ADDR_UNDEF(vgic_cpu->rd_iodev.base_addr))
+@@ -633,52 +631,31 @@ int vgic_register_redist_iodev(struct kvm_vcpu *vcpu)
+ 	vgic_cpu->rdreg = rdreg;
+ 
+ 	rd_base = rdreg->base + rdreg->free_index * KVM_VGIC_V3_REDIST_SIZE;
+-	sgi_base = rd_base + SZ_64K;
+ 
+ 	kvm_iodevice_init(&rd_dev->dev, &kvm_io_gic_ops);
+ 	rd_dev->base_addr = rd_base;
+ 	rd_dev->iodev_type = IODEV_REDIST;
+-	rd_dev->regions = vgic_v3_rdbase_registers;
+-	rd_dev->nr_regions = ARRAY_SIZE(vgic_v3_rdbase_registers);
++	rd_dev->regions = vgic_v3_rd_registers;
++	rd_dev->nr_regions = ARRAY_SIZE(vgic_v3_rd_registers);
+ 	rd_dev->redist_vcpu = vcpu;
+ 
+ 	mutex_lock(&kvm->slots_lock);
+ 	ret = kvm_io_bus_register_dev(kvm, KVM_MMIO_BUS, rd_base,
+-				      SZ_64K, &rd_dev->dev);
++				      2 * SZ_64K, &rd_dev->dev);
+ 	mutex_unlock(&kvm->slots_lock);
+ 
+ 	if (ret)
+ 		return ret;
+ 
+-	kvm_iodevice_init(&sgi_dev->dev, &kvm_io_gic_ops);
+-	sgi_dev->base_addr = sgi_base;
+-	sgi_dev->iodev_type = IODEV_REDIST;
+-	sgi_dev->regions = vgic_v3_sgibase_registers;
+-	sgi_dev->nr_regions = ARRAY_SIZE(vgic_v3_sgibase_registers);
+-	sgi_dev->redist_vcpu = vcpu;
+-
+-	mutex_lock(&kvm->slots_lock);
+-	ret = kvm_io_bus_register_dev(kvm, KVM_MMIO_BUS, sgi_base,
+-				      SZ_64K, &sgi_dev->dev);
+-	if (ret) {
+-		kvm_io_bus_unregister_dev(kvm, KVM_MMIO_BUS,
+-					  &rd_dev->dev);
+-		goto out;
+-	}
+-
+ 	rdreg->free_index++;
+-out:
+-	mutex_unlock(&kvm->slots_lock);
+-	return ret;
++	return 0;
+ }
+ 
+ static void vgic_unregister_redist_iodev(struct kvm_vcpu *vcpu)
+ {
+ 	struct vgic_io_device *rd_dev = &vcpu->arch.vgic_cpu.rd_iodev;
+-	struct vgic_io_device *sgi_dev = &vcpu->arch.vgic_cpu.sgi_iodev;
+ 
+ 	kvm_io_bus_unregister_dev(vcpu->kvm, KVM_MMIO_BUS, &rd_dev->dev);
+-	kvm_io_bus_unregister_dev(vcpu->kvm, KVM_MMIO_BUS, &sgi_dev->dev);
+ }
+ 
+ static int vgic_register_all_redist_iodevs(struct kvm *kvm)
+@@ -828,8 +805,8 @@ int vgic_v3_has_attr_regs(struct kvm_device *dev, struct kvm_device_attr *attr)
+ 		iodev.base_addr = 0;
+ 		break;
+ 	case KVM_DEV_ARM_VGIC_GRP_REDIST_REGS:{
+-		iodev.regions = vgic_v3_rdbase_registers;
+-		iodev.nr_regions = ARRAY_SIZE(vgic_v3_rdbase_registers);
++		iodev.regions = vgic_v3_rd_registers;
++		iodev.nr_regions = ARRAY_SIZE(vgic_v3_rd_registers);
+ 		iodev.base_addr = 0;
+ 		break;
+ 	}
+@@ -987,21 +964,11 @@ int vgic_v3_redist_uaccess(struct kvm_vcpu *vcpu, bool is_write,
+ 			   int offset, u32 *val)
+ {
+ 	struct vgic_io_device rd_dev = {
+-		.regions = vgic_v3_rdbase_registers,
+-		.nr_regions = ARRAY_SIZE(vgic_v3_rdbase_registers),
++		.regions = vgic_v3_rd_registers,
++		.nr_regions = ARRAY_SIZE(vgic_v3_rd_registers),
+ 	};
+ 
+-	struct vgic_io_device sgi_dev = {
+-		.regions = vgic_v3_sgibase_registers,
+-		.nr_regions = ARRAY_SIZE(vgic_v3_sgibase_registers),
+-	};
+-
+-	/* SGI_base is the next 64K frame after RD_base */
+-	if (offset >= SZ_64K)
+-		return vgic_uaccess(vcpu, &sgi_dev, is_write, offset - SZ_64K,
+-				    val);
+-	else
+-		return vgic_uaccess(vcpu, &rd_dev, is_write, offset, val);
++	return vgic_uaccess(vcpu, &rd_dev, is_write, offset, val);
+ }
+ 
+ int vgic_v3_line_level_info_uaccess(struct kvm_vcpu *vcpu, bool is_write,
+
+From patchwork Mon Sep  9 13:48:06 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137993
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3D82A14E5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:34 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 1C9A721A4C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:34 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036974;
+	bh=HX5mSTs59EKccD+AE/gho2430QEzRmm7sSOobU/L+sE=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=DuMM4U/5LcSfq6Z9EuKgtnafdVYEN7CMD5tTb/ImbHWCedfgECbTLCmQF+jfV+JZK
+	 1QIP3dALIePMjstUqUl2+Ct1yqwl739OacebaUDp5hN25hwVlMsT3VHRQsA7/OJkfJ
+	 hyYy+PE/1VDEvyATuTHrJ+9SyzVRn+ObeZXyEXvI=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404947AbfIINtd (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:49:33 -0400
+Received: from foss.arm.com ([217.140.110.172]:50802 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2404915AbfIINtc (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:49:32 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 492301BB2;
+        Mon,  9 Sep 2019 06:49:32 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 085343F59C;
+        Mon,  9 Sep 2019 06:49:29 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 16/17] arm64: KVM: Device mappings should be execute-never
+Date: Mon,  9 Sep 2019 14:48:06 +0100
+Message-Id: <20190909134807.27978-17-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: James Morse <james.morse@arm.com>
+
+Since commit 2f6ea23f63cca ("arm64: KVM: Avoid marking pages as XN in
+Stage-2 if CTR_EL0.DIC is set"), KVM has stopped marking normal memory
+as execute-never at stage2 when the system supports D->I Coherency at
+the PoU. This avoids KVM taking a trap when the page is first executed,
+in order to clean it to PoU.
+
+The patch that added this change also wrapped PAGE_S2_DEVICE mappings
+up in this too. The upshot is, if your CPU caches support DIC ...
+you can execute devices.
+
+Revert the PAGE_S2_DEVICE change so PTE_S2_XN is always used
+directly.
+
+Fixes: 2f6ea23f63cca ("arm64: KVM: Avoid marking pages as XN in Stage-2 if CTR_EL0.DIC is set")
+Signed-off-by: James Morse <james.morse@arm.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/include/asm/pgtable-prot.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/include/asm/pgtable-prot.h b/arch/arm64/include/asm/pgtable-prot.h
+index 92d2e9f28f28..9a21b84536f2 100644
+--- a/arch/arm64/include/asm/pgtable-prot.h
++++ b/arch/arm64/include/asm/pgtable-prot.h
+@@ -77,7 +77,7 @@
+ 	})
+ 
+ #define PAGE_S2			__pgprot(_PROT_DEFAULT | PAGE_S2_MEMATTR(NORMAL) | PTE_S2_RDONLY | PAGE_S2_XN)
+-#define PAGE_S2_DEVICE		__pgprot(_PROT_DEFAULT | PAGE_S2_MEMATTR(DEVICE_nGnRE) | PTE_S2_RDONLY | PAGE_S2_XN)
++#define PAGE_S2_DEVICE		__pgprot(_PROT_DEFAULT | PAGE_S2_MEMATTR(DEVICE_nGnRE) | PTE_S2_RDONLY | PTE_S2_XN)
+ 
+ #define PAGE_NONE		__pgprot(((_PAGE_DEFAULT) & ~PTE_VALID) | PTE_PROT_NONE | PTE_RDONLY | PTE_NG | PTE_PXN | PTE_UXN)
+ #define PAGE_SHARED		__pgprot(_PAGE_DEFAULT | PTE_USER | PTE_NG | PTE_PXN | PTE_UXN | PTE_WRITE)
+
+From patchwork Mon Sep  9 13:48:07 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11137995
+Return-Path: <SRS0=hA4U=XE=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1D4D814E5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:37 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id F05132196E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Sep 2019 13:49:36 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1568036977;
+	bh=MfggMCT1M6uuIEl5yVEbJg+JR2pyG+C4bwgJB6Uxj9E=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=xar/WU3iHfIVBxOmLD8wosWavBut7ChtLoaLFn3Bm981Nzoq1Leq51UV1P7YKW+fc
+	 60x5OU78tSIn6BJkYK8UoRUpq5igFHysPcuomZ2qqNCNqkrwIsVfljocdExX3AejGc
+	 6UM4Y/PwtGawCeb+5Bwc0k6z2iYCiJwazROIWJEs=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404951AbfIINtg (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Sep 2019 09:49:36 -0400
+Received: from foss.arm.com ([217.140.110.172]:50818 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2404915AbfIINtf (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Sep 2019 09:49:35 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id DF3461C01;
+        Mon,  9 Sep 2019 06:49:34 -0700 (PDT)
+Received: from localhost.localdomain (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ A9FD53F59C;
+        Mon,  9 Sep 2019 06:49:32 -0700 (PDT)
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+ =?utf-8?b?UmFkaW0gS3LEjW3DocWZ?= <rkrcmar@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Eric Auger <eric.auger@redhat.com>,
+        James Morse <james.morse@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Zenghui Yu <yuzenghui@huawei.com>, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu, linux-arm-kernel@lists.infradead.org
+Subject: [PATCH 17/17] KVM: arm/arm64: vgic: Allow more than 256 vcpus for
+ KVM_IRQ_LINE
+Date: Mon,  9 Sep 2019 14:48:07 +0100
+Message-Id: <20190909134807.27978-18-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20190909134807.27978-1-maz@kernel.org>
+References: <20190909134807.27978-1-maz@kernel.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+While parts of the VGIC support a large number of vcpus (we
+bravely allow up to 512), other parts are more limited.
+
+One of these limits is visible in the KVM_IRQ_LINE ioctl, which
+only allows 256 vcpus to be signalled when using the CPU or PPI
+types. Unfortunately, we've cornered ourselves badly by allocating
+all the bits in the irq field.
+
+Since the irq_type subfield (8 bit wide) is currently only taking
+the values 0, 1 and 2 (and we have been careful not to allow anything
+else), let's reduce this field to only 4 bits, and allocate the
+remaining 4 bits to a vcpu2_index, which acts as a multiplier:
+
+  vcpu_id = 256 * vcpu2_index + vcpu_index
+
+With that, and a new capability (KVM_CAP_ARM_IRQ_LINE_LAYOUT_2)
+allowing this to be discovered, it becomes possible to inject
+PPIs to up to 4096 vcpus. But please just don't.
+
+Whilst we're there, add a clarification about the use of KVM_IRQ_LINE
+on arm, which is not completely conditionned by KVM_CAP_IRQCHIP.
+
+Reported-by: Zenghui Yu <yuzenghui@huawei.com>
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Reviewed-by: Zenghui Yu <yuzenghui@huawei.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ Documentation/virt/kvm/api.txt    | 12 ++++++++++--
+ arch/arm/include/uapi/asm/kvm.h   |  4 +++-
+ arch/arm64/include/uapi/asm/kvm.h |  4 +++-
+ include/uapi/linux/kvm.h          |  1 +
+ virt/kvm/arm/arm.c                |  2 ++
+ 5 files changed, 19 insertions(+), 4 deletions(-)
+
+diff --git a/Documentation/virt/kvm/api.txt b/Documentation/virt/kvm/api.txt
+index 2d067767b617..25931ca1cb38 100644
+--- a/Documentation/virt/kvm/api.txt
++++ b/Documentation/virt/kvm/api.txt
+@@ -753,8 +753,8 @@ in-kernel irqchip (GIC), and for in-kernel irqchip can tell the GIC to
+ use PPIs designated for specific cpus.  The irq field is interpreted
+ like this:
+ 
+-  bits:  | 31 ... 24 | 23  ... 16 | 15    ...    0 |
+-  field: | irq_type  | vcpu_index |     irq_id     |
++  bits:  |  31 ... 28  | 27 ... 24 | 23  ... 16 | 15 ... 0 |
++  field: | vcpu2_index | irq_type  | vcpu_index |  irq_id  |
+ 
+ The irq_type field has the following values:
+ - irq_type[0]: out-of-kernel GIC: irq_id 0 is IRQ, irq_id 1 is FIQ
+@@ -766,6 +766,14 @@ The irq_type field has the following values:
+ 
+ In both cases, level is used to assert/deassert the line.
+ 
++When KVM_CAP_ARM_IRQ_LINE_LAYOUT_2 is supported, the target vcpu is
++identified as (256 * vcpu2_index + vcpu_index). Otherwise, vcpu2_index
++must be zero.
++
++Note that on arm/arm64, the KVM_CAP_IRQCHIP capability only conditions
++injection of interrupts for the in-kernel irqchip. KVM_IRQ_LINE can always
++be used for a userspace interrupt controller.
++
+ struct kvm_irq_level {
+ 	union {
+ 		__u32 irq;     /* GSI */
+diff --git a/arch/arm/include/uapi/asm/kvm.h b/arch/arm/include/uapi/asm/kvm.h
+index a4217c1a5d01..2769360f195c 100644
+--- a/arch/arm/include/uapi/asm/kvm.h
++++ b/arch/arm/include/uapi/asm/kvm.h
+@@ -266,8 +266,10 @@ struct kvm_vcpu_events {
+ #define   KVM_DEV_ARM_ITS_CTRL_RESET		4
+ 
+ /* KVM_IRQ_LINE irq field index values */
++#define KVM_ARM_IRQ_VCPU2_SHIFT		28
++#define KVM_ARM_IRQ_VCPU2_MASK		0xf
+ #define KVM_ARM_IRQ_TYPE_SHIFT		24
+-#define KVM_ARM_IRQ_TYPE_MASK		0xff
++#define KVM_ARM_IRQ_TYPE_MASK		0xf
+ #define KVM_ARM_IRQ_VCPU_SHIFT		16
+ #define KVM_ARM_IRQ_VCPU_MASK		0xff
+ #define KVM_ARM_IRQ_NUM_SHIFT		0
+diff --git a/arch/arm64/include/uapi/asm/kvm.h b/arch/arm64/include/uapi/asm/kvm.h
+index 9a507716ae2f..67c21f9bdbad 100644
+--- a/arch/arm64/include/uapi/asm/kvm.h
++++ b/arch/arm64/include/uapi/asm/kvm.h
+@@ -325,8 +325,10 @@ struct kvm_vcpu_events {
+ #define   KVM_ARM_VCPU_TIMER_IRQ_PTIMER		1
+ 
+ /* KVM_IRQ_LINE irq field index values */
++#define KVM_ARM_IRQ_VCPU2_SHIFT		28
++#define KVM_ARM_IRQ_VCPU2_MASK		0xf
+ #define KVM_ARM_IRQ_TYPE_SHIFT		24
+-#define KVM_ARM_IRQ_TYPE_MASK		0xff
++#define KVM_ARM_IRQ_TYPE_MASK		0xf
+ #define KVM_ARM_IRQ_VCPU_SHIFT		16
+ #define KVM_ARM_IRQ_VCPU_MASK		0xff
+ #define KVM_ARM_IRQ_NUM_SHIFT		0
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index 5e3f12d5359e..5414b6588fbb 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -996,6 +996,7 @@ struct kvm_ppc_resize_hpt {
+ #define KVM_CAP_ARM_PTRAUTH_ADDRESS 171
+ #define KVM_CAP_ARM_PTRAUTH_GENERIC 172
+ #define KVM_CAP_PMU_EVENT_FILTER 173
++#define KVM_CAP_ARM_IRQ_LINE_LAYOUT_2 174
+ 
+ #ifdef KVM_CAP_IRQ_ROUTING
+ 
+diff --git a/virt/kvm/arm/arm.c b/virt/kvm/arm/arm.c
+index 35a069815baf..86c6aa1cb58e 100644
+--- a/virt/kvm/arm/arm.c
++++ b/virt/kvm/arm/arm.c
+@@ -196,6 +196,7 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
+ 	case KVM_CAP_MP_STATE:
+ 	case KVM_CAP_IMMEDIATE_EXIT:
+ 	case KVM_CAP_VCPU_EVENTS:
++	case KVM_CAP_ARM_IRQ_LINE_LAYOUT_2:
+ 		r = 1;
+ 		break;
+ 	case KVM_CAP_ARM_SET_DEVICE_ADDR:
+@@ -888,6 +889,7 @@ int kvm_vm_ioctl_irq_line(struct kvm *kvm, struct kvm_irq_level *irq_level,
+ 
+ 	irq_type = (irq >> KVM_ARM_IRQ_TYPE_SHIFT) & KVM_ARM_IRQ_TYPE_MASK;
+ 	vcpu_idx = (irq >> KVM_ARM_IRQ_VCPU_SHIFT) & KVM_ARM_IRQ_VCPU_MASK;
++	vcpu_idx += ((irq >> KVM_ARM_IRQ_VCPU2_SHIFT) & KVM_ARM_IRQ_VCPU2_MASK) * (KVM_ARM_IRQ_VCPU_MASK + 1);
+ 	irq_num = (irq >> KVM_ARM_IRQ_NUM_SHIFT) & KVM_ARM_IRQ_NUM_MASK;
+ 
+ 	trace_kvm_irq_line(irq_type, vcpu_idx, irq_num, irq_level->level);
