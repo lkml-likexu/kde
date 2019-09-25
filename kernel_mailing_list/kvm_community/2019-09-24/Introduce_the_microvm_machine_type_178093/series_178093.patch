@@ -1,0 +1,2292 @@
+From patchwork Tue Sep 24 12:44:26 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sergio Lopez <slp@redhat.com>
+X-Patchwork-Id: 11158637
+Return-Path: <SRS0=xKXW=XT=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 0363D1599
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Sep 2019 12:45:13 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id CD37E2168B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Sep 2019 12:45:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2395313AbfIXMpL (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 24 Sep 2019 08:45:11 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:44890 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2395292AbfIXMpL (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 24 Sep 2019 08:45:11 -0400
+Received: from smtp.corp.redhat.com (int-mx03.intmail.prod.int.phx2.redhat.com
+ [10.5.11.13])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id CE74030860CB;
+        Tue, 24 Sep 2019 12:45:10 +0000 (UTC)
+Received: from dritchie.redhat.com (unknown [10.33.36.128])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 8135160852;
+        Tue, 24 Sep 2019 12:45:04 +0000 (UTC)
+From: Sergio Lopez <slp@redhat.com>
+To: qemu-devel@nongnu.org
+Cc: mst@redhat.com, imammedo@redhat.com, marcel.apfelbaum@gmail.com,
+        pbonzini@redhat.com, rth@twiddle.net, ehabkost@redhat.com,
+        philmd@redhat.com, lersek@redhat.com, kraxel@redhat.com,
+        mtosatti@redhat.com, kvm@vger.kernel.org,
+        Sergio Lopez <slp@redhat.com>
+Subject: [PATCH v4 1/8] hw/i386: Factorize PVH related functions
+Date: Tue, 24 Sep 2019 14:44:26 +0200
+Message-Id: <20190924124433.96810-2-slp@redhat.com>
+In-Reply-To: <20190924124433.96810-1-slp@redhat.com>
+References: <20190924124433.96810-1-slp@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.13
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.44]);
+ Tue, 24 Sep 2019 12:45:10 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Extract PVH related functions from pc.c, and put them in pvh.c, so
+they can be shared with other components.
+
+Signed-off-by: Sergio Lopez <slp@redhat.com>
+---
+ hw/i386/Makefile.objs |   1 +
+ hw/i386/pc.c          | 120 +++++-------------------------------------
+ hw/i386/pvh.c         | 113 +++++++++++++++++++++++++++++++++++++++
+ hw/i386/pvh.h         |  10 ++++
+ 4 files changed, 136 insertions(+), 108 deletions(-)
+ create mode 100644 hw/i386/pvh.c
+ create mode 100644 hw/i386/pvh.h
+
+diff --git a/hw/i386/Makefile.objs b/hw/i386/Makefile.objs
+index 5d9c9efd5f..c5f20bbd72 100644
+--- a/hw/i386/Makefile.objs
++++ b/hw/i386/Makefile.objs
+@@ -1,5 +1,6 @@
+ obj-$(CONFIG_KVM) += kvm/
+ obj-y += multiboot.o
++obj-y += pvh.o
+ obj-y += pc.o
+ obj-$(CONFIG_I440FX) += pc_piix.o
+ obj-$(CONFIG_Q35) += pc_q35.o
+diff --git a/hw/i386/pc.c b/hw/i386/pc.c
+index bad866fe44..10e4ced0c6 100644
+--- a/hw/i386/pc.c
++++ b/hw/i386/pc.c
+@@ -42,6 +42,7 @@
+ #include "elf.h"
+ #include "migration/vmstate.h"
+ #include "multiboot.h"
++#include "pvh.h"
+ #include "hw/timer/mc146818rtc.h"
+ #include "hw/dma/i8257.h"
+ #include "hw/timer/i8254.h"
+@@ -116,9 +117,6 @@ static struct e820_entry *e820_table;
+ static unsigned e820_entries;
+ struct hpet_fw_config hpet_cfg = {.count = UINT8_MAX};
+ 
+-/* Physical Address of PVH entry point read from kernel ELF NOTE */
+-static size_t pvh_start_addr;
+-
+ GlobalProperty pc_compat_4_1[] = {};
+ const size_t pc_compat_4_1_len = G_N_ELEMENTS(pc_compat_4_1);
+ 
+@@ -1076,109 +1074,6 @@ struct setup_data {
+     uint8_t data[0];
+ } __attribute__((packed));
+ 
+-
+-/*
+- * The entry point into the kernel for PVH boot is different from
+- * the native entry point.  The PVH entry is defined by the x86/HVM
+- * direct boot ABI and is available in an ELFNOTE in the kernel binary.
+- *
+- * This function is passed to load_elf() when it is called from
+- * load_elfboot() which then additionally checks for an ELF Note of
+- * type XEN_ELFNOTE_PHYS32_ENTRY and passes it to this function to
+- * parse the PVH entry address from the ELF Note.
+- *
+- * Due to trickery in elf_opts.h, load_elf() is actually available as
+- * load_elf32() or load_elf64() and this routine needs to be able
+- * to deal with being called as 32 or 64 bit.
+- *
+- * The address of the PVH entry point is saved to the 'pvh_start_addr'
+- * global variable.  (although the entry point is 32-bit, the kernel
+- * binary can be either 32-bit or 64-bit).
+- */
+-static uint64_t read_pvh_start_addr(void *arg1, void *arg2, bool is64)
+-{
+-    size_t *elf_note_data_addr;
+-
+-    /* Check if ELF Note header passed in is valid */
+-    if (arg1 == NULL) {
+-        return 0;
+-    }
+-
+-    if (is64) {
+-        struct elf64_note *nhdr64 = (struct elf64_note *)arg1;
+-        uint64_t nhdr_size64 = sizeof(struct elf64_note);
+-        uint64_t phdr_align = *(uint64_t *)arg2;
+-        uint64_t nhdr_namesz = nhdr64->n_namesz;
+-
+-        elf_note_data_addr =
+-            ((void *)nhdr64) + nhdr_size64 +
+-            QEMU_ALIGN_UP(nhdr_namesz, phdr_align);
+-    } else {
+-        struct elf32_note *nhdr32 = (struct elf32_note *)arg1;
+-        uint32_t nhdr_size32 = sizeof(struct elf32_note);
+-        uint32_t phdr_align = *(uint32_t *)arg2;
+-        uint32_t nhdr_namesz = nhdr32->n_namesz;
+-
+-        elf_note_data_addr =
+-            ((void *)nhdr32) + nhdr_size32 +
+-            QEMU_ALIGN_UP(nhdr_namesz, phdr_align);
+-    }
+-
+-    pvh_start_addr = *elf_note_data_addr;
+-
+-    return pvh_start_addr;
+-}
+-
+-static bool load_elfboot(const char *kernel_filename,
+-                   int kernel_file_size,
+-                   uint8_t *header,
+-                   size_t pvh_xen_start_addr,
+-                   FWCfgState *fw_cfg)
+-{
+-    uint32_t flags = 0;
+-    uint32_t mh_load_addr = 0;
+-    uint32_t elf_kernel_size = 0;
+-    uint64_t elf_entry;
+-    uint64_t elf_low, elf_high;
+-    int kernel_size;
+-
+-    if (ldl_p(header) != 0x464c457f) {
+-        return false; /* no elfboot */
+-    }
+-
+-    bool elf_is64 = header[EI_CLASS] == ELFCLASS64;
+-    flags = elf_is64 ?
+-        ((Elf64_Ehdr *)header)->e_flags : ((Elf32_Ehdr *)header)->e_flags;
+-
+-    if (flags & 0x00010004) { /* LOAD_ELF_HEADER_HAS_ADDR */
+-        error_report("elfboot unsupported flags = %x", flags);
+-        exit(1);
+-    }
+-
+-    uint64_t elf_note_type = XEN_ELFNOTE_PHYS32_ENTRY;
+-    kernel_size = load_elf(kernel_filename, read_pvh_start_addr,
+-                           NULL, &elf_note_type, &elf_entry,
+-                           &elf_low, &elf_high, 0, I386_ELF_MACHINE,
+-                           0, 0);
+-
+-    if (kernel_size < 0) {
+-        error_report("Error while loading elf kernel");
+-        exit(1);
+-    }
+-    mh_load_addr = elf_low;
+-    elf_kernel_size = elf_high - elf_low;
+-
+-    if (pvh_start_addr == 0) {
+-        error_report("Error loading uncompressed kernel without PVH ELF Note");
+-        exit(1);
+-    }
+-    fw_cfg_add_i32(fw_cfg, FW_CFG_KERNEL_ENTRY, pvh_start_addr);
+-    fw_cfg_add_i32(fw_cfg, FW_CFG_KERNEL_ADDR, mh_load_addr);
+-    fw_cfg_add_i32(fw_cfg, FW_CFG_KERNEL_SIZE, elf_kernel_size);
+-
+-    return true;
+-}
+-
+ static void load_linux(PCMachineState *pcms,
+                        FWCfgState *fw_cfg)
+ {
+@@ -1218,6 +1113,9 @@ static void load_linux(PCMachineState *pcms,
+     if (ldl_p(header+0x202) == 0x53726448) {
+         protocol = lduw_p(header+0x206);
+     } else {
++        size_t pvh_start_addr;
++        uint32_t mh_load_addr = 0;
++        uint32_t elf_kernel_size = 0;
+         /*
+          * This could be a multiboot kernel. If it is, let's stop treating it
+          * like a Linux kernel.
+@@ -1235,10 +1133,16 @@ static void load_linux(PCMachineState *pcms,
+          * If load_elfboot() is successful, populate the fw_cfg info.
+          */
+         if (pcmc->pvh_enabled &&
+-            load_elfboot(kernel_filename, kernel_size,
+-                         header, pvh_start_addr, fw_cfg)) {
++            pvh_load_elfboot(kernel_filename,
++                             &mh_load_addr, &elf_kernel_size)) {
+             fclose(f);
+ 
++            pvh_start_addr = pvh_get_start_addr();
++
++            fw_cfg_add_i32(fw_cfg, FW_CFG_KERNEL_ENTRY, pvh_start_addr);
++            fw_cfg_add_i32(fw_cfg, FW_CFG_KERNEL_ADDR, mh_load_addr);
++            fw_cfg_add_i32(fw_cfg, FW_CFG_KERNEL_SIZE, elf_kernel_size);
++
+             fw_cfg_add_i32(fw_cfg, FW_CFG_CMDLINE_SIZE,
+                 strlen(kernel_cmdline) + 1);
+             fw_cfg_add_string(fw_cfg, FW_CFG_CMDLINE_DATA, kernel_cmdline);
+diff --git a/hw/i386/pvh.c b/hw/i386/pvh.c
+new file mode 100644
+index 0000000000..1c81727811
+--- /dev/null
++++ b/hw/i386/pvh.c
+@@ -0,0 +1,113 @@
++/*
++ * PVH Boot Helper
++ *
++ * Copyright (C) 2019 Oracle
++ * Copyright (C) 2019 Red Hat, Inc
++ *
++ * This work is licensed under the terms of the GNU GPL, version 2 or later.
++ * See the COPYING file in the top-level directory.
++ *
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/units.h"
++#include "qemu/error-report.h"
++#include "hw/loader.h"
++#include "cpu.h"
++#include "elf.h"
++#include "pvh.h"
++
++static size_t pvh_start_addr;
++
++size_t pvh_get_start_addr(void)
++{
++    return pvh_start_addr;
++}
++
++/*
++ * The entry point into the kernel for PVH boot is different from
++ * the native entry point.  The PVH entry is defined by the x86/HVM
++ * direct boot ABI and is available in an ELFNOTE in the kernel binary.
++ *
++ * This function is passed to load_elf() when it is called from
++ * load_elfboot() which then additionally checks for an ELF Note of
++ * type XEN_ELFNOTE_PHYS32_ENTRY and passes it to this function to
++ * parse the PVH entry address from the ELF Note.
++ *
++ * Due to trickery in elf_opts.h, load_elf() is actually available as
++ * load_elf32() or load_elf64() and this routine needs to be able
++ * to deal with being called as 32 or 64 bit.
++ *
++ * The address of the PVH entry point is saved to the 'pvh_start_addr'
++ * global variable.  (although the entry point is 32-bit, the kernel
++ * binary can be either 32-bit or 64-bit).
++ */
++
++static uint64_t read_pvh_start_addr(void *arg1, void *arg2, bool is64)
++{
++    size_t *elf_note_data_addr;
++
++    /* Check if ELF Note header passed in is valid */
++    if (arg1 == NULL) {
++        return 0;
++    }
++
++    if (is64) {
++        struct elf64_note *nhdr64 = (struct elf64_note *)arg1;
++        uint64_t nhdr_size64 = sizeof(struct elf64_note);
++        uint64_t phdr_align = *(uint64_t *)arg2;
++        uint64_t nhdr_namesz = nhdr64->n_namesz;
++
++        elf_note_data_addr =
++            ((void *)nhdr64) + nhdr_size64 +
++            QEMU_ALIGN_UP(nhdr_namesz, phdr_align);
++    } else {
++        struct elf32_note *nhdr32 = (struct elf32_note *)arg1;
++        uint32_t nhdr_size32 = sizeof(struct elf32_note);
++        uint32_t phdr_align = *(uint32_t *)arg2;
++        uint32_t nhdr_namesz = nhdr32->n_namesz;
++
++        elf_note_data_addr =
++            ((void *)nhdr32) + nhdr_size32 +
++            QEMU_ALIGN_UP(nhdr_namesz, phdr_align);
++    }
++
++    pvh_start_addr = *elf_note_data_addr;
++
++    return pvh_start_addr;
++}
++
++bool pvh_load_elfboot(const char *kernel_filename,
++                      uint32_t *mh_load_addr,
++                      uint32_t *elf_kernel_size)
++{
++    uint64_t elf_entry;
++    uint64_t elf_low, elf_high;
++    int kernel_size;
++    uint64_t elf_note_type = XEN_ELFNOTE_PHYS32_ENTRY;
++
++    kernel_size = load_elf(kernel_filename, read_pvh_start_addr,
++                           NULL, &elf_note_type, &elf_entry,
++                           &elf_low, &elf_high, 0, I386_ELF_MACHINE,
++                           0, 0);
++
++    if (kernel_size < 0) {
++        error_report("Error while loading elf kernel");
++        return false;
++    }
++
++    if (pvh_start_addr == 0) {
++        error_report("Error loading uncompressed kernel without PVH ELF Note");
++        return false;
++    }
++
++    if (mh_load_addr) {
++        *mh_load_addr = elf_low;
++    }
++
++    if (elf_kernel_size) {
++        *elf_kernel_size = elf_high - elf_low;
++    }
++
++    return true;
++}
+diff --git a/hw/i386/pvh.h b/hw/i386/pvh.h
+new file mode 100644
+index 0000000000..ada67ff6e8
+--- /dev/null
++++ b/hw/i386/pvh.h
+@@ -0,0 +1,10 @@
++#ifndef HW_I386_PVH_H
++#define HW_I386_PVH_H
++
++size_t pvh_get_start_addr(void);
++
++bool pvh_load_elfboot(const char *kernel_filename,
++                      uint32_t *mh_load_addr,
++                      uint32_t *elf_kernel_size);
++
++#endif
+
+From patchwork Tue Sep 24 12:44:27 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sergio Lopez <slp@redhat.com>
+X-Patchwork-Id: 11158639
+Return-Path: <SRS0=xKXW=XT=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id EA95C14ED
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Sep 2019 12:45:28 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id C97E82168B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Sep 2019 12:45:28 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2439119AbfIXMp2 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 24 Sep 2019 08:45:28 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:40122 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729741AbfIXMp1 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 24 Sep 2019 08:45:27 -0400
+Received: from smtp.corp.redhat.com (int-mx03.intmail.prod.int.phx2.redhat.com
+ [10.5.11.13])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 1051A10CC1F7;
+        Tue, 24 Sep 2019 12:45:27 +0000 (UTC)
+Received: from dritchie.redhat.com (unknown [10.33.36.128])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 3062E60852;
+        Tue, 24 Sep 2019 12:45:11 +0000 (UTC)
+From: Sergio Lopez <slp@redhat.com>
+To: qemu-devel@nongnu.org
+Cc: mst@redhat.com, imammedo@redhat.com, marcel.apfelbaum@gmail.com,
+        pbonzini@redhat.com, rth@twiddle.net, ehabkost@redhat.com,
+        philmd@redhat.com, lersek@redhat.com, kraxel@redhat.com,
+        mtosatti@redhat.com, kvm@vger.kernel.org,
+        Sergio Lopez <slp@redhat.com>
+Subject: [PATCH v4 2/8] hw/i386: Factorize e820 related functions
+Date: Tue, 24 Sep 2019 14:44:27 +0200
+Message-Id: <20190924124433.96810-3-slp@redhat.com>
+In-Reply-To: <20190924124433.96810-1-slp@redhat.com>
+References: <20190924124433.96810-1-slp@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.13
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.6.2 (mx1.redhat.com [10.5.110.65]);
+ Tue, 24 Sep 2019 12:45:27 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Extract e820 related functions from pc.c, and put them in e820.c, so
+they can be shared with other components.
+
+Signed-off-by: Sergio Lopez <slp@redhat.com>
+---
+ hw/i386/Makefile.objs |  1 +
+ hw/i386/e820.c        | 99 +++++++++++++++++++++++++++++++++++++++++++
+ hw/i386/e820.h        | 11 +++++
+ hw/i386/pc.c          | 66 +----------------------------
+ include/hw/i386/pc.h  | 11 -----
+ target/i386/kvm.c     |  1 +
+ 6 files changed, 114 insertions(+), 75 deletions(-)
+ create mode 100644 hw/i386/e820.c
+ create mode 100644 hw/i386/e820.h
+
+diff --git a/hw/i386/Makefile.objs b/hw/i386/Makefile.objs
+index c5f20bbd72..149712db07 100644
+--- a/hw/i386/Makefile.objs
++++ b/hw/i386/Makefile.objs
+@@ -2,6 +2,7 @@ obj-$(CONFIG_KVM) += kvm/
+ obj-y += multiboot.o
+ obj-y += pvh.o
+ obj-y += pc.o
++obj-y += e820.o
+ obj-$(CONFIG_I440FX) += pc_piix.o
+ obj-$(CONFIG_Q35) += pc_q35.o
+ obj-y += fw_cfg.o pc_sysfw.o
+diff --git a/hw/i386/e820.c b/hw/i386/e820.c
+new file mode 100644
+index 0000000000..d5c5c0d528
+--- /dev/null
++++ b/hw/i386/e820.c
+@@ -0,0 +1,99 @@
++/*
++ * Copyright (c) 2003-2004 Fabrice Bellard
++ * Copyright (c) 2019 Red Hat, Inc.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++ * THE SOFTWARE.
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/error-report.h"
++#include "qemu/cutils.h"
++#include "qemu/units.h"
++
++#include "hw/i386/e820.h"
++#include "hw/i386/fw_cfg.h"
++
++#define E820_NR_ENTRIES		16
++
++struct e820_entry {
++    uint64_t address;
++    uint64_t length;
++    uint32_t type;
++} QEMU_PACKED __attribute((__aligned__(4)));
++
++struct e820_table {
++    uint32_t count;
++    struct e820_entry entry[E820_NR_ENTRIES];
++} QEMU_PACKED __attribute((__aligned__(4)));
++
++static struct e820_table e820_reserve;
++static struct e820_entry *e820_table;
++static unsigned e820_entries;
++
++int e820_add_entry(uint64_t address, uint64_t length, uint32_t type)
++{
++    int index = le32_to_cpu(e820_reserve.count);
++    struct e820_entry *entry;
++
++    if (type != E820_RAM) {
++        /* old FW_CFG_E820_TABLE entry -- reservations only */
++        if (index >= E820_NR_ENTRIES) {
++            return -EBUSY;
++        }
++        entry = &e820_reserve.entry[index++];
++
++        entry->address = cpu_to_le64(address);
++        entry->length = cpu_to_le64(length);
++        entry->type = cpu_to_le32(type);
++
++        e820_reserve.count = cpu_to_le32(index);
++    }
++
++    /* new "etc/e820" file -- include ram too */
++    e820_table = g_renew(struct e820_entry, e820_table, e820_entries + 1);
++    e820_table[e820_entries].address = cpu_to_le64(address);
++    e820_table[e820_entries].length = cpu_to_le64(length);
++    e820_table[e820_entries].type = cpu_to_le32(type);
++    e820_entries++;
++
++    return e820_entries;
++}
++
++int e820_get_num_entries(void)
++{
++    return e820_entries;
++}
++
++bool e820_get_entry(int idx, uint32_t type, uint64_t *address, uint64_t *length)
++{
++    if (idx < e820_entries && e820_table[idx].type == cpu_to_le32(type)) {
++        *address = le64_to_cpu(e820_table[idx].address);
++        *length = le64_to_cpu(e820_table[idx].length);
++        return true;
++    }
++    return false;
++}
++
++void e820_create_fw_entry(FWCfgState *fw_cfg)
++{
++    fw_cfg_add_bytes(fw_cfg, FW_CFG_E820_TABLE,
++                     &e820_reserve, sizeof(e820_reserve));
++    fw_cfg_add_file(fw_cfg, "etc/e820", e820_table,
++                    sizeof(struct e820_entry) * e820_entries);
++}
+diff --git a/hw/i386/e820.h b/hw/i386/e820.h
+new file mode 100644
+index 0000000000..569d1f0ab5
+--- /dev/null
++++ b/hw/i386/e820.h
+@@ -0,0 +1,11 @@
++/* e820 types */
++#define E820_RAM        1
++#define E820_RESERVED   2
++#define E820_ACPI       3
++#define E820_NVS        4
++#define E820_UNUSABLE   5
++
++int e820_add_entry(uint64_t address, uint64_t length, uint32_t type);
++int e820_get_num_entries(void);
++bool e820_get_entry(int idx, uint32_t type, uint64_t *address, uint64_t *length);
++void e820_create_fw_entry(FWCfgState *fw_cfg);
+diff --git a/hw/i386/pc.c b/hw/i386/pc.c
+index 10e4ced0c6..3920aa7e85 100644
+--- a/hw/i386/pc.c
++++ b/hw/i386/pc.c
+@@ -30,6 +30,7 @@
+ #include "hw/i386/apic.h"
+ #include "hw/i386/topology.h"
+ #include "hw/i386/fw_cfg.h"
++#include "hw/i386/e820.h"
+ #include "sysemu/cpus.h"
+ #include "hw/block/fdc.h"
+ #include "hw/ide.h"
+@@ -99,22 +100,6 @@
+ #define DPRINTF(fmt, ...)
+ #endif
+ 
+-#define E820_NR_ENTRIES		16
+-
+-struct e820_entry {
+-    uint64_t address;
+-    uint64_t length;
+-    uint32_t type;
+-} QEMU_PACKED __attribute((__aligned__(4)));
+-
+-struct e820_table {
+-    uint32_t count;
+-    struct e820_entry entry[E820_NR_ENTRIES];
+-} QEMU_PACKED __attribute((__aligned__(4)));
+-
+-static struct e820_table e820_reserve;
+-static struct e820_entry *e820_table;
+-static unsigned e820_entries;
+ struct hpet_fw_config hpet_cfg = {.count = UINT8_MAX};
+ 
+ GlobalProperty pc_compat_4_1[] = {};
+@@ -878,50 +863,6 @@ static void handle_a20_line_change(void *opaque, int irq, int level)
+     x86_cpu_set_a20(cpu, level);
+ }
+ 
+-int e820_add_entry(uint64_t address, uint64_t length, uint32_t type)
+-{
+-    int index = le32_to_cpu(e820_reserve.count);
+-    struct e820_entry *entry;
+-
+-    if (type != E820_RAM) {
+-        /* old FW_CFG_E820_TABLE entry -- reservations only */
+-        if (index >= E820_NR_ENTRIES) {
+-            return -EBUSY;
+-        }
+-        entry = &e820_reserve.entry[index++];
+-
+-        entry->address = cpu_to_le64(address);
+-        entry->length = cpu_to_le64(length);
+-        entry->type = cpu_to_le32(type);
+-
+-        e820_reserve.count = cpu_to_le32(index);
+-    }
+-
+-    /* new "etc/e820" file -- include ram too */
+-    e820_table = g_renew(struct e820_entry, e820_table, e820_entries + 1);
+-    e820_table[e820_entries].address = cpu_to_le64(address);
+-    e820_table[e820_entries].length = cpu_to_le64(length);
+-    e820_table[e820_entries].type = cpu_to_le32(type);
+-    e820_entries++;
+-
+-    return e820_entries;
+-}
+-
+-int e820_get_num_entries(void)
+-{
+-    return e820_entries;
+-}
+-
+-bool e820_get_entry(int idx, uint32_t type, uint64_t *address, uint64_t *length)
+-{
+-    if (idx < e820_entries && e820_table[idx].type == cpu_to_le32(type)) {
+-        *address = le64_to_cpu(e820_table[idx].address);
+-        *length = le64_to_cpu(e820_table[idx].length);
+-        return true;
+-    }
+-    return false;
+-}
+-
+ /* Calculates initial APIC ID for a specific CPU index
+  *
+  * Currently we need to be able to calculate the APIC ID from the CPU index
+@@ -1024,10 +965,7 @@ static FWCfgState *bochs_bios_init(AddressSpace *as, PCMachineState *pcms)
+                      acpi_tables, acpi_tables_len);
+     fw_cfg_add_i32(fw_cfg, FW_CFG_IRQ0_OVERRIDE, kvm_allows_irq0_override());
+ 
+-    fw_cfg_add_bytes(fw_cfg, FW_CFG_E820_TABLE,
+-                     &e820_reserve, sizeof(e820_reserve));
+-    fw_cfg_add_file(fw_cfg, "etc/e820", e820_table,
+-                    sizeof(struct e820_entry) * e820_entries);
++    e820_create_fw_entry(fw_cfg);
+ 
+     fw_cfg_add_bytes(fw_cfg, FW_CFG_HPET, &hpet_cfg, sizeof(hpet_cfg));
+     /* allocate memory for the NUMA channel: one (64bit) word for the number
+diff --git a/include/hw/i386/pc.h b/include/hw/i386/pc.h
+index 19a837889d..062feeb69e 100644
+--- a/include/hw/i386/pc.h
++++ b/include/hw/i386/pc.h
+@@ -291,17 +291,6 @@ void pc_system_firmware_init(PCMachineState *pcms, MemoryRegion *rom_memory);
+ void pc_madt_cpu_entry(AcpiDeviceIf *adev, int uid,
+                        const CPUArchIdList *apic_ids, GArray *entry);
+ 
+-/* e820 types */
+-#define E820_RAM        1
+-#define E820_RESERVED   2
+-#define E820_ACPI       3
+-#define E820_NVS        4
+-#define E820_UNUSABLE   5
+-
+-int e820_add_entry(uint64_t, uint64_t, uint32_t);
+-int e820_get_num_entries(void);
+-bool e820_get_entry(int, uint32_t, uint64_t *, uint64_t *);
+-
+ extern GlobalProperty pc_compat_4_1[];
+ extern const size_t pc_compat_4_1_len;
+ 
+diff --git a/target/i386/kvm.c b/target/i386/kvm.c
+index 8023c679ea..8ce56db7d4 100644
+--- a/target/i386/kvm.c
++++ b/target/i386/kvm.c
+@@ -41,6 +41,7 @@
+ #include "hw/i386/apic-msidef.h"
+ #include "hw/i386/intel_iommu.h"
+ #include "hw/i386/x86-iommu.h"
++#include "hw/i386/e820.h"
+ 
+ #include "hw/pci/pci.h"
+ #include "hw/pci/msi.h"
+
+From patchwork Tue Sep 24 12:44:28 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sergio Lopez <slp@redhat.com>
+X-Patchwork-Id: 11158641
+Return-Path: <SRS0=xKXW=XT=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D18151599
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Sep 2019 12:45:31 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id BBF182168B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Sep 2019 12:45:31 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2504972AbfIXMpb (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 24 Sep 2019 08:45:31 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:55634 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2504968AbfIXMpa (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 24 Sep 2019 08:45:30 -0400
+Received: from smtp.corp.redhat.com (int-mx03.intmail.prod.int.phx2.redhat.com
+ [10.5.11.13])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 68DA585362;
+        Tue, 24 Sep 2019 12:45:30 +0000 (UTC)
+Received: from dritchie.redhat.com (unknown [10.33.36.128])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 6B99360852;
+        Tue, 24 Sep 2019 12:45:27 +0000 (UTC)
+From: Sergio Lopez <slp@redhat.com>
+To: qemu-devel@nongnu.org
+Cc: mst@redhat.com, imammedo@redhat.com, marcel.apfelbaum@gmail.com,
+        pbonzini@redhat.com, rth@twiddle.net, ehabkost@redhat.com,
+        philmd@redhat.com, lersek@redhat.com, kraxel@redhat.com,
+        mtosatti@redhat.com, kvm@vger.kernel.org,
+        Sergio Lopez <slp@redhat.com>
+Subject: [PATCH v4 3/8] hw/virtio: Factorize virtio-mmio headers
+Date: Tue, 24 Sep 2019 14:44:28 +0200
+Message-Id: <20190924124433.96810-4-slp@redhat.com>
+In-Reply-To: <20190924124433.96810-1-slp@redhat.com>
+References: <20190924124433.96810-1-slp@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.13
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.25]);
+ Tue, 24 Sep 2019 12:45:30 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Put QOM and main struct definition in a separate header file, so it
+can be accessed from other components.
+
+Signed-off-by: Sergio Lopez <slp@redhat.com>
+---
+ hw/virtio/virtio-mmio.c         | 35 +------------------
+ include/hw/virtio/virtio-mmio.h | 60 +++++++++++++++++++++++++++++++++
+ 2 files changed, 61 insertions(+), 34 deletions(-)
+ create mode 100644 include/hw/virtio/virtio-mmio.h
+
+diff --git a/hw/virtio/virtio-mmio.c b/hw/virtio/virtio-mmio.c
+index eccc795f28..6be6b298d5 100644
+--- a/hw/virtio/virtio-mmio.c
++++ b/hw/virtio/virtio-mmio.c
+@@ -29,44 +29,11 @@
+ #include "qemu/host-utils.h"
+ #include "qemu/module.h"
+ #include "sysemu/kvm.h"
+-#include "hw/virtio/virtio-bus.h"
++#include "hw/virtio/virtio-mmio.h"
+ #include "qemu/error-report.h"
+ #include "qemu/log.h"
+ #include "trace.h"
+ 
+-/* QOM macros */
+-/* virtio-mmio-bus */
+-#define TYPE_VIRTIO_MMIO_BUS "virtio-mmio-bus"
+-#define VIRTIO_MMIO_BUS(obj) \
+-        OBJECT_CHECK(VirtioBusState, (obj), TYPE_VIRTIO_MMIO_BUS)
+-#define VIRTIO_MMIO_BUS_GET_CLASS(obj) \
+-        OBJECT_GET_CLASS(VirtioBusClass, (obj), TYPE_VIRTIO_MMIO_BUS)
+-#define VIRTIO_MMIO_BUS_CLASS(klass) \
+-        OBJECT_CLASS_CHECK(VirtioBusClass, (klass), TYPE_VIRTIO_MMIO_BUS)
+-
+-/* virtio-mmio */
+-#define TYPE_VIRTIO_MMIO "virtio-mmio"
+-#define VIRTIO_MMIO(obj) \
+-        OBJECT_CHECK(VirtIOMMIOProxy, (obj), TYPE_VIRTIO_MMIO)
+-
+-#define VIRT_MAGIC 0x74726976 /* 'virt' */
+-#define VIRT_VERSION 1
+-#define VIRT_VENDOR 0x554D4551 /* 'QEMU' */
+-
+-typedef struct {
+-    /* Generic */
+-    SysBusDevice parent_obj;
+-    MemoryRegion iomem;
+-    qemu_irq irq;
+-    /* Guest accessible state needing migration and reset */
+-    uint32_t host_features_sel;
+-    uint32_t guest_features_sel;
+-    uint32_t guest_page_shift;
+-    /* virtio-bus */
+-    VirtioBusState bus;
+-    bool format_transport_address;
+-} VirtIOMMIOProxy;
+-
+ static bool virtio_mmio_ioeventfd_enabled(DeviceState *d)
+ {
+     return kvm_eventfds_enabled();
+diff --git a/include/hw/virtio/virtio-mmio.h b/include/hw/virtio/virtio-mmio.h
+new file mode 100644
+index 0000000000..2f3973f8c7
+--- /dev/null
++++ b/include/hw/virtio/virtio-mmio.h
+@@ -0,0 +1,60 @@
++/*
++ * Virtio MMIO bindings
++ *
++ * Copyright (c) 2011 Linaro Limited
++ *
++ * Author:
++ *  Peter Maydell <peter.maydell@linaro.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License; either version 2
++ * of the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, see <http://www.gnu.org/licenses/>.
++ */
++
++#ifndef QEMU_VIRTIO_MMIO_H
++#define QEMU_VIRTIO_MMIO_H
++
++#include "hw/virtio/virtio-bus.h"
++
++/* QOM macros */
++/* virtio-mmio-bus */
++#define TYPE_VIRTIO_MMIO_BUS "virtio-mmio-bus"
++#define VIRTIO_MMIO_BUS(obj) \
++        OBJECT_CHECK(VirtioBusState, (obj), TYPE_VIRTIO_MMIO_BUS)
++#define VIRTIO_MMIO_BUS_GET_CLASS(obj) \
++        OBJECT_GET_CLASS(VirtioBusClass, (obj), TYPE_VIRTIO_MMIO_BUS)
++#define VIRTIO_MMIO_BUS_CLASS(klass) \
++        OBJECT_CLASS_CHECK(VirtioBusClass, (klass), TYPE_VIRTIO_MMIO_BUS)
++
++/* virtio-mmio */
++#define TYPE_VIRTIO_MMIO "virtio-mmio"
++#define VIRTIO_MMIO(obj) \
++        OBJECT_CHECK(VirtIOMMIOProxy, (obj), TYPE_VIRTIO_MMIO)
++
++#define VIRT_MAGIC 0x74726976 /* 'virt' */
++#define VIRT_VERSION 1
++#define VIRT_VENDOR 0x554D4551 /* 'QEMU' */
++
++typedef struct {
++    /* Generic */
++    SysBusDevice parent_obj;
++    MemoryRegion iomem;
++    qemu_irq irq;
++    /* Guest accessible state needing migration and reset */
++    uint32_t host_features_sel;
++    uint32_t guest_features_sel;
++    uint32_t guest_page_shift;
++    /* virtio-bus */
++    VirtioBusState bus;
++    bool format_transport_address;
++} VirtIOMMIOProxy;
++
++#endif
+
+From patchwork Tue Sep 24 12:44:30 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sergio Lopez <slp@redhat.com>
+X-Patchwork-Id: 11158643
+Return-Path: <SRS0=xKXW=XT=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E2D9E1599
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Sep 2019 12:45:53 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id C99A02168B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Sep 2019 12:45:53 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2504973AbfIXMpx (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 24 Sep 2019 08:45:53 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:60158 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2504964AbfIXMpw (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 24 Sep 2019 08:45:52 -0400
+Received: from smtp.corp.redhat.com (int-mx03.intmail.prod.int.phx2.redhat.com
+ [10.5.11.13])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 51C45300D20B;
+        Tue, 24 Sep 2019 12:45:52 +0000 (UTC)
+Received: from dritchie.redhat.com (unknown [10.33.36.128])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 5DEAA608C2;
+        Tue, 24 Sep 2019 12:45:37 +0000 (UTC)
+From: Sergio Lopez <slp@redhat.com>
+To: qemu-devel@nongnu.org
+Cc: mst@redhat.com, imammedo@redhat.com, marcel.apfelbaum@gmail.com,
+        pbonzini@redhat.com, rth@twiddle.net, ehabkost@redhat.com,
+        philmd@redhat.com, lersek@redhat.com, kraxel@redhat.com,
+        mtosatti@redhat.com, kvm@vger.kernel.org,
+        Sergio Lopez <slp@redhat.com>
+Subject: [PATCH v4 5/8] fw_cfg: add "modify" functions for all types
+Date: Tue, 24 Sep 2019 14:44:30 +0200
+Message-Id: <20190924124433.96810-6-slp@redhat.com>
+In-Reply-To: <20190924124433.96810-1-slp@redhat.com>
+References: <20190924124433.96810-1-slp@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.13
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.40]);
+ Tue, 24 Sep 2019 12:45:52 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This allows to alter the contents of an already added item.
+
+Signed-off-by: Sergio Lopez <slp@redhat.com>
+---
+ hw/nvram/fw_cfg.c         | 29 +++++++++++++++++++++++++++
+ include/hw/nvram/fw_cfg.h | 42 +++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 71 insertions(+)
+
+diff --git a/hw/nvram/fw_cfg.c b/hw/nvram/fw_cfg.c
+index 7dc3ac378e..aef1727250 100644
+--- a/hw/nvram/fw_cfg.c
++++ b/hw/nvram/fw_cfg.c
+@@ -690,6 +690,15 @@ void fw_cfg_add_string(FWCfgState *s, uint16_t key, const char *value)
+     fw_cfg_add_bytes(s, key, g_memdup(value, sz), sz);
+ }
+ 
++void fw_cfg_modify_string(FWCfgState *s, uint16_t key, const char *value)
++{
++    size_t sz = strlen(value) + 1;
++    char *old;
++
++    old = fw_cfg_modify_bytes_read(s, key, g_memdup(value, sz), sz);
++    g_free(old);
++}
++
+ void fw_cfg_add_i16(FWCfgState *s, uint16_t key, uint16_t value)
+ {
+     uint16_t *copy;
+@@ -720,6 +729,16 @@ void fw_cfg_add_i32(FWCfgState *s, uint16_t key, uint32_t value)
+     fw_cfg_add_bytes(s, key, copy, sizeof(value));
+ }
+ 
++void fw_cfg_modify_i32(FWCfgState *s, uint16_t key, uint32_t value)
++{
++    uint32_t *copy, *old;
++
++    copy = g_malloc(sizeof(value));
++    *copy = cpu_to_le32(value);
++    old = fw_cfg_modify_bytes_read(s, key, copy, sizeof(value));
++    g_free(old);
++}
++
+ void fw_cfg_add_i64(FWCfgState *s, uint16_t key, uint64_t value)
+ {
+     uint64_t *copy;
+@@ -730,6 +749,16 @@ void fw_cfg_add_i64(FWCfgState *s, uint16_t key, uint64_t value)
+     fw_cfg_add_bytes(s, key, copy, sizeof(value));
+ }
+ 
++void fw_cfg_modify_i64(FWCfgState *s, uint16_t key, uint64_t value)
++{
++    uint64_t *copy, *old;
++
++    copy = g_malloc(sizeof(value));
++    *copy = cpu_to_le64(value);
++    old = fw_cfg_modify_bytes_read(s, key, copy, sizeof(value));
++    g_free(old);
++}
++
+ void fw_cfg_set_order_override(FWCfgState *s, int order)
+ {
+     assert(s->fw_cfg_order_override == 0);
+diff --git a/include/hw/nvram/fw_cfg.h b/include/hw/nvram/fw_cfg.h
+index 80e435d303..b5291eefad 100644
+--- a/include/hw/nvram/fw_cfg.h
++++ b/include/hw/nvram/fw_cfg.h
+@@ -98,6 +98,20 @@ void fw_cfg_add_bytes(FWCfgState *s, uint16_t key, void *data, size_t len);
+  */
+ void fw_cfg_add_string(FWCfgState *s, uint16_t key, const char *value);
+ 
++/**
++ * fw_cfg_modify_string:
++ * @s: fw_cfg device being modified
++ * @key: selector key value for new fw_cfg item
++ * @value: NUL-terminated ascii string
++ *
++ * Replace the fw_cfg item available by selecting the given key. The new
++ * data will consist of a dynamically allocated copy of the provided string,
++ * including its NUL terminator. The data being replaced, assumed to have
++ * been dynamically allocated during an earlier call to either
++ * fw_cfg_add_string() or fw_cfg_modify_string(), is freed before returning.
++ */
++void fw_cfg_modify_string(FWCfgState *s, uint16_t key, const char *value);
++
+ /**
+  * fw_cfg_add_i16:
+  * @s: fw_cfg device being modified
+@@ -136,6 +150,20 @@ void fw_cfg_modify_i16(FWCfgState *s, uint16_t key, uint16_t value);
+  */
+ void fw_cfg_add_i32(FWCfgState *s, uint16_t key, uint32_t value);
+ 
++/**
++ * fw_cfg_modify_i32:
++ * @s: fw_cfg device being modified
++ * @key: selector key value for new fw_cfg item
++ * @value: 32-bit integer
++ *
++ * Replace the fw_cfg item available by selecting the given key. The new
++ * data will consist of a dynamically allocated copy of the given 32-bit
++ * value, converted to little-endian representation. The data being replaced,
++ * assumed to have been dynamically allocated during an earlier call to
++ * either fw_cfg_add_i32() or fw_cfg_modify_i32(), is freed before returning.
++ */
++void fw_cfg_modify_i32(FWCfgState *s, uint16_t key, uint32_t value);
++
+ /**
+  * fw_cfg_add_i64:
+  * @s: fw_cfg device being modified
+@@ -148,6 +176,20 @@ void fw_cfg_add_i32(FWCfgState *s, uint16_t key, uint32_t value);
+  */
+ void fw_cfg_add_i64(FWCfgState *s, uint16_t key, uint64_t value);
+ 
++/**
++ * fw_cfg_modify_i64:
++ * @s: fw_cfg device being modified
++ * @key: selector key value for new fw_cfg item
++ * @value: 64-bit integer
++ *
++ * Replace the fw_cfg item available by selecting the given key. The new
++ * data will consist of a dynamically allocated copy of the given 64-bit
++ * value, converted to little-endian representation. The data being replaced,
++ * assumed to have been dynamically allocated during an earlier call to
++ * either fw_cfg_add_i64() or fw_cfg_modify_i64(), is freed before returning.
++ */
++void fw_cfg_modify_i64(FWCfgState *s, uint16_t key, uint64_t value);
++
+ /**
+  * fw_cfg_add_file:
+  * @s: fw_cfg device being modified
+
+From patchwork Tue Sep 24 12:44:31 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sergio Lopez <slp@redhat.com>
+X-Patchwork-Id: 11158649
+Return-Path: <SRS0=xKXW=XT=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 534471599
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Sep 2019 12:46:00 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 280C321783
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Sep 2019 12:46:00 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2441003AbfIXMp7 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 24 Sep 2019 08:45:59 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:56646 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2440997AbfIXMp6 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 24 Sep 2019 08:45:58 -0400
+Received: from smtp.corp.redhat.com (int-mx03.intmail.prod.int.phx2.redhat.com
+ [10.5.11.13])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id 3F68C190C01D;
+        Tue, 24 Sep 2019 12:45:58 +0000 (UTC)
+Received: from dritchie.redhat.com (unknown [10.33.36.128])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id ABB92608C2;
+        Tue, 24 Sep 2019 12:45:52 +0000 (UTC)
+From: Sergio Lopez <slp@redhat.com>
+To: qemu-devel@nongnu.org
+Cc: mst@redhat.com, imammedo@redhat.com, marcel.apfelbaum@gmail.com,
+        pbonzini@redhat.com, rth@twiddle.net, ehabkost@redhat.com,
+        philmd@redhat.com, lersek@redhat.com, kraxel@redhat.com,
+        mtosatti@redhat.com, kvm@vger.kernel.org,
+        Sergio Lopez <slp@redhat.com>
+Subject: [PATCH v4 6/8] roms: add microvm-bios (qboot) as binary and git
+ submodule
+Date: Tue, 24 Sep 2019 14:44:31 +0200
+Message-Id: <20190924124433.96810-7-slp@redhat.com>
+In-Reply-To: <20190924124433.96810-1-slp@redhat.com>
+References: <20190924124433.96810-1-slp@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.13
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.6.2 (mx1.redhat.com [10.5.110.70]);
+ Tue, 24 Sep 2019 12:45:58 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+qboot is a minimalist x86 firmware for booting Linux kernels. It does
+the mininum amount of work required for the task, and it's able to
+boot both PVH images and bzImages without relying on option roms.
+
+This characteristics make it an ideal companion for the microvm
+machine type.
+
+Signed-off-by: Sergio Lopez <slp@redhat.com>
+---
+ .gitmodules              |   3 +++
+ pc-bios/bios-microvm.bin | Bin 0 -> 65536 bytes
+ roms/Makefile            |   6 ++++++
+ roms/qboot               |   1 +
+ 4 files changed, 10 insertions(+)
+ create mode 100755 pc-bios/bios-microvm.bin
+ create mode 160000 roms/qboot
+
+diff --git a/.gitmodules b/.gitmodules
+index c5c474169d..19792c9a11 100644
+--- a/.gitmodules
++++ b/.gitmodules
+@@ -58,3 +58,6 @@
+ [submodule "roms/opensbi"]
+ 	path = roms/opensbi
+ 	url = 	https://git.qemu.org/git/opensbi.git
++[submodule "roms/qboot"]
++	path = roms/qboot
++	url = https://github.com/bonzini/qboot
+diff --git a/pc-bios/bios-microvm.bin b/pc-bios/bios-microvm.bin
+new file mode 100755
+index 0000000000000000000000000000000000000000..45eabc516692e2d134bbb630d133c7c2dcc9a9b6
+GIT binary patch
+literal 65536
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/roms/Makefile b/roms/Makefile
+index 775c963f9d..47eabc8633 100644
+--- a/roms/Makefile
++++ b/roms/Makefile
+@@ -67,6 +67,7 @@ default:
+ 	@echo "  opensbi32-virt     -- update OpenSBI for 32-bit virt machine"
+ 	@echo "  opensbi64-virt     -- update OpenSBI for 64-bit virt machine"
+ 	@echo "  opensbi64-sifive_u -- update OpenSBI for 64-bit sifive_u machine"
++	@echo "  bios-microvm       -- update bios-microvm.bin (qboot)"
+ 	@echo "  clean              -- delete the files generated by the previous" \
+ 	                              "build targets"
+ 
+@@ -185,6 +186,10 @@ opensbi64-sifive_u:
+ 		PLATFORM="qemu/sifive_u"
+ 	cp opensbi/build/platform/qemu/sifive_u/firmware/fw_jump.bin ../pc-bios/opensbi-riscv64-sifive_u-fw_jump.bin
+ 
++bios-microvm:
++	$(MAKE) -C qboot
++	cp qboot/bios.bin ../pc-bios/bios-microvm.bin
++
+ clean:
+ 	rm -rf seabios/.config seabios/out seabios/builds
+ 	$(MAKE) -C sgabios clean
+@@ -197,3 +202,4 @@ clean:
+ 	$(MAKE) -C skiboot clean
+ 	$(MAKE) -f Makefile.edk2 clean
+ 	$(MAKE) -C opensbi clean
++	$(MAKE) -C qboot clean
+diff --git a/roms/qboot b/roms/qboot
+new file mode 160000
+index 0000000000..cb1c49e0cf
+--- /dev/null
++++ b/roms/qboot
+@@ -0,0 +1 @@
++Subproject commit cb1c49e0cfac99b9961d136ac0194da62c28cf64
+
+From patchwork Tue Sep 24 12:44:32 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sergio Lopez <slp@redhat.com>
+X-Patchwork-Id: 11158653
+Return-Path: <SRS0=xKXW=XT=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 312FF14ED
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Sep 2019 12:46:06 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 17F08207FD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Sep 2019 12:46:06 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2441007AbfIXMqF (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 24 Sep 2019 08:46:05 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:40312 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2440997AbfIXMqF (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 24 Sep 2019 08:46:05 -0400
+Received: from smtp.corp.redhat.com (int-mx03.intmail.prod.int.phx2.redhat.com
+ [10.5.11.13])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id C26E1307D970;
+        Tue, 24 Sep 2019 12:46:04 +0000 (UTC)
+Received: from dritchie.redhat.com (unknown [10.33.36.128])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 94A0160933;
+        Tue, 24 Sep 2019 12:45:58 +0000 (UTC)
+From: Sergio Lopez <slp@redhat.com>
+To: qemu-devel@nongnu.org
+Cc: mst@redhat.com, imammedo@redhat.com, marcel.apfelbaum@gmail.com,
+        pbonzini@redhat.com, rth@twiddle.net, ehabkost@redhat.com,
+        philmd@redhat.com, lersek@redhat.com, kraxel@redhat.com,
+        mtosatti@redhat.com, kvm@vger.kernel.org,
+        Sergio Lopez <slp@redhat.com>
+Subject: [PATCH v4 7/8] docs/microvm.txt: document the new microvm machine
+ type
+Date: Tue, 24 Sep 2019 14:44:32 +0200
+Message-Id: <20190924124433.96810-8-slp@redhat.com>
+In-Reply-To: <20190924124433.96810-1-slp@redhat.com>
+References: <20190924124433.96810-1-slp@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.13
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.48]);
+ Tue, 24 Sep 2019 12:46:04 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Document the new microvm machine type.
+
+Signed-off-by: Sergio Lopez <slp@redhat.com>
+---
+ docs/microvm.txt | 78 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 78 insertions(+)
+ create mode 100644 docs/microvm.txt
+
+diff --git a/docs/microvm.txt b/docs/microvm.txt
+new file mode 100644
+index 0000000000..0241226b2a
+--- /dev/null
++++ b/docs/microvm.txt
+@@ -0,0 +1,78 @@
++Microvm is a machine type inspired by both NEMU and Firecracker, and
++constructed after the machine model implemented by the latter.
++
++It's main purpose is providing users a minimalist machine type free
++from the burden of legacy compatibility, serving as a stepping stone
++for future projects aiming at improving boot times, reducing the
++attack surface and slimming down QEMU's footprint.
++
++The microvm machine type supports the following devices:
++
++ - ISA bus
++ - i8259 PIC
++ - LAPIC (implicit if using KVM)
++ - IOAPIC (defaults to kernel_irqchip_split = true)
++ - i8254 PIT
++ - MC146818 RTC (optional)
++ - kvmclock (if using KVM)
++ - fw_cfg
++ - One ISA serial port (optional)
++ - Up to eight virtio-mmio devices (configured by the user)
++
++It supports the following machine-specific options:
++
++microvm.option-roms=bool (Set off to disable loading option ROMs)
++microvm.isa-serial=bool (Set off to disable the instantiation an ISA serial port)
++microvm.rtc=bool (Set off to disable the instantiation of an MC146818 RTC)
++microvm.kernel-cmdline=bool (Set off to disable adding virtio-mmio devices to the kernel cmdline)
++
++By default, microvm uses qboot as its BIOS, to obtain better boot
++times, but it's also compatible with SeaBIOS.
++
++As no current FW is able to boot from a block device using virtio-mmio
++as its transport, a microvm-based VM needs to be run using a host-side
++kernel and, optionally, an initrd image.
++
++This is an example of instantiating a microvm VM with a virtio-mmio
++based console:
++
++qemu-system-x86_64 -M microvm
++ -enable-kvm -cpu host -m 512m -smp 2 \
++ -kernel vmlinux -append "console=hvc0 root=/dev/vda" \
++ -nodefaults -no-user-config -nographic \
++ -chardev stdio,id=virtiocon0,server \
++ -device virtio-serial-device \
++ -device virtconsole,chardev=virtiocon0 \
++ -drive id=test,file=test.img,format=raw,if=none \
++ -device virtio-blk-device,drive=test \
++ -netdev tap,id=tap0,script=no,downscript=no \
++ -device virtio-net-device,netdev=tap0
++
++This is another example, this time using an ISA serial port, useful
++for debugging purposes:
++
++qemu-system-x86_64 -M microvm \
++ -enable-kvm -cpu host -m 512m -smp 2 \
++ -kernel vmlinux -append "earlyprintk=ttyS0 console=ttyS0 root=/dev/vda" \
++ -nodefaults -no-user-config -nographic \
++ -serial stdio \
++ -drive id=test,file=test.img,format=raw,if=none \
++ -device virtio-blk-device,drive=test \
++ -netdev tap,id=tap0,script=no,downscript=no \
++ -device virtio-net-device,netdev=tap0
++
++Finally, in this example a microvm VM is instantiated without RTC,
++without an ISA serial port and without loading the option ROMs,
++obtaining the smallest configuration:
++
++qemu-system-x86_64 -M microvm,rtc=off,isa-serial=off,option-roms=off \
++ -enable-kvm -cpu host -m 512m -smp 2 \
++ -kernel vmlinux -append "console=hvc0 root=/dev/vda" \
++ -nodefaults -no-user-config -nographic \
++ -chardev stdio,id=virtiocon0,server \
++ -device virtio-serial-device \
++ -device virtconsole,chardev=virtiocon0 \
++ -drive id=test,file=test.img,format=raw,if=none \
++ -device virtio-blk-device,drive=test \
++ -netdev tap,id=tap0,script=no,downscript=no \
++ -device virtio-net-device,netdev=tap0
+
+From patchwork Tue Sep 24 12:44:33 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sergio Lopez <slp@redhat.com>
+X-Patchwork-Id: 11158657
+Return-Path: <SRS0=xKXW=XT=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 763A11599
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Sep 2019 12:46:15 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 410662146E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Sep 2019 12:46:15 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2504974AbfIXMqO (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 24 Sep 2019 08:46:14 -0400
+Received: from mx1.redhat.com ([209.132.183.28]:45172 "EHLO mx1.redhat.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2441001AbfIXMqO (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 24 Sep 2019 08:46:14 -0400
+Received: from smtp.corp.redhat.com (int-mx03.intmail.prod.int.phx2.redhat.com
+ [10.5.11.13])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mx1.redhat.com (Postfix) with ESMTPS id AED2C30860B9;
+        Tue, 24 Sep 2019 12:46:13 +0000 (UTC)
+Received: from dritchie.redhat.com (unknown [10.33.36.128])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 286DA60603;
+        Tue, 24 Sep 2019 12:46:04 +0000 (UTC)
+From: Sergio Lopez <slp@redhat.com>
+To: qemu-devel@nongnu.org
+Cc: mst@redhat.com, imammedo@redhat.com, marcel.apfelbaum@gmail.com,
+        pbonzini@redhat.com, rth@twiddle.net, ehabkost@redhat.com,
+        philmd@redhat.com, lersek@redhat.com, kraxel@redhat.com,
+        mtosatti@redhat.com, kvm@vger.kernel.org,
+        Sergio Lopez <slp@redhat.com>
+Subject: [PATCH v4 8/8] hw/i386: Introduce the microvm machine type
+Date: Tue, 24 Sep 2019 14:44:33 +0200
+Message-Id: <20190924124433.96810-9-slp@redhat.com>
+In-Reply-To: <20190924124433.96810-1-slp@redhat.com>
+References: <20190924124433.96810-1-slp@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.13
+X-Greylist: Sender IP whitelisted,
+ not delayed by milter-greylist-4.5.16 (mx1.redhat.com [10.5.110.44]);
+ Tue, 24 Sep 2019 12:46:13 +0000 (UTC)
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Microvm is a machine type inspired by both NEMU and Firecracker, and
+constructed after the machine model implemented by the latter.
+
+It's main purpose is providing users a minimalist machine type free
+from the burden of legacy compatibility, serving as a stepping stone
+for future projects aiming at improving boot times, reducing the
+attack surface and slimming down QEMU's footprint.
+
+The microvm machine type supports the following devices:
+
+ - ISA bus
+ - i8259 PIC
+ - LAPIC (implicit if using KVM)
+ - IOAPIC (defaults to kernel_irqchip_split = true)
+ - i8254 PIT
+ - MC146818 RTC (optional)
+ - kvmclock (if using KVM)
+ - fw_cfg
+ - One ISA serial port (optional)
+ - Up to eight virtio-mmio devices (configured by the user)
+
+It supports the following machine-specific options:
+
+microvm.option-roms=bool (Set off to disable loading option ROMs)
+microvm.isa-serial=bool (Set off to disable the instantiation an ISA serial port)
+microvm.rtc=bool (Set off to disable the instantiation of an MC146818 RTC)
+microvm.kernel-cmdline=bool (Set off to disable adding virtio-mmio devices to the kernel cmdline)
+
+By default, microvm uses qboot as its BIOS, to obtain better boot
+times, but it's also compatible with SeaBIOS.
+
+As no current FW is able to boot from a block device using virtio-mmio
+as its transport, a microvm-based VM needs to be run using a host-side
+kernel and, optionally, an initrd image.
+
+This is an example of instantiating a microvm VM with a virtio-mmio
+based console:
+
+qemu-system-x86_64 -M microvm
+ -enable-kvm -cpu host -m 512m -smp 2 \
+ -kernel vmlinux -append "console=hvc0 root=/dev/vda" \
+ -nodefaults -no-user-config -nographic \
+ -chardev stdio,id=virtiocon0,server \
+ -device virtio-serial-device \
+ -device virtconsole,chardev=virtiocon0 \
+ -drive id=test,file=test.img,format=raw,if=none \
+ -device virtio-blk-device,drive=test \
+ -netdev tap,id=tap0,script=no,downscript=no \
+ -device virtio-net-device,netdev=tap0
+
+This is another example, this time using an ISA serial port, useful
+for debugging purposes:
+
+qemu-system-x86_64 -M microvm \
+ -enable-kvm -cpu host -m 512m -smp 2 \
+ -kernel vmlinux -append "earlyprintk=ttyS0 console=ttyS0 root=/dev/vda" \
+ -nodefaults -no-user-config -nographic \
+ -serial stdio \
+ -drive id=test,file=test.img,format=raw,if=none \
+ -device virtio-blk-device,drive=test \
+ -netdev tap,id=tap0,script=no,downscript=no \
+ -device virtio-net-device,netdev=tap0
+
+Finally, in this example a microvm VM is instantiated without RTC,
+without an ISA serial port and without loading the option ROMs,
+obtaining the smallest configuration:
+
+qemu-system-x86_64 -M microvm,rtc=off,isa-serial=off,option-roms=off \
+ -enable-kvm -cpu host -m 512m -smp 2 \
+ -kernel vmlinux -append "console=hvc0 root=/dev/vda" \
+ -nodefaults -no-user-config -nographic \
+ -chardev stdio,id=virtiocon0,server \
+ -device virtio-serial-device \
+ -device virtconsole,chardev=virtiocon0 \
+ -drive id=test,file=test.img,format=raw,if=none \
+ -device virtio-blk-device,drive=test \
+ -netdev tap,id=tap0,script=no,downscript=no \
+ -device virtio-net-device,netdev=tap0
+
+Signed-off-by: Sergio Lopez <slp@redhat.com>
+---
+ default-configs/i386-softmmu.mak |   1 +
+ hw/i386/Kconfig                  |   4 +
+ hw/i386/Makefile.objs            |   1 +
+ hw/i386/microvm.c                | 512 +++++++++++++++++++++++++++++++
+ include/hw/i386/microvm.h        |  80 +++++
+ 5 files changed, 598 insertions(+)
+ create mode 100644 hw/i386/microvm.c
+ create mode 100644 include/hw/i386/microvm.h
+
+diff --git a/default-configs/i386-softmmu.mak b/default-configs/i386-softmmu.mak
+index cd5ea391e8..c27cdd98e9 100644
+--- a/default-configs/i386-softmmu.mak
++++ b/default-configs/i386-softmmu.mak
+@@ -26,3 +26,4 @@ CONFIG_ISAPC=y
+ CONFIG_I440FX=y
+ CONFIG_Q35=y
+ CONFIG_ACPI_PCI=y
++CONFIG_MICROVM=y
+\ No newline at end of file
+diff --git a/hw/i386/Kconfig b/hw/i386/Kconfig
+index 6350438036..324e193dd8 100644
+--- a/hw/i386/Kconfig
++++ b/hw/i386/Kconfig
+@@ -88,6 +88,10 @@ config Q35
+     select SMBIOS
+     select FW_CFG_DMA
+ 
++config MICROVM
++    bool
++    select VIRTIO_MMIO
++
+ config VTD
+     bool
+ 
+diff --git a/hw/i386/Makefile.objs b/hw/i386/Makefile.objs
+index 5b4b3a672e..bb17d54567 100644
+--- a/hw/i386/Makefile.objs
++++ b/hw/i386/Makefile.objs
+@@ -6,6 +6,7 @@ obj-y += pc.o
+ obj-y += e820.o
+ obj-$(CONFIG_I440FX) += pc_piix.o
+ obj-$(CONFIG_Q35) += pc_q35.o
++obj-$(CONFIG_MICROVM) += microvm.o
+ obj-y += fw_cfg.o pc_sysfw.o
+ obj-y += x86-iommu.o
+ obj-$(CONFIG_VTD) += intel_iommu.o
+diff --git a/hw/i386/microvm.c b/hw/i386/microvm.c
+new file mode 100644
+index 0000000000..4b494a1b27
+--- /dev/null
++++ b/hw/i386/microvm.c
+@@ -0,0 +1,512 @@
++/*
++ * Copyright (c) 2018 Intel Corporation
++ * Copyright (c) 2019 Red Hat, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms and conditions of the GNU General Public License,
++ * version 2 or later, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
++ * more details.
++ *
++ * You should have received a copy of the GNU General Public License along with
++ * this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/error-report.h"
++#include "qemu/cutils.h"
++#include "qemu/units.h"
++#include "qapi/error.h"
++#include "qapi/visitor.h"
++#include "sysemu/sysemu.h"
++#include "sysemu/cpus.h"
++#include "sysemu/numa.h"
++#include "sysemu/reset.h"
++
++#include "hw/loader.h"
++#include "hw/irq.h"
++#include "hw/nmi.h"
++#include "hw/kvm/clock.h"
++#include "hw/i386/microvm.h"
++#include "hw/i386/x86.h"
++#include "hw/i386/pc.h"
++#include "target/i386/cpu.h"
++#include "hw/timer/i8254.h"
++#include "hw/timer/mc146818rtc.h"
++#include "hw/char/serial.h"
++#include "hw/i386/topology.h"
++#include "hw/i386/e820.h"
++#include "hw/i386/fw_cfg.h"
++#include "hw/virtio/virtio-mmio.h"
++
++#include "cpu.h"
++#include "elf.h"
++#include "pvh.h"
++#include "kvm_i386.h"
++#include "hw/xen/start_info.h"
++
++#define MICROVM_BIOS_FILENAME "bios-microvm.bin"
++
++static void microvm_set_rtc(MicrovmMachineState *mms, ISADevice *s)
++{
++    X86MachineState *x86ms = X86_MACHINE(mms);
++    int val;
++
++    val = MIN(x86ms->below_4g_mem_size / KiB, 640);
++    rtc_set_memory(s, 0x15, val);
++    rtc_set_memory(s, 0x16, val >> 8);
++    /* extended memory (next 64MiB) */
++    if (x86ms->below_4g_mem_size > 1 * MiB) {
++        val = (x86ms->below_4g_mem_size - 1 * MiB) / KiB;
++    } else {
++        val = 0;
++    }
++    if (val > 65535) {
++        val = 65535;
++    }
++    rtc_set_memory(s, 0x17, val);
++    rtc_set_memory(s, 0x18, val >> 8);
++    rtc_set_memory(s, 0x30, val);
++    rtc_set_memory(s, 0x31, val >> 8);
++    /* memory between 16MiB and 4GiB */
++    if (x86ms->below_4g_mem_size > 16 * MiB) {
++        val = (x86ms->below_4g_mem_size - 16 * MiB) / (64 * KiB);
++    } else {
++        val = 0;
++    }
++    if (val > 65535) {
++        val = 65535;
++    }
++    rtc_set_memory(s, 0x34, val);
++    rtc_set_memory(s, 0x35, val >> 8);
++    /* memory above 4GiB */
++    val = x86ms->above_4g_mem_size / 65536;
++    rtc_set_memory(s, 0x5b, val);
++    rtc_set_memory(s, 0x5c, val >> 8);
++    rtc_set_memory(s, 0x5d, val >> 16);
++}
++
++static void microvm_devices_init(MicrovmMachineState *mms)
++{
++    X86MachineState *x86ms = X86_MACHINE(mms);
++    ISABus *isa_bus;
++    ISADevice *rtc_state;
++    GSIState *gsi_state;
++    qemu_irq *i8259;
++    int i;
++
++    gsi_state = g_malloc0(sizeof(*gsi_state));
++    x86ms->gsi = qemu_allocate_irqs(gsi_handler, gsi_state, GSI_NUM_PINS);
++
++    isa_bus = isa_bus_new(NULL, get_system_memory(), get_system_io(),
++                          &error_abort);
++    isa_bus_irqs(isa_bus, x86ms->gsi);
++
++    i8259 = i8259_init(isa_bus, pc_allocate_cpu_irq());
++
++    for (i = 0; i < ISA_NUM_IRQS; i++) {
++        gsi_state->i8259_irq[i] = i8259[i];
++    }
++
++    ioapic_init_gsi(gsi_state, "machine");
++
++    if (mms->rtc_enabled) {
++        rtc_state = mc146818_rtc_init(isa_bus, 2000, NULL);
++        microvm_set_rtc(mms, rtc_state);
++    }
++
++    if (kvm_pit_in_kernel()) {
++        kvm_pit_init(isa_bus, 0x40);
++    } else {
++        i8254_pit_init(isa_bus, 0x40, 0, NULL);
++    }
++
++    kvmclock_create();
++
++    for (i = 0; i < VIRTIO_NUM_TRANSPORTS; i++) {
++        int nirq = VIRTIO_IRQ_BASE + i;
++        ISADevice *isadev = isa_create(isa_bus, TYPE_ISA_SERIAL);
++        qemu_irq mmio_irq;
++
++        isa_init_irq(isadev, &mmio_irq, nirq);
++        sysbus_create_simple("virtio-mmio",
++                             VIRTIO_MMIO_BASE + i * 512,
++                             x86ms->gsi[VIRTIO_IRQ_BASE + i]);
++    }
++
++    g_free(i8259);
++
++    if (mms->isa_serial_enabled) {
++        serial_hds_isa_init(isa_bus, 0, 1);
++    }
++
++    if (bios_name == NULL) {
++        bios_name = MICROVM_BIOS_FILENAME;
++    }
++    x86_system_rom_init(get_system_memory(), true);
++}
++
++static void microvm_memory_init(MicrovmMachineState *mms)
++{
++    MachineState *machine = MACHINE(mms);
++    X86MachineState *x86ms = X86_MACHINE(mms);
++    MemoryRegion *ram, *ram_below_4g, *ram_above_4g;
++    MemoryRegion *system_memory = get_system_memory();
++    FWCfgState *fw_cfg;
++    ram_addr_t lowmem;
++    int i;
++
++    /*
++     * Check whether RAM fits below 4G (leaving 1/2 GByte for IO memory
++     * and 256 Mbytes for PCI Express Enhanced Configuration Access Mapping
++     * also known as MMCFG).
++     * If it doesn't, we need to split it in chunks below and above 4G.
++     * In any case, try to make sure that guest addresses aligned at
++     * 1G boundaries get mapped to host addresses aligned at 1G boundaries.
++     */
++    if (machine->ram_size >= 0xb0000000) {
++        lowmem = 0x80000000;
++    } else {
++        lowmem = 0xb0000000;
++    }
++
++    /*
++     * Handle the machine opt max-ram-below-4g.  It is basically doing
++     * min(qemu limit, user limit).
++     */
++    if (!x86ms->max_ram_below_4g) {
++        x86ms->max_ram_below_4g = 1ULL << 32; /* default: 4G */
++    }
++    if (lowmem > x86ms->max_ram_below_4g) {
++        lowmem = x86ms->max_ram_below_4g;
++        if (machine->ram_size - lowmem > lowmem &&
++            lowmem & (1 * GiB - 1)) {
++            warn_report("There is possibly poor performance as the ram size "
++                        " (0x%" PRIx64 ") is more then twice the size of"
++                        " max-ram-below-4g (%"PRIu64") and"
++                        " max-ram-below-4g is not a multiple of 1G.",
++                        (uint64_t)machine->ram_size, x86ms->max_ram_below_4g);
++        }
++    }
++
++    if (machine->ram_size > lowmem) {
++        x86ms->above_4g_mem_size = machine->ram_size - lowmem;
++        x86ms->below_4g_mem_size = lowmem;
++    } else {
++        x86ms->above_4g_mem_size = 0;
++        x86ms->below_4g_mem_size = machine->ram_size;
++    }
++
++    ram = g_malloc(sizeof(*ram));
++    memory_region_allocate_system_memory(ram, NULL, "microvm.ram",
++                                         machine->ram_size);
++
++    ram_below_4g = g_malloc(sizeof(*ram_below_4g));
++    memory_region_init_alias(ram_below_4g, NULL, "ram-below-4g", ram,
++                             0, x86ms->below_4g_mem_size);
++    memory_region_add_subregion(system_memory, 0, ram_below_4g);
++
++    e820_add_entry(0, x86ms->below_4g_mem_size, E820_RAM);
++
++    if (x86ms->above_4g_mem_size > 0) {
++        ram_above_4g = g_malloc(sizeof(*ram_above_4g));
++        memory_region_init_alias(ram_above_4g, NULL, "ram-above-4g", ram,
++                                 x86ms->below_4g_mem_size,
++                                 x86ms->above_4g_mem_size);
++        memory_region_add_subregion(system_memory, 0x100000000ULL,
++                                    ram_above_4g);
++        e820_add_entry(0x100000000ULL, x86ms->above_4g_mem_size, E820_RAM);
++    }
++
++    fw_cfg = fw_cfg_init_io_dma(FW_CFG_IO_BASE, FW_CFG_IO_BASE + 4,
++                                &address_space_memory);
++
++    fw_cfg_add_i16(fw_cfg, FW_CFG_NB_CPUS, x86ms->boot_cpus);
++    fw_cfg_add_i16(fw_cfg, FW_CFG_MAX_CPUS, (uint16_t)x86ms->apic_id_limit);
++    fw_cfg_add_i64(fw_cfg, FW_CFG_RAM_SIZE, (uint64_t)machine->ram_size);
++    fw_cfg_add_i32(fw_cfg, FW_CFG_IRQ0_OVERRIDE, kvm_allows_irq0_override());
++
++    rom_set_fw(fw_cfg);
++
++    e820_create_fw_entry(fw_cfg);
++
++    load_linux(x86ms, fw_cfg, 0, true, true);
++
++    if (mms->option_roms_enabled) {
++        for (i = 0; i < nb_option_roms; i++) {
++            rom_add_option(option_rom[i].name, option_rom[i].bootindex);
++        }
++    }
++
++    x86ms->fw_cfg = fw_cfg;
++    x86ms->ioapic_as = &address_space_memory;
++}
++
++static gchar *microvm_get_mmio_cmdline(gchar *name)
++{
++    gchar *cmdline;
++    gchar *separator;
++    long int index;
++    int ret;
++
++    separator = g_strrstr(name, ".");
++    if (!separator) {
++        return NULL;
++    }
++
++    if (qemu_strtol(separator + 1, NULL, 10, &index) != 0) {
++        return NULL;
++    }
++
++    cmdline = g_malloc0(VIRTIO_CMDLINE_MAXLEN);
++    ret = g_snprintf(cmdline, VIRTIO_CMDLINE_MAXLEN,
++                     " virtio_mmio.device=512@0x%lx:%ld",
++                     VIRTIO_MMIO_BASE + index * 512,
++                     VIRTIO_IRQ_BASE + index);
++    if (ret < 0 || ret >= VIRTIO_CMDLINE_MAXLEN) {
++        g_free(cmdline);
++        return NULL;
++    }
++
++    return cmdline;
++}
++
++static void microvm_fix_kernel_cmdline(MachineState *machine)
++{
++    X86MachineState *x86ms = X86_MACHINE(machine);
++    BusState *bus;
++    BusChild *kid;
++    char *cmdline;
++
++    /*
++     * Find MMIO transports with attached devices, and add them to the kernel
++     * command line.
++     *
++     * Yes, this is a hack, but one that heavily improves the UX without
++     * introducing any significant issues.
++     */
++    cmdline = g_strdup(machine->kernel_cmdline);
++    bus = sysbus_get_default();
++    QTAILQ_FOREACH(kid, &bus->children, sibling) {
++        DeviceState *dev = kid->child;
++        ObjectClass *class = object_get_class(OBJECT(dev));
++
++        if (class == object_class_by_name(TYPE_VIRTIO_MMIO)) {
++            VirtIOMMIOProxy *mmio = VIRTIO_MMIO(OBJECT(dev));
++            VirtioBusState *mmio_virtio_bus = &mmio->bus;
++            BusState *mmio_bus = &mmio_virtio_bus->parent_obj;
++
++            if (!QTAILQ_EMPTY(&mmio_bus->children)) {
++                gchar *mmio_cmdline = microvm_get_mmio_cmdline(mmio_bus->name);
++                if (mmio_cmdline) {
++                    char *newcmd = g_strjoin(NULL, cmdline, mmio_cmdline, NULL);
++                    g_free(mmio_cmdline);
++                    g_free(cmdline);
++                    cmdline = newcmd;
++                }
++            }
++        }
++    }
++
++    fw_cfg_modify_i32(x86ms->fw_cfg, FW_CFG_CMDLINE_SIZE, strlen(cmdline) + 1);
++    fw_cfg_modify_string(x86ms->fw_cfg, FW_CFG_CMDLINE_DATA, cmdline);
++}
++
++static void microvm_machine_state_init(MachineState *machine)
++{
++    MicrovmMachineState *mms = MICROVM_MACHINE(machine);
++    X86MachineState *x86ms = X86_MACHINE(machine);
++    Error *local_err = NULL;
++
++    if (machine->kernel_filename == NULL) {
++        error_report("missing kernel image file name, required by microvm");
++        exit(1);
++    }
++
++    microvm_memory_init(mms);
++
++    x86_cpus_init(x86ms, CPU_VERSION_LATEST);
++    if (local_err) {
++        error_report_err(local_err);
++        exit(1);
++    }
++
++    microvm_devices_init(mms);
++}
++
++static void microvm_machine_reset(MachineState *machine)
++{
++    MicrovmMachineState *mms = MICROVM_MACHINE(machine);
++    CPUState *cs;
++    X86CPU *cpu;
++
++    if (mms->kernel_cmdline_enabled && !mms->kernel_cmdline_fixed) {
++        microvm_fix_kernel_cmdline(machine);
++        mms->kernel_cmdline_fixed = true;
++    }
++
++    qemu_devices_reset();
++
++    CPU_FOREACH(cs) {
++        cpu = X86_CPU(cs);
++
++        if (cpu->apic_state) {
++            device_reset(cpu->apic_state);
++        }
++    }
++}
++
++static bool microvm_machine_get_rtc(Object *obj, Error **errp)
++{
++    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
++
++    return mms->rtc_enabled;
++}
++
++static void microvm_machine_set_rtc(Object *obj, bool value, Error **errp)
++{
++    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
++
++    mms->rtc_enabled = value;
++}
++
++static bool microvm_machine_get_isa_serial(Object *obj, Error **errp)
++{
++    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
++
++    return mms->isa_serial_enabled;
++}
++
++static void microvm_machine_set_isa_serial(Object *obj, bool value,
++                                           Error **errp)
++{
++    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
++
++    mms->isa_serial_enabled = value;
++}
++
++static bool microvm_machine_get_option_roms(Object *obj, Error **errp)
++{
++    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
++
++    return mms->option_roms_enabled;
++}
++
++static void microvm_machine_set_option_roms(Object *obj, bool value,
++                                            Error **errp)
++{
++    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
++
++    mms->option_roms_enabled = value;
++}
++
++static bool microvm_machine_get_kernel_cmdline(Object *obj, Error **errp)
++{
++    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
++
++    return mms->kernel_cmdline_enabled;
++}
++
++static void microvm_machine_set_kernel_cmdline(Object *obj, bool value,
++                                               Error **errp)
++{
++    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
++
++    mms->kernel_cmdline_enabled = value;
++}
++
++static void microvm_machine_initfn(Object *obj)
++{
++    MicrovmMachineState *mms = MICROVM_MACHINE(obj);
++
++    /* Configuration */
++    mms->rtc_enabled = true;
++    mms->isa_serial_enabled = true;
++    mms->option_roms_enabled = true;
++    mms->kernel_cmdline_enabled = true;
++
++    /* State */
++    mms->kernel_cmdline_fixed = false;
++}
++
++static void microvm_class_init(ObjectClass *oc, void *data)
++{
++    MachineClass *mc = MACHINE_CLASS(oc);
++    NMIClass *nc = NMI_CLASS(oc);
++
++    mc->init = microvm_machine_state_init;
++
++    mc->family = "microvm_i386";
++    mc->desc = "Microvm (i386)";
++    mc->units_per_default_bus = 1;
++    mc->no_floppy = 1;
++    machine_class_allow_dynamic_sysbus_dev(mc, "sysbus-debugcon");
++    machine_class_allow_dynamic_sysbus_dev(mc, "sysbus-debugexit");
++    mc->max_cpus = 288;
++    mc->has_hotpluggable_cpus = false;
++    mc->auto_enable_numa_with_memhp = false;
++    mc->default_cpu_type = TARGET_DEFAULT_CPU_TYPE;
++    mc->nvdimm_supported = false;
++
++    /* Avoid relying too much on kernel components */
++    mc->default_kernel_irqchip_split = true;
++
++    /* Machine class handlers */
++    mc->reset = microvm_machine_reset;
++
++    /* NMI handler */
++    nc->nmi_monitor_handler = x86_nmi;
++
++    object_class_property_add_bool(oc, MICROVM_MACHINE_RTC,
++                                   microvm_machine_get_rtc,
++                                   microvm_machine_set_rtc,
++                                   &error_abort);
++    object_class_property_set_description(oc, MICROVM_MACHINE_RTC,
++        "Set off to disable the instantiation of an MC146818 RTC",
++        &error_abort);
++
++    object_class_property_add_bool(oc, MICROVM_MACHINE_ISA_SERIAL,
++                                   microvm_machine_get_isa_serial,
++                                   microvm_machine_set_isa_serial,
++                                   &error_abort);
++    object_class_property_set_description(oc, MICROVM_MACHINE_ISA_SERIAL,
++        "Set off to disable the instantiation an ISA serial port",
++        &error_abort);
++
++    object_class_property_add_bool(oc, MICROVM_MACHINE_OPTION_ROMS,
++                                   microvm_machine_get_option_roms,
++                                   microvm_machine_set_option_roms,
++                                   &error_abort);
++    object_class_property_set_description(oc, MICROVM_MACHINE_OPTION_ROMS,
++        "Set off to disable loading option ROMs", &error_abort);
++
++    object_class_property_add_bool(oc, MICROVM_MACHINE_KERNEL_CMDLINE,
++                                   microvm_machine_get_kernel_cmdline,
++                                   microvm_machine_set_kernel_cmdline,
++                                   &error_abort);
++    object_class_property_set_description(oc, MICROVM_MACHINE_KERNEL_CMDLINE,
++        "Set off to disable adding virtio-mmio devices to the kernel cmdline",
++        &error_abort);
++}
++
++static const TypeInfo microvm_machine_info = {
++    .name          = TYPE_MICROVM_MACHINE,
++    .parent        = TYPE_X86_MACHINE,
++    .instance_size = sizeof(MicrovmMachineState),
++    .instance_init = microvm_machine_initfn,
++    .class_size    = sizeof(MicrovmMachineClass),
++    .class_init    = microvm_class_init,
++    .interfaces = (InterfaceInfo[]) {
++         { TYPE_NMI },
++         { }
++    },
++};
++
++static void microvm_machine_init(void)
++{
++    type_register_static(&microvm_machine_info);
++}
++type_init(microvm_machine_init);
+diff --git a/include/hw/i386/microvm.h b/include/hw/i386/microvm.h
+new file mode 100644
+index 0000000000..04c8caf886
+--- /dev/null
++++ b/include/hw/i386/microvm.h
+@@ -0,0 +1,80 @@
++/*
++ * Copyright (c) 2018 Intel Corporation
++ * Copyright (c) 2019 Red Hat, Inc.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms and conditions of the GNU General Public License,
++ * version 2 or later, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
++ * more details.
++ *
++ * You should have received a copy of the GNU General Public License along with
++ * this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#ifndef HW_I386_MICROVM_H
++#define HW_I386_MICROVM_H
++
++#include "qemu-common.h"
++#include "exec/hwaddr.h"
++#include "qemu/notify.h"
++
++#include "hw/boards.h"
++#include "hw/i386/x86.h"
++
++/* Microvm memory layout */
++#define PVH_START_INFO        0x6000
++#define MEMMAP_START          0x7000
++#define MODLIST_START         0x7800
++#define BOOT_STACK_POINTER    0x8ff0
++#define PML4_START            0x9000
++#define PDPTE_START           0xa000
++#define PDE_START             0xb000
++#define KERNEL_CMDLINE_START  0x20000
++#define EBDA_START            0x9fc00
++#define HIMEM_START           0x100000
++
++/* Platform virtio definitions */
++#define VIRTIO_MMIO_BASE      0xc0000000
++#define VIRTIO_IRQ_BASE       5
++#define VIRTIO_NUM_TRANSPORTS 8
++#define VIRTIO_CMDLINE_MAXLEN 64
++
++/* Machine type options */
++#define MICROVM_MACHINE_RTC            "rtc"
++#define MICROVM_MACHINE_ISA_SERIAL     "isa-serial"
++#define MICROVM_MACHINE_OPTION_ROMS    "option-roms"
++#define MICROVM_MACHINE_KERNEL_CMDLINE "kernel-cmdline"
++
++typedef struct {
++    X86MachineClass parent;
++    HotplugHandler *(*orig_hotplug_handler)(MachineState *machine,
++                                           DeviceState *dev);
++} MicrovmMachineClass;
++
++typedef struct {
++    X86MachineState parent;
++
++    /* Machine type options */
++    bool rtc_enabled;
++    bool isa_serial_enabled;
++    bool option_roms_enabled;
++    bool kernel_cmdline_enabled;
++
++
++    /* Machine state */
++    bool kernel_cmdline_fixed;
++} MicrovmMachineState;
++
++#define TYPE_MICROVM_MACHINE   MACHINE_TYPE_NAME("microvm")
++#define MICROVM_MACHINE(obj) \
++    OBJECT_CHECK(MicrovmMachineState, (obj), TYPE_MICROVM_MACHINE)
++#define MICROVM_MACHINE_GET_CLASS(obj) \
++    OBJECT_GET_CLASS(MicrovmMachineClass, obj, TYPE_MICROVM_MACHINE)
++#define MICROVM_MACHINE_CLASS(class) \
++    OBJECT_CLASS_CHECK(MicrovmMachineClass, class, TYPE_MICROVM_MACHINE)
++
++#endif
