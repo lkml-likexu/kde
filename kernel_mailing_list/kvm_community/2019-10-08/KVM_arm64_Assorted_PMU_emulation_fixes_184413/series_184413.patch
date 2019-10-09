@@ -1,0 +1,621 @@
+From patchwork Tue Oct  8 16:01:24 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11179817
+Return-Path: <SRS0=25+t=YB=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B878214DB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  8 Oct 2019 16:01:57 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 9A31620815
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  8 Oct 2019 16:01:57 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1570550517;
+	bh=V53P7Vn0aPiKYwrOMap7wcByveXMeM32VmJKA4bI76s=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=JE4xlvTyRdquKnep0SfVqS2wW06ouKxuH6NqrtCBxFIKt7wS1lEbA+GwkZB1snsrG
+	 L5glHbmxLbjZmMGzW3r2aesUixvCgLlI243NqZmUxQZZ+veqph/x14oI3hgvV099KI
+	 V6zFv3mP4YSI5w1TECaf8FQKaj7Mh98BbBnnfdSE=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728352AbfJHQB4 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 8 Oct 2019 12:01:56 -0400
+Received: from inca-roads.misterjones.org ([213.251.177.50]:34689 "EHLO
+        inca-roads.misterjones.org" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S1728081AbfJHQB4 (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Tue, 8 Oct 2019 12:01:56 -0400
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by cheepnis.misterjones.org with esmtpsa
+ (TLSv1.2:DHE-RSA-AES128-GCM-SHA256:128)
+        (Exim 4.80)
+        (envelope-from <maz@kernel.org>)
+        id 1iHrvs-0001rs-VO; Tue, 08 Oct 2019 18:01:53 +0200
+From: Marc Zyngier <maz@kernel.org>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: Will Deacon <will@kernel.org>, Mark Rutland <mark.rutland@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Andrew Murray <andrew.murray@arm.com>
+Subject: [PATCH v2 1/5] KVM: arm64: pmu: Fix cycle counter truncation
+Date: Tue,  8 Oct 2019 17:01:24 +0100
+Message-Id: <20191008160128.8872-2-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191008160128.8872-1-maz@kernel.org>
+References: <20191008160128.8872-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org, will@kernel.org,
+ mark.rutland@arm.com, james.morse@arm.com, julien.thierry.kdev@gmail.com,
+ suzuki.poulose@arm.com, andrew.murray@arm.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on cheepnis.misterjones.org);
+ SAEximRunCond expanded to false
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+When a counter is disabled, its value is sampled before the event
+is being disabled, and the value written back in the shadow register.
+
+In that process, the value gets truncated to 32bit, which is adequate
+for any counter but the cycle counter (defined as a 64bit counter).
+
+This obviously results in a corrupted counter, and things like
+"perf record -e cycles" not working at all when run in a guest...
+A similar, but less critical bug exists in kvm_pmu_get_counter_value.
+
+Make the truncation conditional on the counter not being the cycle
+counter, which results in a minor code reorganisation.
+
+Fixes: 80f393a23be6 ("KVM: arm/arm64: Support chained PMU counters")
+Reviewed-by: Andrew Murray <andrew.murray@arm.com>
+Reported-by: Julien Thierry <julien.thierry.kdev@gmail.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ virt/kvm/arm/pmu.c | 22 ++++++++++++----------
+ 1 file changed, 12 insertions(+), 10 deletions(-)
+
+diff --git a/virt/kvm/arm/pmu.c b/virt/kvm/arm/pmu.c
+index 362a01886bab..c30c3a74fc7f 100644
+--- a/virt/kvm/arm/pmu.c
++++ b/virt/kvm/arm/pmu.c
+@@ -146,8 +146,7 @@ u64 kvm_pmu_get_counter_value(struct kvm_vcpu *vcpu, u64 select_idx)
+ 	if (kvm_pmu_pmc_is_chained(pmc) &&
+ 	    kvm_pmu_idx_is_high_counter(select_idx))
+ 		counter = upper_32_bits(counter);
+-
+-	else if (!kvm_pmu_idx_is_64bit(vcpu, select_idx))
++	else if (select_idx != ARMV8_PMU_CYCLE_IDX)
+ 		counter = lower_32_bits(counter);
+ 
+ 	return counter;
+@@ -193,7 +192,7 @@ static void kvm_pmu_release_perf_event(struct kvm_pmc *pmc)
+  */
+ static void kvm_pmu_stop_counter(struct kvm_vcpu *vcpu, struct kvm_pmc *pmc)
+ {
+-	u64 counter, reg;
++	u64 counter, reg, val;
+ 
+ 	pmc = kvm_pmu_get_canonical_pmc(pmc);
+ 	if (!pmc->perf_event)
+@@ -201,16 +200,19 @@ static void kvm_pmu_stop_counter(struct kvm_vcpu *vcpu, struct kvm_pmc *pmc)
+ 
+ 	counter = kvm_pmu_get_pair_counter_value(vcpu, pmc);
+ 
+-	if (kvm_pmu_pmc_is_chained(pmc)) {
+-		reg = PMEVCNTR0_EL0 + pmc->idx;
+-		__vcpu_sys_reg(vcpu, reg) = lower_32_bits(counter);
+-		__vcpu_sys_reg(vcpu, reg + 1) = upper_32_bits(counter);
++	if (pmc->idx == ARMV8_PMU_CYCLE_IDX) {
++		reg = PMCCNTR_EL0;
++		val = counter;
+ 	} else {
+-		reg = (pmc->idx == ARMV8_PMU_CYCLE_IDX)
+-		       ? PMCCNTR_EL0 : PMEVCNTR0_EL0 + pmc->idx;
+-		__vcpu_sys_reg(vcpu, reg) = lower_32_bits(counter);
++		reg = PMEVCNTR0_EL0 + pmc->idx;
++		val = lower_32_bits(counter);
+ 	}
+ 
++	__vcpu_sys_reg(vcpu, reg) = val;
++
++	if (kvm_pmu_pmc_is_chained(pmc))
++		__vcpu_sys_reg(vcpu, reg + 1) = upper_32_bits(counter);
++
+ 	kvm_pmu_release_perf_event(pmc);
+ }
+ 
+
+From patchwork Tue Oct  8 16:01:25 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11179829
+Return-Path: <SRS0=25+t=YB=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 0BA3A1668
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  8 Oct 2019 16:02:03 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id D797421721
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  8 Oct 2019 16:02:02 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1570550522;
+	bh=azhX068/Llc0POTSFJ7hQa0blYq+N0fFcX/ZEjAr9sY=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=cYJCqILtGbOkCRPcUOqeGGKwLuuMbUZA0xyqMbkj2XTe7hWgIrOuT0tMsI6F2VDmD
+	 oK2mVWU+X49+Nw22Jb26olV07XPbf6M7aSNDSkNkOdFDv+aqX3W7L7GyY0f7I6sxOb
+	 Sfhv+GODd4rjS5wj93LDUylt+3JPpmfegVUCRuco=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728702AbfJHQCC (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 8 Oct 2019 12:02:02 -0400
+Received: from inca-roads.misterjones.org ([213.251.177.50]:40856 "EHLO
+        inca-roads.misterjones.org" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S1727514AbfJHQB5 (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Tue, 8 Oct 2019 12:01:57 -0400
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by cheepnis.misterjones.org with esmtpsa
+ (TLSv1.2:DHE-RSA-AES128-GCM-SHA256:128)
+        (Exim 4.80)
+        (envelope-from <maz@kernel.org>)
+        id 1iHrvt-0001rs-Gx; Tue, 08 Oct 2019 18:01:53 +0200
+From: Marc Zyngier <maz@kernel.org>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: Will Deacon <will@kernel.org>, Mark Rutland <mark.rutland@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Andrew Murray <andrew.murray@arm.com>
+Subject: [PATCH v2 2/5] arm64: KVM: Handle PMCR_EL0.LC as RES1 on pure AArch64
+ systems
+Date: Tue,  8 Oct 2019 17:01:25 +0100
+Message-Id: <20191008160128.8872-3-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191008160128.8872-1-maz@kernel.org>
+References: <20191008160128.8872-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org, will@kernel.org,
+ mark.rutland@arm.com, james.morse@arm.com, julien.thierry.kdev@gmail.com,
+ suzuki.poulose@arm.com, andrew.murray@arm.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on cheepnis.misterjones.org);
+ SAEximRunCond expanded to false
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Of PMCR_EL0.LC, the ARMv8 ARM says:
+
+	"In an AArch64 only implementation, this field is RES 1."
+
+So be it.
+
+Fixes: ab9468340d2bc ("arm64: KVM: Add access handler for PMCR register")
+Reviewed-by: Andrew Murray <andrew.murray@arm.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/kvm/sys_regs.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/arch/arm64/kvm/sys_regs.c b/arch/arm64/kvm/sys_regs.c
+index 2071260a275b..46822afc57e0 100644
+--- a/arch/arm64/kvm/sys_regs.c
++++ b/arch/arm64/kvm/sys_regs.c
+@@ -632,6 +632,8 @@ static void reset_pmcr(struct kvm_vcpu *vcpu, const struct sys_reg_desc *r)
+ 	 */
+ 	val = ((pmcr & ~ARMV8_PMU_PMCR_MASK)
+ 	       | (ARMV8_PMU_PMCR_MASK & 0xdecafbad)) & (~ARMV8_PMU_PMCR_E);
++	if (!system_supports_32bit_el0())
++		val |= ARMV8_PMU_PMCR_LC;
+ 	__vcpu_sys_reg(vcpu, r->reg) = val;
+ }
+ 
+@@ -682,6 +684,8 @@ static bool access_pmcr(struct kvm_vcpu *vcpu, struct sys_reg_params *p,
+ 		val = __vcpu_sys_reg(vcpu, PMCR_EL0);
+ 		val &= ~ARMV8_PMU_PMCR_MASK;
+ 		val |= p->regval & ARMV8_PMU_PMCR_MASK;
++		if (!system_supports_32bit_el0())
++			val |= ARMV8_PMU_PMCR_LC;
+ 		__vcpu_sys_reg(vcpu, PMCR_EL0) = val;
+ 		kvm_pmu_handle_pmcr(vcpu, val);
+ 		kvm_vcpu_pmu_restore_guest(vcpu);
+
+From patchwork Tue Oct  8 16:01:26 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11179827
+Return-Path: <SRS0=25+t=YB=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 72C8914DB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  8 Oct 2019 16:02:02 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 47D44217D7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  8 Oct 2019 16:02:02 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1570550522;
+	bh=0J0hdU3I9Aw+CWvISfyZqqKTBoTGfgOHaBKi9ubaO5s=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=0Icm6eMwhnJN5pUTDQePTVchiJIsnJS5qGkTtAmEQq0y9faK2H2d3N3Y5CGPeo1j5
+	 U+tPd1JkqgxW6VeMKEoqU0rnyZxcK6wXFnt+3YHAr9d1+0QrHTzGlEYJ9bFK+Qe1jj
+	 jl3VZKw76d37NqG4zgFklwSHQ28mCCvVGaCL076Y=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728081AbfJHQCB (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 8 Oct 2019 12:02:01 -0400
+Received: from inca-roads.misterjones.org ([213.251.177.50]:47634 "EHLO
+        inca-roads.misterjones.org" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S1728116AbfJHQB5 (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Tue, 8 Oct 2019 12:01:57 -0400
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by cheepnis.misterjones.org with esmtpsa
+ (TLSv1.2:DHE-RSA-AES128-GCM-SHA256:128)
+        (Exim 4.80)
+        (envelope-from <maz@kernel.org>)
+        id 1iHrvu-0001rs-3X; Tue, 08 Oct 2019 18:01:54 +0200
+From: Marc Zyngier <maz@kernel.org>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: Will Deacon <will@kernel.org>, Mark Rutland <mark.rutland@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Andrew Murray <andrew.murray@arm.com>
+Subject: [PATCH v2 3/5] KVM: arm64: pmu: Set the CHAINED attribute before
+ creating the in-kernel event
+Date: Tue,  8 Oct 2019 17:01:26 +0100
+Message-Id: <20191008160128.8872-4-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191008160128.8872-1-maz@kernel.org>
+References: <20191008160128.8872-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org, will@kernel.org,
+ mark.rutland@arm.com, james.morse@arm.com, julien.thierry.kdev@gmail.com,
+ suzuki.poulose@arm.com, andrew.murray@arm.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on cheepnis.misterjones.org);
+ SAEximRunCond expanded to false
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The current convention for KVM to request a chained event from the
+host PMU is to set bit[0] in attr.config1 (PERF_ATTR_CFG1_KVM_PMU_CHAINED).
+
+But as it turns out, this bit gets set *after* we create the kernel
+event that backs our virtual counter, meaning that we never get
+a 64bit counter.
+
+Moving the setting to an earlier point solves the problem.
+
+Fixes: 80f393a23be6 ("KVM: arm/arm64: Support chained PMU counters")
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+Reviewed-by: Andrew Murray <andrew.murray@arm.com>
+---
+ virt/kvm/arm/pmu.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/virt/kvm/arm/pmu.c b/virt/kvm/arm/pmu.c
+index c30c3a74fc7f..f291d4ac3519 100644
+--- a/virt/kvm/arm/pmu.c
++++ b/virt/kvm/arm/pmu.c
+@@ -569,12 +569,12 @@ static void kvm_pmu_create_perf_event(struct kvm_vcpu *vcpu, u64 select_idx)
+ 		 * high counter.
+ 		 */
+ 		attr.sample_period = (-counter) & GENMASK(63, 0);
++		if (kvm_pmu_counter_is_enabled(vcpu, pmc->idx + 1))
++			attr.config1 |= PERF_ATTR_CFG1_KVM_PMU_CHAINED;
++
+ 		event = perf_event_create_kernel_counter(&attr, -1, current,
+ 							 kvm_pmu_perf_overflow,
+ 							 pmc + 1);
+-
+-		if (kvm_pmu_counter_is_enabled(vcpu, pmc->idx + 1))
+-			attr.config1 |= PERF_ATTR_CFG1_KVM_PMU_CHAINED;
+ 	} else {
+ 		/* The initial sample period (overflow count) of an event. */
+ 		if (kvm_pmu_idx_is_64bit(vcpu, pmc->idx))
+
+From patchwork Tue Oct  8 16:01:27 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11179819
+Return-Path: <SRS0=25+t=YB=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 0AB0F1862
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  8 Oct 2019 16:01:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id DFCC4217D7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  8 Oct 2019 16:01:57 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1570550517;
+	bh=Agke9Jnw2LwyyZoBmOnEkCZWKNv8IYWTrwOC/RxAW5M=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=XGXHgOJFBdYQmClm3oaYbEKglXsfuJZBCSeOwtwlEbJN7wwEBxxgR1a+9SHjcyrFO
+	 ahihhfmV6hVpnUcCNGAI5nj5KBVKzMhwcJ8O8yCS0esD9jjak5AqgPvJk8EJi9OvN8
+	 OC8PMPXM8ooSEApXzAuRijYGDuRuRXR739yVeLt8=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728429AbfJHQB5 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 8 Oct 2019 12:01:57 -0400
+Received: from inca-roads.misterjones.org ([213.251.177.50]:55917 "EHLO
+        inca-roads.misterjones.org" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S1726336AbfJHQB5 (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Tue, 8 Oct 2019 12:01:57 -0400
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by cheepnis.misterjones.org with esmtpsa
+ (TLSv1.2:DHE-RSA-AES128-GCM-SHA256:128)
+        (Exim 4.80)
+        (envelope-from <maz@kernel.org>)
+        id 1iHrvu-0001rs-MD; Tue, 08 Oct 2019 18:01:54 +0200
+From: Marc Zyngier <maz@kernel.org>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: Will Deacon <will@kernel.org>, Mark Rutland <mark.rutland@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Andrew Murray <andrew.murray@arm.com>
+Subject: [PATCH v2 4/5] arm64: perf: Add reload-on-overflow capability
+Date: Tue,  8 Oct 2019 17:01:27 +0100
+Message-Id: <20191008160128.8872-5-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191008160128.8872-1-maz@kernel.org>
+References: <20191008160128.8872-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org, will@kernel.org,
+ mark.rutland@arm.com, james.morse@arm.com, julien.thierry.kdev@gmail.com,
+ suzuki.poulose@arm.com, andrew.murray@arm.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on cheepnis.misterjones.org);
+ SAEximRunCond expanded to false
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+As KVM uses perf as a way to emulate an ARMv8 PMU, it needs to
+be able to change the sample period as part of the overflow
+handling (once an overflow has taken place, the following
+overflow point is the overflow of the virtual counter).
+
+Deleting and recreating the in-kernel event is difficult, as
+we're in interrupt context. Instead, we can teach the PMU driver
+a new trick, which is to stop the event before the overflow handling,
+and reprogram it once it has been handled. This would give KVM
+the opportunity to adjust the next sample period. This feature
+is gated on a new flag that can get set by KVM in a subsequent
+patch.
+
+Whilst we're at it, move the CHAINED flag from the KVM emulation
+to the perf_event.h file and adjust the PMU code accordingly.
+
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/include/asm/perf_event.h | 4 ++++
+ arch/arm64/kernel/perf_event.c      | 8 +++++++-
+ virt/kvm/arm/pmu.c                  | 4 +---
+ 3 files changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm64/include/asm/perf_event.h b/arch/arm64/include/asm/perf_event.h
+index 2bdbc79bbd01..8b6b38f2db8e 100644
+--- a/arch/arm64/include/asm/perf_event.h
++++ b/arch/arm64/include/asm/perf_event.h
+@@ -223,4 +223,8 @@ extern unsigned long perf_misc_flags(struct pt_regs *regs);
+ 	(regs)->pstate = PSR_MODE_EL1h;	\
+ }
+ 
++/* Flags used by KVM, among others */
++#define PERF_ATTR_CFG1_CHAINED_EVENT	(1U << 0)
++#define PERF_ATTR_CFG1_RELOAD_EVENT	(1U << 1)
++
+ #endif
+diff --git a/arch/arm64/kernel/perf_event.c b/arch/arm64/kernel/perf_event.c
+index a0b4f1bca491..98907c9e5508 100644
+--- a/arch/arm64/kernel/perf_event.c
++++ b/arch/arm64/kernel/perf_event.c
+@@ -322,7 +322,7 @@ PMU_FORMAT_ATTR(long, "config1:0");
+ 
+ static inline bool armv8pmu_event_is_64bit(struct perf_event *event)
+ {
+-	return event->attr.config1 & 0x1;
++	return event->attr.config1 & PERF_ATTR_CFG1_CHAINED_EVENT;
+ }
+ 
+ static struct attribute *armv8_pmuv3_format_attrs[] = {
+@@ -736,8 +736,14 @@ static irqreturn_t armv8pmu_handle_irq(struct arm_pmu *cpu_pmu)
+ 		if (!armpmu_event_set_period(event))
+ 			continue;
+ 
++		if (event->attr.config1 & PERF_ATTR_CFG1_RELOAD_EVENT)
++			cpu_pmu->pmu.stop(event, PERF_EF_RELOAD);
++
+ 		if (perf_event_overflow(event, &data, regs))
+ 			cpu_pmu->disable(event);
++
++		if (event->attr.config1 & PERF_ATTR_CFG1_RELOAD_EVENT)
++			cpu_pmu->pmu.start(event, PERF_EF_RELOAD);
+ 	}
+ 	armv8pmu_start(cpu_pmu);
+ 
+diff --git a/virt/kvm/arm/pmu.c b/virt/kvm/arm/pmu.c
+index f291d4ac3519..25a483a04beb 100644
+--- a/virt/kvm/arm/pmu.c
++++ b/virt/kvm/arm/pmu.c
+@@ -15,8 +15,6 @@
+ 
+ static void kvm_pmu_create_perf_event(struct kvm_vcpu *vcpu, u64 select_idx);
+ 
+-#define PERF_ATTR_CFG1_KVM_PMU_CHAINED 0x1
+-
+ /**
+  * kvm_pmu_idx_is_64bit - determine if select_idx is a 64bit counter
+  * @vcpu: The vcpu pointer
+@@ -570,7 +568,7 @@ static void kvm_pmu_create_perf_event(struct kvm_vcpu *vcpu, u64 select_idx)
+ 		 */
+ 		attr.sample_period = (-counter) & GENMASK(63, 0);
+ 		if (kvm_pmu_counter_is_enabled(vcpu, pmc->idx + 1))
+-			attr.config1 |= PERF_ATTR_CFG1_KVM_PMU_CHAINED;
++			attr.config1 |= PERF_ATTR_CFG1_CHAINED_EVENT;
+ 
+ 		event = perf_event_create_kernel_counter(&attr, -1, current,
+ 							 kvm_pmu_perf_overflow,
+
+From patchwork Tue Oct  8 16:01:28 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11179823
+Return-Path: <SRS0=25+t=YB=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8480B1668
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  8 Oct 2019 16:01:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 64ED3217D7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  8 Oct 2019 16:01:58 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1570550518;
+	bh=nURtCZ86qR/yMFWL7ZbfezUyOm64JToMBYYomVV3muA=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=LaSmE7xCASLzenEVUFtKCnYKuw/h1O66h1Px7LN/Y05pecKf9Z0Q5kAlt61yJDJeA
+	 s4bv6ZbJl1BWThwlg4eE70HMWU6RqyQ0hvFr0ilx5y/KEeKBeA2GDSk/td3U85359d
+	 +VKZZDpyiqWlLwKsZoY+751Dyju32YPWh+UThLuY=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728465AbfJHQB5 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 8 Oct 2019 12:01:57 -0400
+Received: from inca-roads.misterjones.org ([213.251.177.50]:57057 "EHLO
+        inca-roads.misterjones.org" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S1728081AbfJHQB5 (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Tue, 8 Oct 2019 12:01:57 -0400
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by cheepnis.misterjones.org with esmtpsa
+ (TLSv1.2:DHE-RSA-AES128-GCM-SHA256:128)
+        (Exim 4.80)
+        (envelope-from <maz@kernel.org>)
+        id 1iHrvv-0001rs-7i; Tue, 08 Oct 2019 18:01:55 +0200
+From: Marc Zyngier <maz@kernel.org>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: Will Deacon <will@kernel.org>, Mark Rutland <mark.rutland@arm.com>,
+        James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Andrew Murray <andrew.murray@arm.com>
+Subject: [PATCH v2 5/5] KVM: arm64: pmu: Reset sample period on overflow
+ handling
+Date: Tue,  8 Oct 2019 17:01:28 +0100
+Message-Id: <20191008160128.8872-6-maz@kernel.org>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191008160128.8872-1-maz@kernel.org>
+References: <20191008160128.8872-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org, will@kernel.org,
+ mark.rutland@arm.com, james.morse@arm.com, julien.thierry.kdev@gmail.com,
+ suzuki.poulose@arm.com, andrew.murray@arm.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on cheepnis.misterjones.org);
+ SAEximRunCond expanded to false
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The PMU emulation code uses the perf event sample period to trigger
+the overflow detection. This works fine  for the *first* overflow
+handling, but results in a huge number of interrupts on the host,
+unrelated to the number of interrupts handled in the guest (a x20
+factor is pretty common for the cycle counter). On a slow system
+(such as a SW model), this can result in the guest only making
+forward progress at a glacial pace.
+
+It turns out that the clue is in the name. The sample period is
+exactly that: a period. And once the an overflow has occured,
+the following period should be the full width of the associated
+counter, instead of whatever the guest had initially programed.
+
+Reset the sample period to the architected value in the overflow
+handler, which now results in a number of host interrupts that is
+much closer to the number of interrupts in the guest.
+
+Fixes: b02386eb7dac ("arm64: KVM: Add PMU overflow interrupt routing")
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ virt/kvm/arm/pmu.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/virt/kvm/arm/pmu.c b/virt/kvm/arm/pmu.c
+index 25a483a04beb..8b524d74c68a 100644
+--- a/virt/kvm/arm/pmu.c
++++ b/virt/kvm/arm/pmu.c
+@@ -442,6 +442,20 @@ static void kvm_pmu_perf_overflow(struct perf_event *perf_event,
+ 	struct kvm_pmc *pmc = perf_event->overflow_handler_context;
+ 	struct kvm_vcpu *vcpu = kvm_pmc_to_vcpu(pmc);
+ 	int idx = pmc->idx;
++	u64 period;
++
++	/*
++	 * Reset the sample period to the architectural limit,
++	 * i.e. the point where the counter overflows.
++	 */
++	period = -(local64_read(&pmc->perf_event->count));
++
++	if (!kvm_pmu_idx_is_64bit(vcpu, pmc->idx))
++		period &= GENMASK(31, 0);
++
++	local64_set(&pmc->perf_event->hw.period_left, 0);
++	pmc->perf_event->attr.sample_period = period;
++	pmc->perf_event->hw.sample_period = period;
+ 
+ 	__vcpu_sys_reg(vcpu, PMOVSSET_EL0) |= BIT(idx);
+ 
+@@ -557,6 +571,7 @@ static void kvm_pmu_create_perf_event(struct kvm_vcpu *vcpu, u64 select_idx)
+ 	attr.exclude_host = 1; /* Don't count host events */
+ 	attr.config = (pmc->idx == ARMV8_PMU_CYCLE_IDX) ?
+ 		ARMV8_PMUV3_PERFCTR_CPU_CYCLES : eventsel;
++	attr.config1 = PERF_ATTR_CFG1_RELOAD_EVENT;
+ 
+ 	counter = kvm_pmu_get_pair_counter_value(vcpu, pmc);
+ 
