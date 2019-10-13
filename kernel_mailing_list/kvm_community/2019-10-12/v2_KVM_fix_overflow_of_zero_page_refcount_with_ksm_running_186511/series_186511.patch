@@ -1,0 +1,151 @@
+From patchwork Sat Oct 12 03:37:31 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Zhuang Yanying <ann.zhuangyanying@huawei.com>
+X-Patchwork-Id: 11186599
+Return-Path: <SRS0=yg+T=YF=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D1AC676
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 12 Oct 2019 03:38:10 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id BBD1021D80
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat, 12 Oct 2019 03:38:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726918AbfJLDiA (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 11 Oct 2019 23:38:00 -0400
+Received: from szxga07-in.huawei.com ([45.249.212.35]:33836 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1726354AbfJLDiA (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 11 Oct 2019 23:38:00 -0400
+Received: from DGGEMS410-HUB.china.huawei.com (unknown [172.30.72.60])
+        by Forcepoint Email with ESMTP id BCF21FAD66123068F06F;
+        Sat, 12 Oct 2019 11:37:56 +0800 (CST)
+Received: from localhost (10.133.215.230) by DGGEMS410-HUB.china.huawei.com
+ (10.3.19.210) with Microsoft SMTP Server id 14.3.439.0; Sat, 12 Oct 2019
+ 11:37:49 +0800
+From: Zhuang Yanying <ann.zhuangyanying@huawei.com>
+To: <linfeng23@huawei.com>, <pbonzini@redhat.com>,
+        <linux-kernel@vger.kernel.org>, <kvm@vger.kernel.org>
+CC: <weiqi4@huawei.com>, <weidong.huang@huawei.com>,
+        Zhuang Yanying <ann.zhuangyanying@huawei.com>
+Subject: [PATCH v2] KVM: fix overflow of zero page refcount with ksm running
+Date: Sat, 12 Oct 2019 11:37:31 +0800
+Message-ID: <1570851452-23364-1-git-send-email-ann.zhuangyanying@huawei.com>
+X-Mailer: git-send-email 1.9.5.msysgit.1
+MIME-Version: 1.0
+X-Originating-IP: [10.133.215.230]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+We are testing Virtual Machine with KSM on v5.4-rc2 kernel,
+and found the zero_page refcount overflow.
+The cause of refcount overflow is increased in try_async_pf
+(get_user_page) without being decreased in mmu_set_spte()
+while handling ept violation.
+In kvm_release_pfn_clean(), only unreserved page will call
+put_page. However, zero page is reserved.
+So, as well as creating and destroy vm, the refcount of
+zero page will continue to increase until it overflows.
+
+step1:
+echo 10000 > /sys/kernel/pages_to_scan/pages_to_scan
+echo 1 > /sys/kernel/pages_to_scan/run
+echo 1 > /sys/kernel/pages_to_scan/use_zero_pages
+
+step2:
+just create several normal qemu kvm vms.
+And destroy it after 10s.
+Repeat this action all the time.
+
+After a long period of time, all domains hang because
+of the refcount of zero page overflow.
+
+Qemu print error log as follow:
+ …
+ error: kvm run failed Bad address
+ EAX=00006cdc EBX=00000008 ECX=80202001 EDX=078bfbfd
+ ESI=ffffffff EDI=00000000 EBP=00000008 ESP=00006cc4
+ EIP=000efd75 EFL=00010002 [-------] CPL=0 II=0 A20=1 SMM=0 HLT=0
+ ES =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]
+ CS =0008 00000000 ffffffff 00c09b00 DPL=0 CS32 [-RA]
+ SS =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]
+ DS =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]
+ FS =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]
+ GS =0010 00000000 ffffffff 00c09300 DPL=0 DS   [-WA]
+ LDT=0000 00000000 0000ffff 00008200 DPL=0 LDT
+ TR =0000 00000000 0000ffff 00008b00 DPL=0 TSS32-busy
+ GDT=     000f7070 00000037
+ IDT=     000f70ae 00000000
+ CR0=00000011 CR2=00000000 CR3=00000000 CR4=00000000
+ DR0=0000000000000000 DR1=0000000000000000 DR2=0000000000000000 DR3=0000000000000000
+ DR6=00000000ffff0ff0 DR7=0000000000000400
+ EFER=0000000000000000
+ Code=00 01 00 00 00 e9 e8 00 00 00 c7 05 4c 55 0f 00 01 00 00 00 <8b> 35 00 00 01 00 8b 3d 04 00 01 00 b8 d8 d3 00 00 c1 e0 08 0c ea a3 00 00 01 00 c7 05 04
+ …
+
+Meanwhile, a kernel warning is departed.
+
+ [40914.836375] WARNING: CPU: 3 PID: 82067 at ./include/linux/mm.h:987 try_get_page+0x1f/0x30
+ [40914.836412] CPU: 3 PID: 82067 Comm: CPU 0/KVM Kdump: loaded Tainted: G           OE     5.2.0-rc2 #5
+ [40914.836415] RIP: 0010:try_get_page+0x1f/0x30
+ [40914.836417] Code: 40 00 c3 0f 1f 84 00 00 00 00 00 48 8b 47 08 a8 01 75 11 8b 47 34 85 c0 7e 10 f0 ff 47 34 b8 01 00 00 00 c3 48 8d 78 ff eb e9 <0f> 0b 31 c0 c3 66 90 66 2e 0f 1f 84 00 0
+ 0 00 00 00 48 8b 47 08 a8
+ [40914.836418] RSP: 0018:ffffb4144e523988 EFLAGS: 00010286
+ [40914.836419] RAX: 0000000080000000 RBX: 0000000000000326 RCX: 0000000000000000
+ [40914.836420] RDX: 0000000000000000 RSI: 00004ffdeba10000 RDI: ffffdf07093f6440
+ [40914.836421] RBP: ffffdf07093f6440 R08: 800000424fd91225 R09: 0000000000000000
+ [40914.836421] R10: ffff9eb41bfeebb8 R11: 0000000000000000 R12: ffffdf06bbd1e8a8
+ [40914.836422] R13: 0000000000000080 R14: 800000424fd91225 R15: ffffdf07093f6440
+ [40914.836423] FS:  00007fb60ffff700(0000) GS:ffff9eb4802c0000(0000) knlGS:0000000000000000
+ [40914.836425] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+ [40914.836426] CR2: 0000000000000000 CR3: 0000002f220e6002 CR4: 00000000003626e0
+ [40914.836427] DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+ [40914.836427] DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+ [40914.836428] Call Trace:
+ [40914.836433]  follow_page_pte+0x302/0x47b
+ [40914.836437]  __get_user_pages+0xf1/0x7d0
+ [40914.836441]  ? irq_work_queue+0x9/0x70
+ [40914.836443]  get_user_pages_unlocked+0x13f/0x1e0
+ [40914.836469]  __gfn_to_pfn_memslot+0x10e/0x400 [kvm]
+ [40914.836486]  try_async_pf+0x87/0x240 [kvm]
+ [40914.836503]  tdp_page_fault+0x139/0x270 [kvm]
+ [40914.836523]  kvm_mmu_page_fault+0x76/0x5e0 [kvm]
+ [40914.836588]  vcpu_enter_guest+0xb45/0x1570 [kvm]
+ [40914.836632]  kvm_arch_vcpu_ioctl_run+0x35d/0x580 [kvm]
+ [40914.836645]  kvm_vcpu_ioctl+0x26e/0x5d0 [kvm]
+ [40914.836650]  do_vfs_ioctl+0xa9/0x620
+ [40914.836653]  ksys_ioctl+0x60/0x90
+ [40914.836654]  __x64_sys_ioctl+0x16/0x20
+ [40914.836658]  do_syscall_64+0x5b/0x180
+ [40914.836664]  entry_SYSCALL_64_after_hwframe+0x44/0xa9
+ [40914.836666] RIP: 0033:0x7fb61cb6bfc7
+
+Signed-off-by: LinFeng <linfeng23@huawei.com>
+Signed-off-by: Zhuang Yanying <ann.zhuangyanying@huawei.com>
+---
+v1 -> v2:  fix compile error
+---
+ virt/kvm/kvm_main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index fd68fbe..a073442 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -152,7 +152,7 @@ __weak int kvm_arch_mmu_notifier_invalidate_range(struct kvm *kvm,
+ bool kvm_is_reserved_pfn(kvm_pfn_t pfn)
+ {
+ 	if (pfn_valid(pfn))
+-		return PageReserved(pfn_to_page(pfn));
++		return PageReserved(pfn_to_page(pfn)) && !is_zero_pfn(pfn);
+ 
+ 	return true;
+ }
