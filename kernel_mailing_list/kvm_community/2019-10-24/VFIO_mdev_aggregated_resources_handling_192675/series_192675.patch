@@ -1,0 +1,1120 @@
+From patchwork Thu Oct 24 05:08:24 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Zhenyu Wang <zhenyuw@linux.intel.com>
+X-Patchwork-Id: 11208281
+Return-Path: <SRS0=LVJf=YR=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 99E2C14E5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Oct 2019 05:08:37 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 834302166E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Oct 2019 05:08:37 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2437455AbfJXFIg (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Oct 2019 01:08:36 -0400
+Received: from mga11.intel.com ([192.55.52.93]:7748 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725298AbfJXFIg (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Oct 2019 01:08:36 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga007.fm.intel.com ([10.253.24.52])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Oct 2019 22:08:35 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.68,223,1569308400";
+   d="scan'208";a="197627634"
+Received: from debian-nuc.sh.intel.com ([10.239.160.133])
+  by fmsmga007.fm.intel.com with ESMTP; 23 Oct 2019 22:08:34 -0700
+From: Zhenyu Wang <zhenyuw@linux.intel.com>
+To: kvm@vger.kernel.org
+Cc: alex.williamson@redhat.com, kwankhede@nvidia.com,
+        kevin.tian@intel.com, cohuck@redhat.com
+Subject: [PATCH 1/6] vfio/mdev: Add new "aggregate" parameter for mdev create
+Date: Thu, 24 Oct 2019 13:08:24 +0800
+Message-Id: <20191024050829.4517-2-zhenyuw@linux.intel.com>
+X-Mailer: git-send-email 2.24.0.rc0
+In-Reply-To: <20191024050829.4517-1-zhenyuw@linux.intel.com>
+References: <20191024050829.4517-1-zhenyuw@linux.intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+For special mdev type which can aggregate instances for mdev device,
+this extends mdev create interface by allowing extra "aggregate=xxx"
+parameter, which is passed to mdev device model to be able to create
+bundled number of instances for target mdev device.
+
+Cc: Kirti Wankhede <kwankhede@nvidia.com>
+Cc: Alex Williamson <alex.williamson@redhat.com>
+Cc: Kevin Tian <kevin.tian@intel.com>
+Cc: Cornelia Huck <cohuck@redhat.com>
+Signed-off-by: Zhenyu Wang <zhenyuw@linux.intel.com>
+---
+v2: create new create_with_instances operator for vendor driver
+v3:
+- Change parameter name as "aggregate="
+- Fix new interface comments.
+- Parameter checking for new option, pass UUID string only to
+  parse and properly end parameter for kstrtouint() conversion.
+v4:
+- rebase
+- just call create_with_instances if exists, otherwise call create
+
+ drivers/vfio/mdev/mdev_core.c    | 17 +++++++++++++++--
+ drivers/vfio/mdev/mdev_private.h |  4 +++-
+ drivers/vfio/mdev/mdev_sysfs.c   | 27 +++++++++++++++++++++++----
+ include/linux/mdev.h             | 11 +++++++++++
+ 4 files changed, 52 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/vfio/mdev/mdev_core.c b/drivers/vfio/mdev/mdev_core.c
+index b558d4cfd082..4926a99f664d 100644
+--- a/drivers/vfio/mdev/mdev_core.c
++++ b/drivers/vfio/mdev/mdev_core.c
+@@ -270,7 +270,8 @@ static void mdev_device_release(struct device *dev)
+ }
+ 
+ int mdev_device_create(struct kobject *kobj,
+-		       struct device *dev, const guid_t *uuid)
++		       struct device *dev, const guid_t *uuid,
++		       unsigned int instances)
+ {
+ 	int ret;
+ 	struct mdev_device *mdev, *tmp;
+@@ -281,6 +282,13 @@ int mdev_device_create(struct kobject *kobj,
+ 	if (!parent)
+ 		return -EINVAL;
+ 
++	if (instances > 1 &&
++	    !parent->ops->create_with_instances) {
++		dev_warn(dev, "Non-supported aggregate instances create\n");
++		ret = -EINVAL;
++		goto mdev_fail;
++	}
++
+ 	mutex_lock(&mdev_list_lock);
+ 
+ 	/* Check for duplicate */
+@@ -319,8 +327,13 @@ int mdev_device_create(struct kobject *kobj,
+ 	dev_set_name(&mdev->dev, "%pUl", uuid);
+ 	mdev->dev.groups = parent->ops->mdev_attr_groups;
+ 	mdev->type_kobj = kobj;
++	mdev->type_instances = instances;
+ 
+-	ret = parent->ops->create(kobj, mdev);
++	if (parent->ops->create_with_instances)
++		ret = parent->ops->create_with_instances(kobj, mdev,
++							 instances);
++	else
++		ret = parent->ops->create(kobj, mdev);
+ 	if (ret)
+ 		goto ops_create_fail;
+ 
+diff --git a/drivers/vfio/mdev/mdev_private.h b/drivers/vfio/mdev/mdev_private.h
+index 7d922950caaf..56cbe9ea8817 100644
+--- a/drivers/vfio/mdev/mdev_private.h
++++ b/drivers/vfio/mdev/mdev_private.h
+@@ -33,6 +33,7 @@ struct mdev_device {
+ 	struct kobject *type_kobj;
+ 	struct device *iommu_device;
+ 	bool active;
++	unsigned int type_instances;
+ };
+ 
+ #define to_mdev_device(dev)	container_of(dev, struct mdev_device, dev)
+@@ -58,7 +59,8 @@ int  mdev_create_sysfs_files(struct device *dev, struct mdev_type *type);
+ void mdev_remove_sysfs_files(struct device *dev, struct mdev_type *type);
+ 
+ int  mdev_device_create(struct kobject *kobj,
+-			struct device *dev, const guid_t *uuid);
++			struct device *dev, const guid_t *uuid,
++			unsigned int instances);
+ int  mdev_device_remove(struct device *dev);
+ 
+ #endif /* MDEV_PRIVATE_H */
+diff --git a/drivers/vfio/mdev/mdev_sysfs.c b/drivers/vfio/mdev/mdev_sysfs.c
+index 7570c7602ab4..6c2693dd4022 100644
+--- a/drivers/vfio/mdev/mdev_sysfs.c
++++ b/drivers/vfio/mdev/mdev_sysfs.c
+@@ -48,17 +48,27 @@ static const struct sysfs_ops mdev_type_sysfs_ops = {
+ 	.store = mdev_type_attr_store,
+ };
+ 
++#define MDEV_CREATE_BUF 4096
+ static ssize_t create_store(struct kobject *kobj, struct device *dev,
+ 			    const char *buf, size_t count)
+ {
+-	char *str;
++	char *str, *param;
+ 	guid_t uuid;
+ 	int ret;
++	unsigned int instances = 1;
+ 
+-	if ((count < UUID_STRING_LEN) || (count > UUID_STRING_LEN + 1))
++	if (count < UUID_STRING_LEN)
+ 		return -EINVAL;
++	if (count > MDEV_CREATE_BUF - 1)
++		return -E2BIG;
+ 
+-	str = kstrndup(buf, count, GFP_KERNEL);
++	if ((param = strnchr(buf, count, ',')) == NULL) {
++		if (count > UUID_STRING_LEN + 1)
++			return -EINVAL;
++	} else if (param - buf != UUID_STRING_LEN)
++		return -EINVAL;
++
++	str = kstrndup(buf, UUID_STRING_LEN, GFP_KERNEL);
+ 	if (!str)
+ 		return -ENOMEM;
+ 
+@@ -67,7 +77,16 @@ static ssize_t create_store(struct kobject *kobj, struct device *dev,
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = mdev_device_create(kobj, dev, &uuid);
++	if (param) {
++		param++;
++		if (strncmp(param, "aggregate=", 10))
++			return -EINVAL;
++		param += 10;
++		if (kstrtouint(param, 0, &instances))
++			return -EINVAL;
++	}
++
++	ret = mdev_device_create(kobj, dev, &uuid, instances);
+ 	if (ret)
+ 		return ret;
+ 
+diff --git a/include/linux/mdev.h b/include/linux/mdev.h
+index 0ce30ca78db0..0dbb7ec27009 100644
+--- a/include/linux/mdev.h
++++ b/include/linux/mdev.h
+@@ -42,6 +42,14 @@ struct device *mdev_get_iommu_device(struct device *dev);
+  *			@mdev: mdev_device structure on of mediated device
+  *			      that is being created
+  *			Returns integer: success (0) or error (< 0)
++ * @create_with_instances: Allocate aggregated instances' resources in parent device's
++ *			driver for a particular mediated device. Optional if aggregated
++ *                      resources are not supported.
++ *			@kobj: kobject of type for which 'create' is called.
++ *			@mdev: mdev_device structure of mediated device
++ *			      that is being created
++ *                      @instances: number of instances to aggregate
++ *			Returns integer: success (0) or error (< 0)
+  * @remove:		Called to free resources in parent device's driver for a
+  *			a mediated device. It is mandatory to provide 'remove'
+  *			ops.
+@@ -82,6 +90,9 @@ struct mdev_parent_ops {
+ 	struct attribute_group **supported_type_groups;
+ 
+ 	int     (*create)(struct kobject *kobj, struct mdev_device *mdev);
++	int     (*create_with_instances)(struct kobject *kobj,
++					 struct mdev_device *mdev,
++					 unsigned int instances);
+ 	int     (*remove)(struct mdev_device *mdev);
+ 	int     (*open)(struct mdev_device *mdev);
+ 	void    (*release)(struct mdev_device *mdev);
+
+From patchwork Thu Oct 24 05:08:25 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Zhenyu Wang <zhenyuw@linux.intel.com>
+X-Patchwork-Id: 11208283
+Return-Path: <SRS0=LVJf=YR=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E9BE11515
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Oct 2019 05:08:37 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id D2E5D21925
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Oct 2019 05:08:37 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2437460AbfJXFIh (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Oct 2019 01:08:37 -0400
+Received: from mga11.intel.com ([192.55.52.93]:7748 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2437457AbfJXFIh (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Oct 2019 01:08:37 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga007.fm.intel.com ([10.253.24.52])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Oct 2019 22:08:37 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.68,223,1569308400";
+   d="scan'208";a="197627645"
+Received: from debian-nuc.sh.intel.com ([10.239.160.133])
+  by fmsmga007.fm.intel.com with ESMTP; 23 Oct 2019 22:08:35 -0700
+From: Zhenyu Wang <zhenyuw@linux.intel.com>
+To: kvm@vger.kernel.org
+Cc: alex.williamson@redhat.com, kwankhede@nvidia.com,
+        kevin.tian@intel.com, cohuck@redhat.com
+Subject: [PATCH 2/6] vfio/mdev: Add "aggregation" attribute for supported mdev
+ type
+Date: Thu, 24 Oct 2019 13:08:25 +0800
+Message-Id: <20191024050829.4517-3-zhenyuw@linux.intel.com>
+X-Mailer: git-send-email 2.24.0.rc0
+In-Reply-To: <20191024050829.4517-1-zhenyuw@linux.intel.com>
+References: <20191024050829.4517-1-zhenyuw@linux.intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+For supported mdev driver to create aggregated device, this creates
+new "aggregation" attribute for target type, which will show maximum
+number of instance resources that can be aggregated.
+
+Cc: Kirti Wankhede <kwankhede@nvidia.com>
+Cc: Alex Williamson <alex.williamson@redhat.com>
+Cc: Kevin Tian <kevin.tian@intel.com>
+Cc: Cornelia Huck <cohuck@redhat.com>
+Signed-off-by: Zhenyu Wang <zhenyuw@linux.intel.com>
+---
+ drivers/vfio/mdev/mdev_core.c    | 19 +++++++++++++++++++
+ drivers/vfio/mdev/mdev_private.h |  2 ++
+ drivers/vfio/mdev/mdev_sysfs.c   | 27 +++++++++++++++++++++++++++
+ include/linux/mdev.h             |  8 ++++++++
+ 4 files changed, 56 insertions(+)
+
+diff --git a/drivers/vfio/mdev/mdev_core.c b/drivers/vfio/mdev/mdev_core.c
+index 4926a99f664d..f8687893bff8 100644
+--- a/drivers/vfio/mdev/mdev_core.c
++++ b/drivers/vfio/mdev/mdev_core.c
+@@ -131,6 +131,25 @@ static int mdev_device_remove_cb(struct device *dev, void *data)
+ 	return 0;
+ }
+ 
++int mdev_max_aggregated_instances(struct kobject *kobj, struct device *dev,
++				  unsigned int *m)
++{
++	struct mdev_parent *parent;
++	struct mdev_type *type = to_mdev_type(kobj);
++	int ret;
++
++	parent = mdev_get_parent(type->parent);
++	if (!parent)
++		return -EINVAL;
++
++	if (parent->ops->max_aggregated_instances) {
++		ret = parent->ops->max_aggregated_instances(kobj, dev, m);
++	} else
++		ret = -EINVAL;
++	mdev_put_parent(parent);
++	return ret;
++}
++
+ /*
+  * mdev_register_device : Register a device
+  * @dev: device structure representing parent device.
+diff --git a/drivers/vfio/mdev/mdev_private.h b/drivers/vfio/mdev/mdev_private.h
+index 56cbe9ea8817..5dcbd00f3a46 100644
+--- a/drivers/vfio/mdev/mdev_private.h
++++ b/drivers/vfio/mdev/mdev_private.h
+@@ -63,4 +63,6 @@ int  mdev_device_create(struct kobject *kobj,
+ 			unsigned int instances);
+ int  mdev_device_remove(struct device *dev);
+ 
++int  mdev_max_aggregated_instances(struct kobject *kobj, struct device *dev,
++				   unsigned int *m);
+ #endif /* MDEV_PRIVATE_H */
+diff --git a/drivers/vfio/mdev/mdev_sysfs.c b/drivers/vfio/mdev/mdev_sysfs.c
+index 6c2693dd4022..acd3ec2900b5 100644
+--- a/drivers/vfio/mdev/mdev_sysfs.c
++++ b/drivers/vfio/mdev/mdev_sysfs.c
+@@ -95,6 +95,18 @@ static ssize_t create_store(struct kobject *kobj, struct device *dev,
+ 
+ MDEV_TYPE_ATTR_WO(create);
+ 
++static ssize_t
++aggregation_show(struct kobject *kobj, struct device *dev, char *buf)
++{
++	unsigned int m;
++
++	if (mdev_max_aggregated_instances(kobj, dev, &m))
++		return sprintf(buf, "1\n");
++	else
++		return sprintf(buf, "%u\n", m);
++}
++MDEV_TYPE_ATTR_RO(aggregation);
++
+ static void mdev_type_release(struct kobject *kobj)
+ {
+ 	struct mdev_type *type = to_mdev_type(kobj);
+@@ -137,6 +149,14 @@ static struct mdev_type *add_mdev_supported_type(struct mdev_parent *parent,
+ 	if (ret)
+ 		goto attr_create_failed;
+ 
++	if (parent->ops->create_with_instances &&
++	    parent->ops->max_aggregated_instances) {
++		ret = sysfs_create_file(&type->kobj,
++					&mdev_type_attr_aggregation.attr);
++		if (ret)
++			goto attr_aggregate_failed;
++	}
++
+ 	type->devices_kobj = kobject_create_and_add("devices", &type->kobj);
+ 	if (!type->devices_kobj) {
+ 		ret = -ENOMEM;
+@@ -157,6 +177,8 @@ static struct mdev_type *add_mdev_supported_type(struct mdev_parent *parent,
+ attrs_failed:
+ 	kobject_put(type->devices_kobj);
+ attr_devices_failed:
++	sysfs_remove_file(&type->kobj, &mdev_type_attr_aggregation.attr);
++attr_aggregate_failed:
+ 	sysfs_remove_file(&type->kobj, &mdev_type_attr_create.attr);
+ attr_create_failed:
+ 	kobject_del(&type->kobj);
+@@ -166,9 +188,14 @@ static struct mdev_type *add_mdev_supported_type(struct mdev_parent *parent,
+ 
+ static void remove_mdev_supported_type(struct mdev_type *type)
+ {
++	struct mdev_parent *parent = type->parent;
++
+ 	sysfs_remove_files(&type->kobj,
+ 			   (const struct attribute **)type->group->attrs);
+ 	kobject_put(type->devices_kobj);
++	if (parent->ops->create_with_instances &&
++	    parent->ops->max_aggregated_instances)
++		sysfs_remove_file(&type->kobj, &mdev_type_attr_aggregation.attr);
+ 	sysfs_remove_file(&type->kobj, &mdev_type_attr_create.attr);
+ 	kobject_del(&type->kobj);
+ 	kobject_put(&type->kobj);
+diff --git a/include/linux/mdev.h b/include/linux/mdev.h
+index 0dbb7ec27009..6808f24286dc 100644
+--- a/include/linux/mdev.h
++++ b/include/linux/mdev.h
+@@ -50,6 +50,11 @@ struct device *mdev_get_iommu_device(struct device *dev);
+  *			      that is being created
+  *                      @instances: number of instances to aggregate
+  *			Returns integer: success (0) or error (< 0)
++ * @max_aggregated_instances: Return max number for aggregated resources
++ *			@kobj: kobject of type
++ *                      @dev: mdev parent device for target type
++ *                      @max: return max number of instances which can be aggregated
++ *			Returns integer: success (0) or error (< 0)
+  * @remove:		Called to free resources in parent device's driver for a
+  *			a mediated device. It is mandatory to provide 'remove'
+  *			ops.
+@@ -93,6 +98,9 @@ struct mdev_parent_ops {
+ 	int     (*create_with_instances)(struct kobject *kobj,
+ 					 struct mdev_device *mdev,
+ 					 unsigned int instances);
++	int     (*max_aggregated_instances)(struct kobject *kobj,
++					    struct device *dev,
++					    unsigned int *max);
+ 	int     (*remove)(struct mdev_device *mdev);
+ 	int     (*open)(struct mdev_device *mdev);
+ 	void    (*release)(struct mdev_device *mdev);
+
+From patchwork Thu Oct 24 05:08:26 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Zhenyu Wang <zhenyuw@linux.intel.com>
+X-Patchwork-Id: 11208285
+Return-Path: <SRS0=LVJf=YR=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 0FA7D139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Oct 2019 05:08:40 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id ECA7620679
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Oct 2019 05:08:39 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2437465AbfJXFIj (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Oct 2019 01:08:39 -0400
+Received: from mga11.intel.com ([192.55.52.93]:7748 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2437452AbfJXFIi (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Oct 2019 01:08:38 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga007.fm.intel.com ([10.253.24.52])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Oct 2019 22:08:38 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.68,223,1569308400";
+   d="scan'208";a="197627651"
+Received: from debian-nuc.sh.intel.com ([10.239.160.133])
+  by fmsmga007.fm.intel.com with ESMTP; 23 Oct 2019 22:08:37 -0700
+From: Zhenyu Wang <zhenyuw@linux.intel.com>
+To: kvm@vger.kernel.org
+Cc: alex.williamson@redhat.com, kwankhede@nvidia.com,
+        kevin.tian@intel.com, cohuck@redhat.com
+Subject: [PATCH 3/6] vfio/mdev: Add "aggregated_instances" attribute for
+ supported mdev device
+Date: Thu, 24 Oct 2019 13:08:26 +0800
+Message-Id: <20191024050829.4517-4-zhenyuw@linux.intel.com>
+X-Mailer: git-send-email 2.24.0.rc0
+In-Reply-To: <20191024050829.4517-1-zhenyuw@linux.intel.com>
+References: <20191024050829.4517-1-zhenyuw@linux.intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+For mdev device created by "aggregate" parameter, this creates new mdev
+device attribute "aggregated_instances" to show number of aggregated
+instances allocated.
+
+Cc: Kirti Wankhede <kwankhede@nvidia.com>
+Cc: Alex Williamson <alex.williamson@redhat.com>
+Cc: Kevin Tian <kevin.tian@intel.com>
+Cc: Cornelia Huck <cohuck@redhat.com>
+Signed-off-by: Zhenyu Wang <zhenyuw@linux.intel.com>
+---
+v2:
+- change attribute name as "aggregated_instances"
+v3:
+- create only for aggregated allocation
+v4:
+- fix remove
+
+ drivers/vfio/mdev/mdev_sysfs.c | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/drivers/vfio/mdev/mdev_sysfs.c b/drivers/vfio/mdev/mdev_sysfs.c
+index acd3ec2900b5..f131480a767a 100644
+--- a/drivers/vfio/mdev/mdev_sysfs.c
++++ b/drivers/vfio/mdev/mdev_sysfs.c
+@@ -289,6 +289,17 @@ static ssize_t remove_store(struct device *dev, struct device_attribute *attr,
+ 
+ static DEVICE_ATTR_WO(remove);
+ 
++static ssize_t
++aggregated_instances_show(struct device *dev,
++			  struct device_attribute *attr,
++			  char *buf)
++{
++	struct mdev_device *mdev = to_mdev_device(dev);
++	return sprintf(buf, "%u\n", mdev->type_instances);
++}
++
++static DEVICE_ATTR_RO(aggregated_instances);
++
+ static const struct attribute *mdev_device_attrs[] = {
+ 	&dev_attr_remove.attr,
+ 	NULL,
+@@ -296,6 +307,7 @@ static const struct attribute *mdev_device_attrs[] = {
+ 
+ int  mdev_create_sysfs_files(struct device *dev, struct mdev_type *type)
+ {
++	struct mdev_device *mdev = to_mdev_device(dev);
+ 	int ret;
+ 
+ 	ret = sysfs_create_link(type->devices_kobj, &dev->kobj, dev_name(dev));
+@@ -310,8 +322,17 @@ int  mdev_create_sysfs_files(struct device *dev, struct mdev_type *type)
+ 	if (ret)
+ 		goto create_files_failed;
+ 
++	if (mdev->type_instances > 1) {
++		ret = sysfs_create_file(&dev->kobj,
++					&dev_attr_aggregated_instances.attr);
++		if (ret)
++			goto create_aggregated_failed;
++	}
++
+ 	return ret;
+ 
++create_aggregated_failed:
++	sysfs_remove_files(&dev->kobj, mdev_device_attrs);
+ create_files_failed:
+ 	sysfs_remove_link(&dev->kobj, "mdev_type");
+ type_link_failed:
+@@ -321,6 +342,10 @@ int  mdev_create_sysfs_files(struct device *dev, struct mdev_type *type)
+ 
+ void mdev_remove_sysfs_files(struct device *dev, struct mdev_type *type)
+ {
++	struct mdev_device *mdev = to_mdev_device(dev);
++	if (mdev->type_instances > 1)
++		sysfs_remove_file(&dev->kobj,
++				  &dev_attr_aggregated_instances.attr);
+ 	sysfs_remove_files(&dev->kobj, mdev_device_attrs);
+ 	sysfs_remove_link(&dev->kobj, "mdev_type");
+ 	sysfs_remove_link(type->devices_kobj, dev_name(dev));
+
+From patchwork Thu Oct 24 05:08:27 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Zhenyu Wang <zhenyuw@linux.intel.com>
+X-Patchwork-Id: 11208287
+Return-Path: <SRS0=LVJf=YR=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 30F1614E5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Oct 2019 05:08:41 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 1A1F42166E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Oct 2019 05:08:41 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2437468AbfJXFIk (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Oct 2019 01:08:40 -0400
+Received: from mga11.intel.com ([192.55.52.93]:7748 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2437457AbfJXFIj (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Oct 2019 01:08:39 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga007.fm.intel.com ([10.253.24.52])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Oct 2019 22:08:39 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.68,223,1569308400";
+   d="scan'208";a="197627654"
+Received: from debian-nuc.sh.intel.com ([10.239.160.133])
+  by fmsmga007.fm.intel.com with ESMTP; 23 Oct 2019 22:08:38 -0700
+From: Zhenyu Wang <zhenyuw@linux.intel.com>
+To: kvm@vger.kernel.org
+Cc: alex.williamson@redhat.com, kwankhede@nvidia.com,
+        kevin.tian@intel.com, cohuck@redhat.com
+Subject: [PATCH 4/6] Documentation/driver-api/vfio-mediated-device.rst: Update
+ for vfio/mdev aggregation support
+Date: Thu, 24 Oct 2019 13:08:27 +0800
+Message-Id: <20191024050829.4517-5-zhenyuw@linux.intel.com>
+X-Mailer: git-send-email 2.24.0.rc0
+In-Reply-To: <20191024050829.4517-1-zhenyuw@linux.intel.com>
+References: <20191024050829.4517-1-zhenyuw@linux.intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Update vfio/mdev doc on new "aggregate" create parameter, new "aggregation"
+attribute and "aggregated_instances" attribute for mdev device.
+
+Cc: Kirti Wankhede <kwankhede@nvidia.com>
+Cc: Alex Williamson <alex.williamson@redhat.com>
+Cc: Kevin Tian <kevin.tian@intel.com>
+Cc: Cornelia Huck <cohuck@redhat.com>
+Signed-off-by: Zhenyu Wang <zhenyuw@linux.intel.com>
+---
+ .../driver-api/vfio-mediated-device.rst       | 23 +++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/Documentation/driver-api/vfio-mediated-device.rst b/Documentation/driver-api/vfio-mediated-device.rst
+index 25eb7d5b834b..2881be654516 100644
+--- a/Documentation/driver-api/vfio-mediated-device.rst
++++ b/Documentation/driver-api/vfio-mediated-device.rst
+@@ -216,6 +216,7 @@ Directories and files under the sysfs for Each Physical Device
+   |          |--- available_instances
+   |          |--- device_api
+   |          |--- description
++  |          |--- <aggregation>
+   |          |--- [devices]
+ 
+ * [mdev_supported_types]
+@@ -260,6 +261,21 @@ Directories and files under the sysfs for Each Physical Device
+   This attribute should show brief features/description of the type. This is
+   optional attribute.
+ 
++* <aggregation>
++
++  <aggregation> is an optional attributes to show maximum number that the
++  instance resources of [<type-id>] can be aggregated to be assigned
++  for one mdev device. No <aggregation> attribute means driver doesn't
++  support to aggregate instance resoures for one mdev device.
++
++  Set number of instances by appending "aggregate=N" parameter for
++  create attribute. By default without "aggregate=N" parameter it
++  will create one instance as normal.
++
++Example::
++
++	# echo "<uuid>,aggregate=N" > create
++
+ Directories and Files Under the sysfs for Each mdev Device
+ ----------------------------------------------------------
+ 
+@@ -268,6 +284,7 @@ Directories and Files Under the sysfs for Each mdev Device
+   |- [parent phy device]
+   |--- [$MDEV_UUID]
+          |--- remove
++         |--- <aggregated_instances>
+          |--- mdev_type {link to its type}
+          |--- vendor-specific-attributes [optional]
+ 
+@@ -281,6 +298,12 @@ Example::
+ 
+ 	# echo 1 > /sys/bus/mdev/devices/$mdev_UUID/remove
+ 
++* <aggregated_instances> (read only)
++
++For mdev created with aggregate parameter, this shows number of
++instances assigned for this mdev. For normal type this attribute will
++not exist.
++
+ Mediated device Hot plug
+ ------------------------
+ 
+
+From patchwork Thu Oct 24 05:08:28 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Zhenyu Wang <zhenyuw@linux.intel.com>
+X-Patchwork-Id: 11208289
+Return-Path: <SRS0=LVJf=YR=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1C89D14E5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Oct 2019 05:08:42 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id ED05721872
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Oct 2019 05:08:41 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2437471AbfJXFIl (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Oct 2019 01:08:41 -0400
+Received: from mga11.intel.com ([192.55.52.93]:7748 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2437475AbfJXFIk (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Oct 2019 01:08:40 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga007.fm.intel.com ([10.253.24.52])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Oct 2019 22:08:40 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.68,223,1569308400";
+   d="scan'208";a="197627658"
+Received: from debian-nuc.sh.intel.com ([10.239.160.133])
+  by fmsmga007.fm.intel.com with ESMTP; 23 Oct 2019 22:08:39 -0700
+From: Zhenyu Wang <zhenyuw@linux.intel.com>
+To: kvm@vger.kernel.org
+Cc: alex.williamson@redhat.com, kwankhede@nvidia.com,
+        kevin.tian@intel.com, cohuck@redhat.com
+Subject: [PATCH 5/6] Documentation/ABI/testing/sysfs-bus-vfio-mdev: Update for
+ vfio/mdev aggregation support
+Date: Thu, 24 Oct 2019 13:08:28 +0800
+Message-Id: <20191024050829.4517-6-zhenyuw@linux.intel.com>
+X-Mailer: git-send-email 2.24.0.rc0
+In-Reply-To: <20191024050829.4517-1-zhenyuw@linux.intel.com>
+References: <20191024050829.4517-1-zhenyuw@linux.intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Update vfio/mdev ABI description for new aggregation attributes.
+
+Cc: Kirti Wankhede <kwankhede@nvidia.com>
+Cc: Alex Williamson <alex.williamson@redhat.com>
+Cc: Kevin Tian <kevin.tian@intel.com>
+Cc: Cornelia Huck <cohuck@redhat.com>
+Signed-off-by: Zhenyu Wang <zhenyuw@linux.intel.com>
+---
+ Documentation/ABI/testing/sysfs-bus-vfio-mdev | 24 +++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/Documentation/ABI/testing/sysfs-bus-vfio-mdev b/Documentation/ABI/testing/sysfs-bus-vfio-mdev
+index 452dbe39270e..6645ff9a6a6a 100644
+--- a/Documentation/ABI/testing/sysfs-bus-vfio-mdev
++++ b/Documentation/ABI/testing/sysfs-bus-vfio-mdev
+@@ -85,6 +85,23 @@ Users:
+ 		a particular <type-id> that can help in understanding the
+ 		features provided by that type of mediated device.
+ 
++What:           /sys/.../mdev_supported_types/<type-id>/aggregation
++Date:           October 2019
++Contact:        Zhenyu Wang <zhenyuw@linux.intel.com>
++Description:
++		Reading this attribute will show number of mdev instances
++		that can be aggregated to assign for one mdev device.
++		This is an optional attribute. If this attribute exists,
++		the driver supports to aggregate target mdev type's
++		resources assigned for one mdev device.
++Users:
++		Userspace application should check the number of aggregation
++		instances that could be created before creating mediated device.
++		Create mdev instance with aggregation by applying this,
++		e.g
++		# echo "83b8f4f2-509f-382f-3c1e-e6bfe0fa1001,aggregate=XX" > \
++		       /sys/devices/foo/mdev_supported_types/foo-1/create
++
+ What:           /sys/.../<device>/<UUID>/
+ Date:           October 2016
+ Contact:        Kirti Wankhede <kwankhede@nvidia.com>
+@@ -109,3 +126,10 @@ Description:
+ 		is active and the vendor driver doesn't support hot unplug.
+ 		Example:
+ 		# echo 1 > /sys/bus/mdev/devices/<UUID>/remove
++
++What:           /sys/.../<device>/<UUID>/aggregated_instances
++Date:           October 2019
++Contact:        Zhenyu Wang <zhenyuw@linux.intel.com>
++Description:
++		This attributes shows number of aggregated instances if this
++		mediated device was created with "aggregate" parameter.
+\ No newline at end of file
+
+From patchwork Thu Oct 24 05:08:29 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Zhenyu Wang <zhenyuw@linux.intel.com>
+X-Patchwork-Id: 11208291
+Return-Path: <SRS0=LVJf=YR=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C4140139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Oct 2019 05:08:43 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id A2BB121872
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 24 Oct 2019 05:08:43 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2437472AbfJXFIm (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 24 Oct 2019 01:08:42 -0400
+Received: from mga11.intel.com ([192.55.52.93]:7748 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2437478AbfJXFIm (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 24 Oct 2019 01:08:42 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga007.fm.intel.com ([10.253.24.52])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Oct 2019 22:08:41 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.68,223,1569308400";
+   d="scan'208";a="197627663"
+Received: from debian-nuc.sh.intel.com ([10.239.160.133])
+  by fmsmga007.fm.intel.com with ESMTP; 23 Oct 2019 22:08:40 -0700
+From: Zhenyu Wang <zhenyuw@linux.intel.com>
+To: kvm@vger.kernel.org
+Cc: alex.williamson@redhat.com, kwankhede@nvidia.com,
+        kevin.tian@intel.com, cohuck@redhat.com
+Subject: [PATCH 6/6] drm/i915/gvt: Add new type with aggregation support
+Date: Thu, 24 Oct 2019 13:08:29 +0800
+Message-Id: <20191024050829.4517-7-zhenyuw@linux.intel.com>
+X-Mailer: git-send-email 2.24.0.rc0
+In-Reply-To: <20191024050829.4517-1-zhenyuw@linux.intel.com>
+References: <20191024050829.4517-1-zhenyuw@linux.intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+New aggregation type is created for KVMGT which can be used
+to combine minimal resource number for target instances, to create
+user defined number of resources. For KVMGT, aggregated resource
+is determined by memory and fence resource allocation for target
+number of instances.
+
+Cc: Kirti Wankhede <kwankhede@nvidia.com>
+Cc: Alex Williamson <alex.williamson@redhat.com>
+Cc: Kevin Tian <kevin.tian@intel.com>
+Cc: Cornelia Huck <cohuck@redhat.com>
+Signed-off-by: Zhenyu Wang <zhenyuw@linux.intel.com>
+---
+v2:
+- apply for new hooks
+v3:
+- show aggregation info in description
+
+ drivers/gpu/drm/i915/gvt/gvt.c   |  4 +--
+ drivers/gpu/drm/i915/gvt/gvt.h   | 11 +++++--
+ drivers/gpu/drm/i915/gvt/kvmgt.c | 53 ++++++++++++++++++++++++++++--
+ drivers/gpu/drm/i915/gvt/vgpu.c  | 56 ++++++++++++++++++++++++++++++--
+ 4 files changed, 114 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/gpu/drm/i915/gvt/gvt.c b/drivers/gpu/drm/i915/gvt/gvt.c
+index 8f37eefa0a02..e8b82c925bba 100644
+--- a/drivers/gpu/drm/i915/gvt/gvt.c
++++ b/drivers/gpu/drm/i915/gvt/gvt.c
+@@ -98,11 +98,11 @@ static ssize_t description_show(struct kobject *kobj, struct device *dev,
+ 
+ 	return sprintf(buf, "low_gm_size: %dMB\nhigh_gm_size: %dMB\n"
+ 		       "fence: %d\nresolution: %s\n"
+-		       "weight: %d\n",
++		       "weight: %d\naggregation: %s\n",
+ 		       BYTES_TO_MB(type->low_gm_size),
+ 		       BYTES_TO_MB(type->high_gm_size),
+ 		       type->fence, vgpu_edid_str(type->resolution),
+-		       type->weight);
++		       type->weight, type->aggregation ? "gm" : "none");
+ }
+ 
+ static MDEV_TYPE_ATTR_RO(available_instances);
+diff --git a/drivers/gpu/drm/i915/gvt/gvt.h b/drivers/gpu/drm/i915/gvt/gvt.h
+index b47c6acaf9c0..9eb410257216 100644
+--- a/drivers/gpu/drm/i915/gvt/gvt.h
++++ b/drivers/gpu/drm/i915/gvt/gvt.h
+@@ -238,6 +238,9 @@ struct intel_vgpu {
+ struct intel_gvt_gm {
+ 	unsigned long vgpu_allocated_low_gm_size;
+ 	unsigned long vgpu_allocated_high_gm_size;
++	unsigned long low_avail;
++	unsigned long high_avail;
++	unsigned long fence_avail;
+ };
+ 
+ struct intel_gvt_fence {
+@@ -289,13 +292,15 @@ struct intel_gvt_firmware {
+ 
+ #define NR_MAX_INTEL_VGPU_TYPES 20
+ struct intel_vgpu_type {
+-	char name[16];
++	const char *drv_name;
++	char name[32];
+ 	unsigned int avail_instance;
+ 	unsigned int low_gm_size;
+ 	unsigned int high_gm_size;
+ 	unsigned int fence;
+ 	unsigned int weight;
+ 	enum intel_vgpu_edid resolution;
++	unsigned int aggregation;
+ };
+ 
+ struct intel_gvt {
+@@ -481,7 +486,7 @@ void intel_gvt_clean_vgpu_types(struct intel_gvt *gvt);
+ struct intel_vgpu *intel_gvt_create_idle_vgpu(struct intel_gvt *gvt);
+ void intel_gvt_destroy_idle_vgpu(struct intel_vgpu *vgpu);
+ struct intel_vgpu *intel_gvt_create_vgpu(struct intel_gvt *gvt,
+-					 struct intel_vgpu_type *type);
++					 struct intel_vgpu_type *type, unsigned int);
+ void intel_gvt_destroy_vgpu(struct intel_vgpu *vgpu);
+ void intel_gvt_release_vgpu(struct intel_vgpu *vgpu);
+ void intel_gvt_reset_vgpu_locked(struct intel_vgpu *vgpu, bool dmlr,
+@@ -562,7 +567,7 @@ struct intel_gvt_ops {
+ 	int (*emulate_mmio_write)(struct intel_vgpu *, u64, void *,
+ 				unsigned int);
+ 	struct intel_vgpu *(*vgpu_create)(struct intel_gvt *,
+-				struct intel_vgpu_type *);
++					  struct intel_vgpu_type *, unsigned int);
+ 	void (*vgpu_destroy)(struct intel_vgpu *vgpu);
+ 	void (*vgpu_release)(struct intel_vgpu *vgpu);
+ 	void (*vgpu_reset)(struct intel_vgpu *);
+diff --git a/drivers/gpu/drm/i915/gvt/kvmgt.c b/drivers/gpu/drm/i915/gvt/kvmgt.c
+index 04a5a0d90823..99b77f4d775c 100644
+--- a/drivers/gpu/drm/i915/gvt/kvmgt.c
++++ b/drivers/gpu/drm/i915/gvt/kvmgt.c
+@@ -643,7 +643,9 @@ static void kvmgt_put_vfio_device(void *vgpu)
+ 	vfio_device_put(((struct intel_vgpu *)vgpu)->vdev.vfio_device);
+ }
+ 
+-static int intel_vgpu_create(struct kobject *kobj, struct mdev_device *mdev)
++static int intel_vgpu_create_internal(struct kobject *kobj,
++				      struct mdev_device *mdev,
++				      unsigned int instances)
+ {
+ 	struct intel_vgpu *vgpu = NULL;
+ 	struct intel_vgpu_type *type;
+@@ -662,7 +664,14 @@ static int intel_vgpu_create(struct kobject *kobj, struct mdev_device *mdev)
+ 		goto out;
+ 	}
+ 
+-	vgpu = intel_gvt_ops->vgpu_create(gvt, type);
++	if (instances > 1 && instances > type->aggregation) {
++		gvt_vgpu_err("wrong aggregation specified for type %s\n",
++			     kobject_name(kobj));
++		ret = -EINVAL;
++		goto out;
++	}
++
++	vgpu = intel_gvt_ops->vgpu_create(gvt, type, instances);
+ 	if (IS_ERR_OR_NULL(vgpu)) {
+ 		ret = vgpu == NULL ? -EFAULT : PTR_ERR(vgpu);
+ 		gvt_err("failed to create intel vgpu: %d\n", ret);
+@@ -682,6 +691,44 @@ static int intel_vgpu_create(struct kobject *kobj, struct mdev_device *mdev)
+ 	return ret;
+ }
+ 
++static int intel_vgpu_create(struct kobject *kobj, struct mdev_device *mdev)
++{
++       return intel_vgpu_create_internal(kobj, mdev, 1);
++}
++
++static int intel_vgpu_create_with_instances(struct kobject *kobj,
++                                           struct mdev_device *mdev,
++                                           unsigned int instances)
++{
++       return intel_vgpu_create_internal(kobj, mdev, instances);
++}
++
++static int intel_vgpu_max_aggregated_instances(struct kobject *kobj,
++					       struct device *dev,
++					       unsigned int *max)
++{
++	struct intel_vgpu_type *type;
++	struct intel_gvt *gvt;
++	int ret = 0;
++
++	gvt = kdev_to_i915(dev)->gvt;
++
++	type = intel_gvt_ops->gvt_find_vgpu_type(gvt, kobject_name(kobj));
++	if (!type) {
++		gvt_err("failed to find type %s to create\n",
++						kobject_name(kobj));
++		ret = -EINVAL;
++		goto out;
++	}
++
++	if (type->aggregation == 0)
++		*max = 1;
++	else
++		*max = type->aggregation;
++out:
++	return ret;
++}
++
+ static int intel_vgpu_remove(struct mdev_device *mdev)
+ {
+ 	struct intel_vgpu *vgpu = mdev_get_drvdata(mdev);
+@@ -1584,6 +1631,8 @@ static const struct attribute_group *intel_vgpu_groups[] = {
+ static struct mdev_parent_ops intel_vgpu_ops = {
+ 	.mdev_attr_groups       = intel_vgpu_groups,
+ 	.create			= intel_vgpu_create,
++	.create_with_instances  = intel_vgpu_create_with_instances,
++	.max_aggregated_instances = intel_vgpu_max_aggregated_instances,
+ 	.remove			= intel_vgpu_remove,
+ 
+ 	.open			= intel_vgpu_open,
+diff --git a/drivers/gpu/drm/i915/gvt/vgpu.c b/drivers/gpu/drm/i915/gvt/vgpu.c
+index d5a6e4e3d0fd..d0780a2f7e69 100644
+--- a/drivers/gpu/drm/i915/gvt/vgpu.c
++++ b/drivers/gpu/drm/i915/gvt/vgpu.c
+@@ -108,6 +108,7 @@ int intel_gvt_init_vgpu_types(struct intel_gvt *gvt)
+ 	unsigned int num_types;
+ 	unsigned int i, low_avail, high_avail;
+ 	unsigned int min_low;
++	const char *driver_name = dev_driver_string(&gvt->dev_priv->drm.pdev->dev);
+ 
+ 	/* vGPU type name is defined as GVTg_Vx_y which contains
+ 	 * physical GPU generation type (e.g V4 as BDW server, V5 as
+@@ -125,11 +126,15 @@ int intel_gvt_init_vgpu_types(struct intel_gvt *gvt)
+ 	high_avail = gvt_hidden_sz(gvt) - HOST_HIGH_GM_SIZE;
+ 	num_types = sizeof(vgpu_types) / sizeof(vgpu_types[0]);
+ 
+-	gvt->types = kcalloc(num_types, sizeof(struct intel_vgpu_type),
++	gvt->types = kcalloc(num_types + 1, sizeof(struct intel_vgpu_type),
+ 			     GFP_KERNEL);
+ 	if (!gvt->types)
+ 		return -ENOMEM;
+ 
++	gvt->gm.low_avail = low_avail;
++	gvt->gm.high_avail = high_avail;
++	gvt->gm.fence_avail = 32 - HOST_FENCE;
++
+ 	min_low = MB_TO_BYTES(32);
+ 	for (i = 0; i < num_types; ++i) {
+ 		if (low_avail / vgpu_types[i].low_mm == 0)
+@@ -147,6 +152,7 @@ int intel_gvt_init_vgpu_types(struct intel_gvt *gvt)
+ 		gvt->types[i].resolution = vgpu_types[i].edid;
+ 		gvt->types[i].avail_instance = min(low_avail / vgpu_types[i].low_mm,
+ 						   high_avail / vgpu_types[i].high_mm);
++		gvt->types[i].aggregation = 0;
+ 
+ 		if (IS_GEN(gvt->dev_priv, 8))
+ 			sprintf(gvt->types[i].name, "GVTg_V4_%s",
+@@ -154,6 +160,7 @@ int intel_gvt_init_vgpu_types(struct intel_gvt *gvt)
+ 		else if (IS_GEN(gvt->dev_priv, 9))
+ 			sprintf(gvt->types[i].name, "GVTg_V5_%s",
+ 						vgpu_types[i].name);
++		gvt->types[i].drv_name = driver_name;
+ 
+ 		gvt_dbg_core("type[%d]: %s avail %u low %u high %u fence %u weight %u res %s\n",
+ 			     i, gvt->types[i].name,
+@@ -164,7 +171,32 @@ int intel_gvt_init_vgpu_types(struct intel_gvt *gvt)
+ 			     vgpu_edid_str(gvt->types[i].resolution));
+ 	}
+ 
+-	gvt->num_types = i;
++	/* add aggregation type */
++	gvt->types[i].low_gm_size = MB_TO_BYTES(32);
++	gvt->types[i].high_gm_size = MB_TO_BYTES(192);
++	gvt->types[i].fence = 2;
++	gvt->types[i].weight = 16;
++	gvt->types[i].resolution = GVT_EDID_1024_768;
++	gvt->types[i].avail_instance = min(low_avail / gvt->types[i].low_gm_size,
++					   high_avail / gvt->types[i].high_gm_size);
++	gvt->types[i].avail_instance = min(gvt->types[i].avail_instance,
++					   (32 - HOST_FENCE) / gvt->types[i].fence);
++	if (IS_GEN(gvt->dev_priv, 8))
++		strcat(gvt->types[i].name, "GVTg_V4_aggregate");
++	else if (IS_GEN(gvt->dev_priv, 9))
++		strcat(gvt->types[i].name, "GVTg_V5_aggregate");
++	gvt->types[i].drv_name = driver_name;
++
++	gvt_dbg_core("type[%d]: %s avail %u low %u high %u fence %u weight %u res %s\n",
++		     i, gvt->types[i].name,
++		     gvt->types[i].avail_instance,
++		     gvt->types[i].low_gm_size,
++		     gvt->types[i].high_gm_size, gvt->types[i].fence,
++		     gvt->types[i].weight,
++		     vgpu_edid_str(gvt->types[i].resolution));
++
++	gvt->types[i].aggregation = gvt->types[i].avail_instance;
++	gvt->num_types = ++i;
+ 	return 0;
+ }
+ 
+@@ -195,6 +227,8 @@ static void intel_gvt_update_vgpu_types(struct intel_gvt *gvt)
+ 		fence_min = fence_avail / gvt->types[i].fence;
+ 		gvt->types[i].avail_instance = min(min(low_gm_min, high_gm_min),
+ 						   fence_min);
++		if (gvt->types[i].aggregation > 1)
++			gvt->types[i].aggregation = gvt->types[i].avail_instance;
+ 
+ 		gvt_dbg_core("update type[%d]: %s avail %u low %u high %u fence %u\n",
+ 		       i, gvt->types[i].name,
+@@ -468,7 +502,8 @@ static struct intel_vgpu *__intel_gvt_create_vgpu(struct intel_gvt *gvt,
+  * pointer to intel_vgpu, error pointer if failed.
+  */
+ struct intel_vgpu *intel_gvt_create_vgpu(struct intel_gvt *gvt,
+-				struct intel_vgpu_type *type)
++					 struct intel_vgpu_type *type,
++					 unsigned int instances)
+ {
+ 	struct intel_vgpu_creation_params param;
+ 	struct intel_vgpu *vgpu;
+@@ -485,6 +520,21 @@ struct intel_vgpu *intel_gvt_create_vgpu(struct intel_gvt *gvt,
+ 	param.low_gm_sz = BYTES_TO_MB(param.low_gm_sz);
+ 	param.high_gm_sz = BYTES_TO_MB(param.high_gm_sz);
+ 
++	if (instances > 1 && instances <= type->aggregation) {
++		if (instances > type->avail_instance)
++			return ERR_PTR(-EINVAL);
++		param.low_gm_sz = min(param.low_gm_sz * instances,
++				      (u64)BYTES_TO_MB(gvt->gm.low_avail));
++		param.high_gm_sz = min(param.high_gm_sz * instances,
++				       (u64)BYTES_TO_MB(gvt->gm.high_avail));
++		param.fence_sz = min(param.fence_sz * instances,
++				     (u64)gvt->gm.fence_avail);
++		type->aggregation -= instances;
++		gvt_dbg_core("instances %d, low %lluMB, high %lluMB, fence %llu, left %u\n",
++			     instances, param.low_gm_sz, param.high_gm_sz, param.fence_sz,
++			     type->aggregation);
++	}
++
+ 	mutex_lock(&gvt->lock);
+ 	vgpu = __intel_gvt_create_vgpu(gvt, &param);
+ 	if (!IS_ERR(vgpu))
