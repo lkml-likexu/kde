@@ -1,0 +1,2519 @@
+From patchwork Thu Nov 28 18:04:01 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266475
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6DDA3921
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:33 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 4FB6221771
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:33 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726610AbfK1SEc (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:32 -0500
+Received: from foss.arm.com ([217.140.110.172]:39304 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726401AbfK1SEc (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:32 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id D6BC631B;
+        Thu, 28 Nov 2019 10:04:31 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ BB6DF3F6C4;
+        Thu, 28 Nov 2019 10:04:30 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 01/18] lib: arm/arm64: Remove unnecessary
+ dcache maintenance operations
+Date: Thu, 28 Nov 2019 18:04:01 +0000
+Message-Id: <20191128180418.6938-2-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+On ARMv7 with multiprocessing extensions (which are mandated by the
+virtualization extensions [1]), and on ARMv8, translation table walks are
+coherent [2][3], which means that no dcache maintenance operations are
+required when changing the tables. Remove the maintenance operations so
+that we do only the minimum required to ensure correctness.
+
+Translation table walks are coherent if the memory where the tables
+themselves reside have the same shareability and cacheability attributes
+as the translation table walks. For ARMv8, this is already the case, and
+it is only a matter of removing the cache operations.
+
+However, for ARMv7, translation table walks were being configured as
+Non-shareable (TTBCR.SH0 = 0b00) and Non-cacheable
+(TTBCR.{I,O}RGN0 = 0b00). Fix that by marking them as Inner Shareable,
+Normal memory, Inner and Outer Write-Back Write-Allocate Cacheable.
+
+The ARM ARM uses a DSB ISH in the example code for updating a
+translation table entry [4], however we use a DSB ISHST. It turns out
+that the ARM ARM is being overly cautious and our approach is similar to
+what the Linux kernel does (see commit 98f7685ee69f ("arm64: barriers:
+make use of barrier options with explicit barriers")); it also makes
+sense to use a store DSB barrier to make sure the new value is seen by
+by the next table walk, which is not a memory operation and not affected
+by a DMB.
+
+Because translation table walks are now coherent on arm, replace the
+TLBIMVAA operation with TLBIMVAAIS in flush_tlb_page, which acts on the
+Inner Shareable domain instead of being private to the PE.
+
+The functions that update the translation table are called when the MMU
+is off, or to modify permissions, in the case of the cache test, so
+break-before-make is not necessary.
+
+[1] ARM DDI 0406C.d, section B1.7
+[2] ARM DDI 0406C.d, section B3.3.1
+[3] ARM DDI 0487E.a, section D13.2.72
+[4] ARM DDI 0487E.a, section K11.5.3
+
+Reported-by: Mark Rutland <mark.rutland@arm.com>
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ lib/arm/asm/mmu.h           |  4 ++--
+ lib/arm/asm/pgtable-hwdef.h |  8 ++++++++
+ lib/arm/mmu.c               | 18 +++++-------------
+ arm/cstart.S                |  7 +++++--
+ 4 files changed, 20 insertions(+), 17 deletions(-)
+
+diff --git a/lib/arm/asm/mmu.h b/lib/arm/asm/mmu.h
+index 915c2b07dead..361f3cdcc3d5 100644
+--- a/lib/arm/asm/mmu.h
++++ b/lib/arm/asm/mmu.h
+@@ -31,8 +31,8 @@ static inline void flush_tlb_all(void)
+ 
+ static inline void flush_tlb_page(unsigned long vaddr)
+ {
+-	/* TLBIMVAA */
+-	asm volatile("mcr p15, 0, %0, c8, c7, 3" :: "r" (vaddr));
++	/* TLBIMVAAIS */
++	asm volatile("mcr p15, 0, %0, c8, c3, 3" :: "r" (vaddr));
+ 	dsb();
+ 	isb();
+ }
+diff --git a/lib/arm/asm/pgtable-hwdef.h b/lib/arm/asm/pgtable-hwdef.h
+index c08e6e2c01b4..4f24c78ee011 100644
+--- a/lib/arm/asm/pgtable-hwdef.h
++++ b/lib/arm/asm/pgtable-hwdef.h
+@@ -108,4 +108,12 @@
+ #define PHYS_MASK_SHIFT		(40)
+ #define PHYS_MASK		((_AC(1, ULL) << PHYS_MASK_SHIFT) - 1)
+ 
++#define TTBCR_IRGN0_WBWA	(_AC(1, UL) << 8)
++#define TTBCR_ORGN0_WBWA	(_AC(1, UL) << 10)
++#define TTBCR_SH0_SHARED	(_AC(3, UL) << 12)
++#define TTBCR_IRGN1_WBWA	(_AC(1, UL) << 24)
++#define TTBCR_ORGN1_WBWA	(_AC(1, UL) << 26)
++#define TTBCR_SH1_SHARED	(_AC(3, UL) << 28)
++#define TTBCR_EAE		(_AC(1, UL) << 31)
++
+ #endif /* _ASMARM_PGTABLE_HWDEF_H_ */
+diff --git a/lib/arm/mmu.c b/lib/arm/mmu.c
+index 78db22e6af14..72043c333b55 100644
+--- a/lib/arm/mmu.c
++++ b/lib/arm/mmu.c
+@@ -73,17 +73,6 @@ void mmu_disable(void)
+ 	asm_mmu_disable();
+ }
+ 
+-static void flush_entry(pgd_t *pgtable, uintptr_t vaddr)
+-{
+-	pgd_t *pgd = pgd_offset(pgtable, vaddr);
+-	pmd_t *pmd = pmd_offset(pgd, vaddr);
+-
+-	flush_dcache_addr((ulong)pgd);
+-	flush_dcache_addr((ulong)pmd);
+-	flush_dcache_addr((ulong)pte_offset(pmd, vaddr));
+-	flush_tlb_page(vaddr);
+-}
+-
+ static pteval_t *get_pte(pgd_t *pgtable, uintptr_t vaddr)
+ {
+ 	pgd_t *pgd = pgd_offset(pgtable, vaddr);
+@@ -98,7 +87,9 @@ static pteval_t *install_pte(pgd_t *pgtable, uintptr_t vaddr, pteval_t pte)
+ 	pteval_t *p_pte = get_pte(pgtable, vaddr);
+ 
+ 	*p_pte = pte;
+-	flush_entry(pgtable, vaddr);
++	dsb(ishst);
++	flush_tlb_page(vaddr);
++
+ 	return p_pte;
+ }
+ 
+@@ -148,7 +139,7 @@ void mmu_set_range_sect(pgd_t *pgtable, uintptr_t virt_offset,
+ 		pgd_val(*pgd) = paddr;
+ 		pgd_val(*pgd) |= PMD_TYPE_SECT | PMD_SECT_AF | PMD_SECT_S;
+ 		pgd_val(*pgd) |= pgprot_val(prot);
+-		flush_dcache_addr((ulong)pgd);
++		dsb(ishst);
+ 		flush_tlb_page(vaddr);
+ 	}
+ }
+@@ -230,5 +221,6 @@ void mmu_clear_user(unsigned long vaddr)
+ 	pte = get_pte(pgtable, vaddr);
+ 
+ 	*pte &= ~PTE_USER;
++	dsb(ishst);
+ 	flush_tlb_page(vaddr);
+ }
+diff --git a/arm/cstart.S b/arm/cstart.S
+index 114726feab82..2c81d39a666b 100644
+--- a/arm/cstart.S
++++ b/arm/cstart.S
+@@ -9,6 +9,7 @@
+ #include <auxinfo.h>
+ #include <asm/thread_info.h>
+ #include <asm/asm-offsets.h>
++#include <asm/pgtable-hwdef.h>
+ #include <asm/ptrace.h>
+ #include <asm/sysreg.h>
+ 
+@@ -154,9 +155,11 @@ halt:
+ .globl asm_mmu_enable
+ asm_mmu_enable:
+ 	/* TTBCR */
+-	mrc	p15, 0, r2, c2, c0, 2
+-	orr	r2, #(1 << 31)		@ TTB_EAE
++	ldr	r2, =(TTBCR_EAE | 				\
++		      TTBCR_SH0_SHARED | 			\
++		      TTBCR_IRGN0_WBWA | TTBCR_ORGN0_WBWA)
+ 	mcr	p15, 0, r2, c2, c0, 2
++	isb
+ 
+ 	/* MAIR */
+ 	ldr	r2, =PRRR
+
+From patchwork Thu Nov 28 18:04:02 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266477
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id F40B1109A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:34 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id D451D20656
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:34 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726648AbfK1SEe (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:34 -0500
+Received: from foss.arm.com ([217.140.110.172]:39312 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726401AbfK1SEd (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:33 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 3E44B1042;
+        Thu, 28 Nov 2019 10:04:33 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 18D453F6C4;
+        Thu, 28 Nov 2019 10:04:31 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 02/18] lib: arm64: Remove barriers before
+ TLB operations
+Date: Thu, 28 Nov 2019 18:04:02 +0000
+Message-Id: <20191128180418.6938-3-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+When changing a translation table entry, we already use all the necessary
+barriers. Remove them from the flush_tlb_{page,all} functions.
+
+We don't touch the arm versions of the TLB operations because they had no
+barriers before the TLBIs to begin with.
+
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ lib/arm64/asm/mmu.h | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/lib/arm64/asm/mmu.h b/lib/arm64/asm/mmu.h
+index 72d75eafc882..5d6d49036a06 100644
+--- a/lib/arm64/asm/mmu.h
++++ b/lib/arm64/asm/mmu.h
+@@ -12,7 +12,6 @@
+ 
+ static inline void flush_tlb_all(void)
+ {
+-	dsb(ishst);
+ 	asm("tlbi	vmalle1is");
+ 	dsb(ish);
+ 	isb();
+@@ -21,7 +20,6 @@ static inline void flush_tlb_all(void)
+ static inline void flush_tlb_page(unsigned long vaddr)
+ {
+ 	unsigned long page = vaddr >> 12;
+-	dsb(ishst);
+ 	asm("tlbi	vaae1is, %0" :: "r" (page));
+ 	dsb(ish);
+ 	isb();
+
+From patchwork Thu Nov 28 18:04:03 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266479
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 90C67109A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:36 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 72B4C21775
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:36 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726715AbfK1SEf (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:35 -0500
+Received: from foss.arm.com ([217.140.110.172]:39324 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726401AbfK1SEf (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:35 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id DD2A81042;
+        Thu, 28 Nov 2019 10:04:34 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 721F93F86C;
+        Thu, 28 Nov 2019 10:04:33 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com, Laurent Vivier <lvivier@redhat.com>,
+        Thomas Huth <thuth@redhat.com>,
+        David Hildenbrand <david@redhat.com>
+Subject: [kvm-unit-tests PATCH v2 03/18] lib: Add WRITE_ONCE and READ_ONCE
+ implementations in compiler.h
+Date: Thu, 28 Nov 2019 18:04:03 +0000
+Message-Id: <20191128180418.6938-4-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Add the WRITE_ONCE and READ_ONCE macros which are used to prevent to
+prevent the compiler from optimizing a store or a load, respectively, into
+something else.
+
+Cc: Drew Jones <drjones@redhat.com>
+Cc: Laurent Vivier <lvivier@redhat.com>
+Cc: Thomas Huth <thuth@redhat.com>
+Cc: David Hildenbrand <david@redhat.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Radim Krčmář <rkrcmar@redhat.com>
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ lib/linux/compiler.h | 81 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 81 insertions(+)
+ create mode 100644 lib/linux/compiler.h
+
+diff --git a/lib/linux/compiler.h b/lib/linux/compiler.h
+new file mode 100644
+index 000000000000..aac84c1d711c
+--- /dev/null
++++ b/lib/linux/compiler.h
+@@ -0,0 +1,81 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Taken from tools/include/linux/compiler.h, with minor changes. */
++#ifndef __LINUX_COMPILER_H
++#define __LINUX_COMPILER_H
++
++#ifndef __ASSEMBLY__
++
++#include <stdint.h>
++
++#define barrier()	asm volatile("" : : : "memory")
++
++#define __always_inline	inline __attribute__((always_inline))
++
++static __always_inline void __read_once_size(const volatile void *p, void *res, int size)
++{
++	switch (size) {
++	case 1: *(uint8_t *)res = *(volatile uint8_t *)p; break;
++	case 2: *(uint16_t *)res = *(volatile uint16_t *)p; break;
++	case 4: *(uint32_t *)res = *(volatile uint32_t *)p; break;
++	case 8: *(uint64_t *)res = *(volatile uint64_t *)p; break;
++	default:
++		barrier();
++		__builtin_memcpy((void *)res, (const void *)p, size);
++		barrier();
++	}
++}
++
++/*
++ * Prevent the compiler from merging or refetching reads or writes. The
++ * compiler is also forbidden from reordering successive instances of
++ * READ_ONCE and WRITE_ONCE, but only when the compiler is aware of some
++ * particular ordering. One way to make the compiler aware of ordering is to
++ * put the two invocations of READ_ONCE or WRITE_ONCE in different C
++ * statements.
++ *
++ * These two macros will also work on aggregate data types like structs or
++ * unions. If the size of the accessed data type exceeds the word size of
++ * the machine (e.g., 32 bits or 64 bits) READ_ONCE() and WRITE_ONCE() will
++ * fall back to memcpy(). There's at least two memcpy()s: one for the
++ * __builtin_memcpy() and then one for the macro doing the copy of variable
++ * - '__u' allocated on the stack.
++ *
++ * Their two major use cases are: (1) Mediating communication between
++ * process-level code and irq/NMI handlers, all running on the same CPU,
++ * and (2) Ensuring that the compiler does not fold, spindle, or otherwise
++ * mutilate accesses that either do not require ordering or that interact
++ * with an explicit memory barrier or atomic instruction that provides the
++ * required ordering.
++ */
++#define READ_ONCE(x)					\
++({							\
++	union { typeof(x) __val; char __c[1]; } __u =	\
++		{ .__c = { 0 } };			\
++	__read_once_size(&(x), __u.__c, sizeof(x));	\
++	__u.__val;					\
++})
++
++static __always_inline void __write_once_size(volatile void *p, void *res, int size)
++{
++	switch (size) {
++	case 1: *(volatile uint8_t *)p = *(uint8_t *)res; break;
++	case 2: *(volatile uint16_t *)p = *(uint16_t *)res; break;
++	case 4: *(volatile uint32_t *)p = *(uint32_t *)res; break;
++	case 8: *(volatile uint64_t *)p = *(uint64_t *)res; break;
++	default:
++		barrier();
++		__builtin_memcpy((void *)p, (const void *)res, size);
++		barrier();
++	}
++}
++
++#define WRITE_ONCE(x, val) \
++({							\
++	union { typeof(x) __val; char __c[1]; } __u =	\
++		{ .__val = (typeof(x)) (val) }; 	\
++	__write_once_size(&(x), __u.__c, sizeof(x));	\
++	__u.__val;					\
++})
++
++#endif /* !__ASSEMBLY__ */
++#endif /* !__LINUX_COMPILER_H */
+
+From patchwork Thu Nov 28 18:04:04 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266481
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6B9DA921
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:38 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 4D72821775
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:38 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726692AbfK1SEh (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:37 -0500
+Received: from foss.arm.com ([217.140.110.172]:39332 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726716AbfK1SEg (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:36 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 3887D1FB;
+        Thu, 28 Nov 2019 10:04:36 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 1ECA33F6C4;
+        Thu, 28 Nov 2019 10:04:35 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 04/18] lib: arm/arm64: Use WRITE_ONCE to
+ update the translation tables
+Date: Thu, 28 Nov 2019 18:04:04 +0000
+Message-Id: <20191128180418.6938-5-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Use WRITE_ONCE to prevent store tearing when updating an entry in the
+translation tables. Without WRITE_ONCE, the compiler, even though it is
+unlikely, can emit several stores when changing the table, and we might
+end up with bogus TLB entries.
+
+It's worth noting that the existing code is mostly fine without any
+changes because the translation tables are updated in one of the
+following situations:
+
+- When the tables are being created with the MMU off, which means no TLB
+  caching is being performed.
+
+- When new page table entries are added as a result of vmalloc'ing a
+  stack for a secondary CPU, which doesn't happen very often.
+
+- When clearing the PTE_USER bit for the cache test, and store tearing
+  has no effect on the table walker because there are no intermediate
+  values between bit values 0 and 1. We still use WRITE_ONCE in this case
+  for consistency.
+
+However, the functions are global and there is nothing preventing someone
+from writing a test that uses them in a different scenario. Let's make
+sure that when that happens, there will be no breakage once in a blue
+moon.
+
+Reported-by: Mark Rutland <mark.rutland@arm.com>
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ lib/arm/asm/pgtable.h   | 12 ++++++++----
+ lib/arm64/asm/pgtable.h |  7 +++++--
+ lib/arm/mmu.c           | 19 +++++++++++++------
+ 3 files changed, 26 insertions(+), 12 deletions(-)
+
+diff --git a/lib/arm/asm/pgtable.h b/lib/arm/asm/pgtable.h
+index 241dff69b38a..794514b8c927 100644
+--- a/lib/arm/asm/pgtable.h
++++ b/lib/arm/asm/pgtable.h
+@@ -19,6 +19,8 @@
+  * because we always allocate their pages with alloc_page(), and
+  * alloc_page() always returns identity mapped pages.
+  */
++#include <linux/compiler.h>
++
+ #define pgtable_va(x)		((void *)(unsigned long)(x))
+ #define pgtable_pa(x)		((unsigned long)(x))
+ 
+@@ -58,8 +60,9 @@ static inline pmd_t *pmd_alloc_one(void)
+ static inline pmd_t *pmd_alloc(pgd_t *pgd, unsigned long addr)
+ {
+ 	if (pgd_none(*pgd)) {
+-		pmd_t *pmd = pmd_alloc_one();
+-		pgd_val(*pgd) = pgtable_pa(pmd) | PMD_TYPE_TABLE;
++		pgd_t entry;
++		pgd_val(entry) = pgtable_pa(pmd_alloc_one()) | PMD_TYPE_TABLE;
++		WRITE_ONCE(*pgd, entry);
+ 	}
+ 	return pmd_offset(pgd, addr);
+ }
+@@ -84,8 +87,9 @@ static inline pte_t *pte_alloc_one(void)
+ static inline pte_t *pte_alloc(pmd_t *pmd, unsigned long addr)
+ {
+ 	if (pmd_none(*pmd)) {
+-		pte_t *pte = pte_alloc_one();
+-		pmd_val(*pmd) = pgtable_pa(pte) | PMD_TYPE_TABLE;
++		pmd_t entry;
++		pmd_val(entry) = pgtable_pa(pte_alloc_one()) | PMD_TYPE_TABLE;
++		WRITE_ONCE(*pmd, entry);
+ 	}
+ 	return pte_offset(pmd, addr);
+ }
+diff --git a/lib/arm64/asm/pgtable.h b/lib/arm64/asm/pgtable.h
+index ee0a2c88cc18..dbf9e7253b71 100644
+--- a/lib/arm64/asm/pgtable.h
++++ b/lib/arm64/asm/pgtable.h
+@@ -18,6 +18,8 @@
+ #include <asm/page.h>
+ #include <asm/pgtable-hwdef.h>
+ 
++#include <linux/compiler.h>
++
+ /*
+  * We can convert va <=> pa page table addresses with simple casts
+  * because we always allocate their pages with alloc_page(), and
+@@ -66,8 +68,9 @@ static inline pte_t *pte_alloc_one(void)
+ static inline pte_t *pte_alloc(pmd_t *pmd, unsigned long addr)
+ {
+ 	if (pmd_none(*pmd)) {
+-		pte_t *pte = pte_alloc_one();
+-		pmd_val(*pmd) = pgtable_pa(pte) | PMD_TYPE_TABLE;
++		pmd_t entry;
++		pmd_val(entry) = pgtable_pa(pte_alloc_one()) | PMD_TYPE_TABLE;
++		WRITE_ONCE(*pmd, entry);
+ 	}
+ 	return pte_offset(pmd, addr);
+ }
+diff --git a/lib/arm/mmu.c b/lib/arm/mmu.c
+index 72043c333b55..cc03b25aa77e 100644
+--- a/lib/arm/mmu.c
++++ b/lib/arm/mmu.c
+@@ -17,6 +17,8 @@
+ #include <asm/pgtable-hwdef.h>
+ #include <asm/pgtable.h>
+ 
++#include <linux/compiler.h>
++
+ extern unsigned long etext;
+ 
+ pgd_t *mmu_idmap;
+@@ -86,7 +88,7 @@ static pteval_t *install_pte(pgd_t *pgtable, uintptr_t vaddr, pteval_t pte)
+ {
+ 	pteval_t *p_pte = get_pte(pgtable, vaddr);
+ 
+-	*p_pte = pte;
++	WRITE_ONCE(*p_pte, pte);
+ 	dsb(ishst);
+ 	flush_tlb_page(vaddr);
+ 
+@@ -133,12 +135,15 @@ void mmu_set_range_sect(pgd_t *pgtable, uintptr_t virt_offset,
+ 	phys_addr_t paddr = phys_start & PGDIR_MASK;
+ 	uintptr_t vaddr = virt_offset & PGDIR_MASK;
+ 	uintptr_t virt_end = phys_end - paddr + vaddr;
++	pgd_t *pgd;
++	pgd_t entry;
+ 
+ 	for (; vaddr < virt_end; vaddr += PGDIR_SIZE, paddr += PGDIR_SIZE) {
+-		pgd_t *pgd = pgd_offset(pgtable, vaddr);
+-		pgd_val(*pgd) = paddr;
+-		pgd_val(*pgd) |= PMD_TYPE_SECT | PMD_SECT_AF | PMD_SECT_S;
+-		pgd_val(*pgd) |= pgprot_val(prot);
++		pgd_val(entry) = paddr;
++		pgd_val(entry) |= PMD_TYPE_SECT | PMD_SECT_AF | PMD_SECT_S;
++		pgd_val(entry) |= pgprot_val(prot);
++		pgd = pgd_offset(pgtable, vaddr);
++		WRITE_ONCE(*pgd, entry);
+ 		dsb(ishst);
+ 		flush_tlb_page(vaddr);
+ 	}
+@@ -213,6 +218,7 @@ void mmu_clear_user(unsigned long vaddr)
+ {
+ 	pgd_t *pgtable;
+ 	pteval_t *pte;
++	pteval_t entry;
+ 
+ 	if (!mmu_enabled())
+ 		return;
+@@ -220,7 +226,8 @@ void mmu_clear_user(unsigned long vaddr)
+ 	pgtable = current_thread_info()->pgtable;
+ 	pte = get_pte(pgtable, vaddr);
+ 
+-	*pte &= ~PTE_USER;
++	entry = *pte & ~PTE_USER;
++	WRITE_ONCE(*pte, entry);
+ 	dsb(ishst);
+ 	flush_tlb_page(vaddr);
+ }
+
+From patchwork Thu Nov 28 18:04:05 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266483
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id F0649921
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:39 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id D1428217BA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:39 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726721AbfK1SEi (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:38 -0500
+Received: from foss.arm.com ([217.140.110.172]:39340 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726716AbfK1SEi (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:38 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 8FFEA31B;
+        Thu, 28 Nov 2019 10:04:37 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 6DCF33F6C4;
+        Thu, 28 Nov 2019 10:04:36 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 05/18] lib: arm/arm64: Remove unused CPU_OFF
+ parameter
+Date: Thu, 28 Nov 2019 18:04:05 +0000
+Message-Id: <20191128180418.6938-6-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The first version of PSCI required an argument for CPU_OFF, the power_state
+argument, which was removed in version 0.2 of the specification [1].
+kvm-unit-tests supports PSCI 0.2, and KVM ignores any CPU_OFF parameters,
+so let's remove the PSCI_POWER_STATE_TYPE_POWER_DOWN parameter.
+
+[1] ARM DEN 0022D, section 7.3.
+
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ lib/arm/psci.c | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/lib/arm/psci.c b/lib/arm/psci.c
+index c3d399064ae3..936c83948b6a 100644
+--- a/lib/arm/psci.c
++++ b/lib/arm/psci.c
+@@ -40,11 +40,9 @@ int cpu_psci_cpu_boot(unsigned int cpu)
+ 	return err;
+ }
+ 
+-#define PSCI_POWER_STATE_TYPE_POWER_DOWN (1U << 16)
+ void cpu_psci_cpu_die(void)
+ {
+-	int err = psci_invoke(PSCI_0_2_FN_CPU_OFF,
+-			PSCI_POWER_STATE_TYPE_POWER_DOWN, 0, 0);
++	int err = psci_invoke(PSCI_0_2_FN_CPU_OFF, 0, 0, 0);
+ 	printf("CPU%d unable to power off (error = %d)\n", smp_processor_id(), err);
+ }
+ 
+
+From patchwork Thu Nov 28 18:04:06 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266485
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B717F17F0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:40 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 96350217BC
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:40 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726800AbfK1SEj (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:39 -0500
+Received: from foss.arm.com ([217.140.110.172]:39350 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726742AbfK1SEj (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:39 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id DCF6A1FB;
+        Thu, 28 Nov 2019 10:04:38 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ C40BF3F6C4;
+        Thu, 28 Nov 2019 10:04:37 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 06/18] arm/arm64: psci: Don't run C code
+ without stack or vectors
+Date: Thu, 28 Nov 2019 18:04:06 +0000
+Message-Id: <20191128180418.6938-7-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The psci test performs a series of CPU_ON/CPU_OFF cycles for CPU 1. This is
+done by setting the entry point for the CPU_ON call to the physical address
+of the C function cpu_psci_cpu_die.
+
+The compiler is well within its rights to use the stack when generating
+code for cpu_psci_cpu_die.  However, because no stack initialization has
+been done, the stack pointer is zero, as set by KVM when creating the VCPU.
+This causes a data abort without a change in exception level. The VBAR_EL1
+register is also zero (the KVM reset value for VBAR_EL1), the MMU is off,
+and we end up trying to fetch instructions from address 0x200.
+
+At this point, a stage 2 instruction abort is generated which is taken to
+KVM. KVM interprets this as an instruction fetch from an I/O region, and
+injects a prefetch abort into the guest. Prefetch abort is a synchronous
+exception, and on guest return the VCPU PC will be set to VBAR_EL1 + 0x200,
+which is...  0x200. The VCPU ends up in an infinite loop causing a prefetch
+abort while fetching the instruction to service the said abort.
+
+cpu_psci_cpu_die is basically a wrapper over the HVC instruction, so
+provide an assembly implementation for the function which will serve as the
+entry point for CPU_ON.
+
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ arm/cstart.S   | 7 +++++++
+ arm/cstart64.S | 7 +++++++
+ arm/psci.c     | 5 +++--
+ 3 files changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/arm/cstart.S b/arm/cstart.S
+index 2c81d39a666b..dfef48e4dbb2 100644
+--- a/arm/cstart.S
++++ b/arm/cstart.S
+@@ -7,6 +7,7 @@
+  */
+ #define __ASSEMBLY__
+ #include <auxinfo.h>
++#include <linux/psci.h>
+ #include <asm/thread_info.h>
+ #include <asm/asm-offsets.h>
+ #include <asm/pgtable-hwdef.h>
+@@ -139,6 +140,12 @@ secondary_entry:
+ 	blx	r0
+ 	b	do_idle
+ 
++.global asm_cpu_psci_cpu_die
++asm_cpu_psci_cpu_die:
++	ldr	r0, =PSCI_0_2_FN_CPU_OFF
++	hvc	#0
++	b	.
++
+ .globl halt
+ halt:
+ 1:	wfi
+diff --git a/arm/cstart64.S b/arm/cstart64.S
+index b0e8baa1a23a..c98842f11e90 100644
+--- a/arm/cstart64.S
++++ b/arm/cstart64.S
+@@ -7,6 +7,7 @@
+  */
+ #define __ASSEMBLY__
+ #include <auxinfo.h>
++#include <linux/psci.h>
+ #include <asm/asm-offsets.h>
+ #include <asm/ptrace.h>
+ #include <asm/processor.h>
+@@ -128,6 +129,12 @@ secondary_entry:
+ 	blr	x0
+ 	b	do_idle
+ 
++.globl asm_cpu_psci_cpu_die
++asm_cpu_psci_cpu_die:
++	ldr	x0, =PSCI_0_2_FN_CPU_OFF
++	hvc	#0
++	b	.
++
+ .globl halt
+ halt:
+ 1:	wfi
+diff --git a/arm/psci.c b/arm/psci.c
+index 536c9b742033..87ea2f3ff453 100644
+--- a/arm/psci.c
++++ b/arm/psci.c
+@@ -72,6 +72,7 @@ static int cpu_on_ret[NR_CPUS];
+ static cpumask_t cpu_on_ready, cpu_on_done;
+ static volatile int cpu_on_start;
+ 
++extern void asm_cpu_psci_cpu_die(void);
+ static void cpu_on_secondary_entry(void)
+ {
+ 	int cpu = smp_processor_id();
+@@ -79,7 +80,7 @@ static void cpu_on_secondary_entry(void)
+ 	cpumask_set_cpu(cpu, &cpu_on_ready);
+ 	while (!cpu_on_start)
+ 		cpu_relax();
+-	cpu_on_ret[cpu] = psci_cpu_on(cpus[1], __pa(cpu_psci_cpu_die));
++	cpu_on_ret[cpu] = psci_cpu_on(cpus[1], __pa(asm_cpu_psci_cpu_die));
+ 	cpumask_set_cpu(cpu, &cpu_on_done);
+ }
+ 
+@@ -104,7 +105,7 @@ static bool psci_cpu_on_test(void)
+ 	cpu_on_start = 1;
+ 	smp_mb();
+ 
+-	cpu_on_ret[0] = psci_cpu_on(cpus[1], __pa(cpu_psci_cpu_die));
++	cpu_on_ret[0] = psci_cpu_on(cpus[1], __pa(asm_cpu_psci_cpu_die));
+ 	cpumask_set_cpu(0, &cpu_on_done);
+ 
+ 	while (!cpumask_full(&cpu_on_done))
+
+From patchwork Thu Nov 28 18:04:07 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266487
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 7322F921
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:42 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 53B85217D6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:42 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726749AbfK1SEl (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:41 -0500
+Received: from foss.arm.com ([217.140.110.172]:39358 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726876AbfK1SEk (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:40 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 3FE6A31B;
+        Thu, 28 Nov 2019 10:04:40 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 1D3DF3F6C4;
+        Thu, 28 Nov 2019 10:04:39 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 07/18] lib: arm/arm64: Add missing include
+ for alloc_page.h in pgtable.h
+Date: Thu, 28 Nov 2019 18:04:07 +0000
+Message-Id: <20191128180418.6938-8-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+pgtable.h is used only by mmu.c, where it is included after alloc_page.h.
+
+Reviewed-by: Andrew Jones <drjones@redhat.com>
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ lib/arm/asm/pgtable.h   | 1 +
+ lib/arm64/asm/pgtable.h | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/lib/arm/asm/pgtable.h b/lib/arm/asm/pgtable.h
+index 794514b8c927..e7f967071980 100644
+--- a/lib/arm/asm/pgtable.h
++++ b/lib/arm/asm/pgtable.h
+@@ -13,6 +13,7 @@
+  *
+  * This work is licensed under the terms of the GNU GPL, version 2.
+  */
++#include <alloc_page.h>
+ 
+ /*
+  * We can convert va <=> pa page table addresses with simple casts
+diff --git a/lib/arm64/asm/pgtable.h b/lib/arm64/asm/pgtable.h
+index dbf9e7253b71..6412d67759e4 100644
+--- a/lib/arm64/asm/pgtable.h
++++ b/lib/arm64/asm/pgtable.h
+@@ -14,6 +14,7 @@
+  * This work is licensed under the terms of the GNU GPL, version 2.
+  */
+ #include <alloc.h>
++#include <alloc_page.h>
+ #include <asm/setup.h>
+ #include <asm/page.h>
+ #include <asm/pgtable-hwdef.h>
+
+From patchwork Thu Nov 28 18:04:08 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266489
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 259E3921
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:44 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 066DC217D6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:44 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726758AbfK1SEm (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:42 -0500
+Received: from foss.arm.com ([217.140.110.172]:39370 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726920AbfK1SEm (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:42 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 9BA591FB;
+        Thu, 28 Nov 2019 10:04:41 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 778FD3F6C4;
+        Thu, 28 Nov 2019 10:04:40 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 08/18] lib: arm: Implement flush_tlb_all
+Date: Thu, 28 Nov 2019 18:04:08 +0000
+Message-Id: <20191128180418.6938-9-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+flush_tlb_all performs a TLBIALL, which affects only the executing PE; fix
+that by executing a TLBIALLIS. Note that virtualization extensions imply
+the multiprocessing extensions, so we're safe to use that instruction.
+
+While we're at it, let's add a comment to flush_dcache_addr stating what
+instruction is uses (unsurprisingly, it's a dcache clean and invalidate to
+PoC).
+
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ lib/arm/asm/mmu.h | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/lib/arm/asm/mmu.h b/lib/arm/asm/mmu.h
+index 361f3cdcc3d5..7c9ee3dbc079 100644
+--- a/lib/arm/asm/mmu.h
++++ b/lib/arm/asm/mmu.h
+@@ -25,8 +25,10 @@ static inline void local_flush_tlb_all(void)
+ 
+ static inline void flush_tlb_all(void)
+ {
+-	//TODO
+-	local_flush_tlb_all();
++	/* TLBIALLIS */
++	asm volatile("mcr p15, 0, %0, c8, c3, 0" :: "r" (0));
++	dsb();
++	isb();
+ }
+ 
+ static inline void flush_tlb_page(unsigned long vaddr)
+@@ -39,6 +41,7 @@ static inline void flush_tlb_page(unsigned long vaddr)
+ 
+ static inline void flush_dcache_addr(unsigned long vaddr)
+ {
++	/* DCCIMVAC */
+ 	asm volatile("mcr p15, 0, %0, c7, c14, 1" :: "r" (vaddr));
+ }
+ 
+
+From patchwork Thu Nov 28 18:04:09 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266491
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 14F60109A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:46 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id E62FF217D9
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:45 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726968AbfK1SEo (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:44 -0500
+Received: from foss.arm.com ([217.140.110.172]:39378 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726937AbfK1SEn (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:43 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id ED72F31B;
+        Thu, 28 Nov 2019 10:04:42 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ D1AF63F6C4;
+        Thu, 28 Nov 2019 10:04:41 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 09/18] lib: arm/arm64: Teach mmu_clear_user
+ about block mappings
+Date: Thu, 28 Nov 2019 18:04:09 +0000
+Message-Id: <20191128180418.6938-10-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+kvm-unit-tests uses block mappings, so let's expand the mmu_clear_user
+function to handle those as well.
+
+Now that the function knows about block mappings, we cannot simply
+assume that if an address isn't mapped we can map it as a regular page.
+Change the semantics of the function to fail quite loudly if the address
+isn't mapped, and shift the burden on the caller to map the address as a
+page or block mapping before calling mmu_clear_user.
+
+Also make mmu_clear_user more flexible by adding a pgtable parameter,
+instead of assuming that the change always applies to the current
+translation tables.
+
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ lib/arm/asm/mmu-api.h         |  2 +-
+ lib/arm/asm/pgtable-hwdef.h   |  3 +++
+ lib/arm/asm/pgtable.h         |  7 +++++++
+ lib/arm64/asm/pgtable-hwdef.h |  3 +++
+ lib/arm64/asm/pgtable.h       |  7 +++++++
+ lib/arm/mmu.c                 | 26 +++++++++++++++++++-------
+ arm/cache.c                   |  3 ++-
+ 7 files changed, 42 insertions(+), 9 deletions(-)
+
+diff --git a/lib/arm/asm/mmu-api.h b/lib/arm/asm/mmu-api.h
+index 8fe85ba31ec9..2bbe1faea900 100644
+--- a/lib/arm/asm/mmu-api.h
++++ b/lib/arm/asm/mmu-api.h
+@@ -22,5 +22,5 @@ extern void mmu_set_range_sect(pgd_t *pgtable, uintptr_t virt_offset,
+ extern void mmu_set_range_ptes(pgd_t *pgtable, uintptr_t virt_offset,
+ 			       phys_addr_t phys_start, phys_addr_t phys_end,
+ 			       pgprot_t prot);
+-extern void mmu_clear_user(unsigned long vaddr);
++extern void mmu_clear_user(pgd_t *pgtable, unsigned long vaddr);
+ #endif
+diff --git a/lib/arm/asm/pgtable-hwdef.h b/lib/arm/asm/pgtable-hwdef.h
+index 4f24c78ee011..4107e188014a 100644
+--- a/lib/arm/asm/pgtable-hwdef.h
++++ b/lib/arm/asm/pgtable-hwdef.h
+@@ -14,6 +14,8 @@
+ #define PGDIR_SIZE		(_AC(1,UL) << PGDIR_SHIFT)
+ #define PGDIR_MASK		(~((1 << PGDIR_SHIFT) - 1))
+ 
++#define PGD_VALID		(_AT(pgdval_t, 1) << 0)
++
+ #define PTRS_PER_PTE		512
+ #define PTRS_PER_PMD		512
+ 
+@@ -54,6 +56,7 @@
+ #define PMD_TYPE_FAULT		(_AT(pmdval_t, 0) << 0)
+ #define PMD_TYPE_TABLE		(_AT(pmdval_t, 3) << 0)
+ #define PMD_TYPE_SECT		(_AT(pmdval_t, 1) << 0)
++#define PMD_SECT_VALID		(_AT(pmdval_t, 1) << 0)
+ #define PMD_TABLE_BIT		(_AT(pmdval_t, 1) << 1)
+ #define PMD_BIT4		(_AT(pmdval_t, 0))
+ #define PMD_DOMAIN(x)		(_AT(pmdval_t, 0))
+diff --git a/lib/arm/asm/pgtable.h b/lib/arm/asm/pgtable.h
+index e7f967071980..078dd16fa799 100644
+--- a/lib/arm/asm/pgtable.h
++++ b/lib/arm/asm/pgtable.h
+@@ -29,6 +29,13 @@
+ #define pmd_none(pmd)		(!pmd_val(pmd))
+ #define pte_none(pte)		(!pte_val(pte))
+ 
++#define pgd_valid(pgd)		(pgd_val(pgd) & PGD_VALID)
++#define pmd_valid(pmd)		(pmd_val(pmd) & PMD_SECT_VALID)
++#define pte_valid(pte)		(pte_val(pte) & L_PTE_VALID)
++
++#define pmd_huge(pmd)	\
++	((pmd_val(pmd) & PMD_TYPE_MASK) == PMD_TYPE_SECT)
++
+ #define pgd_index(addr) \
+ 	(((addr) >> PGDIR_SHIFT) & (PTRS_PER_PGD - 1))
+ #define pgd_offset(pgtable, addr) ((pgtable) + pgd_index(addr))
+diff --git a/lib/arm64/asm/pgtable-hwdef.h b/lib/arm64/asm/pgtable-hwdef.h
+index 045a3ce12645..33524899e5fa 100644
+--- a/lib/arm64/asm/pgtable-hwdef.h
++++ b/lib/arm64/asm/pgtable-hwdef.h
+@@ -22,6 +22,8 @@
+ #define PGDIR_MASK		(~(PGDIR_SIZE-1))
+ #define PTRS_PER_PGD		(1 << (VA_BITS - PGDIR_SHIFT))
+ 
++#define PGD_VALID		(_AT(pgdval_t, 1) << 0)
++
+ /* From include/asm-generic/pgtable-nopmd.h */
+ #define PMD_SHIFT		PGDIR_SHIFT
+ #define PTRS_PER_PMD		1
+@@ -71,6 +73,7 @@
+ #define PTE_TYPE_MASK		(_AT(pteval_t, 3) << 0)
+ #define PTE_TYPE_FAULT		(_AT(pteval_t, 0) << 0)
+ #define PTE_TYPE_PAGE		(_AT(pteval_t, 3) << 0)
++#define PTE_VALID		(_AT(pteval_t, 1) << 0)
+ #define PTE_TABLE_BIT		(_AT(pteval_t, 1) << 1)
+ #define PTE_USER		(_AT(pteval_t, 1) << 6)		/* AP[1] */
+ #define PTE_RDONLY		(_AT(pteval_t, 1) << 7)		/* AP[2] */
+diff --git a/lib/arm64/asm/pgtable.h b/lib/arm64/asm/pgtable.h
+index 6412d67759e4..e577d9cf304e 100644
+--- a/lib/arm64/asm/pgtable.h
++++ b/lib/arm64/asm/pgtable.h
+@@ -33,6 +33,13 @@
+ #define pmd_none(pmd)		(!pmd_val(pmd))
+ #define pte_none(pte)		(!pte_val(pte))
+ 
++#define pgd_valid(pgd)		(pgd_val(pgd) & PGD_VALID)
++#define pmd_valid(pmd)		(pmd_val(pmd) & PMD_SECT_VALID)
++#define pte_valid(pte)		(pte_val(pte) & PTE_VALID)
++
++#define pmd_huge(pmd)	\
++	((pmd_val(pmd) & PMD_TYPE_MASK) == PMD_TYPE_SECT)
++
+ #define pgd_index(addr) \
+ 	(((addr) >> PGDIR_SHIFT) & (PTRS_PER_PGD - 1))
+ #define pgd_offset(pgtable, addr) ((pgtable) + pgd_index(addr))
+diff --git a/lib/arm/mmu.c b/lib/arm/mmu.c
+index cc03b25aa77e..ed5411c157bb 100644
+--- a/lib/arm/mmu.c
++++ b/lib/arm/mmu.c
+@@ -214,20 +214,32 @@ unsigned long __phys_to_virt(phys_addr_t addr)
+ 	return addr;
+ }
+ 
+-void mmu_clear_user(unsigned long vaddr)
++void mmu_clear_user(pgd_t *pgtable, unsigned long vaddr)
+ {
+-	pgd_t *pgtable;
+-	pteval_t *pte;
+-	pteval_t entry;
++	pgd_t *pgd;
++	pmd_t *pmd;
++	pte_t *pte;
+ 
+ 	if (!mmu_enabled())
+ 		return;
+ 
+-	pgtable = current_thread_info()->pgtable;
+-	pte = get_pte(pgtable, vaddr);
++	pgd = pgd_offset(pgtable, vaddr);
++	assert(pgd_valid(*pgd));
++	pmd = pmd_offset(pgd, vaddr);
++	assert(pmd_valid(*pmd));
++
++	if (pmd_huge(*pmd)) {
++		pmd_t entry = __pmd(pmd_val(*pmd) & ~PMD_SECT_USER);
++		WRITE_ONCE(*pmd, entry);
++		goto out_flush_tlb;
++	}
+ 
+-	entry = *pte & ~PTE_USER;
++	pte = pte_offset(pmd, vaddr);
++	assert(pte_valid(*pte));
++	pte_t entry = __pte(pte_val(*pte) & ~PTE_USER);
+ 	WRITE_ONCE(*pte, entry);
++
++out_flush_tlb:
+ 	dsb(ishst);
+ 	flush_tlb_page(vaddr);
+ }
+diff --git a/arm/cache.c b/arm/cache.c
+index 2939b85a8c9a..5db558325316 100644
+--- a/arm/cache.c
++++ b/arm/cache.c
+@@ -2,6 +2,7 @@
+ #include <alloc_page.h>
+ #include <asm/mmu.h>
+ #include <asm/processor.h>
++#include <asm/thread_info.h>
+ 
+ #define NTIMES			(1 << 16)
+ 
+@@ -47,7 +48,7 @@ static void check_code_generation(bool dcache_clean, bool icache_inval)
+ 	bool success;
+ 
+ 	/* Make sure we can execute from a writable page */
+-	mmu_clear_user((unsigned long)code);
++	mmu_clear_user(current_thread_info()->pgtable, (unsigned long)code);
+ 
+ 	sctlr = read_sysreg(sctlr_el1);
+ 	if (sctlr & SCTLR_EL1_WXN) {
+
+From patchwork Thu Nov 28 18:04:10 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266509
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E4F81109A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:05:03 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id CE5E520656
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:05:03 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726980AbfK1SEp (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:45 -0500
+Received: from foss.arm.com ([217.140.110.172]:39390 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726909AbfK1SEp (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:45 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 4B6251FB;
+        Thu, 28 Nov 2019 10:04:44 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 2F78D3F6C4;
+        Thu, 28 Nov 2019 10:04:43 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 10/18] arm/arm64: selftest: Add prefetch
+ abort test
+Date: Thu, 28 Nov 2019 18:04:10 +0000
+Message-Id: <20191128180418.6938-11-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+When a guest tries to execute code from MMIO memory, KVM injects an
+external abort into that guest. We have now fixed the psci test to not
+fetch instructions from the I/O region, and it's not that often that a
+guest misbehaves in such a way. Let's expand our coverage by adding a
+proper test targetting this corner case.
+
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ lib/arm64/asm/esr.h |   3 ++
+ arm/selftest.c      | 112 ++++++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 112 insertions(+), 3 deletions(-)
+
+diff --git a/lib/arm64/asm/esr.h b/lib/arm64/asm/esr.h
+index 8e5af4d90767..8c351631b0a0 100644
+--- a/lib/arm64/asm/esr.h
++++ b/lib/arm64/asm/esr.h
+@@ -44,4 +44,7 @@
+ #define ESR_EL1_EC_BKPT32	(0x38)
+ #define ESR_EL1_EC_BRK64	(0x3C)
+ 
++#define ESR_EL1_FSC_MASK	(0x3F)
++#define ESR_EL1_FSC_EXTABT	(0x10)
++
+ #endif /* _ASMARM64_ESR_H_ */
+diff --git a/arm/selftest.c b/arm/selftest.c
+index e9dc5c0cab28..2512e011034f 100644
+--- a/arm/selftest.c
++++ b/arm/selftest.c
+@@ -16,6 +16,8 @@
+ #include <asm/psci.h>
+ #include <asm/smp.h>
+ #include <asm/barrier.h>
++#include <asm/mmu.h>
++#include <asm/pgtable.h>
+ 
+ static cpumask_t ready, valid;
+ 
+@@ -68,6 +70,7 @@ static void check_setup(int argc, char **argv)
+ static struct pt_regs expected_regs;
+ static bool und_works;
+ static bool svc_works;
++static bool pabt_works;
+ #if defined(__arm__)
+ /*
+  * Capture the current register state and execute an instruction
+@@ -91,7 +94,7 @@ static bool svc_works;
+ 		"str	r1, [r0, #" xstr(S_PC) "]\n"		\
+ 		excptn_insn "\n"				\
+ 		post_insns "\n"					\
+-	:: "r" (&expected_regs) : "r0", "r1")
++	:: "r" (&expected_regs) : "r0", "r1", "r2")
+ 
+ static bool check_regs(struct pt_regs *regs)
+ {
+@@ -171,6 +174,54 @@ static void user_psci_system_off(struct pt_regs *regs)
+ {
+ 	__user_psci_system_off();
+ }
++
++static void check_pabt_exit(void)
++{
++	install_exception_handler(EXCPTN_PABT, NULL);
++
++	report("pabt", pabt_works);
++	exit(report_summary());
++}
++
++#define PABT_ADDR	((3ul << 30) - PAGE_SIZE)
++static void pabt_handler(struct pt_regs *regs)
++{
++	expected_regs.ARM_pc = PABT_ADDR;
++	pabt_works = check_regs(regs);
++
++	regs->ARM_pc = (unsigned long)&check_pabt_exit;
++}
++
++static void check_pabt(void)
++{
++	unsigned long sctlr;
++
++	if (PABT_ADDR < __phys_end) {
++		report_skip("pabt: physical memory overlap");
++		return;
++	}
++
++	mmu_set_range_ptes(current_thread_info()->pgtable, PABT_ADDR,
++			PABT_ADDR, PABT_ADDR + PAGE_SIZE, __pgprot(PTE_WBWA));
++
++	/* Make sure we can actually execute from a writable region */
++	asm volatile("mrc p15, 0, %0, c1, c0, 0": "=r" (sctlr));
++	if (sctlr & CR_ST) {
++		sctlr &= ~CR_ST;
++		asm volatile("mcr p15, 0, %0, c1, c0, 0" :: "r" (sctlr));
++		isb();
++		/*
++		 * Required according to the sequence in ARM DDI 0406C.d, page
++		 * B3-1358.
++		 */
++		flush_tlb_all();
++	}
++
++	install_exception_handler(EXCPTN_PABT, pabt_handler);
++
++	test_exception("ldr r2, =" xstr(PABT_ADDR), "bx r2", "");
++	__builtin_unreachable();
++}
+ #elif defined(__aarch64__)
+ 
+ /*
+@@ -212,7 +263,7 @@ static void user_psci_system_off(struct pt_regs *regs)
+ 		"stp	 x0,  x1, [x1]\n"			\
+ 	"1:"	excptn_insn "\n"				\
+ 		post_insns "\n"					\
+-	:: "r" (&expected_regs) : "x0", "x1")
++	:: "r" (&expected_regs) : "x0", "x1", "x2")
+ 
+ static bool check_regs(struct pt_regs *regs)
+ {
+@@ -288,6 +339,59 @@ static bool check_svc(void)
+ 	return svc_works;
+ }
+ 
++static void check_pabt_exit(void)
++{
++	install_exception_handler(EL1H_SYNC, ESR_EL1_EC_IABT_EL1, NULL);
++
++	report("pabt", pabt_works);
++	exit(report_summary());
++}
++
++#define PABT_ADDR	((1ul << 38) - PAGE_SIZE)
++static void pabt_handler(struct pt_regs *regs, unsigned int esr)
++{
++	bool is_extabt;
++
++	expected_regs.pc = PABT_ADDR;
++	is_extabt = (esr & ESR_EL1_FSC_MASK) == ESR_EL1_FSC_EXTABT;
++	pabt_works = check_regs(regs) && is_extabt;
++
++	regs->pc = (u64)&check_pabt_exit;
++}
++
++static void check_pabt(void)
++{
++	enum vector v = check_vector_prep();
++	unsigned long sctlr;
++
++	if (PABT_ADDR < __phys_end) {
++		report_skip("pabt: physical memory overlap");
++		return;
++	}
++
++	/*
++	 * According to ARM DDI 0487E.a, table D5-33, footnote c, all regions
++	 * writable at EL0 are treated as PXN. Map the page without the user bit
++	 * set.
++	 */
++	mmu_set_range_ptes(current_thread_info()->pgtable, PABT_ADDR,
++			PABT_ADDR, PABT_ADDR + PAGE_SIZE, __pgprot(PTE_WBWA));
++
++	/* Make sure we can actually execute from a writable region */
++	sctlr = read_sysreg(sctlr_el1);
++	if (sctlr & SCTLR_EL1_WXN) {
++		write_sysreg(sctlr & ~SCTLR_EL1_WXN, sctlr_el1);
++		isb();
++		/* SCTLR_EL1.WXN is permitted to be cached in a TLB. */
++		flush_tlb_all();
++	}
++
++	install_exception_handler(v, ESR_EL1_EC_IABT_EL1, pabt_handler);
++
++	test_exception("ldr x2, =" xstr(PABT_ADDR), "br x2", "");
++	__builtin_unreachable();
++}
++
+ static void user_psci_system_off(struct pt_regs *regs, unsigned int esr)
+ {
+ 	__user_psci_system_off();
+@@ -298,7 +402,9 @@ static void check_vectors(void *arg __unused)
+ {
+ 	report("und", check_und());
+ 	report("svc", check_svc());
+-	if (is_user()) {
++	if (!is_user()) {
++		check_pabt();
++	} else {
+ #ifdef __arm__
+ 		install_exception_handler(EXCPTN_UND, user_psci_system_off);
+ #else
+
+From patchwork Thu Nov 28 18:04:11 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266493
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 11577921
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:50 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id EE5502176D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:49 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727040AbfK1SEr (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:47 -0500
+Received: from foss.arm.com ([217.140.110.172]:39396 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726909AbfK1SEq (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:46 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 9D6BD31B;
+        Thu, 28 Nov 2019 10:04:45 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 81A773F6C4;
+        Thu, 28 Nov 2019 10:04:44 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 11/18] arm64: timer: Write to ICENABLER to
+ disable timer IRQ
+Date: Thu, 28 Nov 2019 18:04:11 +0000
+Message-Id: <20191128180418.6938-12-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+According the Generic Interrupt Controller versions 2, 3 and 4 architecture
+specifications, a write of 0 to the GIC{D,R}_ISENABLER{,0} registers is
+ignored; this is also how KVM emulates the corresponding register. Write
+instead to the ICENABLER register when disabling the timer interrupt.
+
+Note that fortunately for us, the timer test was still working as intended
+because KVM does the sensible thing and all interrupts are disabled by
+default when creating a VM.
+
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ lib/arm/asm/gic-v3.h |  1 +
+ lib/arm/asm/gic.h    |  1 +
+ arm/timer.c          | 22 +++++++++++-----------
+ 3 files changed, 13 insertions(+), 11 deletions(-)
+
+diff --git a/lib/arm/asm/gic-v3.h b/lib/arm/asm/gic-v3.h
+index 347be2f9da17..0dc838b3ab2d 100644
+--- a/lib/arm/asm/gic-v3.h
++++ b/lib/arm/asm/gic-v3.h
+@@ -31,6 +31,7 @@
+ /* Re-Distributor registers, offsets from SGI_base */
+ #define GICR_IGROUPR0			GICD_IGROUPR
+ #define GICR_ISENABLER0			GICD_ISENABLER
++#define GICR_ICENABLER0			GICD_ICENABLER
+ #define GICR_IPRIORITYR0		GICD_IPRIORITYR
+ 
+ #define ICC_SGI1R_AFFINITY_1_SHIFT	16
+diff --git a/lib/arm/asm/gic.h b/lib/arm/asm/gic.h
+index 1fc10a096259..09826fd5bc29 100644
+--- a/lib/arm/asm/gic.h
++++ b/lib/arm/asm/gic.h
+@@ -15,6 +15,7 @@
+ #define GICD_IIDR			0x0008
+ #define GICD_IGROUPR			0x0080
+ #define GICD_ISENABLER			0x0100
++#define GICD_ICENABLER			0x0180
+ #define GICD_ISPENDR			0x0200
+ #define GICD_ICPENDR			0x0280
+ #define GICD_ISACTIVER			0x0300
+diff --git a/arm/timer.c b/arm/timer.c
+index 0b808d5da9da..a4e3f98c4559 100644
+--- a/arm/timer.c
++++ b/arm/timer.c
+@@ -17,6 +17,9 @@
+ #define ARCH_TIMER_CTL_ISTATUS (1 << 2)
+ 
+ static void *gic_ispendr;
++static void *gic_isenabler;
++static void *gic_icenabler;
++
+ static bool ptimer_unsupported;
+ 
+ static void ptimer_unsupported_handler(struct pt_regs *regs, unsigned int esr)
+@@ -132,19 +135,12 @@ static struct timer_info ptimer_info = {
+ 
+ static void set_timer_irq_enabled(struct timer_info *info, bool enabled)
+ {
+-	u32 val = 0;
++	u32 val = 1 << PPI(info->irq);
+ 
+ 	if (enabled)
+-		val = 1 << PPI(info->irq);
+-
+-	switch (gic_version()) {
+-	case 2:
+-		writel(val, gicv2_dist_base() + GICD_ISENABLER + 0);
+-		break;
+-	case 3:
+-		writel(val, gicv3_sgi_base() + GICR_ISENABLER0);
+-		break;
+-	}
++		writel(val, gic_isenabler);
++	else
++		writel(val, gic_icenabler);
+ }
+ 
+ static void irq_handler(struct pt_regs *regs)
+@@ -306,9 +302,13 @@ static void test_init(void)
+ 	switch (gic_version()) {
+ 	case 2:
+ 		gic_ispendr = gicv2_dist_base() + GICD_ISPENDR;
++		gic_isenabler = gicv2_dist_base() + GICD_ISENABLER;
++		gic_icenabler = gicv2_dist_base() + GICD_ICENABLER;
+ 		break;
+ 	case 3:
+ 		gic_ispendr = gicv3_sgi_base() + GICD_ISPENDR;
++		gic_isenabler = gicv3_sgi_base() + GICR_ISENABLER0;
++		gic_icenabler = gicv3_sgi_base() + GICR_ICENABLER0;
+ 		break;
+ 	}
+ 
+
+From patchwork Thu Nov 28 18:04:12 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266507
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B14FB109A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:05:02 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 91CAE21771
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:05:02 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727085AbfK1SFB (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:05:01 -0500
+Received: from foss.arm.com ([217.140.110.172]:39404 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727011AbfK1SEr (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:47 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id ED58E1FB;
+        Thu, 28 Nov 2019 10:04:46 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ D16203F6C4;
+        Thu, 28 Nov 2019 10:04:45 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 12/18] arm64: timer: EOIR the interrupt
+ after masking the timer
+Date: Thu, 28 Nov 2019 18:04:12 +0000
+Message-Id: <20191128180418.6938-13-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Writing to the EOIR register before masking the HW mapped timer
+interrupt can cause taking another timer interrupt immediately after
+exception return. This doesn't happen all the time, because KVM
+reevaluates the state of pending HW mapped level sensitive interrupts on
+each guest exit. If the second interrupt is pending and a guest exit
+occurs after masking the timer interrupt and before the ERET (which
+restores PSTATE.I), then KVM removes it.
+
+Move the write after the IMASK bit has been set to prevent this from
+happening.
+
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ arm/timer.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/arm/timer.c b/arm/timer.c
+index a4e3f98c4559..d2cd5dc7a58b 100644
+--- a/arm/timer.c
++++ b/arm/timer.c
+@@ -149,8 +149,8 @@ static void irq_handler(struct pt_regs *regs)
+ 	u32 irqstat = gic_read_iar();
+ 	u32 irqnr = gic_iar_irqnr(irqstat);
+ 
+-	if (irqnr != GICC_INT_SPURIOUS)
+-		gic_write_eoir(irqstat);
++	if (irqnr == GICC_INT_SPURIOUS)
++		return;
+ 
+ 	if (irqnr == PPI(vtimer_info.irq)) {
+ 		info = &vtimer_info;
+@@ -162,7 +162,11 @@ static void irq_handler(struct pt_regs *regs)
+ 	}
+ 
+ 	info->write_ctl(ARCH_TIMER_CTL_IMASK | ARCH_TIMER_CTL_ENABLE);
++	isb();
++
+ 	info->irq_received = true;
++
++	gic_write_eoir(irqstat);
+ }
+ 
+ static bool gic_timer_pending(struct timer_info *info)
+
+From patchwork Thu Nov 28 18:04:13 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266505
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 35693921
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:05:00 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 159E0217D6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:05:00 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727008AbfK1SE7 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:59 -0500
+Received: from foss.arm.com ([217.140.110.172]:39412 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727005AbfK1SEs (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:48 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 48AB331B;
+        Thu, 28 Nov 2019 10:04:48 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 2EFBA3F6C4;
+        Thu, 28 Nov 2019 10:04:47 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 13/18] arm64: timer: Test behavior when
+ timer disabled or masked
+Date: Thu, 28 Nov 2019 18:04:13 +0000
+Message-Id: <20191128180418.6938-14-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+When the timer is disabled (the *_CTL_EL0.ENABLE bit is clear) or the
+timer interrupt is masked at the timer level (the *_CTL_EL0.IMASK bit is
+set), timer interrupts must not be pending or asserted by the VGIC.
+However, only when the timer interrupt is masked, we can still check
+that the timer condition is met by reading the *_CTL_EL0.ISTATUS bit.
+
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+
+This test was used to discover a bug and test the fix introduced by KVM
+commit 16e604a437c8 ("KVM: arm/arm64: vgic: Reevaluate level sensitive
+interrupts on enable").
+
+ arm/timer.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/arm/timer.c b/arm/timer.c
+index d2cd5dc7a58b..09d527bb09a8 100644
+--- a/arm/timer.c
++++ b/arm/timer.c
+@@ -230,9 +230,17 @@ static void test_timer(struct timer_info *info)
+ 
+ 	/* Disable the timer again and prepare to take interrupts */
+ 	info->write_ctl(0);
++	isb();
++	info->irq_received = false;
+ 	set_timer_irq_enabled(info, true);
++	report("no interrupt when timer is disabled", !info->irq_received);
+ 	report("interrupt signal no longer pending", !gic_timer_pending(info));
+ 
++	info->write_ctl(ARCH_TIMER_CTL_ENABLE | ARCH_TIMER_CTL_IMASK);
++	isb();
++	report("interrupt signal not pending", !gic_timer_pending(info));
++	report("timer condition met", info->read_ctl() & ARCH_TIMER_CTL_ISTATUS);
++
+ 	report("latency within 10 ms", test_cval_10msec(info));
+ 	report("interrupt received", info->irq_received);
+ 
+
+From patchwork Thu Nov 28 18:04:14 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266501
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 25919921
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:57 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 0525620656
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:57 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726957AbfK1SEw (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:52 -0500
+Received: from foss.arm.com ([217.140.110.172]:39422 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727086AbfK1SEt (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:49 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id A39761FB;
+        Thu, 28 Nov 2019 10:04:49 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 80B433F6C4;
+        Thu, 28 Nov 2019 10:04:48 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 14/18] lib: arm/arm64: Refuse to disable the
+ MMU with non-identity stack pointer
+Date: Thu, 28 Nov 2019 18:04:14 +0000
+Message-Id: <20191128180418.6938-15-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+When the MMU is off, all addresses are physical addresses. If the stack
+pointer is not an identity mapped address (the virtual address is not the
+same as the physical address), then we end up trying to access an invalid
+memory region. This can happen if we call mmu_disable from a secondary CPU,
+which has its stack allocated from the vmalloc region.
+
+Reviewed-by: Andrew Jones <drjones@redhat.com>
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ lib/arm/mmu.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/lib/arm/mmu.c b/lib/arm/mmu.c
+index ed5411c157bb..773c764c4836 100644
+--- a/lib/arm/mmu.c
++++ b/lib/arm/mmu.c
+@@ -68,8 +68,12 @@ void mmu_enable(pgd_t *pgtable)
+ extern void asm_mmu_disable(void);
+ void mmu_disable(void)
+ {
++	unsigned long sp = current_stack_pointer;
+ 	int cpu = current_thread_info()->cpu;
+ 
++	assert_msg(__virt_to_phys(sp) == sp,
++			"Attempting to disable MMU with non-identity mapped stack");
++
+ 	mmu_mark_disabled(cpu);
+ 
+ 	asm_mmu_disable();
+
+From patchwork Thu Nov 28 18:04:15 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266495
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6562F109A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:53 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 46979217F9
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:53 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727086AbfK1SEw (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:52 -0500
+Received: from foss.arm.com ([217.140.110.172]:39430 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726987AbfK1SEv (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:51 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 02F171042;
+        Thu, 28 Nov 2019 10:04:51 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ DB1D23F6C4;
+        Thu, 28 Nov 2019 10:04:49 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 15/18] arm/arm64: Perform dcache clean +
+ invalidate after turning MMU off
+Date: Thu, 28 Nov 2019 18:04:15 +0000
+Message-Id: <20191128180418.6938-16-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+When the MMU is off, data accesses are to Device nGnRnE memory on arm64 [1]
+or to Strongly-Ordered memory on arm [2]. This means that the accesses are
+non-cacheable.
+
+Perform a dcache clean to PoC so we can read the newer values from the
+cache, instead of the stale values from memory.
+
+Perform an invalidation so when we re-enable the MMU, we can access the
+data written to memory while the MMU was off, instead of potentially
+stale values from the cache.
+
+Data caches are PIPT and the VAs are translated using the current
+translation tables, or an identity mapping (what Arm calls a "flat
+mapping") when the MMU is off [1], [2]. Do the clean + invalidate when the
+MMU is off so we don't depend on the current translation tables and we can
+make sure that the operation applies to the entire physical memory.
+
+[1] ARM DDI 0487E.a, section D5.2.9
+[2] ARM DDI 0406C.d, section B3.2.1
+
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+
+Tested with the following hack:
+
+diff --git a/arm/selftest.c b/arm/selftest.c
+index e9dc5c0cab28..7f29548bc468 100644
+--- a/arm/selftest.c
++++ b/arm/selftest.c
+@@ -350,10 +350,21 @@ static void cpu_report(void *data __unused)
+ 	report_info("CPU%3d: MPIDR=%010" PRIx64, cpu, mpidr);
+ }
+ 
++#include <alloc_page.h>
++#include <asm/mmu.h>
+ int main(int argc, char **argv)
+ {
++	int *x = alloc_page();
++
+ 	report_prefix_push("selftest");
+ 
++	*x = 0x42;
++	mmu_disable();
++	report("read back value written with MMU on", *x == 0x42);
++	*x = 0x50;
++	mmu_enable(current_thread_info()->pgtable);
++	report("read back value written with MMU off", *x == 0x50);
++
+ 	if (argc < 2)
+ 		report_abort("no test specified");
+ 
+Without the fix, the first report fails, and the test usually hangs because
+mmu_enable pushes the LR register on the stack before asm_mmu_enable, which
+goes to memory, then pops it after asm_mmu_enable, and reads back garbage
+from the dcache.
+
+With the fix, the two reports pass.
+
+ lib/arm/asm/processor.h   |  6 ++++++
+ lib/arm64/asm/processor.h |  6 ++++++
+ lib/arm/processor.c       | 10 ++++++++++
+ lib/arm/setup.c           |  2 ++
+ lib/arm64/processor.c     | 11 +++++++++++
+ arm/cstart.S              | 22 ++++++++++++++++++++++
+ arm/cstart64.S            | 23 +++++++++++++++++++++++
+ 7 files changed, 80 insertions(+)
+
+diff --git a/lib/arm/asm/processor.h b/lib/arm/asm/processor.h
+index a8c4628da818..4684fb4755b3 100644
+--- a/lib/arm/asm/processor.h
++++ b/lib/arm/asm/processor.h
+@@ -9,6 +9,11 @@
+ #include <asm/sysreg.h>
+ #include <asm/barrier.h>
+ 
++#define CTR_DMINLINE_SHIFT	16
++#define CTR_DMINLINE_MASK	(0xf << 16)
++#define CTR_DMINLINE(x)	\
++	(((x) & CTR_DMINLINE_MASK) >> CTR_DMINLINE_SHIFT)
++
+ enum vector {
+ 	EXCPTN_RST,
+ 	EXCPTN_UND,
+@@ -25,6 +30,7 @@ typedef void (*exception_fn)(struct pt_regs *);
+ extern void install_exception_handler(enum vector v, exception_fn fn);
+ 
+ extern void show_regs(struct pt_regs *regs);
++extern void init_dcache_line_size(void);
+ 
+ static inline unsigned long current_cpsr(void)
+ {
+diff --git a/lib/arm64/asm/processor.h b/lib/arm64/asm/processor.h
+index 1d9223f728a5..fd508c02f30d 100644
+--- a/lib/arm64/asm/processor.h
++++ b/lib/arm64/asm/processor.h
+@@ -16,6 +16,11 @@
+ #define SCTLR_EL1_A	(1 << 1)
+ #define SCTLR_EL1_M	(1 << 0)
+ 
++#define CTR_EL0_DMINLINE_SHIFT	16
++#define CTR_EL0_DMINLINE_MASK	(0xf << 16)
++#define CTR_EL0_DMINLINE(x)	\
++	(((x) & CTR_EL0_DMINLINE_MASK) >> CTR_EL0_DMINLINE_SHIFT)
++
+ #ifndef __ASSEMBLY__
+ #include <asm/ptrace.h>
+ #include <asm/esr.h>
+@@ -60,6 +65,7 @@ extern void vector_handlers_default_init(vector_fn *handlers);
+ 
+ extern void show_regs(struct pt_regs *regs);
+ extern bool get_far(unsigned int esr, unsigned long *far);
++extern void init_dcache_line_size(void);
+ 
+ static inline unsigned long current_level(void)
+ {
+diff --git a/lib/arm/processor.c b/lib/arm/processor.c
+index 773337e6d3b7..c57657c5ea53 100644
+--- a/lib/arm/processor.c
++++ b/lib/arm/processor.c
+@@ -25,6 +25,8 @@ static const char *vector_names[] = {
+ 	"rst", "und", "svc", "pabt", "dabt", "addrexcptn", "irq", "fiq"
+ };
+ 
++unsigned int dcache_line_size;
++
+ void show_regs(struct pt_regs *regs)
+ {
+ 	unsigned long flags;
+@@ -145,3 +147,11 @@ bool is_user(void)
+ {
+ 	return current_thread_info()->flags & TIF_USER_MODE;
+ }
++void init_dcache_line_size(void)
++{
++	u32 ctr;
++
++	asm volatile("mrc p15, 0, %0, c0, c0, 1" : "=r" (ctr));
++	/* DminLine is log2 of the number of words in the smallest cache line */
++	dcache_line_size = 1 << (CTR_DMINLINE(ctr) + 2);
++}
+diff --git a/lib/arm/setup.c b/lib/arm/setup.c
+index 4f02fca85607..54fc19a20942 100644
+--- a/lib/arm/setup.c
++++ b/lib/arm/setup.c
+@@ -20,6 +20,7 @@
+ #include <asm/thread_info.h>
+ #include <asm/setup.h>
+ #include <asm/page.h>
++#include <asm/processor.h>
+ #include <asm/smp.h>
+ 
+ #include "io.h"
+@@ -63,6 +64,7 @@ static void cpu_init(void)
+ 	ret = dt_for_each_cpu_node(cpu_set, NULL);
+ 	assert(ret == 0);
+ 	set_cpu_online(0, true);
++	init_dcache_line_size();
+ }
+ 
+ static void mem_init(phys_addr_t freemem_start)
+diff --git a/lib/arm64/processor.c b/lib/arm64/processor.c
+index 2a024e3f4e9d..f28066d40145 100644
+--- a/lib/arm64/processor.c
++++ b/lib/arm64/processor.c
+@@ -62,6 +62,8 @@ static const char *ec_names[EC_MAX] = {
+ 	[ESR_EL1_EC_BRK64]		= "BRK64",
+ };
+ 
++unsigned int dcache_line_size;
++
+ void show_regs(struct pt_regs *regs)
+ {
+ 	int i;
+@@ -257,3 +259,12 @@ bool is_user(void)
+ {
+ 	return current_thread_info()->flags & TIF_USER_MODE;
+ }
++
++void init_dcache_line_size(void)
++{
++	u64 ctr;
++
++	ctr = read_sysreg(ctr_el0);
++	/* DminLine is log2 of the number of words in the smallest cache line */
++	dcache_line_size = 1 << (CTR_EL0_DMINLINE(ctr) + 2);
++}
+diff --git a/arm/cstart.S b/arm/cstart.S
+index dfef48e4dbb2..3c2a3bcde61a 100644
+--- a/arm/cstart.S
++++ b/arm/cstart.S
+@@ -188,6 +188,20 @@ asm_mmu_enable:
+ 
+ 	mov     pc, lr
+ 
++.macro dcache_clean_inval domain, start, end, tmp1, tmp2
++	ldr	\tmp1, =dcache_line_size
++	ldr	\tmp1, [\tmp1]
++	sub	\tmp2, \tmp1, #1
++	bic	\start, \start, \tmp2
++9998:
++	/* DCCIMVAC */
++	mcr	p15, 0, \start, c7, c14, 1
++	add	\start, \start, \tmp1
++	cmp	\start, \end
++	blo	9998b
++	dsb	\domain
++.endm
++
+ .globl asm_mmu_disable
+ asm_mmu_disable:
+ 	/* SCTLR */
+@@ -195,6 +209,14 @@ asm_mmu_disable:
+ 	bic	r0, #CR_M
+ 	mcr	p15, 0, r0, c1, c0, 0
+ 	isb
++
++	ldr	r0, =__phys_offset
++	ldr	r0, [r0]
++	ldr	r1, =__phys_end
++	ldr	r1, [r1]
++	dcache_clean_inval sy, r0, r1, r2, r3
++	isb
++
+ 	mov     pc, lr
+ 
+ /*
+diff --git a/arm/cstart64.S b/arm/cstart64.S
+index c98842f11e90..f41ffa3bc6c2 100644
+--- a/arm/cstart64.S
++++ b/arm/cstart64.S
+@@ -201,12 +201,35 @@ asm_mmu_enable:
+ 
+ 	ret
+ 
++/* Taken with small changes from arch/arm64/incluse/asm/assembler.h */
++.macro dcache_by_line_op op, domain, start, end, tmp1, tmp2
++	adrp	\tmp1, dcache_line_size
++	ldr	\tmp1, [\tmp1, :lo12:dcache_line_size]
++	sub	\tmp2, \tmp1, #1
++	bic	\start, \start, \tmp2
++9998:
++	dc	\op , \start
++	add	\start, \start, \tmp1
++	cmp	\start, \end
++	b.lo	9998b
++	dsb	\domain
++.endm
++
+ .globl asm_mmu_disable
+ asm_mmu_disable:
+ 	mrs	x0, sctlr_el1
+ 	bic	x0, x0, SCTLR_EL1_M
+ 	msr	sctlr_el1, x0
+ 	isb
++
++	/* Clean + invalidate the entire memory */
++	adrp	x0, __phys_offset
++	ldr	x0, [x0, :lo12:__phys_offset]
++	adrp	x1, __phys_end
++	ldr	x1, [x1, :lo12:__phys_end]
++	dcache_by_line_op civac, sy, x0, x1, x2, x3
++	isb
++
+ 	ret
+ 
+ /*
+
+From patchwork Thu Nov 28 18:04:16 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266497
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id CD2E917F0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:53 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id B6A0921775
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:53 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727096AbfK1SEx (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:53 -0500
+Received: from foss.arm.com ([217.140.110.172]:39440 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727085AbfK1SEw (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:52 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 5E3401FB;
+        Thu, 28 Nov 2019 10:04:52 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 3AFC13F6C4;
+        Thu, 28 Nov 2019 10:04:51 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 16/18] arm: cstart64.S: Downgrade TLBI to
+ non-shareable in asm_mmu_enable
+Date: Thu, 28 Nov 2019 18:04:16 +0000
+Message-Id: <20191128180418.6938-17-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+There's really no need to invalidate the TLB entries for all CPUs when
+enabling the MMU for the current CPU, so use the non-shareable version of
+the TLBI operation (and downgrade the DSB accordingly).
+
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ arm/cstart64.S | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/arm/cstart64.S b/arm/cstart64.S
+index f41ffa3bc6c2..87bf873795a1 100644
+--- a/arm/cstart64.S
++++ b/arm/cstart64.S
+@@ -167,8 +167,8 @@ halt:
+ .globl asm_mmu_enable
+ asm_mmu_enable:
+ 	ic	iallu			// I+BTB cache invalidate
+-	tlbi	vmalle1is		// invalidate I + D TLBs
+-	dsb	ish
++	tlbi	vmalle1			// invalidate I + D TLBs
++	dsb	nsh
+ 
+ 	/* TCR */
+ 	ldr	x1, =TCR_TxSZ(VA_BITS) |		\
+
+From patchwork Thu Nov 28 18:04:17 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266499
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id ED459921
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:55 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id CA866217BC
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:55 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726926AbfK1SEy (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:54 -0500
+Received: from foss.arm.com ([217.140.110.172]:39450 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727097AbfK1SEy (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:54 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id AF90831B;
+        Thu, 28 Nov 2019 10:04:53 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 9589F3F6C4;
+        Thu, 28 Nov 2019 10:04:52 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 17/18] arm/arm64: Invalidate TLB before
+ enabling MMU
+Date: Thu, 28 Nov 2019 18:04:17 +0000
+Message-Id: <20191128180418.6938-18-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Let's invalidate the TLB before enabling the MMU, not after, so we don't
+accidently use a stale TLB mapping. For arm, we add a TLBIALL operation,
+which applies only to the PE that executed the instruction [1]. For arm64,
+we already do that in asm_mmu_enable.
+
+We now find ourselves in a situation where we issue an extra invalidation
+after asm_mmu_enable returns. Remove this redundant call to tlb_flush_all.
+
+[1] ARM DDI 0406C.d, section B3.10.6
+
+Reviewed-by: Andrew Jones <drjones@redhat.com>
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ lib/arm/mmu.c | 1 -
+ arm/cstart.S  | 4 ++++
+ 2 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/lib/arm/mmu.c b/lib/arm/mmu.c
+index 773c764c4836..530d6b825398 100644
+--- a/lib/arm/mmu.c
++++ b/lib/arm/mmu.c
+@@ -59,7 +59,6 @@ void mmu_enable(pgd_t *pgtable)
+ 	struct thread_info *info = current_thread_info();
+ 
+ 	asm_mmu_enable(__pa(pgtable));
+-	flush_tlb_all();
+ 
+ 	info->pgtable = pgtable;
+ 	mmu_mark_enabled(info->cpu);
+diff --git a/arm/cstart.S b/arm/cstart.S
+index 3c2a3bcde61a..32b2b4f03098 100644
+--- a/arm/cstart.S
++++ b/arm/cstart.S
+@@ -161,6 +161,10 @@ halt:
+ .equ	NMRR,	0xff000004		@ MAIR1 (from Linux kernel)
+ .globl asm_mmu_enable
+ asm_mmu_enable:
++	/* TLBIALL */
++	mcr	p15, 0, r2, c8, c7, 0
++	dsb	nsh
++
+ 	/* TTBCR */
+ 	ldr	r2, =(TTBCR_EAE | 				\
+ 		      TTBCR_SH0_SHARED | 			\
+
+From patchwork Thu Nov 28 18:04:18 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 11266503
+Return-Path: <SRS0=sCwx=ZU=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8AD11109A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 66027217D7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 28 Nov 2019 18:04:58 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727104AbfK1SE4 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 28 Nov 2019 13:04:56 -0500
+Received: from foss.arm.com ([217.140.110.172]:39456 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727107AbfK1SEz (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 28 Nov 2019 13:04:55 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 124431FB;
+        Thu, 28 Nov 2019 10:04:55 -0800 (PST)
+Received: from e123195-lin.cambridge.arm.com (e123195-lin.cambridge.arm.com
+ [10.1.196.63])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ E502F3F6C4;
+        Thu, 28 Nov 2019 10:04:53 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: kvm@vger.kernel.org
+Cc: pbonzini@redhat.com, rkrcmar@redhat.com, drjones@redhat.com,
+        maz@kernel.org, andre.przywara@arm.com, vladimir.murzin@arm.com,
+        mark.rutland@arm.com
+Subject: [kvm-unit-tests PATCH v2 18/18] arm: cstart64.S: Remove icache
+ invalidation from asm_mmu_enable
+Date: Thu, 28 Nov 2019 18:04:18 +0000
+Message-Id: <20191128180418.6938-19-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.20.1
+In-Reply-To: <20191128180418.6938-1-alexandru.elisei@arm.com>
+References: <20191128180418.6938-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+According to the ARM ARM [1]:
+
+"In Armv8, any permitted instruction cache implementation can be
+described as implementing the IVIPT Extension to the Arm architecture.
+
+The formal definition of the Arm IVIPT Extension is that it reduces the
+instruction cache maintenance requirement to the following condition:
+Instruction cache maintenance is required only after writing new data to
+a PA that holds an instruction".
+
+We never patch instructions in the boot path, so remove the icache
+invalidation from asm_mmu_enable. Tests that modify instructions (like
+the cache test) should have their own icache maintenance operations.
+
+[1] ARM DDI 0487E.a, section D5.11.2 "Instruction caches"
+
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+
+And immediately following: "Previous versions of the Arm architecture have
+permitted an instruction cache option that does not implement the Arm IVIPT
+Extension".
+
+That type of cache is the ASID and VMID tagged VIVT instruction cache [2],
+which require icache maintenance when the instruction at a given virtual
+address changes. Seeing how we don't change the IPA for the same VA
+anywhere in kvm-unit-tests, I think it should be up to the person who will
+write such a test to use the appropriate maintenance operations.
+
+[2] ARM DDI 0406C.d, section B3.11.2.
+
+ arm/cstart64.S | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/arm/cstart64.S b/arm/cstart64.S
+index 87bf873795a1..7e7f8b2e8f0b 100644
+--- a/arm/cstart64.S
++++ b/arm/cstart64.S
+@@ -166,7 +166,6 @@ halt:
+ 
+ .globl asm_mmu_enable
+ asm_mmu_enable:
+-	ic	iallu			// I+BTB cache invalidate
+ 	tlbi	vmalle1			// invalidate I + D TLBs
+ 	dsb	nsh
+ 
