@@ -1,0 +1,2773 @@
+From patchwork Thu Dec  5 03:25:36 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Yan Zhao <yan.y.zhao@intel.com>
+X-Patchwork-Id: 11274099
+Return-Path: <SRS0=8IBs=Z3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id AF6346C1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:34:03 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 8221F2073B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:34:03 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728560AbfLEDd7 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 4 Dec 2019 22:33:59 -0500
+Received: from mga11.intel.com ([192.55.52.93]:22205 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728132AbfLEDd7 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 4 Dec 2019 22:33:59 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 04 Dec 2019 19:33:58 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,279,1571727600";
+   d="scan'208";a="243094895"
+Received: from joy-optiplex-7040.sh.intel.com ([10.239.13.9])
+  by fmsmga002.fm.intel.com with ESMTP; 04 Dec 2019 19:33:56 -0800
+From: Yan Zhao <yan.y.zhao@intel.com>
+To: alex.williamson@redhat.com
+Cc: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        libvir-list@redhat.com, qemu-devel@nongnu.org, cohuck@redhat.com,
+        zhenyuw@linux.intel.com, zhi.a.wang@intel.com,
+        kevin.tian@intel.com, shaopeng.he@intel.com,
+        Yan Zhao <yan.y.zhao@intel.com>
+Subject: [RFC PATCH 1/9] vfio/pci: introduce mediate ops to intercept vfio-pci
+ ops
+Date: Wed,  4 Dec 2019 22:25:36 -0500
+Message-Id: <20191205032536.29653-1-yan.y.zhao@intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191205032419.29606-1-yan.y.zhao@intel.com>
+References: <20191205032419.29606-1-yan.y.zhao@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+when vfio-pci is bound to a physical device, almost all the hardware
+resources are passthroughed.
+Sometimes, vendor driver of this physcial device may want to mediate some
+hardware resource access for a short period of time, e.g. dirty page
+tracking during live migration.
+
+Here we introduce mediate ops in vfio-pci for this purpose.
+
+Vendor driver can register a mediate ops to vfio-pci.
+But rather than directly bind to the passthroughed device, the
+vendor driver is now either a module that does not bind to any device or
+a module binds to other device.
+E.g. when passing through a VF device that is bound to vfio-pci modules,
+PF driver that binds to PF device can register to vfio-pci to mediate
+VF's regions, hence supporting VF live migration.
+
+The sequence goes like this:
+1. Vendor driver register its vfio_pci_mediate_ops to vfio-pci driver
+
+2. vfio-pci maintains a list of those registered vfio_pci_mediate_ops
+
+3. Whenever vfio-pci opens a device, it searches the list and call
+vfio_pci_mediate_ops->open() to check whether a vendor driver supports
+mediating this device.
+Upon a success return value of from vfio_pci_mediate_ops->open(),
+vfio-pci will stop list searching and store a mediate handle to
+represent this open into vendor driver.
+(so if multiple vendor drivers support mediating a device through
+vfio_pci_mediate_ops, only one will win, depending on their registering
+sequence)
+
+4. Whenever a VFIO_DEVICE_GET_REGION_INFO ioctl is received in vfio-pci
+ops, it will chain into vfio_pci_mediate_ops->get_region_info(), so that
+vendor driver is able to override a region's default flags and caps,
+e.g. adding a sparse mmap cap to passthrough only sub-regions of a whole
+region.
+
+5. vfio_pci_rw()/vfio_pci_mmap() first calls into
+vfio_pci_mediate_ops->rw()/vfio_pci_mediate_ops->mmaps().
+if pt=true is rteturned, vfio_pci_rw()/vfio_pci_mmap() will further
+passthrough this read/write/mmap to physical device, otherwise it just
+returns without touch physical device.
+
+6. When vfio-pci closes a device, vfio_pci_release() chains into
+vfio_pci_mediate_ops->release() to close the reference in vendor driver.
+
+7. Vendor driver unregister its vfio_pci_mediate_ops when driver exits
+
+Cc: Kevin Tian <kevin.tian@intel.com>
+
+Signed-off-by: Yan Zhao <yan.y.zhao@intel.com>
+---
+ drivers/vfio/pci/vfio_pci.c         | 146 ++++++++++++++++++++++++++++
+ drivers/vfio/pci/vfio_pci_private.h |   2 +
+ include/linux/vfio.h                |  16 +++
+ 3 files changed, 164 insertions(+)
+
+diff --git a/drivers/vfio/pci/vfio_pci.c b/drivers/vfio/pci/vfio_pci.c
+index 02206162eaa9..55080ff29495 100644
+--- a/drivers/vfio/pci/vfio_pci.c
++++ b/drivers/vfio/pci/vfio_pci.c
+@@ -54,6 +54,14 @@ module_param(disable_idle_d3, bool, S_IRUGO | S_IWUSR);
+ MODULE_PARM_DESC(disable_idle_d3,
+ 		 "Disable using the PCI D3 low power state for idle, unused devices");
+ 
++static LIST_HEAD(mediate_ops_list);
++static DEFINE_MUTEX(mediate_ops_list_lock);
++struct vfio_pci_mediate_ops_list_entry {
++	struct vfio_pci_mediate_ops	*ops;
++	int				refcnt;
++	struct list_head		next;
++};
++
+ static inline bool vfio_vga_disabled(void)
+ {
+ #ifdef CONFIG_VFIO_PCI_VGA
+@@ -472,6 +480,10 @@ static void vfio_pci_release(void *device_data)
+ 	if (!(--vdev->refcnt)) {
+ 		vfio_spapr_pci_eeh_release(vdev->pdev);
+ 		vfio_pci_disable(vdev);
++		if (vdev->mediate_ops && vdev->mediate_ops->release) {
++			vdev->mediate_ops->release(vdev->mediate_handle);
++			vdev->mediate_ops = NULL;
++		}
+ 	}
+ 
+ 	mutex_unlock(&vdev->reflck->lock);
+@@ -483,6 +495,7 @@ static int vfio_pci_open(void *device_data)
+ {
+ 	struct vfio_pci_device *vdev = device_data;
+ 	int ret = 0;
++	struct vfio_pci_mediate_ops_list_entry *mentry;
+ 
+ 	if (!try_module_get(THIS_MODULE))
+ 		return -ENODEV;
+@@ -495,6 +508,30 @@ static int vfio_pci_open(void *device_data)
+ 			goto error;
+ 
+ 		vfio_spapr_pci_eeh_open(vdev->pdev);
++		mutex_lock(&mediate_ops_list_lock);
++		list_for_each_entry(mentry, &mediate_ops_list, next) {
++			u64 caps;
++			u32 handle;
++
++			memset(&caps, 0, sizeof(caps));
++			ret = mentry->ops->open(vdev->pdev, &caps, &handle);
++			if (!ret)  {
++				vdev->mediate_ops = mentry->ops;
++				vdev->mediate_handle = handle;
++
++				pr_info("vfio pci found mediate_ops %s, caps=%llx, handle=%x for %x:%x\n",
++						vdev->mediate_ops->name, caps,
++						handle, vdev->pdev->vendor,
++						vdev->pdev->device);
++				/*
++				 * only find the first matching mediate_ops,
++				 * and add its refcnt
++				 */
++				mentry->refcnt++;
++				break;
++			}
++		}
++		mutex_unlock(&mediate_ops_list_lock);
+ 	}
+ 	vdev->refcnt++;
+ error:
+@@ -736,6 +773,14 @@ static long vfio_pci_ioctl(void *device_data,
+ 			info.size = pdev->cfg_size;
+ 			info.flags = VFIO_REGION_INFO_FLAG_READ |
+ 				     VFIO_REGION_INFO_FLAG_WRITE;
++
++			if (vdev->mediate_ops &&
++					vdev->mediate_ops->get_region_info) {
++				vdev->mediate_ops->get_region_info(
++						vdev->mediate_handle,
++						&info, &caps, NULL);
++			}
++
+ 			break;
+ 		case VFIO_PCI_BAR0_REGION_INDEX ... VFIO_PCI_BAR5_REGION_INDEX:
+ 			info.offset = VFIO_PCI_INDEX_TO_OFFSET(info.index);
+@@ -756,6 +801,13 @@ static long vfio_pci_ioctl(void *device_data,
+ 				}
+ 			}
+ 
++			if (vdev->mediate_ops &&
++					vdev->mediate_ops->get_region_info) {
++				vdev->mediate_ops->get_region_info(
++						vdev->mediate_handle,
++						&info, &caps, NULL);
++			}
++
+ 			break;
+ 		case VFIO_PCI_ROM_REGION_INDEX:
+ 		{
+@@ -794,6 +846,14 @@ static long vfio_pci_ioctl(void *device_data,
+ 			}
+ 
+ 			pci_write_config_word(pdev, PCI_COMMAND, orig_cmd);
++
++			if (vdev->mediate_ops &&
++					vdev->mediate_ops->get_region_info) {
++				vdev->mediate_ops->get_region_info(
++						vdev->mediate_handle,
++						&info, &caps, NULL);
++			}
++
+ 			break;
+ 		}
+ 		case VFIO_PCI_VGA_REGION_INDEX:
+@@ -805,6 +865,13 @@ static long vfio_pci_ioctl(void *device_data,
+ 			info.flags = VFIO_REGION_INFO_FLAG_READ |
+ 				     VFIO_REGION_INFO_FLAG_WRITE;
+ 
++			if (vdev->mediate_ops &&
++					vdev->mediate_ops->get_region_info) {
++				vdev->mediate_ops->get_region_info(
++						vdev->mediate_handle,
++						&info, &caps, NULL);
++			}
++
+ 			break;
+ 		default:
+ 		{
+@@ -839,6 +906,13 @@ static long vfio_pci_ioctl(void *device_data,
+ 				if (ret)
+ 					return ret;
+ 			}
++
++			if (vdev->mediate_ops &&
++					vdev->mediate_ops->get_region_info) {
++				vdev->mediate_ops->get_region_info(
++						vdev->mediate_handle,
++						&info, &caps, &cap_type);
++			}
+ 		}
+ 		}
+ 
+@@ -1151,6 +1225,16 @@ static ssize_t vfio_pci_rw(void *device_data, char __user *buf,
+ 	if (index >= VFIO_PCI_NUM_REGIONS + vdev->num_regions)
+ 		return -EINVAL;
+ 
++	if (vdev->mediate_ops && vdev->mediate_ops->rw) {
++		int ret;
++		bool pt = true;
++
++		ret = vdev->mediate_ops->rw(vdev->mediate_handle,
++				buf, count, ppos, iswrite, &pt);
++		if (!pt)
++			return ret;
++	}
++
+ 	switch (index) {
+ 	case VFIO_PCI_CONFIG_REGION_INDEX:
+ 		return vfio_pci_config_rw(vdev, buf, count, ppos, iswrite);
+@@ -1200,6 +1284,15 @@ static int vfio_pci_mmap(void *device_data, struct vm_area_struct *vma)
+ 	u64 phys_len, req_len, pgoff, req_start;
+ 	int ret;
+ 
++	if (vdev->mediate_ops && vdev->mediate_ops->mmap) {
++		int ret;
++		bool pt = true;
++
++		ret = vdev->mediate_ops->mmap(vdev->mediate_handle, vma, &pt);
++		if (!pt)
++			return ret;
++	}
++
+ 	index = vma->vm_pgoff >> (VFIO_PCI_OFFSET_SHIFT - PAGE_SHIFT);
+ 
+ 	if (vma->vm_end < vma->vm_start)
+@@ -1629,8 +1722,17 @@ static void vfio_pci_try_bus_reset(struct vfio_pci_device *vdev)
+ 
+ static void __exit vfio_pci_cleanup(void)
+ {
++	struct vfio_pci_mediate_ops_list_entry *mentry, *n;
++
+ 	pci_unregister_driver(&vfio_pci_driver);
+ 	vfio_pci_uninit_perm_bits();
++
++	mutex_lock(&mediate_ops_list_lock);
++	list_for_each_entry_safe(mentry, n,  &mediate_ops_list, next) {
++		list_del(&mentry->next);
++		kfree(mentry);
++	}
++	mutex_unlock(&mediate_ops_list_lock);
+ }
+ 
+ static void __init vfio_pci_fill_ids(void)
+@@ -1697,6 +1799,50 @@ static int __init vfio_pci_init(void)
+ 	return ret;
+ }
+ 
++int vfio_pci_register_mediate_ops(struct vfio_pci_mediate_ops *ops)
++{
++	struct vfio_pci_mediate_ops_list_entry *mentry;
++
++	mutex_lock(&mediate_ops_list_lock);
++	mentry = kzalloc(sizeof(*mentry), GFP_KERNEL);
++	if (!mentry) {
++		mutex_unlock(&mediate_ops_list_lock);
++		return -ENOMEM;
++	}
++
++	mentry->ops = ops;
++	mentry->refcnt = 0;
++	list_add(&mentry->next, &mediate_ops_list);
++
++	pr_info("registered dm ops %s\n", ops->name);
++	mutex_unlock(&mediate_ops_list_lock);
++
++	return 0;
++}
++EXPORT_SYMBOL(vfio_pci_register_mediate_ops);
++
++void vfio_pci_unregister_mediate_ops(struct vfio_pci_mediate_ops *ops)
++{
++	struct vfio_pci_mediate_ops_list_entry *mentry, *n;
++
++	mutex_lock(&mediate_ops_list_lock);
++	list_for_each_entry_safe(mentry, n,  &mediate_ops_list, next) {
++		if (mentry->ops != ops)
++			continue;
++
++		mentry->refcnt--;
++		if (!mentry->refcnt) {
++			list_del(&mentry->next);
++			kfree(mentry);
++		} else
++			pr_err("vfio_pci unregister mediate ops %s error\n",
++					mentry->ops->name);
++	}
++	mutex_unlock(&mediate_ops_list_lock);
++
++}
++EXPORT_SYMBOL(vfio_pci_unregister_mediate_ops);
++
+ module_init(vfio_pci_init);
+ module_exit(vfio_pci_cleanup);
+ 
+diff --git a/drivers/vfio/pci/vfio_pci_private.h b/drivers/vfio/pci/vfio_pci_private.h
+index ee6ee91718a4..bad4a254360e 100644
+--- a/drivers/vfio/pci/vfio_pci_private.h
++++ b/drivers/vfio/pci/vfio_pci_private.h
+@@ -122,6 +122,8 @@ struct vfio_pci_device {
+ 	struct list_head	dummy_resources_list;
+ 	struct mutex		ioeventfds_lock;
+ 	struct list_head	ioeventfds_list;
++	struct vfio_pci_mediate_ops *mediate_ops;
++	u32			 mediate_handle;
+ };
+ 
+ #define is_intx(vdev) (vdev->irq_type == VFIO_PCI_INTX_IRQ_INDEX)
+diff --git a/include/linux/vfio.h b/include/linux/vfio.h
+index e42a711a2800..0265e779acd1 100644
+--- a/include/linux/vfio.h
++++ b/include/linux/vfio.h
+@@ -195,4 +195,20 @@ extern int vfio_virqfd_enable(void *opaque,
+ 			      void *data, struct virqfd **pvirqfd, int fd);
+ extern void vfio_virqfd_disable(struct virqfd **pvirqfd);
+ 
++struct vfio_pci_mediate_ops {
++	char	*name;
++	int	(*open)(struct pci_dev *pdev, u64 *caps, u32 *handle);
++	void	(*release)(int handle);
++	void	(*get_region_info)(int handle,
++			struct vfio_region_info *info,
++			struct vfio_info_cap *caps,
++			struct vfio_region_info_cap_type *cap_type);
++	ssize_t	(*rw)(int handle, char __user *buf,
++			   size_t count, loff_t *ppos, bool iswrite, bool *pt);
++	int	(*mmap)(int handle, struct vm_area_struct *vma, bool *pt);
++
++};
++extern int vfio_pci_register_mediate_ops(struct vfio_pci_mediate_ops *ops);
++extern void vfio_pci_unregister_mediate_ops(struct vfio_pci_mediate_ops *ops);
++
+ #endif /* VFIO_H */
+
+From patchwork Thu Dec  5 03:25:55 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Yan Zhao <yan.y.zhao@intel.com>
+X-Patchwork-Id: 11274101
+Return-Path: <SRS0=8IBs=Z3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 15DD0930
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:34:23 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id F23892073B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:34:22 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728857AbfLEDeT (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 4 Dec 2019 22:34:19 -0500
+Received: from mga12.intel.com ([192.55.52.136]:43800 "EHLO mga12.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728821AbfLEDeT (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 4 Dec 2019 22:34:19 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by fmsmga106.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 04 Dec 2019 19:34:19 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,279,1571727600";
+   d="scan'208";a="243094962"
+Received: from joy-optiplex-7040.sh.intel.com ([10.239.13.9])
+  by fmsmga002.fm.intel.com with ESMTP; 04 Dec 2019 19:34:16 -0800
+From: Yan Zhao <yan.y.zhao@intel.com>
+To: alex.williamson@redhat.com
+Cc: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        libvir-list@redhat.com, qemu-devel@nongnu.org, cohuck@redhat.com,
+        zhenyuw@linux.intel.com, zhi.a.wang@intel.com,
+        kevin.tian@intel.com, shaopeng.he@intel.com,
+        Yan Zhao <yan.y.zhao@intel.com>
+Subject: [RFC PATCH 2/9] vfio/pci: test existence before calling region->ops
+Date: Wed,  4 Dec 2019 22:25:55 -0500
+Message-Id: <20191205032555.29700-1-yan.y.zhao@intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191205032419.29606-1-yan.y.zhao@intel.com>
+References: <20191205032419.29606-1-yan.y.zhao@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+For regions registered through vfio_pci_register_dev_region(),
+before calling region->ops, first check whether region->ops is not null.
+
+As in the next two patches, dev regions of null region->ops are to be
+registered by default on behalf of vendor driver, we need to check here
+to prevent null pointer access if vendor driver forgets to handle those
+dev regions
+
+Cc: Kevin Tian <kevin.tian@intel.com>
+
+Signed-off-by: Yan Zhao <yan.y.zhao@intel.com>
+---
+ drivers/vfio/pci/vfio_pci.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/vfio/pci/vfio_pci.c b/drivers/vfio/pci/vfio_pci.c
+index 55080ff29495..f3730252ee82 100644
+--- a/drivers/vfio/pci/vfio_pci.c
++++ b/drivers/vfio/pci/vfio_pci.c
+@@ -398,8 +398,12 @@ static void vfio_pci_disable(struct vfio_pci_device *vdev)
+ 
+ 	vdev->virq_disabled = false;
+ 
+-	for (i = 0; i < vdev->num_regions; i++)
++	for (i = 0; i < vdev->num_regions; i++) {
++		if (!vdev->region[i].ops || vdev->region[i].ops->release)
++			continue;
++
+ 		vdev->region[i].ops->release(vdev, &vdev->region[i]);
++	}
+ 
+ 	vdev->num_regions = 0;
+ 	kfree(vdev->region);
+@@ -900,7 +904,8 @@ static long vfio_pci_ioctl(void *device_data,
+ 			if (ret)
+ 				return ret;
+ 
+-			if (vdev->region[i].ops->add_capability) {
++			if (vdev->region[i].ops &&
++					vdev->region[i].ops->add_capability) {
+ 				ret = vdev->region[i].ops->add_capability(vdev,
+ 						&vdev->region[i], &caps);
+ 				if (ret)
+@@ -1251,6 +1256,9 @@ static ssize_t vfio_pci_rw(void *device_data, char __user *buf,
+ 		return vfio_pci_vga_rw(vdev, buf, count, ppos, iswrite);
+ 	default:
+ 		index -= VFIO_PCI_NUM_REGIONS;
++		if (!vdev->region[index].ops || !vdev->region[index].ops->rw)
++			return -EINVAL;
++
+ 		return vdev->region[index].ops->rw(vdev, buf,
+ 						   count, ppos, iswrite);
+ 	}
+
+From patchwork Thu Dec  5 03:26:38 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Yan Zhao <yan.y.zhao@intel.com>
+X-Patchwork-Id: 11274105
+Return-Path: <SRS0=8IBs=Z3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 41E746C1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:34:57 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 15F3C2245C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:34:57 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728909AbfLEDex (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 4 Dec 2019 22:34:53 -0500
+Received: from mga04.intel.com ([192.55.52.120]:20381 "EHLO mga04.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728449AbfLEDex (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 4 Dec 2019 22:34:53 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by fmsmga104.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 04 Dec 2019 19:34:52 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,279,1571727600";
+   d="scan'208";a="243095037"
+Received: from joy-optiplex-7040.sh.intel.com ([10.239.13.9])
+  by fmsmga002.fm.intel.com with ESMTP; 04 Dec 2019 19:34:50 -0800
+From: Yan Zhao <yan.y.zhao@intel.com>
+To: alex.williamson@redhat.com
+Cc: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        libvir-list@redhat.com, qemu-devel@nongnu.org, cohuck@redhat.com,
+        zhenyuw@linux.intel.com, zhi.a.wang@intel.com,
+        kevin.tian@intel.com, shaopeng.he@intel.com,
+        Yan Zhao <yan.y.zhao@intel.com>
+Subject: [RFC PATCH 3/9] vfio/pci: register a default migration region
+Date: Wed,  4 Dec 2019 22:26:38 -0500
+Message-Id: <20191205032638.29747-1-yan.y.zhao@intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191205032419.29606-1-yan.y.zhao@intel.com>
+References: <20191205032419.29606-1-yan.y.zhao@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Vendor driver specifies when to support a migration region through cap
+VFIO_PCI_DEVICE_CAP_MIGRATION in vfio_pci_mediate_ops->open().
+
+If vfio-pci detects this cap, it creates a default migration region on
+behalf of vendor driver with region len=0 and region->ops=null.
+Vendor driver should override this region's len, flags, rw, mmap in
+its vfio_pci_mediate_ops.
+
+This migration region definition is aligned to QEMU vfio migration code v8:
+(https://lists.gnu.org/archive/html/qemu-devel/2019-08/msg05542.html)
+
+Cc: Kevin Tian <kevin.tian@intel.com>
+
+Signed-off-by: Yan Zhao <yan.y.zhao@intel.com>
+---
+ drivers/vfio/pci/vfio_pci.c |  15 ++++
+ include/linux/vfio.h        |   1 +
+ include/uapi/linux/vfio.h   | 149 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 165 insertions(+)
+
+diff --git a/drivers/vfio/pci/vfio_pci.c b/drivers/vfio/pci/vfio_pci.c
+index f3730252ee82..059660328be2 100644
+--- a/drivers/vfio/pci/vfio_pci.c
++++ b/drivers/vfio/pci/vfio_pci.c
+@@ -115,6 +115,18 @@ static inline bool vfio_pci_is_vga(struct pci_dev *pdev)
+ 	return (pdev->class >> 8) == PCI_CLASS_DISPLAY_VGA;
+ }
+ 
++/**
++ * init a region to hold migration ctl & data
++ */
++void init_migration_region(struct vfio_pci_device *vdev)
++{
++	vfio_pci_register_dev_region(vdev, VFIO_REGION_TYPE_MIGRATION,
++		VFIO_REGION_SUBTYPE_MIGRATION,
++		NULL, 0,
++		VFIO_REGION_INFO_FLAG_READ | VFIO_REGION_INFO_FLAG_WRITE,
++		NULL);
++}
++
+ static void vfio_pci_probe_mmaps(struct vfio_pci_device *vdev)
+ {
+ 	struct resource *res;
+@@ -523,6 +535,9 @@ static int vfio_pci_open(void *device_data)
+ 				vdev->mediate_ops = mentry->ops;
+ 				vdev->mediate_handle = handle;
+ 
++				if (caps & VFIO_PCI_DEVICE_CAP_MIGRATION)
++					init_migration_region(vdev);
++
+ 				pr_info("vfio pci found mediate_ops %s, caps=%llx, handle=%x for %x:%x\n",
+ 						vdev->mediate_ops->name, caps,
+ 						handle, vdev->pdev->vendor,
+diff --git a/include/linux/vfio.h b/include/linux/vfio.h
+index 0265e779acd1..cddea8e9dcb2 100644
+--- a/include/linux/vfio.h
++++ b/include/linux/vfio.h
+@@ -197,6 +197,7 @@ extern void vfio_virqfd_disable(struct virqfd **pvirqfd);
+ 
+ struct vfio_pci_mediate_ops {
+ 	char	*name;
++#define VFIO_PCI_DEVICE_CAP_MIGRATION (0x01)
+ 	int	(*open)(struct pci_dev *pdev, u64 *caps, u32 *handle);
+ 	void	(*release)(int handle);
+ 	void	(*get_region_info)(int handle,
+diff --git a/include/uapi/linux/vfio.h b/include/uapi/linux/vfio.h
+index 9e843a147ead..caf8845a67a6 100644
+--- a/include/uapi/linux/vfio.h
++++ b/include/uapi/linux/vfio.h
+@@ -306,6 +306,155 @@ struct vfio_region_info_cap_type {
+ #define VFIO_REGION_TYPE_GFX                    (1)
+ #define VFIO_REGION_TYPE_CCW			(2)
+ 
++/* Migration region type and sub-type */
++#define VFIO_REGION_TYPE_MIGRATION          (3)
++#define VFIO_REGION_SUBTYPE_MIGRATION           (1)
++
++/**
++ * Structure vfio_device_migration_info is placed at 0th offset of
++ * VFIO_REGION_SUBTYPE_MIGRATION region to get/set VFIO device related migration
++ * information. Field accesses from this structure are only supported at their
++ * native width and alignment, otherwise the result is undefined and vendor
++ * drivers should return an error.
++ *
++ * device_state: (read/write)
++ *      To indicate vendor driver the state VFIO device should be transitioned
++ *      to. If device state transition fails, write on this field return error.
++ *      It consists of 3 bits:
++ *      - If bit 0 set, indicates _RUNNING state. When its reset, that indicates
++ *        _STOPPED state. When device is changed to _STOPPED, driver should stop
++ *        device before write() returns.
++ *      - If bit 1 set, indicates _SAVING state.
++ *      - If bit 2 set, indicates _RESUMING state.
++ *      Bits 3 - 31 are reserved for future use. User should perform
++ *      read-modify-write operation on this field.
++ *      _SAVING and _RESUMING bits set at the same time is invalid state.
++ *
++ * pending bytes: (read only)
++ *      Number of pending bytes yet to be migrated from vendor driver
++ *
++ * data_offset: (read only)
++ *      User application should read data_offset in migration region from where
++ *      user application should read device data during _SAVING state or write
++ *      device data during _RESUMING state or read dirty pages bitmap. See below
++ *      for detail of sequence to be followed.
++ *
++ * data_size: (read/write)
++ *      User application should read data_size to get size of data copied in
++ *      migration region during _SAVING state and write size of data copied in
++ *      migration region during _RESUMING state.
++ *
++ * start_pfn: (write only)
++ *      Start address pfn to get bitmap of dirty pages from vendor driver duing
++ *      _SAVING state.
++ *
++ * page_size: (write only)
++ *      User application should write the page_size of pfn.
++ *
++ * total_pfns: (write only)
++ *      Total pfn count from start_pfn for which dirty bitmap is requested.
++ *
++ * copied_pfns: (read only)
++ *      pfn count for which dirty bitmap is copied to migration region.
++ *      Vendor driver should copy the bitmap with bits set only for pages to be
++ *      marked dirty in migration region.
++ *      - Vendor driver should return VFIO_DEVICE_DIRTY_PFNS_NONE if none of the
++ *        pages are dirty in requested range or rest of the range.
++ *      - Vendor driver should return VFIO_DEVICE_DIRTY_PFNS_ALL to mark all
++ *        pages dirty in the given range or rest of the range.
++ *      - Vendor driver should return pfn count for which bitmap is written in
++ *        the region.
++ *
++ * Migration region looks like:
++ *  ------------------------------------------------------------------
++ * |vfio_device_migration_info|    data section                      |
++ * |                          |     ///////////////////////////////  |
++ * ------------------------------------------------------------------
++ *   ^                              ^                             ^
++ *  offset 0-trapped part        data_offset                 data_size
++ *
++ * Data section is always followed by vfio_device_migration_info structure
++ * in the region, so data_offset will always be non-0. Offset from where data
++ * is copied is decided by kernel driver, data section can be trapped or
++ * mapped or partitioned, depending on how kernel driver defines data section.
++ * Data section partition can be defined as mapped by sparse mmap capability.
++ * If mmapped, then data_offset should be page aligned, where as initial section
++ * which contain vfio_device_migration_info structure might not end at offset
++ * which is page aligned.
++ * Data_offset can be same or different for device data and dirty pages bitmap.
++ * Vendor driver should decide whether to partition data section and how to
++ * partition the data section. Vendor driver should return data_offset
++ * accordingly.
++ *
++ * Sequence to be followed for _SAVING|_RUNNING device state or pre-copy phase
++ * and for _SAVING device state or stop-and-copy phase:
++ * a. read pending_bytes. If pending_bytes > 0, go through below steps.
++ * b. read data_offset, indicates kernel driver to write data to staging buffer.
++ * c. read data_size, amount of data in bytes written by vendor driver in
++ *    migration region.
++ * d. read data_size bytes of data from data_offset in the migration region.
++ * e. process data.
++ * f. Loop through a to e.
++ *
++ * To copy system memory content during migration, vendor driver should be able
++ * to report system memory pages which are dirtied by that driver. For such
++ * dirty page reporting, user application should query for a range of GFNs
++ * relative to device address space (IOVA), then vendor driver should provide
++ * the bitmap of pages from this range which are dirtied by him through
++ * migration region where each bit represents a page and bit set to 1 represents
++ * that the page is dirty.
++ * User space application should take care of copying content of system memory
++ * for those pages.
++ *
++ * Steps to get dirty page bitmap:
++ * a. write start_pfn, page_size and total_pfns.
++ * b. read copied_pfns. Vendor driver should take one of the below action:
++ *     - Vendor driver should return VFIO_DEVICE_DIRTY_PFNS_NONE if driver
++ *       doesn't have any page to report dirty in given range or rest of the
++ *       range. Exit the loop.
++ *     - Vendor driver should return VFIO_DEVICE_DIRTY_PFNS_ALL to mark all
++ *       pages dirty for given range or rest of the range. User space
++ *       application mark all pages in the range as dirty and exit the loop.
++ *     - Vendor driver should return copied_pfns and provide bitmap for
++ *       copied_pfn in migration region.
++ * c. read data_offset, where vendor driver has written bitmap.
++ * d. read bitmap from the migration region from data_offset.
++ * e. Iterate through steps a to d while (total copied_pfns < total_pfns)
++ *
++ * Sequence to be followed while _RESUMING device state:
++ * While data for this device is available, repeat below steps:
++ * a. read data_offset from where user application should write data.
++ * b. write data of data_size to migration region from data_offset.
++ * c. write data_size which indicates vendor driver that data is written in
++ *    staging buffer.
++ *
++ * For user application, data is opaque. User should write data in the same
++ * order as received.
++ */
++
++struct vfio_device_migration_info {
++	__u32 device_state;		/* VFIO device state */
++#define VFIO_DEVICE_STATE_RUNNING	(1 << 0)
++#define VFIO_DEVICE_STATE_SAVING	(1 << 1)
++#define VFIO_DEVICE_STATE_RESUMING	(1 << 2)
++#define VFIO_DEVICE_STATE_MASK		(VFIO_DEVICE_STATE_RUNNING | \
++					VFIO_DEVICE_STATE_SAVING | \
++					VFIO_DEVICE_STATE_RESUMING)
++#define VFIO_DEVICE_STATE_INVALID	(VFIO_DEVICE_STATE_SAVING | \
++					VFIO_DEVICE_STATE_RESUMING)
++	__u32 reserved;
++	__u64 pending_bytes;
++	__u64 data_offset;
++	__u64 data_size;
++	__u64 start_pfn;
++	__u64 page_size;
++	__u64 total_pfns;
++	__u64 copied_pfns;
++#define VFIO_DEVICE_DIRTY_PFNS_NONE	(0)
++#define VFIO_DEVICE_DIRTY_PFNS_ALL	(~0ULL)
++} __attribute__((packed));
++
++
+ /* sub-types for VFIO_REGION_TYPE_PCI_* */
+ 
+ /* 8086 vendor PCI sub-types */
+
+From patchwork Thu Dec  5 03:26:50 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Yan Zhao <yan.y.zhao@intel.com>
+X-Patchwork-Id: 11274111
+Return-Path: <SRS0=8IBs=Z3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3DAF6930
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:35:10 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 2638521823
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:35:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728933AbfLEDfG (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 4 Dec 2019 22:35:06 -0500
+Received: from mga09.intel.com ([134.134.136.24]:38447 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728858AbfLEDfG (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 4 Dec 2019 22:35:06 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 04 Dec 2019 19:35:05 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,279,1571727600";
+   d="scan'208";a="243095108"
+Received: from joy-optiplex-7040.sh.intel.com ([10.239.13.9])
+  by fmsmga002.fm.intel.com with ESMTP; 04 Dec 2019 19:35:03 -0800
+From: Yan Zhao <yan.y.zhao@intel.com>
+To: alex.williamson@redhat.com
+Cc: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        libvir-list@redhat.com, qemu-devel@nongnu.org, cohuck@redhat.com,
+        zhenyuw@linux.intel.com, zhi.a.wang@intel.com,
+        kevin.tian@intel.com, shaopeng.he@intel.com,
+        Yan Zhao <yan.y.zhao@intel.com>
+Subject: [RFC PATCH 4/9] vfio-pci: register default dynamic-trap-bar-info
+ region
+Date: Wed,  4 Dec 2019 22:26:50 -0500
+Message-Id: <20191205032650.29794-1-yan.y.zhao@intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191205032419.29606-1-yan.y.zhao@intel.com>
+References: <20191205032419.29606-1-yan.y.zhao@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Dynamic trap bar info region is a channel for QEMU and vendor driver to
+communicate dynamic trap info. It is of type
+VFIO_REGION_TYPE_DYNAMIC_TRAP_BAR_INFO and subtype
+VFIO_REGION_SUBTYPE_DYNAMIC_TRAP_BAR_INFO.
+
+This region has two fields: dt_fd and trap.
+When QEMU detects a device regions of this type, it will create an
+eventfd and write its eventfd id to dt_fd field.
+When vendor drivre signals this eventfd, QEMU reads trap field of this
+info region.
+- If trap is true, QEMU would search the device's PCI BAR
+regions and disable all the sparse mmaped subregions (if the sparse
+mmaped subregion is disablable).
+- If trap is false, QEMU would re-enable those subregions.
+
+A typical usage is
+1. vendor driver first cuts its bar 0 into several sections, all in a
+sparse mmap array. So initally, all its bar 0 are passthroughed.
+2. vendor driver specifys part of bar 0 sections to be disablable.
+3. on migration starts, vendor driver signals dt_fd and set trap to true
+to notify QEMU disabling the bar 0 sections of disablable flags on.
+4. QEMU disables those bar 0 section and hence let vendor driver be able
+to trap access of bar 0 registers and make dirty page tracking possible.
+5. on migration failure, vendor driver signals dt_fd to QEMU again.
+QEMU reads trap field of this info region which is false and QEMU
+re-passthrough the whole bar 0 region.
+
+Vendor driver specifies whether it supports dynamic-trap-bar-info region
+through cap VFIO_PCI_DEVICE_CAP_DYNAMIC_TRAP_BAR in
+vfio_pci_mediate_ops->open().
+
+If vfio-pci detects this cap, it will create a default
+dynamic_trap_bar_info region on behalf of vendor driver with region len=0
+and region->ops=null.
+Vvendor driver should override this region's len, flags, rw, mmap in its
+vfio_pci_mediate_ops.
+
+Cc: Kevin Tian <kevin.tian@intel.com>
+
+Signed-off-by: Yan Zhao <yan.y.zhao@intel.com>
+---
+ drivers/vfio/pci/vfio_pci.c | 16 ++++++++++++++++
+ include/linux/vfio.h        |  3 ++-
+ include/uapi/linux/vfio.h   | 11 +++++++++++
+ 3 files changed, 29 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/vfio/pci/vfio_pci.c b/drivers/vfio/pci/vfio_pci.c
+index 059660328be2..62b811ca43e4 100644
+--- a/drivers/vfio/pci/vfio_pci.c
++++ b/drivers/vfio/pci/vfio_pci.c
+@@ -127,6 +127,19 @@ void init_migration_region(struct vfio_pci_device *vdev)
+ 		NULL);
+ }
+ 
++/**
++ * register a region to hold info for dynamically trap bar regions
++ */
++void init_dynamic_trap_bar_info_region(struct vfio_pci_device *vdev)
++{
++	vfio_pci_register_dev_region(vdev,
++		VFIO_REGION_TYPE_DYNAMIC_TRAP_BAR_INFO,
++		VFIO_REGION_SUBTYPE_DYNAMIC_TRAP_BAR_INFO,
++		NULL, 0,
++		VFIO_REGION_INFO_FLAG_READ | VFIO_REGION_INFO_FLAG_WRITE,
++		NULL);
++}
++
+ static void vfio_pci_probe_mmaps(struct vfio_pci_device *vdev)
+ {
+ 	struct resource *res;
+@@ -538,6 +551,9 @@ static int vfio_pci_open(void *device_data)
+ 				if (caps & VFIO_PCI_DEVICE_CAP_MIGRATION)
+ 					init_migration_region(vdev);
+ 
++				if (caps & VFIO_PCI_DEVICE_CAP_DYNAMIC_TRAP_BAR)
++					init_dynamic_trap_bar_info_region(vdev);
++
+ 				pr_info("vfio pci found mediate_ops %s, caps=%llx, handle=%x for %x:%x\n",
+ 						vdev->mediate_ops->name, caps,
+ 						handle, vdev->pdev->vendor,
+diff --git a/include/linux/vfio.h b/include/linux/vfio.h
+index cddea8e9dcb2..cf8ecf687bee 100644
+--- a/include/linux/vfio.h
++++ b/include/linux/vfio.h
+@@ -197,7 +197,8 @@ extern void vfio_virqfd_disable(struct virqfd **pvirqfd);
+ 
+ struct vfio_pci_mediate_ops {
+ 	char	*name;
+-#define VFIO_PCI_DEVICE_CAP_MIGRATION (0x01)
++#define VFIO_PCI_DEVICE_CAP_MIGRATION		(0x01)
++#define VFIO_PCI_DEVICE_CAP_DYNAMIC_TRAP_BAR	(0x02)
+ 	int	(*open)(struct pci_dev *pdev, u64 *caps, u32 *handle);
+ 	void	(*release)(int handle);
+ 	void	(*get_region_info)(int handle,
+diff --git a/include/uapi/linux/vfio.h b/include/uapi/linux/vfio.h
+index caf8845a67a6..74a2d0b57741 100644
+--- a/include/uapi/linux/vfio.h
++++ b/include/uapi/linux/vfio.h
+@@ -258,6 +258,9 @@ struct vfio_region_info {
+ struct vfio_region_sparse_mmap_area {
+ 	__u64	offset;	/* Offset of mmap'able area within region */
+ 	__u64	size;	/* Size of mmap'able area */
++	__u32	disablable;	/* whether this mmap'able are able to
++				 *  be dynamically disabled
++				 */
+ };
+ 
+ struct vfio_region_info_cap_sparse_mmap {
+@@ -454,6 +457,14 @@ struct vfio_device_migration_info {
+ #define VFIO_DEVICE_DIRTY_PFNS_ALL	(~0ULL)
+ } __attribute__((packed));
+ 
++/* Region type and sub-type to hold info to dynamically trap bars */
++#define VFIO_REGION_TYPE_DYNAMIC_TRAP_BAR_INFO		(4)
++#define VFIO_REGION_SUBTYPE_DYNAMIC_TRAP_BAR_INFO	(1)
++
++struct vfio_device_dt_bar_info_region {
++	__u32 dt_fd; /* fd of eventfd to notify qemu trap/untrap bars*/
++	__u32 trap;   /* trap/untrap bar regions */
++};
+ 
+ /* sub-types for VFIO_REGION_TYPE_PCI_* */
+ 
+
+From patchwork Thu Dec  5 03:27:04 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Yan Zhao <yan.y.zhao@intel.com>
+X-Patchwork-Id: 11274113
+Return-Path: <SRS0=8IBs=Z3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 774516C1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:35:29 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 52F182073B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:35:29 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728985AbfLEDfZ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 4 Dec 2019 22:35:25 -0500
+Received: from mga03.intel.com ([134.134.136.65]:10227 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728374AbfLEDfX (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 4 Dec 2019 22:35:23 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 04 Dec 2019 19:35:22 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,279,1571727600";
+   d="scan'208";a="243095169"
+Received: from joy-optiplex-7040.sh.intel.com ([10.239.13.9])
+  by fmsmga002.fm.intel.com with ESMTP; 04 Dec 2019 19:35:15 -0800
+From: Yan Zhao <yan.y.zhao@intel.com>
+To: alex.williamson@redhat.com
+Cc: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        libvir-list@redhat.com, qemu-devel@nongnu.org, cohuck@redhat.com,
+        zhenyuw@linux.intel.com, zhi.a.wang@intel.com,
+        kevin.tian@intel.com, shaopeng.he@intel.com,
+        Yan Zhao <yan.y.zhao@intel.com>
+Subject: [RFC PATCH 5/9] samples/vfio-pci/igd_dt: sample driver to mediate a
+ passthrough IGD
+Date: Wed,  4 Dec 2019 22:27:04 -0500
+Message-Id: <20191205032704.29841-1-yan.y.zhao@intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191205032419.29606-1-yan.y.zhao@intel.com>
+References: <20191205032419.29606-1-yan.y.zhao@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This is a sample driver to use mediate ops for passthrough IGDs.
+
+This sample driver does not directly bind to IGD device but defines what
+IGD devices to support via a pciidlist.
+
+It registers its vfio_pci_mediate_ops to vfio-pci on driver loading.
+
+when vfio_pci->open() calls vfio_pci_mediate_ops->open(), it will check
+the vendor id and device id of the pdev passed in. If they match in
+pciidlist, success is returned; otherwise, failure is return.
+
+After a success vfio_pci_mediate_ops->open(), vfio-pci will further call
+.get_region_info/.rw/.mmap interface with a mediate handle for each region
+and therefore the regions access get mediated/customized.
+
+when vfio-pci->release() is called on the IGD, it first calls
+vfio_pci_mediate_ops->release() with a mediate_handle to close the
+opened IGD device instance in this sample driver.
+
+This sample driver unregister its vfio_pci_mediate_ops on driver exiting.
+
+Cc: Kevin Tian <kevin.tian@intel.com>
+
+Signed-off-by: Yan Zhao <yan.y.zhao@intel.com>
+---
+ samples/Kconfig           |   6 ++
+ samples/Makefile          |   1 +
+ samples/vfio-pci/Makefile |   2 +
+ samples/vfio-pci/igd_dt.c | 191 ++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 200 insertions(+)
+ create mode 100644 samples/vfio-pci/Makefile
+ create mode 100644 samples/vfio-pci/igd_dt.c
+
+diff --git a/samples/Kconfig b/samples/Kconfig
+index c8dacb4dda80..2da42a725c03 100644
+--- a/samples/Kconfig
++++ b/samples/Kconfig
+@@ -169,4 +169,10 @@ config SAMPLE_VFS
+ 	  as mount API and statx().  Note that this is restricted to the x86
+ 	  arch whilst it accesses system calls that aren't yet in all arches.
+ 
++config SAMPLE_VFIO_PCI_IGD_DT
++	tristate "Build example driver to dynamicaly trap a passthroughed device bound to VFIO-PCI -- loadable modules only"
++	depends on VFIO_PCI && m
++	help
++	  Build a sample driver to show how to dynamically trap a passthroughed device that bound to VFIO-PCI
++
+ endif # SAMPLES
+diff --git a/samples/Makefile b/samples/Makefile
+index 7d6e4ca28d69..f0f422e7dd11 100644
+--- a/samples/Makefile
++++ b/samples/Makefile
+@@ -18,5 +18,6 @@ subdir-$(CONFIG_SAMPLE_SECCOMP)		+= seccomp
+ obj-$(CONFIG_SAMPLE_TRACE_EVENTS)	+= trace_events/
+ obj-$(CONFIG_SAMPLE_TRACE_PRINTK)	+= trace_printk/
+ obj-$(CONFIG_VIDEO_PCI_SKELETON)	+= v4l/
++obj-$(CONFIG_SAMPLE_VFIO_PCI_IGD_DT)	+= vfio-pci/
+ obj-y					+= vfio-mdev/
+ subdir-$(CONFIG_SAMPLE_VFS)		+= vfs
+diff --git a/samples/vfio-pci/Makefile b/samples/vfio-pci/Makefile
+new file mode 100644
+index 000000000000..4b8acc145d65
+--- /dev/null
++++ b/samples/vfio-pci/Makefile
+@@ -0,0 +1,2 @@
++# SPDX-License-Identifier: GPL-2.0-only
++obj-$(CONFIG_SAMPLE_VFIO_PCI_IGD_DT) += igd_dt.o
+diff --git a/samples/vfio-pci/igd_dt.c b/samples/vfio-pci/igd_dt.c
+new file mode 100644
+index 000000000000..857e8d01b0d1
+--- /dev/null
++++ b/samples/vfio-pci/igd_dt.c
+@@ -0,0 +1,191 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Dynamic trap IGD device that bound to vfio-pci device driver
++ * Copyright(c) 2019 Intel Corporation.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ */
++
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/device.h>
++#include <linux/kernel.h>
++#include <linux/vfio.h>
++#include <linux/sysfs.h>
++#include <linux/file.h>
++#include <linux/pci.h>
++#include <linux/eventfd.h>
++
++#define VERSION_STRING  "0.1"
++#define DRIVER_AUTHOR   "Intel Corporation"
++
++/* helper macros copied from vfio-pci */
++#define VFIO_PCI_OFFSET_SHIFT   40
++#define VFIO_PCI_OFFSET_TO_INDEX(off)   ((off) >> VFIO_PCI_OFFSET_SHIFT)
++#define VFIO_PCI_OFFSET_MASK    (((u64)(1) << VFIO_PCI_OFFSET_SHIFT) - 1)
++
++/* This driver supports to open max 256 device devices */
++#define MAX_OPEN_DEVICE 256
++
++/*
++ * below are pciids of two IGD devices supported in this driver
++ * It is only for demo purpose.
++ * You can add more device ids in this list to support any pci devices
++ * that you want to dynamically trap its pci bars
++ */
++static const struct pci_device_id pciidlist[] = {
++	{0x8086, 0x5927, ~0, ~0, 0x30000, 0xff0000, 0},
++	{0x8086, 0x193b, ~0, ~0, 0x30000, 0xff0000, 0},
++};
++
++static long igd_device_bits[MAX_OPEN_DEVICE/BITS_PER_LONG + 1];
++static DEFINE_MUTEX(device_bit_lock);
++
++struct igd_dt_device {
++	__u32 vendor;
++	__u32 device;
++	__u32 handle;
++};
++
++static struct igd_dt_device *igd_device_array[MAX_OPEN_DEVICE];
++
++int igd_dt_open(struct pci_dev *pdev, u64 *caps, u32 *mediate_handle)
++{
++	int supported_dev_cnt = sizeof(pciidlist)/sizeof(struct pci_device_id);
++	int i, ret = 0;
++	struct igd_dt_device *igd_device;
++	int handle;
++
++	if (!try_module_get(THIS_MODULE))
++		return -ENODEV;
++
++	for (i = 0; i < supported_dev_cnt; i++) {
++		if (pciidlist[i].vendor == pdev->vendor &&
++				pciidlist[i].device == pdev->device)
++			goto support;
++	}
++
++	module_put(THIS_MODULE);
++	return -ENODEV;
++
++support:
++	mutex_lock(&device_bit_lock);
++	handle = find_next_zero_bit(igd_device_bits, MAX_OPEN_DEVICE, 0);
++	if (handle >= MAX_OPEN_DEVICE) {
++		ret = -EBUSY;
++		goto error;
++	}
++
++	igd_device = kzalloc(sizeof(*igd_device), GFP_KERNEL);
++
++	if (!igd_device) {
++		ret = -ENOMEM;
++		goto error;
++	}
++
++	igd_device->vendor = pdev->vendor;
++	igd_device->device = pdev->device;
++	igd_device->handle = handle;
++	igd_device_array[handle] = igd_device;
++	set_bit(handle, igd_device_bits);
++
++	pr_info("%s open device %x %x, handle=%x\n", __func__,
++			pdev->vendor, pdev->device, handle);
++
++	*mediate_handle = handle;
++
++error:
++	mutex_unlock(&device_bit_lock);
++	if (ret < 0)
++		module_put(THIS_MODULE);
++	return ret;
++}
++
++void igd_dt_release(int handle)
++{
++	struct igd_dt_device *igd_device;
++
++	mutex_lock(&device_bit_lock);
++
++	if (handle >= MAX_OPEN_DEVICE || !igd_device_array[handle] ||
++			!test_bit(handle, igd_device_bits)) {
++		pr_err("handle mismatch, please check interaction with vfio-pci module\n");
++		mutex_unlock(&device_bit_lock);
++		return;
++	}
++
++	igd_device = igd_device_array[handle];
++	igd_device_array[handle] = NULL;
++	clear_bit(handle, igd_device_bits);
++	mutex_unlock(&device_bit_lock);
++
++	pr_info("release: handle=%d, igd_device VID DID =%x %x\n",
++			handle, igd_device->vendor, igd_device->device);
++
++
++	kfree(igd_device);
++	module_put(THIS_MODULE);
++
++}
++
++static void igd_dt_get_region_info(int handle,
++		struct vfio_region_info *info,
++		struct vfio_info_cap *caps,
++		struct vfio_region_info_cap_type *cap_type)
++{
++}
++
++static ssize_t igd_dt_rw(int handle, char __user *buf,
++			   size_t count, loff_t *ppos,
++			   bool iswrite, bool *pt)
++{
++	*pt = true;
++
++	return 0;
++}
++
++static int igd_dt_mmap(int handle, struct vm_area_struct *vma, bool *pt)
++{
++	*pt = true;
++
++	return 0;
++}
++
++
++static struct vfio_pci_mediate_ops igd_dt_ops = {
++	.name = "IGD dt",
++	.open = igd_dt_open,
++	.release = igd_dt_release,
++	.get_region_info = igd_dt_get_region_info,
++	.rw = igd_dt_rw,
++	.mmap = igd_dt_mmap,
++};
++
++
++static int __init igd_dt_init(void)
++{
++	int ret = 0;
++
++	pr_info("igd_dt: %s\n", __func__);
++
++	memset(igd_device_bits, 0, sizeof(igd_device_bits));
++	memset(igd_device_array, 0, sizeof(igd_device_array));
++	vfio_pci_register_mediate_ops(&igd_dt_ops);
++	return ret;
++}
++
++static void __exit igd_dt_exit(void)
++{
++	pr_info("igd_dt: Unloaded!\n");
++	vfio_pci_unregister_mediate_ops(&igd_dt_ops);
++}
++
++module_init(igd_dt_init)
++module_exit(igd_dt_exit)
++
++MODULE_LICENSE("GPL v2");
++MODULE_INFO(supported, "Sample driver that Dynamic Trap a passthoughed IGD bound to vfio-pci");
++MODULE_VERSION(VERSION_STRING);
++MODULE_AUTHOR(DRIVER_AUTHOR);
+
+From patchwork Thu Dec  5 03:27:20 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Yan Zhao <yan.y.zhao@intel.com>
+X-Patchwork-Id: 11274115
+Return-Path: <SRS0=8IBs=Z3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 382FD6C1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:35:38 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 16533214B2
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:35:38 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729012AbfLEDfe (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 4 Dec 2019 22:35:34 -0500
+Received: from mga01.intel.com ([192.55.52.88]:11098 "EHLO mga01.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728671AbfLEDfd (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 4 Dec 2019 22:35:33 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by fmsmga101.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 04 Dec 2019 19:35:33 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,279,1571727600";
+   d="scan'208";a="243095235"
+Received: from joy-optiplex-7040.sh.intel.com ([10.239.13.9])
+  by fmsmga002.fm.intel.com with ESMTP; 04 Dec 2019 19:35:30 -0800
+From: Yan Zhao <yan.y.zhao@intel.com>
+To: alex.williamson@redhat.com
+Cc: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        libvir-list@redhat.com, qemu-devel@nongnu.org, cohuck@redhat.com,
+        zhenyuw@linux.intel.com, zhi.a.wang@intel.com,
+        kevin.tian@intel.com, shaopeng.he@intel.com,
+        Yan Zhao <yan.y.zhao@intel.com>
+Subject: [RFC PATCH 6/9] sample/vfio-pci/igd_dt: dynamically trap/untrap
+ subregion of IGD bar0
+Date: Wed,  4 Dec 2019 22:27:20 -0500
+Message-Id: <20191205032720.29888-1-yan.y.zhao@intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191205032419.29606-1-yan.y.zhao@intel.com>
+References: <20191205032419.29606-1-yan.y.zhao@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This sample code first returns device
+cap |= VFIO_PCI_DEVICE_CAP_DYNAMIC_TRAP_BAR, so that vfio-pci driver
+would create for it a dynamic-trap-bar-info region
+(of type VFIO_REGION_TYPE_DYNAMIC_TRAP_BAR_INFO and
+subtype VFIO_REGION_SUBTYPE_DYNAMIC_TRAP_BAR_INFO)
+
+Then in igd_dt_get_region_info(), this sample driver will customize the
+size of dynamic-trap-bar-info region.
+Also, this sample driver customizes BAR 0 region to be sparse mmaped
+(only passthrough subregion from BAR0_DYNAMIC_TRAP_OFFSET of size
+BAR0_DYNAMIC_TRAP_SIZE) and set this sparse mmaped subregion as disablable.
+
+Then when QEMU detects the dynamic trap bar info region, it will create
+an eventfd and write its fd into 'dt_fd' field of this region.
+
+When BAR0's registers below BAR0_DYNAMIC_TRAP_OFFSET is trapped, it will
+signal the eventfd to notify QEMU to read 'trap' field of dynamic trap bar
+info region  and put previously passthroughed subregion to be trapped.
+After registers within BAR0_DYNAMIC_TRAP_OFFSET and
+BAR0_DYNAMIC_TRAP_SIZE are trapped, this sample driver notifies QEMU via
+eventfd to passthrough this subregion again.
+
+Cc: Kevin Tian <kevin.tian@intel.com>
+
+Signed-off-by: Yan Zhao <yan.y.zhao@intel.com>
+---
+ samples/vfio-pci/igd_dt.c | 176 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 176 insertions(+)
+
+diff --git a/samples/vfio-pci/igd_dt.c b/samples/vfio-pci/igd_dt.c
+index 857e8d01b0d1..58ef110917f1 100644
+--- a/samples/vfio-pci/igd_dt.c
++++ b/samples/vfio-pci/igd_dt.c
+@@ -29,6 +29,9 @@
+ /* This driver supports to open max 256 device devices */
+ #define MAX_OPEN_DEVICE 256
+ 
++#define BAR0_DYNAMIC_TRAP_OFFSET (32*1024)
++#define BAR0_DYNAMIC_TRAP_SIZE (32*1024)
++
+ /*
+  * below are pciids of two IGD devices supported in this driver
+  * It is only for demo purpose.
+@@ -47,10 +50,30 @@ struct igd_dt_device {
+ 	__u32 vendor;
+ 	__u32 device;
+ 	__u32 handle;
++
++	__u64 dt_region_index;
++	struct eventfd_ctx *dt_trigger;
++	bool is_highend_trapped;
++	bool is_trap_triggered;
+ };
+ 
+ static struct igd_dt_device *igd_device_array[MAX_OPEN_DEVICE];
+ 
++static bool is_handle_valid(int handle)
++{
++	mutex_lock(&device_bit_lock);
++
++	if (handle >= MAX_OPEN_DEVICE || !igd_device_array[handle] ||
++			!test_bit(handle, igd_device_bits)) {
++		pr_err("%s: handle mismatch, please check interaction with vfio-pci module\n",
++				__func__);
++		mutex_unlock(&device_bit_lock);
++		return false;
++	}
++	mutex_unlock(&device_bit_lock);
++	return true;
++}
++
+ int igd_dt_open(struct pci_dev *pdev, u64 *caps, u32 *mediate_handle)
+ {
+ 	int supported_dev_cnt = sizeof(pciidlist)/sizeof(struct pci_device_id);
+@@ -88,6 +111,7 @@ int igd_dt_open(struct pci_dev *pdev, u64 *caps, u32 *mediate_handle)
+ 	igd_device->vendor = pdev->vendor;
+ 	igd_device->device = pdev->device;
+ 	igd_device->handle = handle;
++	igd_device->dt_region_index = -1;
+ 	igd_device_array[handle] = igd_device;
+ 	set_bit(handle, igd_device_bits);
+ 
+@@ -95,6 +119,7 @@ int igd_dt_open(struct pci_dev *pdev, u64 *caps, u32 *mediate_handle)
+ 			pdev->vendor, pdev->device, handle);
+ 
+ 	*mediate_handle = handle;
++	*caps |= VFIO_PCI_DEVICE_CAP_DYNAMIC_TRAP_BAR;
+ 
+ error:
+ 	mutex_unlock(&device_bit_lock);
+@@ -135,14 +160,165 @@ static void igd_dt_get_region_info(int handle,
+ 		struct vfio_info_cap *caps,
+ 		struct vfio_region_info_cap_type *cap_type)
+ {
++	struct vfio_region_info_cap_sparse_mmap *sparse;
++	size_t size;
++	int nr_areas, ret;
++
++	if (!is_handle_valid(handle))
++		return;
++
++	switch (info->index) {
++	case VFIO_PCI_BAR0_REGION_INDEX:
++		info->flags |= VFIO_REGION_INFO_FLAG_MMAP;
++		nr_areas = 1;
++
++		size = sizeof(*sparse) + (nr_areas * sizeof(*sparse->areas));
++
++		sparse = kzalloc(size, GFP_KERNEL);
++		if (!sparse)
++			return;
++
++		sparse->header.id = VFIO_REGION_INFO_CAP_SPARSE_MMAP;
++		sparse->header.version = 1;
++		sparse->nr_areas = nr_areas;
++
++		sparse->areas[0].offset = BAR0_DYNAMIC_TRAP_OFFSET;
++		sparse->areas[0].size = BAR0_DYNAMIC_TRAP_SIZE;
++		sparse->areas[0].disablable = 1;//able to get disabled
++
++		ret = vfio_info_add_capability(caps, &sparse->header,
++				size);
++		kfree(sparse);
++		break;
++	case VFIO_PCI_BAR1_REGION_INDEX ... VFIO_PCI_BAR5_REGION_INDEX:
++	case VFIO_PCI_CONFIG_REGION_INDEX:
++	case VFIO_PCI_ROM_REGION_INDEX:
++	case VFIO_PCI_VGA_REGION_INDEX:
++		break;
++	default:
++		if ((cap_type->type ==
++			VFIO_REGION_TYPE_DYNAMIC_TRAP_BAR_INFO) &&
++			(cap_type->subtype ==
++			 VFIO_REGION_SUBTYPE_DYNAMIC_TRAP_BAR_INFO)){
++			struct igd_dt_device *igd_device;
++
++			igd_device = igd_device_array[handle];
++			igd_device->dt_region_index = info->index;
++			info->size =
++				sizeof(struct vfio_device_dt_bar_info_region);
++		}
++	}
++}
++
++static
++void igd_dt_set_bar_mmap_enabled(struct igd_dt_device *igd_device,
++							bool enabled)
++{
++	bool disable_bar = !enabled;
++
++	if (igd_device->is_highend_trapped == disable_bar)
++		return;
++
++	igd_device->is_highend_trapped = disable_bar;
++
++	if (igd_device->dt_trigger)
++		eventfd_signal(igd_device->dt_trigger, 1);
++}
++
++static ssize_t igd_dt_dt_region_rw(struct igd_dt_device *igd_device,
++				char __user *buf, size_t count,
++				loff_t *ppos, bool iswrite, bool *pt)
++{
++#define DT_REGION_OFFSET(x) offsetof(struct vfio_device_dt_bar_info_region, x)
++	u64 pos = *ppos & VFIO_PCI_OFFSET_MASK;
++
++	*pt = false;
++	switch (pos) {
++	case DT_REGION_OFFSET(dt_fd):
++		if (iswrite) {
++			u32 dt_fd;
++			struct eventfd_ctx *trigger;
++
++			if (copy_from_user(&dt_fd, buf,
++						sizeof(dt_fd)))
++				return -EFAULT;
++
++			trigger = eventfd_ctx_fdget(dt_fd);
++			pr_info("igd_dt_rw, dt trigger fd %d\n",
++					dt_fd);
++			if (IS_ERR(trigger)) {
++				pr_err("igd_dt_rw, dt trigger fd set error\n");
++				return -EINVAL;
++			}
++			igd_device->dt_trigger = trigger;
++			return sizeof(dt_fd);
++		} else
++			return -EFAULT;
++	case DT_REGION_OFFSET(trap):
++		if (iswrite)
++			return -EFAULT;
++		else
++			return copy_to_user(buf,
++					&igd_device->is_highend_trapped,
++					sizeof(u32)) ?
++				-EFAULT : count;
++		break;
++	default:
++		return -EFAULT;
++	}
+ }
+ 
+ static ssize_t igd_dt_rw(int handle, char __user *buf,
+ 			   size_t count, loff_t *ppos,
+ 			   bool iswrite, bool *pt)
+ {
++	unsigned int index = VFIO_PCI_OFFSET_TO_INDEX(*ppos);
++	struct igd_dt_device *igd_device;
++	u64 pos = *ppos & VFIO_PCI_OFFSET_MASK;
++
+ 	*pt = true;
+ 
++	if (!is_handle_valid(handle))
++		return -EFAULT;
++
++	igd_device = igd_device_array[handle];
++
++	switch (index) {
++	case VFIO_PCI_BAR0_REGION_INDEX:
++		/*
++		 * disable passthroughed subregion
++		 * on lower end write trapped
++		 */
++		if (pos < BAR0_DYNAMIC_TRAP_OFFSET &&
++				!igd_device->is_trap_triggered) {
++			pr_info("igd_dt bar 0 lowend rw trapped, trap highend\n");
++			igd_device->is_trap_triggered = true;
++			igd_dt_set_bar_mmap_enabled(igd_device, false);
++		}
++
++		/*
++		 * re-enable passthroughed subregion
++		 * on high end write trapped
++		 */
++		if (pos >= BAR0_DYNAMIC_TRAP_OFFSET &&
++				pos <= (BAR0_DYNAMIC_TRAP_OFFSET +
++					BAR0_DYNAMIC_TRAP_SIZE)) {
++			pr_info("igd_dt bar 0 higher end rw trapped, pt higher end\n");
++			igd_dt_set_bar_mmap_enabled(igd_device, true);
++		}
++
++		break;
++	case VFIO_PCI_BAR1_REGION_INDEX ... VFIO_PCI_BAR5_REGION_INDEX:
++	case VFIO_PCI_CONFIG_REGION_INDEX:
++	case VFIO_PCI_ROM_REGION_INDEX:
++	case VFIO_PCI_VGA_REGION_INDEX:
++		break;
++	default:
++		if (index == igd_device->dt_region_index)
++			return igd_dt_dt_region_rw(igd_device, buf,
++					count, ppos, iswrite, pt);
++	}
++
+ 	return 0;
+ }
+ 
+
+From patchwork Thu Dec  5 03:27:29 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Yan Zhao <yan.y.zhao@intel.com>
+X-Patchwork-Id: 11274117
+Return-Path: <SRS0=8IBs=Z3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3C744930
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:35:50 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 1256921835
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:35:50 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729029AbfLEDfq (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 4 Dec 2019 22:35:46 -0500
+Received: from mga05.intel.com ([192.55.52.43]:19480 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728374AbfLEDfq (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 4 Dec 2019 22:35:46 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 04 Dec 2019 19:35:45 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,279,1571727600";
+   d="scan'208";a="243095260"
+Received: from joy-optiplex-7040.sh.intel.com ([10.239.13.9])
+  by fmsmga002.fm.intel.com with ESMTP; 04 Dec 2019 19:35:43 -0800
+From: Yan Zhao <yan.y.zhao@intel.com>
+To: alex.williamson@redhat.com
+Cc: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        libvir-list@redhat.com, qemu-devel@nongnu.org, cohuck@redhat.com,
+        zhenyuw@linux.intel.com, zhi.a.wang@intel.com,
+        kevin.tian@intel.com, shaopeng.he@intel.com,
+        Yan Zhao <yan.y.zhao@intel.com>
+Subject: [RFC PATCH 7/9] i40e/vf_migration: register mediate_ops to vfio-pci
+Date: Wed,  4 Dec 2019 22:27:29 -0500
+Message-Id: <20191205032729.29936-1-yan.y.zhao@intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191205032419.29606-1-yan.y.zhao@intel.com>
+References: <20191205032419.29606-1-yan.y.zhao@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+register to vfio-pci vfio_pci_mediate_ops when i40e binds to PF to
+support mediating of VF's vfio-pci ops.
+unregister vfio_pci_mediate_ops when i40e unbinds from PF.
+
+vfio_pci_mediate_ops->open will return success if the device passed in
+equals to devfn of its VFs
+
+Cc: Shaopeng He <shaopeng.he@intel.com>
+
+Signed-off-by: Yan Zhao <yan.y.zhao@intel.com>
+---
+ drivers/net/ethernet/intel/Kconfig            |   2 +-
+ drivers/net/ethernet/intel/i40e/Makefile      |   3 +-
+ drivers/net/ethernet/intel/i40e/i40e.h        |   2 +
+ drivers/net/ethernet/intel/i40e/i40e_main.c   |   3 +
+ .../ethernet/intel/i40e/i40e_vf_migration.c   | 169 ++++++++++++++++++
+ .../ethernet/intel/i40e/i40e_vf_migration.h   |  52 ++++++
+ 6 files changed, 229 insertions(+), 2 deletions(-)
+ create mode 100644 drivers/net/ethernet/intel/i40e/i40e_vf_migration.c
+ create mode 100644 drivers/net/ethernet/intel/i40e/i40e_vf_migration.h
+
+diff --git a/drivers/net/ethernet/intel/Kconfig b/drivers/net/ethernet/intel/Kconfig
+index 154e2e818ec6..b5c7fdf55380 100644
+--- a/drivers/net/ethernet/intel/Kconfig
++++ b/drivers/net/ethernet/intel/Kconfig
+@@ -240,7 +240,7 @@ config IXGBEVF_IPSEC
+ config I40E
+ 	tristate "Intel(R) Ethernet Controller XL710 Family support"
+ 	imply PTP_1588_CLOCK
+-	depends on PCI
++	depends on PCI && VFIO_PCI
+ 	---help---
+ 	  This driver supports Intel(R) Ethernet Controller XL710 Family of
+ 	  devices.  For more information on how to identify your adapter, go
+diff --git a/drivers/net/ethernet/intel/i40e/Makefile b/drivers/net/ethernet/intel/i40e/Makefile
+index 2f21b3e89fd0..ae7a6a23dba9 100644
+--- a/drivers/net/ethernet/intel/i40e/Makefile
++++ b/drivers/net/ethernet/intel/i40e/Makefile
+@@ -24,6 +24,7 @@ i40e-objs := i40e_main.o \
+ 	i40e_ddp.o \
+ 	i40e_client.o   \
+ 	i40e_virtchnl_pf.o \
+-	i40e_xsk.o
++	i40e_xsk.o	\
++	i40e_vf_migration.o
+ 
+ i40e-$(CONFIG_I40E_DCB) += i40e_dcb.o i40e_dcb_nl.o
+diff --git a/drivers/net/ethernet/intel/i40e/i40e.h b/drivers/net/ethernet/intel/i40e/i40e.h
+index 2af9f6308f84..0141c94b835f 100644
+--- a/drivers/net/ethernet/intel/i40e/i40e.h
++++ b/drivers/net/ethernet/intel/i40e/i40e.h
+@@ -1162,4 +1162,6 @@ int i40e_add_del_cloud_filter(struct i40e_vsi *vsi,
+ int i40e_add_del_cloud_filter_big_buf(struct i40e_vsi *vsi,
+ 				      struct i40e_cloud_filter *filter,
+ 				      bool add);
++int i40e_vf_migration_register(void);
++void i40e_vf_migration_unregister(void);
+ #endif /* _I40E_H_ */
+diff --git a/drivers/net/ethernet/intel/i40e/i40e_main.c b/drivers/net/ethernet/intel/i40e/i40e_main.c
+index 6031223eafab..92d1c3fdc808 100644
+--- a/drivers/net/ethernet/intel/i40e/i40e_main.c
++++ b/drivers/net/ethernet/intel/i40e/i40e_main.c
+@@ -15274,6 +15274,7 @@ static int i40e_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+ 	/* print a string summarizing features */
+ 	i40e_print_features(pf);
+ 
++	i40e_vf_migration_register();
+ 	return 0;
+ 
+ 	/* Unwind what we've done if something failed in the setup */
+@@ -15320,6 +15321,8 @@ static void i40e_remove(struct pci_dev *pdev)
+ 	i40e_status ret_code;
+ 	int i;
+ 
++	i40e_vf_migration_unregister();
++
+ 	i40e_dbg_pf_exit(pf);
+ 
+ 	i40e_ptp_stop(pf);
+diff --git a/drivers/net/ethernet/intel/i40e/i40e_vf_migration.c b/drivers/net/ethernet/intel/i40e/i40e_vf_migration.c
+new file mode 100644
+index 000000000000..b2d913459600
+--- /dev/null
++++ b/drivers/net/ethernet/intel/i40e/i40e_vf_migration.c
+@@ -0,0 +1,169 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright(c) 2013 - 2019 Intel Corporation. */
++
++#include <linux/module.h>
++#include <linux/device.h>
++#include <linux/vfio.h>
++#include <linux/pci.h>
++#include <linux/eventfd.h>
++
++#include "i40e.h"
++#include "i40e_vf_migration.h"
++
++static long open_device_bits[MAX_OPEN_DEVICE / BITS_PER_LONG + 1];
++static DEFINE_MUTEX(device_bit_lock);
++static struct i40e_vf_migration *i40e_vf_dev_array[MAX_OPEN_DEVICE];
++
++int i40e_vf_migration_open(struct pci_dev *pdev, u64 *caps, u32 *dm_handle)
++{
++	int i, ret = 0;
++	struct i40e_vf_migration *i40e_vf_dev = NULL;
++	int handle;
++	struct pci_dev *pf_dev, *vf_dev;
++	struct i40e_pf *pf;
++	struct i40e_vf *vf;
++	unsigned int vf_devfn, devfn;
++	int vf_id = -1;
++
++	if (!try_module_get(THIS_MODULE))
++		return -ENODEV;
++
++	pf_dev = pdev->physfn;
++	pf = pci_get_drvdata(pf_dev);
++	vf_dev = pdev;
++	vf_devfn = vf_dev->devfn;
++
++	for (i = 0; i < pci_num_vf(pf_dev); i++) {
++		devfn = (pf_dev->devfn + pf_dev->sriov->offset +
++			 pf_dev->sriov->stride * i) & 0xff;
++		if (devfn == vf_devfn) {
++			vf_id = i;
++			break;
++		}
++	}
++
++	if (vf_id == -1) {
++		ret = -EINVAL;
++		goto out;
++	}
++
++	mutex_lock(&device_bit_lock);
++	handle = find_next_zero_bit(open_device_bits, MAX_OPEN_DEVICE, 0);
++	if (handle >= MAX_OPEN_DEVICE) {
++		ret = -EBUSY;
++		goto error;
++	}
++
++	i40e_vf_dev = kzalloc(sizeof(*i40e_vf_dev), GFP_KERNEL);
++
++	if (!i40e_vf_dev) {
++		ret = -ENOMEM;
++		goto error;
++	}
++
++	i40e_vf_dev->vf_id = vf_id;
++	i40e_vf_dev->vf_vendor = pdev->vendor;
++	i40e_vf_dev->vf_device = pdev->device;
++	i40e_vf_dev->pf_dev = pf_dev;
++	i40e_vf_dev->vf_dev = vf_dev;
++	i40e_vf_dev->handle = handle;
++
++	pr_info("%s: device %x %x, vf id %d, handle=%x\n",
++		__func__, pdev->vendor, pdev->device, vf_id, handle);
++
++	i40e_vf_dev_array[handle] = i40e_vf_dev;
++	set_bit(handle, open_device_bits);
++	vf = &pf->vf[vf_id];
++	*dm_handle = handle;
++error:
++	mutex_unlock(&device_bit_lock);
++
++	if (ret < 0) {
++		module_put(THIS_MODULE);
++		kfree(i40e_vf_dev);
++	}
++
++out:
++	return ret;
++}
++
++void i40e_vf_migration_release(int handle)
++{
++	struct i40e_vf_migration *i40e_vf_dev;
++
++	mutex_lock(&device_bit_lock);
++
++	if (handle >= MAX_OPEN_DEVICE ||
++	    !i40e_vf_dev_array[handle] ||
++	    !test_bit(handle, open_device_bits)) {
++		pr_err("handle mismatch, please check interaction with vfio-pci module\n");
++		mutex_unlock(&device_bit_lock);
++		return;
++	}
++
++	i40e_vf_dev = i40e_vf_dev_array[handle];
++	i40e_vf_dev_array[handle] = NULL;
++
++	clear_bit(handle, open_device_bits);
++	mutex_unlock(&device_bit_lock);
++
++	pr_info("%s: handle=%d, i40e_vf_dev VID DID =%x %x, vf id=%d\n",
++		__func__, handle,
++		i40e_vf_dev->vf_vendor, i40e_vf_dev->vf_device,
++		i40e_vf_dev->vf_id);
++
++	kfree(i40e_vf_dev);
++	module_put(THIS_MODULE);
++}
++
++static void
++i40e_vf_migration_get_region_info(int handle,
++				  struct vfio_region_info *info,
++				  struct vfio_info_cap *caps,
++				  struct vfio_region_info_cap_type *cap_type)
++{
++}
++
++static ssize_t i40e_vf_migration_rw(int handle, char __user *buf,
++				    size_t count, loff_t *ppos,
++				    bool iswrite, bool *pt)
++{
++	*pt = true;
++
++	return 0;
++}
++
++static int i40e_vf_migration_mmap(int handle, struct vm_area_struct *vma,
++				  bool *pt)
++{
++	*pt = true;
++	return 0;
++}
++
++static struct vfio_pci_mediate_ops i40e_vf_migration_ops = {
++	.name = "i40e_vf",
++	.open = i40e_vf_migration_open,
++	.release = i40e_vf_migration_release,
++	.get_region_info = i40e_vf_migration_get_region_info,
++	.rw = i40e_vf_migration_rw,
++	.mmap = i40e_vf_migration_mmap,
++};
++
++int i40e_vf_migration_register(void)
++{
++	int ret = 0;
++
++	pr_info("%s\n", __func__);
++
++	memset(open_device_bits, 0, sizeof(open_device_bits));
++	memset(i40e_vf_dev_array, 0, sizeof(i40e_vf_dev_array));
++	vfio_pci_register_mediate_ops(&i40e_vf_migration_ops);
++
++	return ret;
++}
++
++void i40e_vf_migration_unregister(void)
++{
++	pr_info("%s\n", __func__);
++	vfio_pci_unregister_mediate_ops(&i40e_vf_migration_ops);
++}
+diff --git a/drivers/net/ethernet/intel/i40e/i40e_vf_migration.h b/drivers/net/ethernet/intel/i40e/i40e_vf_migration.h
+new file mode 100644
+index 000000000000..b195399b6788
+--- /dev/null
++++ b/drivers/net/ethernet/intel/i40e/i40e_vf_migration.h
+@@ -0,0 +1,52 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/* Copyright(c) 2013 - 2019 Intel Corporation. */
++
++#ifndef I40E_MIG_H
++#define I40E_MIG_H
++
++#include <linux/pci.h>
++#include <linux/vfio.h>
++#include <linux/mdev.h>
++
++#include "i40e.h"
++#include "i40e_txrx.h"
++
++#define MAX_OPEN_DEVICE 1024
++
++/* Single Root I/O Virtualization */
++struct pci_sriov {
++	int		pos;		/* Capability position */
++	int		nres;		/* Number of resources */
++	u32		cap;		/* SR-IOV Capabilities */
++	u16		ctrl;		/* SR-IOV Control */
++	u16		total_VFs;	/* Total VFs associated with the PF */
++	u16		initial_VFs;	/* Initial VFs associated with the PF */
++	u16		num_VFs;	/* Number of VFs available */
++	u16		offset;		/* First VF Routing ID offset */
++	u16		stride;		/* Following VF stride */
++	u16		vf_device;	/* VF device ID */
++	u32		pgsz;		/* Page size for BAR alignment */
++	u8		link;		/* Function Dependency Link */
++	u8		max_VF_buses;	/* Max buses consumed by VFs */
++	u16		driver_max_VFs;	/* Max num VFs driver supports */
++	struct pci_dev	*dev;		/* Lowest numbered PF */
++	struct pci_dev	*self;		/* This PF */
++	u32		cfg_size;	/* VF config space size */
++	u32		class;		/* VF device */
++	u8		hdr_type;	/* VF header type */
++	u16		subsystem_vendor; /* VF subsystem vendor */
++	u16		subsystem_device; /* VF subsystem device */
++	resource_size_t	barsz[PCI_SRIOV_NUM_BARS];	/* VF BAR size */
++	bool		drivers_autoprobe; /* Auto probing of VFs by driver */
++};
++
++struct i40e_vf_migration {
++	__u32 vf_vendor;
++	__u32 vf_device;
++	__u32 handle;
++	struct pci_dev *pf_dev;
++	struct pci_dev *vf_dev;
++	int vf_id;
++};
++#endif /* I40E_MIG_H */
++
+
+From patchwork Thu Dec  5 03:27:41 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Yan Zhao <yan.y.zhao@intel.com>
+X-Patchwork-Id: 11274119
+Return-Path: <SRS0=8IBs=Z3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 44DA7930
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:35:59 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 19FA82073B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:35:59 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729049AbfLEDfz (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 4 Dec 2019 22:35:55 -0500
+Received: from mga11.intel.com ([192.55.52.93]:22313 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728895AbfLEDfz (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 4 Dec 2019 22:35:55 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 04 Dec 2019 19:35:54 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,279,1571727600";
+   d="scan'208";a="243095279"
+Received: from joy-optiplex-7040.sh.intel.com ([10.239.13.9])
+  by fmsmga002.fm.intel.com with ESMTP; 04 Dec 2019 19:35:52 -0800
+From: Yan Zhao <yan.y.zhao@intel.com>
+To: alex.williamson@redhat.com
+Cc: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        libvir-list@redhat.com, qemu-devel@nongnu.org, cohuck@redhat.com,
+        zhenyuw@linux.intel.com, zhi.a.wang@intel.com,
+        kevin.tian@intel.com, shaopeng.he@intel.com,
+        Yan Zhao <yan.y.zhao@intel.com>
+Subject: [RFC PATCH 8/9] i40e/vf_migration: mediate migration region
+Date: Wed,  4 Dec 2019 22:27:41 -0500
+Message-Id: <20191205032741.29983-1-yan.y.zhao@intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191205032419.29606-1-yan.y.zhao@intel.com>
+References: <20191205032419.29606-1-yan.y.zhao@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+in vfio_pci_mediate_ops->get_region_info(), migration region's len and
+flags are overridden and its region index is saved.
+
+vfio_pci_mediate_ops->rw() and vfio_pci_mediate_ops->mmap() overrides
+default rw/mmap for migration region.
+
+This is only a sample implementation in i440 vf migration to demonstrate
+how vf migration code will look like. The actual dirty page tracking and
+device state retrieving code would be sent in future. Currently only
+comments are used as placeholders.
+
+It's based on QEMU vfio migration code v8:
+(https://lists.gnu.org/archive/html/qemu-devel/2019-08/msg05542.html).
+
+Cc: Shaopeng He <shaopeng.he@intel.com>
+
+Signed-off-by: Yan Zhao <yan.y.zhao@intel.com>
+---
+ .../ethernet/intel/i40e/i40e_vf_migration.c   | 335 +++++++++++++++++-
+ .../ethernet/intel/i40e/i40e_vf_migration.h   |  14 +
+ 2 files changed, 345 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/i40e/i40e_vf_migration.c b/drivers/net/ethernet/intel/i40e/i40e_vf_migration.c
+index b2d913459600..5bb509fed66e 100644
+--- a/drivers/net/ethernet/intel/i40e/i40e_vf_migration.c
++++ b/drivers/net/ethernet/intel/i40e/i40e_vf_migration.c
+@@ -14,6 +14,55 @@ static long open_device_bits[MAX_OPEN_DEVICE / BITS_PER_LONG + 1];
+ static DEFINE_MUTEX(device_bit_lock);
+ static struct i40e_vf_migration *i40e_vf_dev_array[MAX_OPEN_DEVICE];
+ 
++static bool is_handle_valid(int handle)
++{
++	mutex_lock(&device_bit_lock);
++
++	if (handle >= MAX_OPEN_DEVICE || !i40e_vf_dev_array[handle] ||
++	    !test_bit(handle, open_device_bits)) {
++		pr_err("%s: handle mismatch, please check interaction with vfio-pci module\n",
++		       __func__);
++		mutex_unlock(&device_bit_lock);
++		return false;
++	}
++	mutex_unlock(&device_bit_lock);
++	return true;
++}
++
++static size_t set_device_state(struct i40e_vf_migration *i40e_vf_dev, u32 state)
++{
++	int ret = 0;
++	struct vfio_device_migration_info *mig_ctl = i40e_vf_dev->mig_ctl;
++
++	if (state == mig_ctl->device_state)
++		return ret;
++
++	switch (state) {
++	case VFIO_DEVICE_STATE_RUNNING:
++		break;
++	case VFIO_DEVICE_STATE_SAVING | VFIO_DEVICE_STATE_RUNNING:
++		// alloc dirty page tracking resources and
++		// do the first round dirty page scanning
++		break;
++	case VFIO_DEVICE_STATE_SAVING:
++		// do the last round of dirty page scanning
++		break;
++	case ~VFIO_DEVICE_STATE_MASK & VFIO_DEVICE_STATE_MASK:
++		// release dirty page tracking resources
++		//if (mig_ctl->device_state == VFIO_DEVICE_STATE_SAVING)
++		//	i40e_release_scan_resources(i40e_vf_dev);
++		break;
++	case VFIO_DEVICE_STATE_RESUMING:
++		break;
++	default:
++		ret = -EFAULT;
++	}
++
++	mig_ctl->device_state = state;
++
++	return ret;
++}
++
+ int i40e_vf_migration_open(struct pci_dev *pdev, u64 *caps, u32 *dm_handle)
+ {
+ 	int i, ret = 0;
+@@ -24,6 +73,8 @@ int i40e_vf_migration_open(struct pci_dev *pdev, u64 *caps, u32 *dm_handle)
+ 	struct i40e_vf *vf;
+ 	unsigned int vf_devfn, devfn;
+ 	int vf_id = -1;
++	struct vfio_device_migration_info *mig_ctl = NULL;
++	void *dirty_bitmap_base = NULL;
+ 
+ 	if (!try_module_get(THIS_MODULE))
+ 		return -ENODEV;
+@@ -68,18 +119,41 @@ int i40e_vf_migration_open(struct pci_dev *pdev, u64 *caps, u32 *dm_handle)
+ 	i40e_vf_dev->vf_dev = vf_dev;
+ 	i40e_vf_dev->handle = handle;
+ 
+-	pr_info("%s: device %x %x, vf id %d, handle=%x\n",
+-		__func__, pdev->vendor, pdev->device, vf_id, handle);
++	mig_ctl = kzalloc(sizeof(*mig_ctl), GFP_KERNEL);
++	if (!mig_ctl) {
++		ret = -ENOMEM;
++		goto error;
++	}
++
++	dirty_bitmap_base = vmalloc_user(MIGRATION_DIRTY_BITMAP_SIZE);
++	if (!dirty_bitmap_base) {
++		ret = -ENOMEM;
++		goto error;
++	}
++
++	i40e_vf_dev->dirty_bitmap = dirty_bitmap_base;
++	i40e_vf_dev->mig_ctl = mig_ctl;
++	i40e_vf_dev->migration_region_size = DIRTY_BITMAP_OFFSET +
++		MIGRATION_DIRTY_BITMAP_SIZE;
++	i40e_vf_dev->migration_region_index = -1;
++
++	vf = &pf->vf[vf_id];
+ 
+ 	i40e_vf_dev_array[handle] = i40e_vf_dev;
+ 	set_bit(handle, open_device_bits);
+-	vf = &pf->vf[vf_id];
+ 	*dm_handle = handle;
++
++	*caps |= VFIO_PCI_DEVICE_CAP_MIGRATION;
++
++	pr_info("%s: device %x %x, vf id %d, handle=%x\n",
++		__func__, pdev->vendor, pdev->device, vf_id, handle);
+ error:
+ 	mutex_unlock(&device_bit_lock);
+ 
+ 	if (ret < 0) {
+ 		module_put(THIS_MODULE);
++		kfree(mig_ctl);
++		vfree(dirty_bitmap_base);
+ 		kfree(i40e_vf_dev);
+ 	}
+ 
+@@ -112,32 +186,285 @@ void i40e_vf_migration_release(int handle)
+ 		i40e_vf_dev->vf_vendor, i40e_vf_dev->vf_device,
+ 		i40e_vf_dev->vf_id);
+ 
++	kfree(i40e_vf_dev->mig_ctl);
++	vfree(i40e_vf_dev->dirty_bitmap);
+ 	kfree(i40e_vf_dev);
++
+ 	module_put(THIS_MODULE);
+ }
+ 
++static void migration_region_sparse_mmap_cap(struct vfio_info_cap *caps)
++{
++	struct vfio_region_info_cap_sparse_mmap *sparse;
++	size_t size;
++	int nr_areas = 1;
++
++	size = sizeof(*sparse) + (nr_areas * sizeof(*sparse->areas));
++
++	sparse = kzalloc(size, GFP_KERNEL);
++	if (!sparse)
++		return;
++
++	sparse->header.id = VFIO_REGION_INFO_CAP_SPARSE_MMAP;
++	sparse->header.version = 1;
++	sparse->nr_areas = nr_areas;
++
++	sparse->areas[0].offset = DIRTY_BITMAP_OFFSET;
++	sparse->areas[0].size = MIGRATION_DIRTY_BITMAP_SIZE;
++
++	vfio_info_add_capability(caps, &sparse->header, size);
++	kfree(sparse);
++}
++
+ static void
+ i40e_vf_migration_get_region_info(int handle,
+ 				  struct vfio_region_info *info,
+ 				  struct vfio_info_cap *caps,
+ 				  struct vfio_region_info_cap_type *cap_type)
+ {
++	if (!is_handle_valid(handle))
++		return;
++
++	switch (info->index) {
++	case VFIO_PCI_BAR0_REGION_INDEX:
++		info->flags = VFIO_REGION_INFO_FLAG_READ |
++			VFIO_REGION_INFO_FLAG_WRITE;
++
++		break;
++	case VFIO_PCI_BAR1_REGION_INDEX ... VFIO_PCI_BAR5_REGION_INDEX:
++	case VFIO_PCI_CONFIG_REGION_INDEX:
++	case VFIO_PCI_ROM_REGION_INDEX:
++	case VFIO_PCI_VGA_REGION_INDEX:
++		break;
++	default:
++		if (cap_type->type == VFIO_REGION_TYPE_MIGRATION &&
++		    cap_type->subtype == VFIO_REGION_SUBTYPE_MIGRATION) {
++			struct i40e_vf_migration *i40e_vf_dev;
++
++			i40e_vf_dev = i40e_vf_dev_array[handle];
++			i40e_vf_dev->migration_region_index = info->index;
++			info->size = i40e_vf_dev->migration_region_size;
++
++			info->flags = VFIO_REGION_INFO_FLAG_CAPS |
++				VFIO_REGION_INFO_FLAG_READ |
++				VFIO_REGION_INFO_FLAG_WRITE |
++				VFIO_REGION_INFO_FLAG_MMAP;
++			migration_region_sparse_mmap_cap(caps);
++		}
++	}
++}
++
++static
++ssize_t i40e_vf_migration_region_rw(struct i40e_vf_migration *i40e_vf_dev,
++				    char __user *buf, size_t count,
++				    loff_t *ppos, bool iswrite, bool *pt)
++{
++#define VDM_OFFSET(x) offsetof(struct vfio_device_migration_info, x)
++	struct vfio_device_migration_info *mig_ctl = i40e_vf_dev->mig_ctl;
++	u64 pos = *ppos & VFIO_PCI_OFFSET_MASK;
++	ssize_t ret = 0;
++
++	*pt = false;
++	switch (pos) {
++	case VDM_OFFSET(device_state):
++		if (count != sizeof(mig_ctl->device_state))
++			return -EINVAL;
++
++		if (iswrite) {
++			u32 device_state;
++
++			if (copy_from_user(&device_state, buf, count))
++				return -EFAULT;
++
++			set_device_state(i40e_vf_dev, device_state);
++			ret = count;
++		} else {
++			ret = -EFAULT;
++		}
++		break;
++
++	case VDM_OFFSET(reserved):
++		ret = -EFAULT;
++		break;
++
++	case VDM_OFFSET(pending_bytes):
++		if (count != sizeof(mig_ctl->pending_bytes))
++			return -EINVAL;
++
++		if (iswrite) {
++			ret = -EFAULT;
++		} else {
++			u64 p_bytes = 0;
++
++			ret = copy_to_user(buf, &p_bytes, count) ?
++				-EFAULT : count;
++		}
++		break;
++
++	case VDM_OFFSET(data_offset):
++		if (count != sizeof(mig_ctl->data_offset))
++			return -EINVAL;
++
++		if (iswrite) {
++			ret = -EFAULT;
++		} else {
++			u64 d_off = DIRTY_BITMAP_OFFSET;
++			/* always return dirty bitmap offset
++			 * here as we don't support device
++			 * internal dirty data
++			 * and our pending_bytes always return 0
++			 */
++			ret = copy_to_user(buf, &d_off, count) ?
++					-EFAULT : count;
++		}
++		break;
++
++	case VDM_OFFSET(data_size):
++		if (count != sizeof(mig_ctl->data_size))
++			return -EINVAL;
++
++		if (iswrite)
++			ret = copy_from_user(&mig_ctl->data_size, buf,
++					     count) ? -EFAULT : count;
++		else
++			ret = copy_to_user(buf, &mig_ctl->data_size,
++					   count) ? -EFAULT : count;
++		break;
++
++	case VDM_OFFSET(start_pfn):
++		if (count != sizeof(mig_ctl->start_pfn))
++			return -EINVAL;
++
++		if (iswrite)
++			ret = copy_from_user(&mig_ctl->start_pfn, buf,
++					     count) ? -EFAULT : count;
++		else
++			ret = -EFAULT;
++		break;
++
++	case VDM_OFFSET(page_size):
++		if (count != sizeof(mig_ctl->page_size))
++			return -EINVAL;
++
++		if (iswrite)
++			ret = copy_from_user(&mig_ctl->page_size, buf,
++					     count) ? -EFAULT : count;
++		else
++			ret = -EFAULT;
++		break;
++
++	case VDM_OFFSET(total_pfns):
++		if (count != sizeof(mig_ctl->total_pfns))
++			return -EINVAL;
++
++		if (iswrite) {
++			if (copy_from_user(&mig_ctl->total_pfns, buf, count))
++				return -EFAULT;
++
++			//calc dirty page bitmap
++			ret = count;
++		} else {
++			ret = -EFAULT;
++		}
++		break;
++
++	case VDM_OFFSET(copied_pfns):
++		if (count != sizeof(mig_ctl->copied_pfns))
++			return -EINVAL;
++
++		if (iswrite)
++			ret = -EFAULT;
++		else
++			ret = copy_to_user(buf, &mig_ctl->copied_pfns,
++					   count) ? -EFAULT : count;
++		break;
++
++	case DIRTY_BITMAP_OFFSET:
++		if (count > MIGRATION_DIRTY_BITMAP_SIZE || count < 0)
++			return -EINVAL;
++
++		if (iswrite)
++			ret = -EFAULT;
++		else
++			ret = copy_to_user(buf, i40e_vf_dev->dirty_bitmap,
++					   count) ? -EFAULT : count;
++		break;
++	default:
++		ret = -EFAULT;
++		break;
++	}
++	return ret;
+ }
+ 
+ static ssize_t i40e_vf_migration_rw(int handle, char __user *buf,
+ 				    size_t count, loff_t *ppos,
+ 				    bool iswrite, bool *pt)
+ {
++	unsigned int index = VFIO_PCI_OFFSET_TO_INDEX(*ppos);
++	struct i40e_vf_migration *i40e_vf_dev;
++
+ 	*pt = true;
+ 
++	if (!is_handle_valid(handle))
++		return 0;
++
++	i40e_vf_dev = i40e_vf_dev_array[handle];
++
++	switch (index) {
++	case VFIO_PCI_BAR0_REGION_INDEX:
++		// scan dirty pages
++		break;
++	case VFIO_PCI_BAR1_REGION_INDEX ... VFIO_PCI_BAR5_REGION_INDEX:
++	case VFIO_PCI_CONFIG_REGION_INDEX:
++	case VFIO_PCI_ROM_REGION_INDEX:
++	case VFIO_PCI_VGA_REGION_INDEX:
++		break;
++	default:
++		if (index == i40e_vf_dev->migration_region_index) {
++			return i40e_vf_migration_region_rw(i40e_vf_dev, buf,
++					count, ppos, iswrite, pt);
++		}
++	}
+ 	return 0;
+ }
+ 
+ static int i40e_vf_migration_mmap(int handle, struct vm_area_struct *vma,
+ 				  bool *pt)
+ {
++	unsigned int index;
++	struct i40e_vf_migration *i40e_vf_dev;
++	unsigned long pgoff = 0;
++	void *base;
++
++	index = vma->vm_pgoff >> (VFIO_PCI_OFFSET_SHIFT - PAGE_SHIFT);
++
+ 	*pt = true;
+-	return 0;
++	if (!is_handle_valid(handle))
++		return -EINVAL;
++
++	i40e_vf_dev = i40e_vf_dev_array[handle];
++
++	if (index != i40e_vf_dev->migration_region_index)
++		return 0;
++
++	*pt = false;
++	base = i40e_vf_dev->dirty_bitmap;
++
++	if (vma->vm_end < vma->vm_start)
++		return -EINVAL;
++
++	if (!(vma->vm_flags & VM_SHARED))
++		return -EINVAL;
++
++	pgoff = vma->vm_pgoff &
++		((1U << (VFIO_PCI_OFFSET_SHIFT - PAGE_SHIFT)) - 1);
++
++	if (pgoff != DIRTY_BITMAP_OFFSET / PAGE_SIZE)
++		return -EINVAL;
++
++	pr_info("%s, handle=%d, vf_id=%d, pgoff %lx\n", __func__,
++		handle, i40e_vf_dev->vf_id, pgoff);
++	return remap_vmalloc_range(vma, base, 0);
+ }
+ 
+ static struct vfio_pci_mediate_ops i40e_vf_migration_ops = {
+diff --git a/drivers/net/ethernet/intel/i40e/i40e_vf_migration.h b/drivers/net/ethernet/intel/i40e/i40e_vf_migration.h
+index b195399b6788..b31b500b3cd6 100644
+--- a/drivers/net/ethernet/intel/i40e/i40e_vf_migration.h
++++ b/drivers/net/ethernet/intel/i40e/i40e_vf_migration.h
+@@ -11,8 +11,16 @@
+ #include "i40e.h"
+ #include "i40e_txrx.h"
+ 
++/* helper macros copied from vfio-pci */
++#define VFIO_PCI_OFFSET_SHIFT   40
++#define VFIO_PCI_OFFSET_TO_INDEX(off)   ((off) >> VFIO_PCI_OFFSET_SHIFT)
++#define VFIO_PCI_OFFSET_MASK    (((u64)(1) << VFIO_PCI_OFFSET_SHIFT) - 1)
+ #define MAX_OPEN_DEVICE 1024
+ 
++#define DIRTY_BITMAP_OFFSET \
++		PAGE_ALIGN(sizeof(struct vfio_device_migration_info))
++#define MIGRATION_DIRTY_BITMAP_SIZE (64 * 1024UL)
++
+ /* Single Root I/O Virtualization */
+ struct pci_sriov {
+ 	int		pos;		/* Capability position */
+@@ -47,6 +55,12 @@ struct i40e_vf_migration {
+ 	struct pci_dev *pf_dev;
+ 	struct pci_dev *vf_dev;
+ 	int vf_id;
++
++	__u64 migration_region_index;
++	__u64 migration_region_size;
++
++	struct vfio_device_migration_info *mig_ctl;
++	void *dirty_bitmap;
+ };
+ #endif /* I40E_MIG_H */
+ 
+
+From patchwork Thu Dec  5 03:27:49 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Yan Zhao <yan.y.zhao@intel.com>
+X-Patchwork-Id: 11274121
+Return-Path: <SRS0=8IBs=Z3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id ECA516C1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:36:07 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id CB31B21835
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Dec 2019 03:36:07 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729068AbfLEDgD (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 4 Dec 2019 22:36:03 -0500
+Received: from mga09.intel.com ([134.134.136.24]:38549 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728873AbfLEDgD (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 4 Dec 2019 22:36:03 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga002.fm.intel.com ([10.253.24.26])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 04 Dec 2019 19:36:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,279,1571727600";
+   d="scan'208";a="243095319"
+Received: from joy-optiplex-7040.sh.intel.com ([10.239.13.9])
+  by fmsmga002.fm.intel.com with ESMTP; 04 Dec 2019 19:36:00 -0800
+From: Yan Zhao <yan.y.zhao@intel.com>
+To: alex.williamson@redhat.com
+Cc: kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        libvir-list@redhat.com, qemu-devel@nongnu.org, cohuck@redhat.com,
+        zhenyuw@linux.intel.com, zhi.a.wang@intel.com,
+        kevin.tian@intel.com, shaopeng.he@intel.com,
+        Yan Zhao <yan.y.zhao@intel.com>
+Subject: [RFC PATCH 9/9] i40e/vf_migration: support dynamic trap of bar0
+Date: Wed,  4 Dec 2019 22:27:49 -0500
+Message-Id: <20191205032749.30030-1-yan.y.zhao@intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191205032419.29606-1-yan.y.zhao@intel.com>
+References: <20191205032419.29606-1-yan.y.zhao@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+mediate dynamic_trap_info region to dynamically trap bar0.
+
+bar0 is sparsely mmaped into 5 sub-regions, of which only two need to be
+dynamically trapped.
+By mediating dynamic_trap_info region and telling QEMU this information,
+the two sub-regions of bar0 can be trapped when migration starts and put
+to passthrough again when migration fails
+
+Cc: Shaopeng He <shaopeng.he@intel.com>
+
+Signed-off-by: Yan Zhao <yan.y.zhao@intel.com>
+---
+ .../ethernet/intel/i40e/i40e_vf_migration.c   | 140 +++++++++++++++++-
+ .../ethernet/intel/i40e/i40e_vf_migration.h   |  12 ++
+ 2 files changed, 147 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/net/ethernet/intel/i40e/i40e_vf_migration.c b/drivers/net/ethernet/intel/i40e/i40e_vf_migration.c
+index 5bb509fed66e..0b9d5be85049 100644
+--- a/drivers/net/ethernet/intel/i40e/i40e_vf_migration.c
++++ b/drivers/net/ethernet/intel/i40e/i40e_vf_migration.c
+@@ -29,6 +29,21 @@ static bool is_handle_valid(int handle)
+ 	return true;
+ }
+ 
++static
++void i40e_vf_migration_dynamic_trap_bar(struct i40e_vf_migration *i40e_vf_dev)
++{
++	if (i40e_vf_dev->dt_trigger)
++		eventfd_signal(i40e_vf_dev->dt_trigger, 1);
++}
++
++static void i40e_vf_trap_bar0(struct i40e_vf_migration *i40e_vf_dev, bool trap)
++{
++	if (i40e_vf_dev->trap_bar0 != trap) {
++		i40e_vf_dev->trap_bar0 = trap;
++		i40e_vf_migration_dynamic_trap_bar(i40e_vf_dev);
++	}
++}
++
+ static size_t set_device_state(struct i40e_vf_migration *i40e_vf_dev, u32 state)
+ {
+ 	int ret = 0;
+@@ -39,8 +54,10 @@ static size_t set_device_state(struct i40e_vf_migration *i40e_vf_dev, u32 state)
+ 
+ 	switch (state) {
+ 	case VFIO_DEVICE_STATE_RUNNING:
++		i40e_vf_trap_bar0(i40e_vf_dev, false);
+ 		break;
+ 	case VFIO_DEVICE_STATE_SAVING | VFIO_DEVICE_STATE_RUNNING:
++		i40e_vf_trap_bar0(i40e_vf_dev, true);
+ 		// alloc dirty page tracking resources and
+ 		// do the first round dirty page scanning
+ 		break;
+@@ -137,16 +154,22 @@ int i40e_vf_migration_open(struct pci_dev *pdev, u64 *caps, u32 *dm_handle)
+ 		MIGRATION_DIRTY_BITMAP_SIZE;
+ 	i40e_vf_dev->migration_region_index = -1;
+ 
++	i40e_vf_dev->dt_region_index = -1;
++	i40e_vf_dev->trap_bar0 = false;
++
+ 	vf = &pf->vf[vf_id];
+ 
+ 	i40e_vf_dev_array[handle] = i40e_vf_dev;
+ 	set_bit(handle, open_device_bits);
++
+ 	*dm_handle = handle;
+ 
+ 	*caps |= VFIO_PCI_DEVICE_CAP_MIGRATION;
++	*caps |= VFIO_PCI_DEVICE_CAP_DYNAMIC_TRAP_BAR;
+ 
+ 	pr_info("%s: device %x %x, vf id %d, handle=%x\n",
+ 		__func__, pdev->vendor, pdev->device, vf_id, handle);
++
+ error:
+ 	mutex_unlock(&device_bit_lock);
+ 
+@@ -188,6 +211,10 @@ void i40e_vf_migration_release(int handle)
+ 
+ 	kfree(i40e_vf_dev->mig_ctl);
+ 	vfree(i40e_vf_dev->dirty_bitmap);
++
++	if (i40e_vf_dev->dt_trigger)
++		eventfd_ctx_put(i40e_vf_dev->dt_trigger);
++
+ 	kfree(i40e_vf_dev);
+ 
+ 	module_put(THIS_MODULE);
+@@ -216,6 +243,47 @@ static void migration_region_sparse_mmap_cap(struct vfio_info_cap *caps)
+ 	kfree(sparse);
+ }
+ 
++static void bar0_sparse_mmap_cap(struct vfio_region_info *info,
++				 struct vfio_info_cap *caps)
++{
++	struct vfio_region_info_cap_sparse_mmap *sparse;
++	size_t size;
++	int nr_areas = 5;
++
++	size = sizeof(*sparse) + (nr_areas * sizeof(*sparse->areas));
++
++	sparse = kzalloc(size, GFP_KERNEL);
++	if (!sparse)
++		return;
++
++	sparse->header.id = VFIO_REGION_INFO_CAP_SPARSE_MMAP;
++	sparse->header.version = 1;
++	sparse->nr_areas = nr_areas;
++
++	sparse->areas[0].offset = 0;
++	sparse->areas[0].size = IAVF_VF_TAIL_START;
++	sparse->areas[0].disablable = 0;//able to get toggled
++
++	sparse->areas[1].offset = IAVF_VF_TAIL_START;
++	sparse->areas[1].size = PAGE_SIZE;
++	sparse->areas[1].disablable = 1;//able to get toggled
++
++	sparse->areas[2].offset = IAVF_VF_TAIL_START + PAGE_SIZE;
++	sparse->areas[2].size = IAVF_VF_ARQH1 - sparse->areas[2].offset;
++	sparse->areas[2].disablable = 0;//able to get toggled
++
++	sparse->areas[3].offset = IAVF_VF_ARQT1;
++	sparse->areas[3].size = PAGE_SIZE;
++	sparse->areas[3].disablable = 1;//able to get toggled
++
++	sparse->areas[4].offset = IAVF_VF_ARQT1 + PAGE_SIZE;
++	sparse->areas[4].size = info->size - sparse->areas[4].offset;
++	sparse->areas[4].disablable = 0;//able to get toggled
++
++	vfio_info_add_capability(caps, &sparse->header,	size);
++	kfree(sparse);
++}
++
+ static void
+ i40e_vf_migration_get_region_info(int handle,
+ 				  struct vfio_region_info *info,
+@@ -227,9 +295,8 @@ i40e_vf_migration_get_region_info(int handle,
+ 
+ 	switch (info->index) {
+ 	case VFIO_PCI_BAR0_REGION_INDEX:
+-		info->flags = VFIO_REGION_INFO_FLAG_READ |
+-			VFIO_REGION_INFO_FLAG_WRITE;
+-
++		info->flags |= VFIO_REGION_INFO_FLAG_MMAP;
++		bar0_sparse_mmap_cap(info, caps);
+ 		break;
+ 	case VFIO_PCI_BAR1_REGION_INDEX ... VFIO_PCI_BAR5_REGION_INDEX:
+ 	case VFIO_PCI_CONFIG_REGION_INDEX:
+@@ -237,7 +304,20 @@ i40e_vf_migration_get_region_info(int handle,
+ 	case VFIO_PCI_VGA_REGION_INDEX:
+ 		break;
+ 	default:
+-		if (cap_type->type == VFIO_REGION_TYPE_MIGRATION &&
++		if (cap_type->type ==
++		    VFIO_REGION_TYPE_DYNAMIC_TRAP_BAR_INFO &&
++		    cap_type->subtype ==
++		    VFIO_REGION_SUBTYPE_DYNAMIC_TRAP_BAR_INFO) {
++			struct i40e_vf_migration *i40e_vf_dev;
++
++			i40e_vf_dev = i40e_vf_dev_array[handle];
++			i40e_vf_dev->dt_region_index = info->index;
++			info->size =
++				sizeof(struct vfio_device_dt_bar_info_region);
++		} else if ((cap_type->type == VFIO_REGION_TYPE_MIGRATION) &&
++				(cap_type->subtype ==
++				 VFIO_REGION_SUBTYPE_MIGRATION)) {
++		} else if (cap_type->type == VFIO_REGION_TYPE_MIGRATION &&
+ 		    cap_type->subtype == VFIO_REGION_SUBTYPE_MIGRATION) {
+ 			struct i40e_vf_migration *i40e_vf_dev;
+ 
+@@ -254,6 +334,53 @@ i40e_vf_migration_get_region_info(int handle,
+ 	}
+ }
+ 
++static ssize_t i40e_vf_dt_region_rw(struct i40e_vf_migration *i40e_vf_dev,
++				    char __user *buf, size_t count,
++				    loff_t *ppos, bool iswrite, bool *pt)
++{
++#define DT_REGION_OFFSET(x) offsetof(struct vfio_device_dt_bar_info_region, x)
++	u64 pos = *ppos & VFIO_PCI_OFFSET_MASK;
++	ssize_t ret = 0;
++
++	*pt = false;
++	switch (pos) {
++	case DT_REGION_OFFSET(dt_fd):
++		if (iswrite) {
++			u32 dt_fd;
++			struct eventfd_ctx *trigger;
++
++			if (copy_from_user(&dt_fd, buf,	sizeof(dt_fd)))
++				return -EFAULT;
++
++			trigger = eventfd_ctx_fdget(dt_fd);
++			if (IS_ERR(trigger)) {
++				pr_err("i40e_vf_migration_rw, dt trigger fd set error\n");
++				return -EINVAL;
++			}
++			i40e_vf_dev->dt_trigger = trigger;
++			ret = sizeof(dt_fd);
++		} else {
++			ret = -EFAULT;
++		}
++		break;
++
++	case DT_REGION_OFFSET(trap):
++		if (iswrite)
++			ret = copy_from_user(&i40e_vf_dev->trap_bar0,
++					     buf, count) ? -EFAULT : count;
++		else
++			ret = copy_to_user(buf,
++					   &i40e_vf_dev->trap_bar0,
++					   sizeof(u32)) ?
++					   -EFAULT : sizeof(u32);
++		break;
++	default:
++		ret = -EFAULT;
++		break;
++	}
++	return ret;
++}
++
+ static
+ ssize_t i40e_vf_migration_region_rw(struct i40e_vf_migration *i40e_vf_dev,
+ 				    char __user *buf, size_t count,
+@@ -420,7 +547,10 @@ static ssize_t i40e_vf_migration_rw(int handle, char __user *buf,
+ 	case VFIO_PCI_VGA_REGION_INDEX:
+ 		break;
+ 	default:
+-		if (index == i40e_vf_dev->migration_region_index) {
++		if (index == i40e_vf_dev->dt_region_index) {
++			return i40e_vf_dt_region_rw(i40e_vf_dev, buf, count,
++					ppos, iswrite, pt);
++		} else if (index == i40e_vf_dev->migration_region_index) {
+ 			return i40e_vf_migration_region_rw(i40e_vf_dev, buf,
+ 					count, ppos, iswrite, pt);
+ 		}
+diff --git a/drivers/net/ethernet/intel/i40e/i40e_vf_migration.h b/drivers/net/ethernet/intel/i40e/i40e_vf_migration.h
+index b31b500b3cd6..dfad4cc7e46f 100644
+--- a/drivers/net/ethernet/intel/i40e/i40e_vf_migration.h
++++ b/drivers/net/ethernet/intel/i40e/i40e_vf_migration.h
+@@ -21,6 +21,14 @@
+ 		PAGE_ALIGN(sizeof(struct vfio_device_migration_info))
+ #define MIGRATION_DIRTY_BITMAP_SIZE (64 * 1024UL)
+ 
++#define IAVF_VF_ARQBAH1 0x00006000 /* Reset: EMPR */
++#define IAVF_VF_ARQBAL1 0x00006C00 /* Reset: EMPR */
++#define IAVF_VF_ARQH1 0x00007400 /* Reset: EMPR */
++#define IAVF_VF_ARQT1 0x00007000 /* Reset: EMPR */
++#define IAVF_VF_ARQLEN1 0x00008000 /* Reset: EMPR */
++#define IAVF_VF_TAIL_START 0x00002000 /* Start of tail register region */
++#define IAVF_VF_TAIL_END 0x00002400 /* End of tail register region */
++
+ /* Single Root I/O Virtualization */
+ struct pci_sriov {
+ 	int		pos;		/* Capability position */
+@@ -56,6 +64,10 @@ struct i40e_vf_migration {
+ 	struct pci_dev *vf_dev;
+ 	int vf_id;
+ 
++	__u64 dt_region_index;
++	struct eventfd_ctx *dt_trigger;
++	bool trap_bar0;
++
+ 	__u64 migration_region_index;
+ 	__u64 migration_region_size;
+ 
