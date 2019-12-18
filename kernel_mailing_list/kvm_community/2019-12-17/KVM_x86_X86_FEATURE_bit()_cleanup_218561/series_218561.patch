@@ -1,0 +1,695 @@
+From patchwork Tue Dec 17 21:32:38 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11298781
+Return-Path: <SRS0=Ktm+=2H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E37FD112B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 17 Dec 2019 21:33:01 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id CA55824650
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 17 Dec 2019 21:33:01 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728415AbfLQVc4 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 17 Dec 2019 16:32:56 -0500
+Received: from mga04.intel.com ([192.55.52.120]:17437 "EHLO mga04.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728318AbfLQVcq (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 17 Dec 2019 16:32:46 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga002.jf.intel.com ([10.7.209.21])
+  by fmsmga104.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 17 Dec 2019 13:32:43 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,326,1571727600";
+   d="scan'208";a="227639445"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga002.jf.intel.com with ESMTP; 17 Dec 2019 13:32:42 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v2 1/5] KVM: x86: Add dedicated emulator helpers for querying
+ CPUID features
+Date: Tue, 17 Dec 2019 13:32:38 -0800
+Message-Id: <20191217213242.11712-2-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20191217213242.11712-1-sean.j.christopherson@intel.com>
+References: <20191217213242.11712-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Add feature-specific helpers for querying guest CPUID support from the
+emulator instead of having the emulator do a full CPUID and perform its
+own bit tests.  The primary motivation is to eliminate the emulator's
+usage of bit() so that future patches can add more extensive build-time
+assertions on the usage of bit() without having to expose yet more code
+to the emulator.
+
+Note, providing a generic guest_cpuid_has() to the emulator doesn't work
+due to the existing built-time assertions in guest_cpuid_has(), which
+require the feature being checked to be a compile-time constant.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_emulate.h |  4 ++++
+ arch/x86/kvm/emulate.c             | 21 +++------------------
+ arch/x86/kvm/x86.c                 | 18 ++++++++++++++++++
+ 3 files changed, 25 insertions(+), 18 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_emulate.h b/arch/x86/include/asm/kvm_emulate.h
+index 77cf6c11f66b..03946eb3e2b9 100644
+--- a/arch/x86/include/asm/kvm_emulate.h
++++ b/arch/x86/include/asm/kvm_emulate.h
+@@ -222,6 +222,10 @@ struct x86_emulate_ops {
+ 
+ 	bool (*get_cpuid)(struct x86_emulate_ctxt *ctxt, u32 *eax, u32 *ebx,
+ 			  u32 *ecx, u32 *edx, bool check_limit);
++	bool (*guest_has_long_mode)(struct x86_emulate_ctxt *ctxt);
++	bool (*guest_has_movbe)(struct x86_emulate_ctxt *ctxt);
++	bool (*guest_has_fxsr)(struct x86_emulate_ctxt *ctxt);
++
+ 	void (*set_nmi_mask)(struct x86_emulate_ctxt *ctxt, bool masked);
+ 
+ 	unsigned (*get_hflags)(struct x86_emulate_ctxt *ctxt);
+diff --git a/arch/x86/kvm/emulate.c b/arch/x86/kvm/emulate.c
+index 952d1a4f4d7e..e9833e345a5c 100644
+--- a/arch/x86/kvm/emulate.c
++++ b/arch/x86/kvm/emulate.c
+@@ -2348,12 +2348,7 @@ static int em_lseg(struct x86_emulate_ctxt *ctxt)
+ static int emulator_has_longmode(struct x86_emulate_ctxt *ctxt)
+ {
+ #ifdef CONFIG_X86_64
+-	u32 eax, ebx, ecx, edx;
+-
+-	eax = 0x80000001;
+-	ecx = 0;
+-	ctxt->ops->get_cpuid(ctxt, &eax, &ebx, &ecx, &edx, false);
+-	return edx & bit(X86_FEATURE_LM);
++	return ctxt->ops->guest_has_long_mode(ctxt);
+ #else
+ 	return false;
+ #endif
+@@ -3618,18 +3613,11 @@ static int em_mov(struct x86_emulate_ctxt *ctxt)
+ 	return X86EMUL_CONTINUE;
+ }
+ 
+-#define FFL(x) bit(X86_FEATURE_##x)
+-
+ static int em_movbe(struct x86_emulate_ctxt *ctxt)
+ {
+-	u32 ebx, ecx, edx, eax = 1;
+ 	u16 tmp;
+ 
+-	/*
+-	 * Check MOVBE is set in the guest-visible CPUID leaf.
+-	 */
+-	ctxt->ops->get_cpuid(ctxt, &eax, &ebx, &ecx, &edx, false);
+-	if (!(ecx & FFL(MOVBE)))
++	if (!ctxt->ops->guest_has_movbe(ctxt))
+ 		return emulate_ud(ctxt);
+ 
+ 	switch (ctxt->op_bytes) {
+@@ -4027,10 +4015,7 @@ static int em_movsxd(struct x86_emulate_ctxt *ctxt)
+ 
+ static int check_fxsr(struct x86_emulate_ctxt *ctxt)
+ {
+-	u32 eax = 1, ebx, ecx = 0, edx;
+-
+-	ctxt->ops->get_cpuid(ctxt, &eax, &ebx, &ecx, &edx, false);
+-	if (!(edx & FFL(FXSR)))
++	if (!ctxt->ops->guest_has_fxsr(ctxt))
+ 		return emulate_ud(ctxt);
+ 
+ 	if (ctxt->ops->get_cr(ctxt, 0) & (X86_CR0_TS | X86_CR0_EM))
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 8bb2fb1705ff..6bca14071d30 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -6184,6 +6184,21 @@ static bool emulator_get_cpuid(struct x86_emulate_ctxt *ctxt,
+ 	return kvm_cpuid(emul_to_vcpu(ctxt), eax, ebx, ecx, edx, check_limit);
+ }
+ 
++static bool emulator_guest_has_long_mode(struct x86_emulate_ctxt *ctxt)
++{
++	return guest_cpuid_has(emul_to_vcpu(ctxt), X86_FEATURE_LM);
++}
++
++static bool emulator_guest_has_movbe(struct x86_emulate_ctxt *ctxt)
++{
++	return guest_cpuid_has(emul_to_vcpu(ctxt), X86_FEATURE_MOVBE);
++}
++
++static bool emulator_guest_has_fxsr(struct x86_emulate_ctxt *ctxt)
++{
++	return guest_cpuid_has(emul_to_vcpu(ctxt), X86_FEATURE_FXSR);
++}
++
+ static ulong emulator_read_gpr(struct x86_emulate_ctxt *ctxt, unsigned reg)
+ {
+ 	return kvm_register_read(emul_to_vcpu(ctxt), reg);
+@@ -6261,6 +6276,9 @@ static const struct x86_emulate_ops emulate_ops = {
+ 	.fix_hypercall       = emulator_fix_hypercall,
+ 	.intercept           = emulator_intercept,
+ 	.get_cpuid           = emulator_get_cpuid,
++	.guest_has_long_mode = emulator_guest_has_long_mode,
++	.guest_has_movbe     = emulator_guest_has_movbe,
++	.guest_has_fxsr      = emulator_guest_has_fxsr,
+ 	.set_nmi_mask        = emulator_set_nmi_mask,
+ 	.get_hflags          = emulator_get_hflags,
+ 	.set_hflags          = emulator_set_hflags,
+
+From patchwork Tue Dec 17 21:32:39 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11298785
+Return-Path: <SRS0=Ktm+=2H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id AB977112B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 17 Dec 2019 21:33:09 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 92D4A2465E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 17 Dec 2019 21:33:09 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728456AbfLQVdF (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 17 Dec 2019 16:33:05 -0500
+Received: from mga04.intel.com ([192.55.52.120]:17437 "EHLO mga04.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728051AbfLQVcp (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 17 Dec 2019 16:32:45 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga002.jf.intel.com ([10.7.209.21])
+  by fmsmga104.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 17 Dec 2019 13:32:43 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,326,1571727600";
+   d="scan'208";a="227639449"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga002.jf.intel.com with ESMTP; 17 Dec 2019 13:32:42 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v2 2/5] KVM: x86: Move bit() helper to cpuid.h
+Date: Tue, 17 Dec 2019 13:32:39 -0800
+Message-Id: <20191217213242.11712-3-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20191217213242.11712-1-sean.j.christopherson@intel.com>
+References: <20191217213242.11712-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Move bit() to cpuid.h in preparation for incorporating the reverse_cpuid
+array in bit() build-time assertions.  Opportunistically use the BIT()
+macro instead of open-coding the shift.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/cpuid.h | 5 +++++
+ arch/x86/kvm/x86.h   | 5 -----
+ 2 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/cpuid.h b/arch/x86/kvm/cpuid.h
+index d78a61408243..a631329ebec7 100644
+--- a/arch/x86/kvm/cpuid.h
++++ b/arch/x86/kvm/cpuid.h
+@@ -55,6 +55,11 @@ static const struct cpuid_reg reverse_cpuid[] = {
+ 	[CPUID_7_EDX]         = {         7, 0, CPUID_EDX},
+ };
+ 
++static inline u32 bit(int bitno)
++{
++	return BIT(bitno & 31);
++}
++
+ static __always_inline struct cpuid_reg x86_feature_cpuid(unsigned x86_feature)
+ {
+ 	unsigned x86_leaf = x86_feature / 32;
+diff --git a/arch/x86/kvm/x86.h b/arch/x86/kvm/x86.h
+index cab5e71f0f0f..5f6b8f9a385c 100644
+--- a/arch/x86/kvm/x86.h
++++ b/arch/x86/kvm/x86.h
+@@ -144,11 +144,6 @@ static inline bool is_pae_paging(struct kvm_vcpu *vcpu)
+ 	return !is_long_mode(vcpu) && is_pae(vcpu) && is_paging(vcpu);
+ }
+ 
+-static inline u32 bit(int bitno)
+-{
+-	return 1 << (bitno & 31);
+-}
+-
+ static inline u8 vcpu_virt_addr_bits(struct kvm_vcpu *vcpu)
+ {
+ 	return kvm_read_cr4_bits(vcpu, X86_CR4_LA57) ? 57 : 48;
+
+From patchwork Tue Dec 17 21:32:40 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11298779
+Return-Path: <SRS0=Ktm+=2H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 11BEA112B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 17 Dec 2019 21:32:57 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id E33AF21582
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 17 Dec 2019 21:32:56 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728346AbfLQVcq (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 17 Dec 2019 16:32:46 -0500
+Received: from mga04.intel.com ([192.55.52.120]:17437 "EHLO mga04.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728059AbfLQVcp (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 17 Dec 2019 16:32:45 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga002.jf.intel.com ([10.7.209.21])
+  by fmsmga104.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 17 Dec 2019 13:32:43 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,326,1571727600";
+   d="scan'208";a="227639452"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga002.jf.intel.com with ESMTP; 17 Dec 2019 13:32:42 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v2 3/5] KVM: x86: Add CPUID_7_1_EAX to the reverse CPUID table
+Date: Tue, 17 Dec 2019 13:32:40 -0800
+Message-Id: <20191217213242.11712-4-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20191217213242.11712-1-sean.j.christopherson@intel.com>
+References: <20191217213242.11712-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Add an entry for CPUID_7_1_EAX in the reserve_cpuid array in preparation
+for incorporating the array in bit() build-time assertions, specifically
+to avoid an assertion on F(AVX512_BF16) in do_cpuid_7_mask().
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/cpuid.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/x86/kvm/cpuid.h b/arch/x86/kvm/cpuid.h
+index a631329ebec7..8c77d829e27d 100644
+--- a/arch/x86/kvm/cpuid.h
++++ b/arch/x86/kvm/cpuid.h
+@@ -53,6 +53,7 @@ static const struct cpuid_reg reverse_cpuid[] = {
+ 	[CPUID_7_ECX]         = {         7, 0, CPUID_ECX},
+ 	[CPUID_8000_0007_EBX] = {0x80000007, 0, CPUID_EBX},
+ 	[CPUID_7_EDX]         = {         7, 0, CPUID_EDX},
++	[CPUID_7_1_EAX]       = {         7, 1, CPUID_EAX},
+ };
+ 
+ static inline u32 bit(int bitno)
+
+From patchwork Tue Dec 17 21:32:41 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11298777
+Return-Path: <SRS0=Ktm+=2H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C311314E3
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 17 Dec 2019 21:32:55 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id A932521D7D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 17 Dec 2019 21:32:55 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728397AbfLQVcv (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 17 Dec 2019 16:32:51 -0500
+Received: from mga04.intel.com ([192.55.52.120]:17440 "EHLO mga04.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728325AbfLQVcq (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 17 Dec 2019 16:32:46 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga002.jf.intel.com ([10.7.209.21])
+  by fmsmga104.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 17 Dec 2019 13:32:43 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,326,1571727600";
+   d="scan'208";a="227639455"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga002.jf.intel.com with ESMTP; 17 Dec 2019 13:32:42 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v2 4/5] KVM: x86: Expand build-time assertion on reverse CPUID
+ usage
+Date: Tue, 17 Dec 2019 13:32:41 -0800
+Message-Id: <20191217213242.11712-5-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20191217213242.11712-1-sean.j.christopherson@intel.com>
+References: <20191217213242.11712-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Add build-time checks to ensure KVM isn't trying to do a reverse CPUID
+lookup on Linux-defined feature bits, along with comments to explain
+the gory details of X86_FEATUREs and bit().
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/cpuid.c |  3 ++-
+ arch/x86/kvm/cpuid.h | 39 +++++++++++++++++++++++++++++++--------
+ 2 files changed, 33 insertions(+), 9 deletions(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index cfafa320a8cf..a3b41e87e810 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -281,8 +281,9 @@ int kvm_vcpu_ioctl_get_cpuid2(struct kvm_vcpu *vcpu,
+ 	return r;
+ }
+ 
+-static void cpuid_mask(u32 *word, int wordnum)
++static __always_inline void cpuid_mask(u32 *word, int wordnum)
+ {
++	reverse_cpuid_check(wordnum);
+ 	*word &= boot_cpu_data.x86_capability[wordnum];
+ }
+ 
+diff --git a/arch/x86/kvm/cpuid.h b/arch/x86/kvm/cpuid.h
+index 8c77d829e27d..fc5a4cde260b 100644
+--- a/arch/x86/kvm/cpuid.h
++++ b/arch/x86/kvm/cpuid.h
+@@ -56,18 +56,41 @@ static const struct cpuid_reg reverse_cpuid[] = {
+ 	[CPUID_7_1_EAX]       = {         7, 1, CPUID_EAX},
+ };
+ 
+-static inline u32 bit(int bitno)
++/*
++ * Reverse CPUID and its derivatives can only be used for hardware-defined
++ * feature words, i.e. words whose bits directly correspond to a CPUID leaf.
++ * Retrieving a feature bit or masking guest CPUID from a Linux-defined word
++ * is nonsensical as the bit number/mask is an arbitrary software-defined value
++ * and can't be used by KVM to query/control guest capabilities.  And obviously
++ * the leaf being queried must have an entry in the lookup table.
++ */
++static __always_inline void reverse_cpuid_check(unsigned x86_leaf)
+ {
+-	return BIT(bitno & 31);
+-}
+-
+-static __always_inline struct cpuid_reg x86_feature_cpuid(unsigned x86_feature)
+-{
+-	unsigned x86_leaf = x86_feature / 32;
+-
++	BUILD_BUG_ON(x86_leaf == CPUID_LNX_1);
++	BUILD_BUG_ON(x86_leaf == CPUID_LNX_2);
++	BUILD_BUG_ON(x86_leaf == CPUID_LNX_3);
++	BUILD_BUG_ON(x86_leaf == CPUID_LNX_4);
+ 	BUILD_BUG_ON(x86_leaf >= ARRAY_SIZE(reverse_cpuid));
+ 	BUILD_BUG_ON(reverse_cpuid[x86_leaf].function == 0);
++}
+ 
++/*
++ * Retrieve the bit mask from an X86_FEATURE_* definition.  Features contain
++ * the hardware defined bit number (stored in bits 4:0) and a software defined
++ * "word" (stored in bits 31:5).  The word is used to index into arrays of
++ * bit masks that hold the per-cpu feature capabilities, e.g. this_cpu_has().
++ */
++static __always_inline u32 bit(int x86_feature)
++{
++	reverse_cpuid_check(x86_feature / 32);
++	return 1 << (x86_feature & 31);
++}
++
++static __always_inline struct cpuid_reg x86_feature_cpuid(unsigned x86_feature)
++{
++	unsigned x86_leaf = x86_feature / 32;
++
++	reverse_cpuid_check(x86_leaf);
+ 	return reverse_cpuid[x86_leaf];
+ }
+ 
+
+From patchwork Tue Dec 17 21:32:42 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11298783
+Return-Path: <SRS0=Ktm+=2H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 60A44112B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 17 Dec 2019 21:33:03 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 3ED0324650
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 17 Dec 2019 21:33:03 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728311AbfLQVcp (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 17 Dec 2019 16:32:45 -0500
+Received: from mga09.intel.com ([134.134.136.24]:35299 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726891AbfLQVcp (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 17 Dec 2019 16:32:45 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga002.jf.intel.com ([10.7.209.21])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 17 Dec 2019 13:32:44 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,326,1571727600";
+   d="scan'208";a="227639458"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga002.jf.intel.com with ESMTP; 17 Dec 2019 13:32:42 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v2 5/5] KVM: x86: Refactor and rename bit() to feature_bit()
+ macro
+Date: Tue, 17 Dec 2019 13:32:42 -0800
+Message-Id: <20191217213242.11712-6-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20191217213242.11712-1-sean.j.christopherson@intel.com>
+References: <20191217213242.11712-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Rename bit() to __feature_bit() to give it a more descriptive name, and
+add a macro, feature_bit(), to stuff the X68_FEATURE_ prefix to keep
+line lengths manageable for code that hardcodes the bit to be retrieved.
+
+No functional change intended.
+
+Cc: Jim Mattson <jmattson@google.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/cpuid.c   |  2 +-
+ arch/x86/kvm/cpuid.h   |  8 +++++---
+ arch/x86/kvm/svm.c     |  4 ++--
+ arch/x86/kvm/vmx/vmx.c | 42 +++++++++++++++++++++---------------------
+ 4 files changed, 29 insertions(+), 27 deletions(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index a3b41e87e810..390dff4beb07 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -62,7 +62,7 @@ u64 kvm_supported_xcr0(void)
+ 	return xcr0;
+ }
+ 
+-#define F(x) bit(X86_FEATURE_##x)
++#define F feature_bit
+ 
+ int kvm_update_cpuid(struct kvm_vcpu *vcpu)
+ {
+diff --git a/arch/x86/kvm/cpuid.h b/arch/x86/kvm/cpuid.h
+index fc5a4cde260b..5d0bede5fc80 100644
+--- a/arch/x86/kvm/cpuid.h
++++ b/arch/x86/kvm/cpuid.h
+@@ -80,12 +80,14 @@ static __always_inline void reverse_cpuid_check(unsigned x86_leaf)
+  * "word" (stored in bits 31:5).  The word is used to index into arrays of
+  * bit masks that hold the per-cpu feature capabilities, e.g. this_cpu_has().
+  */
+-static __always_inline u32 bit(int x86_feature)
++static __always_inline u32 __feature_bit(int x86_feature)
+ {
+ 	reverse_cpuid_check(x86_feature / 32);
+ 	return 1 << (x86_feature & 31);
+ }
+ 
++#define feature_bit(name)  __feature_bit(X86_FEATURE_##name)
++
+ static __always_inline struct cpuid_reg x86_feature_cpuid(unsigned x86_feature)
+ {
+ 	unsigned x86_leaf = x86_feature / 32;
+@@ -130,7 +132,7 @@ static __always_inline bool guest_cpuid_has(struct kvm_vcpu *vcpu, unsigned x86_
+ 	if (!reg)
+ 		return false;
+ 
+-	return *reg & bit(x86_feature);
++	return *reg & __feature_bit(x86_feature);
+ }
+ 
+ static __always_inline void guest_cpuid_clear(struct kvm_vcpu *vcpu, unsigned x86_feature)
+@@ -139,7 +141,7 @@ static __always_inline void guest_cpuid_clear(struct kvm_vcpu *vcpu, unsigned x8
+ 
+ 	reg = guest_cpuid_get_register(vcpu, x86_feature);
+ 	if (reg)
+-		*reg &= ~bit(x86_feature);
++		*reg &= ~__feature_bit(x86_feature);
+ }
+ 
+ static inline bool guest_cpuid_is_amd(struct kvm_vcpu *vcpu)
+diff --git a/arch/x86/kvm/svm.c b/arch/x86/kvm/svm.c
+index 8f1b715dfde8..832b8ad5a178 100644
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -5924,14 +5924,14 @@ static void svm_cpuid_update(struct kvm_vcpu *vcpu)
+ 	guest_cpuid_clear(vcpu, X86_FEATURE_X2APIC);
+ }
+ 
+-#define F(x) bit(X86_FEATURE_##x)
++#define F feature_bit
+ 
+ static void svm_set_supported_cpuid(u32 func, struct kvm_cpuid_entry2 *entry)
+ {
+ 	switch (func) {
+ 	case 0x1:
+ 		if (avic)
+-			entry->ecx &= ~bit(X86_FEATURE_X2APIC);
++			entry->ecx &= ~F(X2APIC);
+ 		break;
+ 	case 0x80000001:
+ 		if (nested)
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 51e3b27f90ed..3608de5649f2 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6979,28 +6979,28 @@ static void nested_vmx_cr_fixed1_bits_update(struct kvm_vcpu *vcpu)
+ } while (0)
+ 
+ 	entry = kvm_find_cpuid_entry(vcpu, 0x1, 0);
+-	cr4_fixed1_update(X86_CR4_VME,        edx, bit(X86_FEATURE_VME));
+-	cr4_fixed1_update(X86_CR4_PVI,        edx, bit(X86_FEATURE_VME));
+-	cr4_fixed1_update(X86_CR4_TSD,        edx, bit(X86_FEATURE_TSC));
+-	cr4_fixed1_update(X86_CR4_DE,         edx, bit(X86_FEATURE_DE));
+-	cr4_fixed1_update(X86_CR4_PSE,        edx, bit(X86_FEATURE_PSE));
+-	cr4_fixed1_update(X86_CR4_PAE,        edx, bit(X86_FEATURE_PAE));
+-	cr4_fixed1_update(X86_CR4_MCE,        edx, bit(X86_FEATURE_MCE));
+-	cr4_fixed1_update(X86_CR4_PGE,        edx, bit(X86_FEATURE_PGE));
+-	cr4_fixed1_update(X86_CR4_OSFXSR,     edx, bit(X86_FEATURE_FXSR));
+-	cr4_fixed1_update(X86_CR4_OSXMMEXCPT, edx, bit(X86_FEATURE_XMM));
+-	cr4_fixed1_update(X86_CR4_VMXE,       ecx, bit(X86_FEATURE_VMX));
+-	cr4_fixed1_update(X86_CR4_SMXE,       ecx, bit(X86_FEATURE_SMX));
+-	cr4_fixed1_update(X86_CR4_PCIDE,      ecx, bit(X86_FEATURE_PCID));
+-	cr4_fixed1_update(X86_CR4_OSXSAVE,    ecx, bit(X86_FEATURE_XSAVE));
++	cr4_fixed1_update(X86_CR4_VME,        edx, feature_bit(VME));
++	cr4_fixed1_update(X86_CR4_PVI,        edx, feature_bit(VME));
++	cr4_fixed1_update(X86_CR4_TSD,        edx, feature_bit(TSC));
++	cr4_fixed1_update(X86_CR4_DE,         edx, feature_bit(DE));
++	cr4_fixed1_update(X86_CR4_PSE,        edx, feature_bit(PSE));
++	cr4_fixed1_update(X86_CR4_PAE,        edx, feature_bit(PAE));
++	cr4_fixed1_update(X86_CR4_MCE,        edx, feature_bit(MCE));
++	cr4_fixed1_update(X86_CR4_PGE,        edx, feature_bit(PGE));
++	cr4_fixed1_update(X86_CR4_OSFXSR,     edx, feature_bit(FXSR));
++	cr4_fixed1_update(X86_CR4_OSXMMEXCPT, edx, feature_bit(XMM));
++	cr4_fixed1_update(X86_CR4_VMXE,       ecx, feature_bit(VMX));
++	cr4_fixed1_update(X86_CR4_SMXE,       ecx, feature_bit(SMX));
++	cr4_fixed1_update(X86_CR4_PCIDE,      ecx, feature_bit(PCID));
++	cr4_fixed1_update(X86_CR4_OSXSAVE,    ecx, feature_bit(XSAVE));
+ 
+ 	entry = kvm_find_cpuid_entry(vcpu, 0x7, 0);
+-	cr4_fixed1_update(X86_CR4_FSGSBASE,   ebx, bit(X86_FEATURE_FSGSBASE));
+-	cr4_fixed1_update(X86_CR4_SMEP,       ebx, bit(X86_FEATURE_SMEP));
+-	cr4_fixed1_update(X86_CR4_SMAP,       ebx, bit(X86_FEATURE_SMAP));
+-	cr4_fixed1_update(X86_CR4_PKE,        ecx, bit(X86_FEATURE_PKU));
+-	cr4_fixed1_update(X86_CR4_UMIP,       ecx, bit(X86_FEATURE_UMIP));
+-	cr4_fixed1_update(X86_CR4_LA57,       ecx, bit(X86_FEATURE_LA57));
++	cr4_fixed1_update(X86_CR4_FSGSBASE,   ebx, feature_bit(FSGSBASE));
++	cr4_fixed1_update(X86_CR4_SMEP,       ebx, feature_bit(SMEP));
++	cr4_fixed1_update(X86_CR4_SMAP,       ebx, feature_bit(SMAP));
++	cr4_fixed1_update(X86_CR4_PKE,        ecx, feature_bit(PKU));
++	cr4_fixed1_update(X86_CR4_UMIP,       ecx, feature_bit(UMIP));
++	cr4_fixed1_update(X86_CR4_LA57,       ecx, feature_bit(LA57));
+ 
+ #undef cr4_fixed1_update
+ }
+@@ -7134,7 +7134,7 @@ static void vmx_cpuid_update(struct kvm_vcpu *vcpu)
+ static void vmx_set_supported_cpuid(u32 func, struct kvm_cpuid_entry2 *entry)
+ {
+ 	if (func == 1 && nested)
+-		entry->ecx |= bit(X86_FEATURE_VMX);
++		entry->ecx |= feature_bit(VMX);
+ }
+ 
+ static void vmx_request_immediate_exit(struct kvm_vcpu *vcpu)
