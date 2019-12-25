@@ -1,0 +1,1278 @@
+From patchwork Tue Dec 24 07:44:55 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Lu Baolu <baolu.lu@linux.intel.com>
+X-Patchwork-Id: 11309133
+Return-Path: <SRS0=GC/h=2O=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 4B5E014E3
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Dec 2019 07:46:27 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 3474B20706
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Dec 2019 07:46:27 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726246AbfLXHqQ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 24 Dec 2019 02:46:16 -0500
+Received: from mga03.intel.com ([134.134.136.65]:49680 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726225AbfLXHqP (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 24 Dec 2019 02:46:15 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Dec 2019 23:46:14 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,350,1571727600";
+   d="scan'208";a="223177066"
+Received: from allen-box.sh.intel.com ([10.239.159.136])
+  by fmsmga001.fm.intel.com with ESMTP; 23 Dec 2019 23:46:13 -0800
+From: Lu Baolu <baolu.lu@linux.intel.com>
+To: Joerg Roedel <joro@8bytes.org>,
+        David Woodhouse <dwmw2@infradead.org>,
+        Alex Williamson <alex.williamson@redhat.com>
+Cc: ashok.raj@intel.com, sanjay.k.kumar@intel.com,
+        jacob.jun.pan@linux.intel.com, kevin.tian@intel.com,
+        yi.l.liu@intel.com, yi.y.sun@intel.com,
+        Peter Xu <peterx@redhat.com>, iommu@lists.linux-foundation.org,
+        kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Lu Baolu <baolu.lu@linux.intel.com>,
+        Yi Sun <yi.y.sun@linux.intel.com>
+Subject: [PATCH v5 2/9] iommu/vt-d: Add set domain DOMAIN_ATTR_NESTING attr
+Date: Tue, 24 Dec 2019 15:44:55 +0800
+Message-Id: <20191224074502.5545-3-baolu.lu@linux.intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191224074502.5545-1-baolu.lu@linux.intel.com>
+References: <20191224074502.5545-1-baolu.lu@linux.intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This adds the Intel VT-d specific callback of setting
+DOMAIN_ATTR_NESTING domain attribution. It is necessary
+to let the VT-d driver know that the domain represents
+a virtual machine which requires the IOMMU hardware to
+support nested translation mode. Return success if the
+IOMMU hardware suports nested mode, otherwise failure.
+
+Signed-off-by: Yi Sun <yi.y.sun@linux.intel.com>
+Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+---
+ drivers/iommu/intel-iommu.c | 56 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 56 insertions(+)
+
+diff --git a/drivers/iommu/intel-iommu.c b/drivers/iommu/intel-iommu.c
+index 71ad5e5feae2..35f65628202c 100644
+--- a/drivers/iommu/intel-iommu.c
++++ b/drivers/iommu/intel-iommu.c
+@@ -315,6 +315,12 @@ static int hw_pass_through = 1;
+  */
+ #define DOMAIN_FLAG_USE_FIRST_LEVEL		BIT(2)
+ 
++/*
++ * Domain represents a virtual machine which demands iommu nested
++ * translation mode support.
++ */
++#define DOMAIN_FLAG_NESTING_MODE		BIT(3)
++
+ #define for_each_domain_iommu(idx, domain)			\
+ 	for (idx = 0; idx < g_num_of_iommus; idx++)		\
+ 		if (domain->iommu_refcnt[idx])
+@@ -5640,6 +5646,24 @@ static inline bool iommu_pasid_support(void)
+ 	return ret;
+ }
+ 
++static inline bool nested_mode_support(void)
++{
++	struct dmar_drhd_unit *drhd;
++	struct intel_iommu *iommu;
++	bool ret = true;
++
++	rcu_read_lock();
++	for_each_active_iommu(iommu, drhd) {
++		if (!sm_supported(iommu) || !ecap_nest(iommu->ecap)) {
++			ret = false;
++			break;
++		}
++	}
++	rcu_read_unlock();
++
++	return ret;
++}
++
+ static bool intel_iommu_capable(enum iommu_cap cap)
+ {
+ 	if (cap == IOMMU_CAP_CACHE_COHERENCY)
+@@ -6018,10 +6042,42 @@ static bool intel_iommu_is_attach_deferred(struct iommu_domain *domain,
+ 	return dev->archdata.iommu == DEFER_DEVICE_DOMAIN_INFO;
+ }
+ 
++static int
++intel_iommu_domain_set_attr(struct iommu_domain *domain,
++			    enum iommu_attr attr, void *data)
++{
++	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
++	unsigned long flags;
++	int ret = 0;
++
++	if (domain->type != IOMMU_DOMAIN_UNMANAGED)
++		return -EINVAL;
++
++	switch (attr) {
++	case DOMAIN_ATTR_NESTING:
++		spin_lock_irqsave(&device_domain_lock, flags);
++		if (nested_mode_support() &&
++		    list_empty(&dmar_domain->devices)) {
++			dmar_domain->flags |= DOMAIN_FLAG_NESTING_MODE;
++			dmar_domain->flags &= ~DOMAIN_FLAG_USE_FIRST_LEVEL;
++		} else {
++			ret = -ENODEV;
++		}
++		spin_unlock_irqrestore(&device_domain_lock, flags);
++		break;
++	default:
++		ret = -EINVAL;
++		break;
++	}
++
++	return ret;
++}
++
+ const struct iommu_ops intel_iommu_ops = {
+ 	.capable		= intel_iommu_capable,
+ 	.domain_alloc		= intel_iommu_domain_alloc,
+ 	.domain_free		= intel_iommu_domain_free,
++	.domain_set_attr	= intel_iommu_domain_set_attr,
+ 	.attach_dev		= intel_iommu_attach_device,
+ 	.detach_dev		= intel_iommu_detach_device,
+ 	.aux_attach_dev		= intel_iommu_aux_attach_device,
+
+From patchwork Tue Dec 24 07:44:56 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Lu Baolu <baolu.lu@linux.intel.com>
+X-Patchwork-Id: 11309143
+Return-Path: <SRS0=GC/h=2O=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 22F15138D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Dec 2019 07:46:57 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 0B01C20706
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Dec 2019 07:46:57 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726330AbfLXHqX (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 24 Dec 2019 02:46:23 -0500
+Received: from mga03.intel.com ([134.134.136.65]:49680 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726225AbfLXHqS (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 24 Dec 2019 02:46:18 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Dec 2019 23:46:16 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,350,1571727600";
+   d="scan'208";a="223177073"
+Received: from allen-box.sh.intel.com ([10.239.159.136])
+  by fmsmga001.fm.intel.com with ESMTP; 23 Dec 2019 23:46:15 -0800
+From: Lu Baolu <baolu.lu@linux.intel.com>
+To: Joerg Roedel <joro@8bytes.org>,
+        David Woodhouse <dwmw2@infradead.org>,
+        Alex Williamson <alex.williamson@redhat.com>
+Cc: ashok.raj@intel.com, sanjay.k.kumar@intel.com,
+        jacob.jun.pan@linux.intel.com, kevin.tian@intel.com,
+        yi.l.liu@intel.com, yi.y.sun@intel.com,
+        Peter Xu <peterx@redhat.com>, iommu@lists.linux-foundation.org,
+        kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Lu Baolu <baolu.lu@linux.intel.com>
+Subject: [PATCH v5 3/9] iommu/vt-d: Add PASID_FLAG_FL5LP for first-level pasid
+ setup
+Date: Tue, 24 Dec 2019 15:44:56 +0800
+Message-Id: <20191224074502.5545-4-baolu.lu@linux.intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191224074502.5545-1-baolu.lu@linux.intel.com>
+References: <20191224074502.5545-1-baolu.lu@linux.intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Current intel_pasid_setup_first_level() use 5-level paging for
+first level translation if CPUs use 5-level paging mode too.
+This makes sense for SVA usages since the page table is shared
+between CPUs and IOMMUs. But it makes no sense if we only want
+to use first level for IOVA translation. Add PASID_FLAG_FL5LP
+bit in the flags which indicates whether the 5-level paging
+mode should be used.
+
+Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+---
+ drivers/iommu/intel-pasid.c | 7 ++-----
+ drivers/iommu/intel-pasid.h | 6 ++++++
+ drivers/iommu/intel-svm.c   | 8 ++++++--
+ 3 files changed, 14 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/iommu/intel-pasid.c b/drivers/iommu/intel-pasid.c
+index 3cb569e76642..22b30f10b396 100644
+--- a/drivers/iommu/intel-pasid.c
++++ b/drivers/iommu/intel-pasid.c
+@@ -477,18 +477,15 @@ int intel_pasid_setup_first_level(struct intel_iommu *iommu,
+ 		pasid_set_sre(pte);
+ 	}
+ 
+-#ifdef CONFIG_X86
+-	/* Both CPU and IOMMU paging mode need to match */
+-	if (cpu_feature_enabled(X86_FEATURE_LA57)) {
++	if (flags & PASID_FLAG_FL5LP) {
+ 		if (cap_5lp_support(iommu->cap)) {
+ 			pasid_set_flpm(pte, 1);
+ 		} else {
+-			pr_err("VT-d has no 5-level paging support for CPU\n");
++			pr_err("No 5-level paging support for first-level\n");
+ 			pasid_clear_entry(pte);
+ 			return -EINVAL;
+ 		}
+ 	}
+-#endif /* CONFIG_X86 */
+ 
+ 	pasid_set_domain_id(pte, did);
+ 	pasid_set_address_width(pte, iommu->agaw);
+diff --git a/drivers/iommu/intel-pasid.h b/drivers/iommu/intel-pasid.h
+index fc8cd8f17de1..92de6df24ccb 100644
+--- a/drivers/iommu/intel-pasid.h
++++ b/drivers/iommu/intel-pasid.h
+@@ -37,6 +37,12 @@
+  */
+ #define PASID_FLAG_SUPERVISOR_MODE	BIT(0)
+ 
++/*
++ * The PASID_FLAG_FL5LP flag Indicates using 5-level paging for first-
++ * level translation, otherwise, 4-level paging will be used.
++ */
++#define PASID_FLAG_FL5LP		BIT(1)
++
+ struct pasid_dir_entry {
+ 	u64 val;
+ };
+diff --git a/drivers/iommu/intel-svm.c b/drivers/iommu/intel-svm.c
+index 04023033b79f..d7f2a5358900 100644
+--- a/drivers/iommu/intel-svm.c
++++ b/drivers/iommu/intel-svm.c
+@@ -364,7 +364,9 @@ int intel_svm_bind_mm(struct device *dev, int *pasid, int flags, struct svm_dev_
+ 		ret = intel_pasid_setup_first_level(iommu, dev,
+ 				mm ? mm->pgd : init_mm.pgd,
+ 				svm->pasid, FLPT_DEFAULT_DID,
+-				mm ? 0 : PASID_FLAG_SUPERVISOR_MODE);
++				(mm ? 0 : PASID_FLAG_SUPERVISOR_MODE) |
++				(cpu_feature_enabled(X86_FEATURE_LA57) ?
++				 PASID_FLAG_FL5LP : 0));
+ 		spin_unlock(&iommu->lock);
+ 		if (ret) {
+ 			if (mm)
+@@ -385,7 +387,9 @@ int intel_svm_bind_mm(struct device *dev, int *pasid, int flags, struct svm_dev_
+ 		ret = intel_pasid_setup_first_level(iommu, dev,
+ 						mm ? mm->pgd : init_mm.pgd,
+ 						svm->pasid, FLPT_DEFAULT_DID,
+-						mm ? 0 : PASID_FLAG_SUPERVISOR_MODE);
++						(mm ? 0 : PASID_FLAG_SUPERVISOR_MODE) |
++						(cpu_feature_enabled(X86_FEATURE_LA57) ?
++						PASID_FLAG_FL5LP : 0));
+ 		spin_unlock(&iommu->lock);
+ 		if (ret) {
+ 			kfree(sdev);
+
+From patchwork Tue Dec 24 07:44:57 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Lu Baolu <baolu.lu@linux.intel.com>
+X-Patchwork-Id: 11309145
+Return-Path: <SRS0=GC/h=2O=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 246A4109A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Dec 2019 07:46:59 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 0D04E2071A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Dec 2019 07:46:59 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726298AbfLXHqX (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 24 Dec 2019 02:46:23 -0500
+Received: from mga03.intel.com ([134.134.136.65]:49685 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726278AbfLXHqU (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 24 Dec 2019 02:46:20 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Dec 2019 23:46:18 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,350,1571727600";
+   d="scan'208";a="223177081"
+Received: from allen-box.sh.intel.com ([10.239.159.136])
+  by fmsmga001.fm.intel.com with ESMTP; 23 Dec 2019 23:46:17 -0800
+From: Lu Baolu <baolu.lu@linux.intel.com>
+To: Joerg Roedel <joro@8bytes.org>,
+        David Woodhouse <dwmw2@infradead.org>,
+        Alex Williamson <alex.williamson@redhat.com>
+Cc: ashok.raj@intel.com, sanjay.k.kumar@intel.com,
+        jacob.jun.pan@linux.intel.com, kevin.tian@intel.com,
+        yi.l.liu@intel.com, yi.y.sun@intel.com,
+        Peter Xu <peterx@redhat.com>, iommu@lists.linux-foundation.org,
+        kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Lu Baolu <baolu.lu@linux.intel.com>
+Subject: [PATCH v5 4/9] iommu/vt-d: Setup pasid entries for iova over first
+ level
+Date: Tue, 24 Dec 2019 15:44:57 +0800
+Message-Id: <20191224074502.5545-5-baolu.lu@linux.intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191224074502.5545-1-baolu.lu@linux.intel.com>
+References: <20191224074502.5545-1-baolu.lu@linux.intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Intel VT-d in scalable mode supports two types of page tables for
+IOVA translation: first level and second level. The IOMMU driver
+can choose one from both for IOVA translation according to the use
+case. This sets up the pasid entry if a domain is selected to use
+the first-level page table for iova translation.
+
+Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+---
+ drivers/iommu/intel-iommu.c | 57 +++++++++++++++++++++++++++++++++----
+ include/linux/intel-iommu.h | 16 +++++++----
+ 2 files changed, 62 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/iommu/intel-iommu.c b/drivers/iommu/intel-iommu.c
+index 35f65628202c..071cbc172ce8 100644
+--- a/drivers/iommu/intel-iommu.c
++++ b/drivers/iommu/intel-iommu.c
+@@ -571,6 +571,11 @@ static inline int domain_type_is_si(struct dmar_domain *domain)
+ 	return domain->flags & DOMAIN_FLAG_STATIC_IDENTITY;
+ }
+ 
++static inline bool domain_use_first_level(struct dmar_domain *domain)
++{
++	return domain->flags & DOMAIN_FLAG_USE_FIRST_LEVEL;
++}
++
+ static inline int domain_pfn_supported(struct dmar_domain *domain,
+ 				       unsigned long pfn)
+ {
+@@ -932,6 +937,8 @@ static struct dma_pte *pfn_to_dma_pte(struct dmar_domain *domain,
+ 
+ 			domain_flush_cache(domain, tmp_page, VTD_PAGE_SIZE);
+ 			pteval = ((uint64_t)virt_to_dma_pfn(tmp_page) << VTD_PAGE_SHIFT) | DMA_PTE_READ | DMA_PTE_WRITE;
++			if (domain_use_first_level(domain))
++				pteval |= DMA_FL_PTE_XD;
+ 			if (cmpxchg64(&pte->val, 0ULL, pteval))
+ 				/* Someone else set it while we were thinking; use theirs. */
+ 				free_pgtable_page(tmp_page);
+@@ -2281,17 +2288,20 @@ static int __domain_mapping(struct dmar_domain *domain, unsigned long iov_pfn,
+ 	unsigned long sg_res = 0;
+ 	unsigned int largepage_lvl = 0;
+ 	unsigned long lvl_pages = 0;
++	u64 attr;
+ 
+ 	BUG_ON(!domain_pfn_supported(domain, iov_pfn + nr_pages - 1));
+ 
+ 	if ((prot & (DMA_PTE_READ|DMA_PTE_WRITE)) == 0)
+ 		return -EINVAL;
+ 
+-	prot &= DMA_PTE_READ | DMA_PTE_WRITE | DMA_PTE_SNP;
++	attr = prot & (DMA_PTE_READ | DMA_PTE_WRITE | DMA_PTE_SNP);
++	if (domain_use_first_level(domain))
++		attr |= DMA_FL_PTE_PRESENT | DMA_FL_PTE_XD;
+ 
+ 	if (!sg) {
+ 		sg_res = nr_pages;
+-		pteval = ((phys_addr_t)phys_pfn << VTD_PAGE_SHIFT) | prot;
++		pteval = ((phys_addr_t)phys_pfn << VTD_PAGE_SHIFT) | attr;
+ 	}
+ 
+ 	while (nr_pages > 0) {
+@@ -2303,7 +2313,7 @@ static int __domain_mapping(struct dmar_domain *domain, unsigned long iov_pfn,
+ 			sg_res = aligned_nrpages(sg->offset, sg->length);
+ 			sg->dma_address = ((dma_addr_t)iov_pfn << VTD_PAGE_SHIFT) + pgoff;
+ 			sg->dma_length = sg->length;
+-			pteval = (sg_phys(sg) - pgoff) | prot;
++			pteval = (sg_phys(sg) - pgoff) | attr;
+ 			phys_pfn = pteval >> VTD_PAGE_SHIFT;
+ 		}
+ 
+@@ -2515,6 +2525,36 @@ dmar_search_domain_by_dev_info(int segment, int bus, int devfn)
+ 	return NULL;
+ }
+ 
++static int domain_setup_first_level(struct intel_iommu *iommu,
++				    struct dmar_domain *domain,
++				    struct device *dev,
++				    int pasid)
++{
++	int flags = PASID_FLAG_SUPERVISOR_MODE;
++	struct dma_pte *pgd = domain->pgd;
++	int agaw, level;
++
++	/*
++	 * Skip top levels of page tables for iommu which has
++	 * less agaw than default. Unnecessary for PT mode.
++	 */
++	for (agaw = domain->agaw; agaw > iommu->agaw; agaw--) {
++		pgd = phys_to_virt(dma_pte_addr(pgd));
++		if (!dma_pte_present(pgd))
++			return -ENOMEM;
++	}
++
++	level = agaw_to_level(agaw);
++	if (level != 4 && level != 5)
++		return -EINVAL;
++
++	flags |= (level == 5) ? PASID_FLAG_FL5LP : 0;
++
++	return intel_pasid_setup_first_level(iommu, dev, (pgd_t *)pgd, pasid,
++					     domain->iommu_did[iommu->seq_id],
++					     flags);
++}
++
+ static struct dmar_domain *dmar_insert_one_dev_info(struct intel_iommu *iommu,
+ 						    int bus, int devfn,
+ 						    struct device *dev,
+@@ -2614,6 +2654,9 @@ static struct dmar_domain *dmar_insert_one_dev_info(struct intel_iommu *iommu,
+ 		if (hw_pass_through && domain_type_is_si(domain))
+ 			ret = intel_pasid_setup_pass_through(iommu, domain,
+ 					dev, PASID_RID2PASID);
++		else if (domain_use_first_level(domain))
++			ret = domain_setup_first_level(iommu, domain, dev,
++					PASID_RID2PASID);
+ 		else
+ 			ret = intel_pasid_setup_second_level(iommu, domain,
+ 					dev, PASID_RID2PASID);
+@@ -5374,8 +5417,12 @@ static int aux_domain_add_dev(struct dmar_domain *domain,
+ 		goto attach_failed;
+ 
+ 	/* Setup the PASID entry for mediated devices: */
+-	ret = intel_pasid_setup_second_level(iommu, domain, dev,
+-					     domain->default_pasid);
++	if (domain_use_first_level(domain))
++		ret = domain_setup_first_level(iommu, domain, dev,
++					       domain->default_pasid);
++	else
++		ret = intel_pasid_setup_second_level(iommu, domain, dev,
++						     domain->default_pasid);
+ 	if (ret)
+ 		goto table_failed;
+ 	spin_unlock(&iommu->lock);
+diff --git a/include/linux/intel-iommu.h b/include/linux/intel-iommu.h
+index aaece25c055f..454c69712131 100644
+--- a/include/linux/intel-iommu.h
++++ b/include/linux/intel-iommu.h
+@@ -34,10 +34,13 @@
+ #define VTD_STRIDE_SHIFT        (9)
+ #define VTD_STRIDE_MASK         (((u64)-1) << VTD_STRIDE_SHIFT)
+ 
+-#define DMA_PTE_READ (1)
+-#define DMA_PTE_WRITE (2)
+-#define DMA_PTE_LARGE_PAGE (1 << 7)
+-#define DMA_PTE_SNP (1 << 11)
++#define DMA_PTE_READ		BIT_ULL(0)
++#define DMA_PTE_WRITE		BIT_ULL(1)
++#define DMA_PTE_LARGE_PAGE	BIT_ULL(7)
++#define DMA_PTE_SNP		BIT_ULL(11)
++
++#define DMA_FL_PTE_PRESENT	BIT_ULL(0)
++#define DMA_FL_PTE_XD		BIT_ULL(63)
+ 
+ #define CONTEXT_TT_MULTI_LEVEL	0
+ #define CONTEXT_TT_DEV_IOTLB	1
+@@ -610,10 +613,11 @@ static inline void dma_clear_pte(struct dma_pte *pte)
+ static inline u64 dma_pte_addr(struct dma_pte *pte)
+ {
+ #ifdef CONFIG_64BIT
+-	return pte->val & VTD_PAGE_MASK;
++	return pte->val & VTD_PAGE_MASK & (~DMA_FL_PTE_XD);
+ #else
+ 	/* Must have a full atomic 64-bit read */
+-	return  __cmpxchg64(&pte->val, 0ULL, 0ULL) & VTD_PAGE_MASK;
++	return  __cmpxchg64(&pte->val, 0ULL, 0ULL) &
++			VTD_PAGE_MASK & (~DMA_FL_PTE_XD);
+ #endif
+ }
+ 
+
+From patchwork Tue Dec 24 07:44:58 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Lu Baolu <baolu.lu@linux.intel.com>
+X-Patchwork-Id: 11309147
+Return-Path: <SRS0=GC/h=2O=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id A8309138D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Dec 2019 07:47:04 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 85BF120706
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Dec 2019 07:47:04 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727076AbfLXHrA (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 24 Dec 2019 02:47:00 -0500
+Received: from mga03.intel.com ([134.134.136.65]:49687 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726271AbfLXHqW (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 24 Dec 2019 02:46:22 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Dec 2019 23:46:20 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,350,1571727600";
+   d="scan'208";a="223177085"
+Received: from allen-box.sh.intel.com ([10.239.159.136])
+  by fmsmga001.fm.intel.com with ESMTP; 23 Dec 2019 23:46:20 -0800
+From: Lu Baolu <baolu.lu@linux.intel.com>
+To: Joerg Roedel <joro@8bytes.org>,
+        David Woodhouse <dwmw2@infradead.org>,
+        Alex Williamson <alex.williamson@redhat.com>
+Cc: ashok.raj@intel.com, sanjay.k.kumar@intel.com,
+        jacob.jun.pan@linux.intel.com, kevin.tian@intel.com,
+        yi.l.liu@intel.com, yi.y.sun@intel.com,
+        Peter Xu <peterx@redhat.com>, iommu@lists.linux-foundation.org,
+        kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Lu Baolu <baolu.lu@linux.intel.com>
+Subject: [PATCH v5 5/9] iommu/vt-d: Flush PASID-based iotlb for iova over
+ first level
+Date: Tue, 24 Dec 2019 15:44:58 +0800
+Message-Id: <20191224074502.5545-6-baolu.lu@linux.intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191224074502.5545-1-baolu.lu@linux.intel.com>
+References: <20191224074502.5545-1-baolu.lu@linux.intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+When software has changed first-level tables, it should invalidate
+the affected IOTLB and the paging-structure-caches using the PASID-
+based-IOTLB Invalidate Descriptor defined in spec 6.5.2.4.
+
+Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+---
+ drivers/iommu/dmar.c        | 41 +++++++++++++++++++++++++++
+ drivers/iommu/intel-iommu.c | 56 +++++++++++++++++++++++++++----------
+ include/linux/intel-iommu.h |  2 ++
+ 3 files changed, 84 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/iommu/dmar.c b/drivers/iommu/dmar.c
+index 3acfa6a25fa2..fb30d5053664 100644
+--- a/drivers/iommu/dmar.c
++++ b/drivers/iommu/dmar.c
+@@ -1371,6 +1371,47 @@ void qi_flush_dev_iotlb(struct intel_iommu *iommu, u16 sid, u16 pfsid,
+ 	qi_submit_sync(&desc, iommu);
+ }
+ 
++/* PASID-based IOTLB invalidation */
++void qi_flush_piotlb(struct intel_iommu *iommu, u16 did, u32 pasid, u64 addr,
++		     unsigned long npages, bool ih)
++{
++	struct qi_desc desc = {.qw2 = 0, .qw3 = 0};
++
++	/*
++	 * npages == -1 means a PASID-selective invalidation, otherwise,
++	 * a positive value for Page-selective-within-PASID invalidation.
++	 * 0 is not a valid input.
++	 */
++	if (WARN_ON(!npages)) {
++		pr_err("Invalid input npages = %ld\n", npages);
++		return;
++	}
++
++	if (npages == -1) {
++		desc.qw0 = QI_EIOTLB_PASID(pasid) |
++				QI_EIOTLB_DID(did) |
++				QI_EIOTLB_GRAN(QI_GRAN_NONG_PASID) |
++				QI_EIOTLB_TYPE;
++		desc.qw1 = 0;
++	} else {
++		int mask = ilog2(__roundup_pow_of_two(npages));
++		unsigned long align = (1ULL << (VTD_PAGE_SHIFT + mask));
++
++		if (WARN_ON_ONCE(!ALIGN(addr, align)))
++			addr &= ~(align - 1);
++
++		desc.qw0 = QI_EIOTLB_PASID(pasid) |
++				QI_EIOTLB_DID(did) |
++				QI_EIOTLB_GRAN(QI_GRAN_PSI_PASID) |
++				QI_EIOTLB_TYPE;
++		desc.qw1 = QI_EIOTLB_ADDR(addr) |
++				QI_EIOTLB_IH(ih) |
++				QI_EIOTLB_AM(mask);
++	}
++
++	qi_submit_sync(&desc, iommu);
++}
++
+ /*
+  * Disable Queued Invalidation interface.
+  */
+diff --git a/drivers/iommu/intel-iommu.c b/drivers/iommu/intel-iommu.c
+index 071cbc172ce8..54db6bc0b281 100644
+--- a/drivers/iommu/intel-iommu.c
++++ b/drivers/iommu/intel-iommu.c
+@@ -1509,6 +1509,20 @@ static void iommu_flush_dev_iotlb(struct dmar_domain *domain,
+ 	spin_unlock_irqrestore(&device_domain_lock, flags);
+ }
+ 
++static void domain_flush_piotlb(struct intel_iommu *iommu,
++				struct dmar_domain *domain,
++				u64 addr, unsigned long npages, bool ih)
++{
++	u16 did = domain->iommu_did[iommu->seq_id];
++
++	if (domain->default_pasid)
++		qi_flush_piotlb(iommu, did, domain->default_pasid,
++				addr, npages, ih);
++
++	if (!list_empty(&domain->devices))
++		qi_flush_piotlb(iommu, did, PASID_RID2PASID, addr, npages, ih);
++}
++
+ static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
+ 				  struct dmar_domain *domain,
+ 				  unsigned long pfn, unsigned int pages,
+@@ -1522,18 +1536,23 @@ static void iommu_flush_iotlb_psi(struct intel_iommu *iommu,
+ 
+ 	if (ih)
+ 		ih = 1 << 6;
+-	/*
+-	 * Fallback to domain selective flush if no PSI support or the size is
+-	 * too big.
+-	 * PSI requires page size to be 2 ^ x, and the base address is naturally
+-	 * aligned to the size
+-	 */
+-	if (!cap_pgsel_inv(iommu->cap) || mask > cap_max_amask_val(iommu->cap))
+-		iommu->flush.flush_iotlb(iommu, did, 0, 0,
+-						DMA_TLB_DSI_FLUSH);
+-	else
+-		iommu->flush.flush_iotlb(iommu, did, addr | ih, mask,
+-						DMA_TLB_PSI_FLUSH);
++
++	if (domain_use_first_level(domain)) {
++		domain_flush_piotlb(iommu, domain, addr, pages, ih);
++	} else {
++		/*
++		 * Fallback to domain selective flush if no PSI support or
++		 * the size is too big. PSI requires page size to be 2 ^ x,
++		 * and the base address is naturally aligned to the size.
++		 */
++		if (!cap_pgsel_inv(iommu->cap) ||
++		    mask > cap_max_amask_val(iommu->cap))
++			iommu->flush.flush_iotlb(iommu, did, 0, 0,
++							DMA_TLB_DSI_FLUSH);
++		else
++			iommu->flush.flush_iotlb(iommu, did, addr | ih, mask,
++							DMA_TLB_PSI_FLUSH);
++	}
+ 
+ 	/*
+ 	 * In caching mode, changes of pages from non-present to present require
+@@ -1548,8 +1567,11 @@ static inline void __mapping_notify_one(struct intel_iommu *iommu,
+ 					struct dmar_domain *domain,
+ 					unsigned long pfn, unsigned int pages)
+ {
+-	/* It's a non-present to present mapping. Only flush if caching mode */
+-	if (cap_caching_mode(iommu->cap))
++	/*
++	 * It's a non-present to present mapping. Only flush if caching mode
++	 * and second level.
++	 */
++	if (cap_caching_mode(iommu->cap) && !domain_use_first_level(domain))
+ 		iommu_flush_iotlb_psi(iommu, domain, pfn, pages, 0, 1);
+ 	else
+ 		iommu_flush_write_buffer(iommu);
+@@ -1566,7 +1588,11 @@ static void iommu_flush_iova(struct iova_domain *iovad)
+ 		struct intel_iommu *iommu = g_iommus[idx];
+ 		u16 did = domain->iommu_did[iommu->seq_id];
+ 
+-		iommu->flush.flush_iotlb(iommu, did, 0, 0, DMA_TLB_DSI_FLUSH);
++		if (domain_use_first_level(domain))
++			domain_flush_piotlb(iommu, domain, 0, -1, 0);
++		else
++			iommu->flush.flush_iotlb(iommu, did, 0, 0,
++						 DMA_TLB_DSI_FLUSH);
+ 
+ 		if (!cap_caching_mode(iommu->cap))
+ 			iommu_flush_dev_iotlb(get_iommu_domain(iommu, did),
+diff --git a/include/linux/intel-iommu.h b/include/linux/intel-iommu.h
+index 454c69712131..3a4708a8a414 100644
+--- a/include/linux/intel-iommu.h
++++ b/include/linux/intel-iommu.h
+@@ -650,6 +650,8 @@ extern void qi_flush_iotlb(struct intel_iommu *iommu, u16 did, u64 addr,
+ 			  unsigned int size_order, u64 type);
+ extern void qi_flush_dev_iotlb(struct intel_iommu *iommu, u16 sid, u16 pfsid,
+ 			u16 qdep, u64 addr, unsigned mask);
++void qi_flush_piotlb(struct intel_iommu *iommu, u16 did, u32 pasid, u64 addr,
++		     unsigned long npages, bool ih);
+ extern int qi_submit_sync(struct qi_desc *desc, struct intel_iommu *iommu);
+ 
+ extern int dmar_ir_support(void);
+
+From patchwork Tue Dec 24 07:44:59 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Lu Baolu <baolu.lu@linux.intel.com>
+X-Patchwork-Id: 11309135
+Return-Path: <SRS0=GC/h=2O=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3218A109A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Dec 2019 07:46:28 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 1A5502071A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Dec 2019 07:46:28 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726395AbfLXHq0 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 24 Dec 2019 02:46:26 -0500
+Received: from mga03.intel.com ([134.134.136.65]:49687 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726269AbfLXHqZ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 24 Dec 2019 02:46:25 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Dec 2019 23:46:23 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,350,1571727600";
+   d="scan'208";a="223177088"
+Received: from allen-box.sh.intel.com ([10.239.159.136])
+  by fmsmga001.fm.intel.com with ESMTP; 23 Dec 2019 23:46:22 -0800
+From: Lu Baolu <baolu.lu@linux.intel.com>
+To: Joerg Roedel <joro@8bytes.org>,
+        David Woodhouse <dwmw2@infradead.org>,
+        Alex Williamson <alex.williamson@redhat.com>
+Cc: ashok.raj@intel.com, sanjay.k.kumar@intel.com,
+        jacob.jun.pan@linux.intel.com, kevin.tian@intel.com,
+        yi.l.liu@intel.com, yi.y.sun@intel.com,
+        Peter Xu <peterx@redhat.com>, iommu@lists.linux-foundation.org,
+        kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Lu Baolu <baolu.lu@linux.intel.com>
+Subject: [PATCH v5 6/9] iommu/vt-d: Make first level IOVA canonical
+Date: Tue, 24 Dec 2019 15:44:59 +0800
+Message-Id: <20191224074502.5545-7-baolu.lu@linux.intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191224074502.5545-1-baolu.lu@linux.intel.com>
+References: <20191224074502.5545-1-baolu.lu@linux.intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+First-level translation restricts the input-address to a canonical
+address (i.e., address bits 63:N have the same value as address
+bit [N-1], where N is 48-bits with 4-level paging and 57-bits with
+5-level paging). (section 3.6 in the spec)
+
+This makes first level IOVA canonical by using IOVA with bit [N-1]
+always cleared.
+
+Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+---
+ drivers/iommu/intel-iommu.c | 17 +++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/iommu/intel-iommu.c b/drivers/iommu/intel-iommu.c
+index 54db6bc0b281..1ebf5ed460cf 100644
+--- a/drivers/iommu/intel-iommu.c
++++ b/drivers/iommu/intel-iommu.c
+@@ -3505,8 +3505,21 @@ static unsigned long intel_alloc_iova(struct device *dev,
+ {
+ 	unsigned long iova_pfn;
+ 
+-	/* Restrict dma_mask to the width that the iommu can handle */
+-	dma_mask = min_t(uint64_t, DOMAIN_MAX_ADDR(domain->gaw), dma_mask);
++	/*
++	 * Restrict dma_mask to the width that the iommu can handle.
++	 * First-level translation restricts the input-address to a
++	 * canonical address (i.e., address bits 63:N have the same
++	 * value as address bit [N-1], where N is 48-bits with 4-level
++	 * paging and 57-bits with 5-level paging). Hence, skip bit
++	 * [N-1].
++	 */
++	if (domain_use_first_level(domain))
++		dma_mask = min_t(uint64_t, DOMAIN_MAX_ADDR(domain->gaw - 1),
++				 dma_mask);
++	else
++		dma_mask = min_t(uint64_t, DOMAIN_MAX_ADDR(domain->gaw),
++				 dma_mask);
++
+ 	/* Ensure we reserve the whole size-aligned region */
+ 	nrpages = __roundup_pow_of_two(nrpages);
+ 
+
+From patchwork Tue Dec 24 07:45:00 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Lu Baolu <baolu.lu@linux.intel.com>
+X-Patchwork-Id: 11309141
+Return-Path: <SRS0=GC/h=2O=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 01E13138D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Dec 2019 07:46:53 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id DDF7920722
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Dec 2019 07:46:52 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726867AbfLXHq2 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 24 Dec 2019 02:46:28 -0500
+Received: from mga03.intel.com ([134.134.136.65]:49687 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726559AbfLXHq1 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 24 Dec 2019 02:46:27 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Dec 2019 23:46:25 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,350,1571727600";
+   d="scan'208";a="223177094"
+Received: from allen-box.sh.intel.com ([10.239.159.136])
+  by fmsmga001.fm.intel.com with ESMTP; 23 Dec 2019 23:46:24 -0800
+From: Lu Baolu <baolu.lu@linux.intel.com>
+To: Joerg Roedel <joro@8bytes.org>,
+        David Woodhouse <dwmw2@infradead.org>,
+        Alex Williamson <alex.williamson@redhat.com>
+Cc: ashok.raj@intel.com, sanjay.k.kumar@intel.com,
+        jacob.jun.pan@linux.intel.com, kevin.tian@intel.com,
+        yi.l.liu@intel.com, yi.y.sun@intel.com,
+        Peter Xu <peterx@redhat.com>, iommu@lists.linux-foundation.org,
+        kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Lu Baolu <baolu.lu@linux.intel.com>
+Subject: [PATCH v5 7/9] iommu/vt-d: Update first level super page capability
+Date: Tue, 24 Dec 2019 15:45:00 +0800
+Message-Id: <20191224074502.5545-8-baolu.lu@linux.intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191224074502.5545-1-baolu.lu@linux.intel.com>
+References: <20191224074502.5545-1-baolu.lu@linux.intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+First-level translation may map input addresses to 4-KByte pages,
+2-MByte pages, or 1-GByte pages. Support for 4-KByte pages and
+2-Mbyte pages are mandatory for first-level translation. Hardware
+support for 1-GByte page is reported through the FL1GP field in
+the Capability Register.
+
+Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+---
+ drivers/iommu/intel-iommu.c | 17 ++++++++++++-----
+ 1 file changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/iommu/intel-iommu.c b/drivers/iommu/intel-iommu.c
+index 1ebf5ed460cf..34e619318f64 100644
+--- a/drivers/iommu/intel-iommu.c
++++ b/drivers/iommu/intel-iommu.c
+@@ -685,11 +685,12 @@ static int domain_update_iommu_snooping(struct intel_iommu *skip)
+ 	return ret;
+ }
+ 
+-static int domain_update_iommu_superpage(struct intel_iommu *skip)
++static int domain_update_iommu_superpage(struct dmar_domain *domain,
++					 struct intel_iommu *skip)
+ {
+ 	struct dmar_drhd_unit *drhd;
+ 	struct intel_iommu *iommu;
+-	int mask = 0xf;
++	int mask = 0x3;
+ 
+ 	if (!intel_iommu_superpage) {
+ 		return 0;
+@@ -699,7 +700,13 @@ static int domain_update_iommu_superpage(struct intel_iommu *skip)
+ 	rcu_read_lock();
+ 	for_each_active_iommu(iommu, drhd) {
+ 		if (iommu != skip) {
+-			mask &= cap_super_page_val(iommu->cap);
++			if (domain && domain_use_first_level(domain)) {
++				if (!cap_fl1gp_support(iommu->cap))
++					mask = 0x1;
++			} else {
++				mask &= cap_super_page_val(iommu->cap);
++			}
++
+ 			if (!mask)
+ 				break;
+ 		}
+@@ -714,7 +721,7 @@ static void domain_update_iommu_cap(struct dmar_domain *domain)
+ {
+ 	domain_update_iommu_coherency(domain);
+ 	domain->iommu_snooping = domain_update_iommu_snooping(NULL);
+-	domain->iommu_superpage = domain_update_iommu_superpage(NULL);
++	domain->iommu_superpage = domain_update_iommu_superpage(domain, NULL);
+ }
+ 
+ struct context_entry *iommu_context_addr(struct intel_iommu *iommu, u8 bus,
+@@ -4604,7 +4611,7 @@ static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
+ 			iommu->name);
+ 		return -ENXIO;
+ 	}
+-	sp = domain_update_iommu_superpage(iommu) - 1;
++	sp = domain_update_iommu_superpage(NULL, iommu) - 1;
+ 	if (sp >= 0 && !(cap_super_page_val(iommu->cap) & (1 << sp))) {
+ 		pr_warn("%s: Doesn't support large page.\n",
+ 			iommu->name);
+
+From patchwork Tue Dec 24 07:45:01 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Lu Baolu <baolu.lu@linux.intel.com>
+X-Patchwork-Id: 11309139
+Return-Path: <SRS0=GC/h=2O=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1A2FF138D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Dec 2019 07:46:49 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 02C7A207FF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Dec 2019 07:46:48 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726903AbfLXHqa (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 24 Dec 2019 02:46:30 -0500
+Received: from mga03.intel.com ([134.134.136.65]:49687 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726884AbfLXHq3 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 24 Dec 2019 02:46:29 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Dec 2019 23:46:27 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,350,1571727600";
+   d="scan'208";a="223177100"
+Received: from allen-box.sh.intel.com ([10.239.159.136])
+  by fmsmga001.fm.intel.com with ESMTP; 23 Dec 2019 23:46:26 -0800
+From: Lu Baolu <baolu.lu@linux.intel.com>
+To: Joerg Roedel <joro@8bytes.org>,
+        David Woodhouse <dwmw2@infradead.org>,
+        Alex Williamson <alex.williamson@redhat.com>
+Cc: ashok.raj@intel.com, sanjay.k.kumar@intel.com,
+        jacob.jun.pan@linux.intel.com, kevin.tian@intel.com,
+        yi.l.liu@intel.com, yi.y.sun@intel.com,
+        Peter Xu <peterx@redhat.com>, iommu@lists.linux-foundation.org,
+        kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Lu Baolu <baolu.lu@linux.intel.com>
+Subject: [PATCH v5 8/9] iommu/vt-d: Use iova over first level
+Date: Tue, 24 Dec 2019 15:45:01 +0800
+Message-Id: <20191224074502.5545-9-baolu.lu@linux.intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191224074502.5545-1-baolu.lu@linux.intel.com>
+References: <20191224074502.5545-1-baolu.lu@linux.intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+After we make all map/unmap paths support first level page table.
+Let's turn it on if hardware supports scalable mode.
+
+Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+---
+ drivers/iommu/intel-iommu.c | 6 ++----
+ 1 file changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/iommu/intel-iommu.c b/drivers/iommu/intel-iommu.c
+index 34e619318f64..51d60bad0b1d 100644
+--- a/drivers/iommu/intel-iommu.c
++++ b/drivers/iommu/intel-iommu.c
+@@ -1770,15 +1770,13 @@ static void free_dmar_iommu(struct intel_iommu *iommu)
+ 
+ /*
+  * Check and return whether first level is used by default for
+- * DMA translation. Currently, we make it off by setting
+- * first_level_support = 0, and will change it to -1 after all
+- * map/unmap paths support first level page table.
++ * DMA translation.
+  */
+ static bool first_level_by_default(void)
+ {
+ 	struct dmar_drhd_unit *drhd;
+ 	struct intel_iommu *iommu;
+-	static int first_level_support = 0;
++	static int first_level_support = -1;
+ 
+ 	if (likely(first_level_support != -1))
+ 		return first_level_support;
+
+From patchwork Tue Dec 24 07:45:02 2019
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Lu Baolu <baolu.lu@linux.intel.com>
+X-Patchwork-Id: 11309137
+Return-Path: <SRS0=GC/h=2O=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id A0F9C109A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Dec 2019 07:46:34 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 8068420730
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 24 Dec 2019 07:46:34 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727009AbfLXHqd (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 24 Dec 2019 02:46:33 -0500
+Received: from mga03.intel.com ([134.134.136.65]:49687 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726976AbfLXHqc (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 24 Dec 2019 02:46:32 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 23 Dec 2019 23:46:29 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.69,350,1571727600";
+   d="scan'208";a="223177103"
+Received: from allen-box.sh.intel.com ([10.239.159.136])
+  by fmsmga001.fm.intel.com with ESMTP; 23 Dec 2019 23:46:29 -0800
+From: Lu Baolu <baolu.lu@linux.intel.com>
+To: Joerg Roedel <joro@8bytes.org>,
+        David Woodhouse <dwmw2@infradead.org>,
+        Alex Williamson <alex.williamson@redhat.com>
+Cc: ashok.raj@intel.com, sanjay.k.kumar@intel.com,
+        jacob.jun.pan@linux.intel.com, kevin.tian@intel.com,
+        yi.l.liu@intel.com, yi.y.sun@intel.com,
+        Peter Xu <peterx@redhat.com>, iommu@lists.linux-foundation.org,
+        kvm@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Lu Baolu <baolu.lu@linux.intel.com>
+Subject: [PATCH v5 9/9] iommu/vt-d: debugfs: Add support to show page table
+ internals
+Date: Tue, 24 Dec 2019 15:45:02 +0800
+Message-Id: <20191224074502.5545-10-baolu.lu@linux.intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20191224074502.5545-1-baolu.lu@linux.intel.com>
+References: <20191224074502.5545-1-baolu.lu@linux.intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Export page table internals of the domain attached to each device.
+Example of such dump on a Skylake machine:
+
+$ sudo cat /sys/kernel/debug/iommu/intel/domain_translation_struct
+[ ... ]
+Device 0000:00:14.0 with pasid 0 @0x15f3d9000
+IOVA_PFN                PML5E                   PML4E
+0x000000008ced0 |       0x0000000000000000      0x000000015f3da003
+0x000000008ced1 |       0x0000000000000000      0x000000015f3da003
+0x000000008ced2 |       0x0000000000000000      0x000000015f3da003
+0x000000008ced3 |       0x0000000000000000      0x000000015f3da003
+0x000000008ced4 |       0x0000000000000000      0x000000015f3da003
+0x000000008ced5 |       0x0000000000000000      0x000000015f3da003
+0x000000008ced6 |       0x0000000000000000      0x000000015f3da003
+0x000000008ced7 |       0x0000000000000000      0x000000015f3da003
+0x000000008ced8 |       0x0000000000000000      0x000000015f3da003
+0x000000008ced9 |       0x0000000000000000      0x000000015f3da003
+
+PDPE                    PDE                     PTE
+0x000000015f3db003      0x000000015f3dc003      0x000000008ced0003
+0x000000015f3db003      0x000000015f3dc003      0x000000008ced1003
+0x000000015f3db003      0x000000015f3dc003      0x000000008ced2003
+0x000000015f3db003      0x000000015f3dc003      0x000000008ced3003
+0x000000015f3db003      0x000000015f3dc003      0x000000008ced4003
+0x000000015f3db003      0x000000015f3dc003      0x000000008ced5003
+0x000000015f3db003      0x000000015f3dc003      0x000000008ced6003
+0x000000015f3db003      0x000000015f3dc003      0x000000008ced7003
+0x000000015f3db003      0x000000015f3dc003      0x000000008ced8003
+0x000000015f3db003      0x000000015f3dc003      0x000000008ced9003
+[ ... ]
+
+Signed-off-by: Lu Baolu <baolu.lu@linux.intel.com>
+---
+ drivers/iommu/intel-iommu-debugfs.c | 75 +++++++++++++++++++++++++++++
+ drivers/iommu/intel-iommu.c         |  4 +-
+ include/linux/intel-iommu.h         |  2 +
+ 3 files changed, 79 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/iommu/intel-iommu-debugfs.c b/drivers/iommu/intel-iommu-debugfs.c
+index 471f05d452e0..c1257bef553c 100644
+--- a/drivers/iommu/intel-iommu-debugfs.c
++++ b/drivers/iommu/intel-iommu-debugfs.c
+@@ -5,6 +5,7 @@
+  * Authors: Gayatri Kammela <gayatri.kammela@intel.com>
+  *	    Sohil Mehta <sohil.mehta@intel.com>
+  *	    Jacob Pan <jacob.jun.pan@linux.intel.com>
++ *	    Lu Baolu <baolu.lu@linux.intel.com>
+  */
+ 
+ #include <linux/debugfs.h>
+@@ -283,6 +284,77 @@ static int dmar_translation_struct_show(struct seq_file *m, void *unused)
+ }
+ DEFINE_SHOW_ATTRIBUTE(dmar_translation_struct);
+ 
++static inline unsigned long level_to_directory_size(int level)
++{
++	return BIT_ULL(VTD_PAGE_SHIFT + VTD_STRIDE_SHIFT * (level - 1));
++}
++
++static inline void
++dump_page_info(struct seq_file *m, unsigned long iova, u64 *path)
++{
++	seq_printf(m, "0x%013lx |\t0x%016llx\t0x%016llx\t0x%016llx\t0x%016llx\t0x%016llx\n",
++		   iova >> VTD_PAGE_SHIFT, path[5], path[4],
++		   path[3], path[2], path[1]);
++}
++
++static void pgtable_walk_level(struct seq_file *m, struct dma_pte *pde,
++			       int level, unsigned long start,
++			       u64 *path)
++{
++	int i;
++
++	if (level > 5 || level < 1)
++		return;
++
++	for (i = 0; i < BIT_ULL(VTD_STRIDE_SHIFT);
++			i++, pde++, start += level_to_directory_size(level)) {
++		if (!dma_pte_present(pde))
++			continue;
++
++		path[level] = pde->val;
++		if (dma_pte_superpage(pde) || level == 1)
++			dump_page_info(m, start, path);
++		else
++			pgtable_walk_level(m, phys_to_virt(dma_pte_addr(pde)),
++					   level - 1, start, path);
++		path[level] = 0;
++	}
++}
++
++static int show_device_domain_translation(struct device *dev, void *data)
++{
++	struct dmar_domain *domain = find_domain(dev);
++	struct seq_file *m = data;
++	u64 path[6] = { 0 };
++
++	if (!domain)
++		return 0;
++
++	seq_printf(m, "Device %s with pasid %d @0x%llx\n",
++		   dev_name(dev), domain->default_pasid,
++		   (u64)virt_to_phys(domain->pgd));
++	seq_puts(m, "IOVA_PFN\t\tPML5E\t\t\tPML4E\t\t\tPDPE\t\t\tPDE\t\t\tPTE\n");
++
++	pgtable_walk_level(m, domain->pgd, domain->agaw + 2, 0, path);
++	seq_putc(m, '\n');
++
++	return 0;
++}
++
++static int domain_translation_struct_show(struct seq_file *m, void *unused)
++{
++	unsigned long flags;
++	int ret;
++
++	spin_lock_irqsave(&device_domain_lock, flags);
++	ret = bus_for_each_dev(&pci_bus_type, NULL, m,
++			       show_device_domain_translation);
++	spin_unlock_irqrestore(&device_domain_lock, flags);
++
++	return ret;
++}
++DEFINE_SHOW_ATTRIBUTE(domain_translation_struct);
++
+ #ifdef CONFIG_IRQ_REMAP
+ static void ir_tbl_remap_entry_show(struct seq_file *m,
+ 				    struct intel_iommu *iommu)
+@@ -396,6 +468,9 @@ void __init intel_iommu_debugfs_init(void)
+ 			    &iommu_regset_fops);
+ 	debugfs_create_file("dmar_translation_struct", 0444, intel_iommu_debug,
+ 			    NULL, &dmar_translation_struct_fops);
++	debugfs_create_file("domain_translation_struct", 0444,
++			    intel_iommu_debug, NULL,
++			    &domain_translation_struct_fops);
+ #ifdef CONFIG_IRQ_REMAP
+ 	debugfs_create_file("ir_translation_struct", 0444, intel_iommu_debug,
+ 			    NULL, &ir_translation_struct_fops);
+diff --git a/drivers/iommu/intel-iommu.c b/drivers/iommu/intel-iommu.c
+index 51d60bad0b1d..609931f6d771 100644
+--- a/drivers/iommu/intel-iommu.c
++++ b/drivers/iommu/intel-iommu.c
+@@ -396,7 +396,7 @@ EXPORT_SYMBOL_GPL(intel_iommu_gfx_mapped);
+ 
+ #define DUMMY_DEVICE_DOMAIN_INFO ((struct device_domain_info *)(-1))
+ #define DEFER_DEVICE_DOMAIN_INFO ((struct device_domain_info *)(-2))
+-static DEFINE_SPINLOCK(device_domain_lock);
++DEFINE_SPINLOCK(device_domain_lock);
+ static LIST_HEAD(device_domain_list);
+ 
+ #define device_needs_bounce(d) (!intel_no_bounce && dev_is_pci(d) &&	\
+@@ -2513,7 +2513,7 @@ static void domain_remove_dev_info(struct dmar_domain *domain)
+ 	spin_unlock_irqrestore(&device_domain_lock, flags);
+ }
+ 
+-static struct dmar_domain *find_domain(struct device *dev)
++struct dmar_domain *find_domain(struct device *dev)
+ {
+ 	struct device_domain_info *info;
+ 
+diff --git a/include/linux/intel-iommu.h b/include/linux/intel-iommu.h
+index 3a4708a8a414..4a16b39ae353 100644
+--- a/include/linux/intel-iommu.h
++++ b/include/linux/intel-iommu.h
+@@ -441,6 +441,7 @@ enum {
+ #define VTD_FLAG_SVM_CAPABLE		(1 << 2)
+ 
+ extern int intel_iommu_sm;
++extern spinlock_t device_domain_lock;
+ 
+ #define sm_supported(iommu)	(intel_iommu_sm && ecap_smts((iommu)->ecap))
+ #define pasid_supported(iommu)	(sm_supported(iommu) &&			\
+@@ -663,6 +664,7 @@ int for_each_device_domain(int (*fn)(struct device_domain_info *info,
+ 				     void *data), void *data);
+ void iommu_flush_write_buffer(struct intel_iommu *iommu);
+ int intel_iommu_enable_pasid(struct intel_iommu *iommu, struct device *dev);
++struct dmar_domain *find_domain(struct device *dev);
+ 
+ #ifdef CONFIG_INTEL_IOMMU_SVM
+ extern void intel_svm_check(struct intel_iommu *iommu);
