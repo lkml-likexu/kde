@@ -1,0 +1,775 @@
+From patchwork Tue Jan  7 14:46:38 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: weiqi <weiqi4@huawei.com>
+X-Patchwork-Id: 11320969
+Return-Path: <SRS0=92ZW=24=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1BE8514BD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  7 Jan 2020 14:47:11 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id EDF8E24679
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  7 Jan 2020 14:47:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728200AbgAGOrD (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 7 Jan 2020 09:47:03 -0500
+Received: from szxga05-in.huawei.com ([45.249.212.191]:8235 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1728118AbgAGOrC (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 7 Jan 2020 09:47:02 -0500
+Received: from DGGEMS405-HUB.china.huawei.com (unknown [172.30.72.60])
+        by Forcepoint Email with ESMTP id 76B47369D94C3378F945;
+        Tue,  7 Jan 2020 22:46:59 +0800 (CST)
+Received: from localhost (10.177.98.84) by DGGEMS405-HUB.china.huawei.com
+ (10.3.19.205) with Microsoft SMTP Server id 14.3.439.0; Tue, 7 Jan 2020
+ 22:46:52 +0800
+From: weiqi <weiqi4@huawei.com>
+To: <alexander.h.duyck@linux.intel.com>, <alex.williamson@redhat.com>
+CC: <kvm@vger.kernel.org>, <linux-kernel@vger.kernel.org>,
+        <pbonzini@redhat.com>, <x86@kernel.org>, wei qi <weiqi4@huawei.com>
+Subject: [PATCH 1/2] vfio: add mmap/munmap API for page hinting
+Date: Tue, 7 Jan 2020 22:46:38 +0800
+Message-ID: <1578408399-20092-2-git-send-email-weiqi4@huawei.com>
+X-Mailer: git-send-email 1.8.4.msysgit.0
+In-Reply-To: <1578408399-20092-1-git-send-email-weiqi4@huawei.com>
+References: <1578408399-20092-1-git-send-email-weiqi4@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.177.98.84]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: wei qi <weiqi4@huawei.com>
+
+add mmap/munmap API for page hinting.
+
+Signed-off-by: wei qi <weiqi4@huawei.com>
+---
+ drivers/vfio/vfio.c             | 109 ++++++++++++++++++++++++++++
+ drivers/vfio/vfio_iommu_type1.c | 157 +++++++++++++++++++++++++++++++++++++++-
+ include/linux/vfio.h            |  17 ++++-
+ 3 files changed, 280 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/vfio/vfio.c b/drivers/vfio/vfio.c
+index c848262..c7e9103 100644
+--- a/drivers/vfio/vfio.c
++++ b/drivers/vfio/vfio.c
+@@ -1866,6 +1866,115 @@ int vfio_set_irqs_validate_and_prepare(struct vfio_irq_set *hdr, int num_irqs,
+ }
+ EXPORT_SYMBOL(vfio_set_irqs_validate_and_prepare);
+ 
++int vfio_mmap_pages(struct device *dev, unsigned long user_pfn,
++			unsigned long page_size, int prot,
++			unsigned long pfn)
++{
++	struct vfio_container *container;
++	struct vfio_group *group;
++	struct vfio_iommu_driver *driver;
++	int ret;
++
++	if (!dev || !user_pfn || !page_size)
++		return -EINVAL;
++
++	group = vfio_group_get_from_dev(dev);
++	if (!group)
++		return -ENODEV;
++
++	ret = vfio_group_add_container_user(group);
++	if (ret)
++		goto err_pin_pages;
++
++	container = group->container;
++	driver = container->iommu_driver;
++	if (likely(driver && driver->ops->mmap_pages))
++		ret = driver->ops->mmap_pages(container->iommu_data, user_pfn,
++					page_size, prot, pfn);
++	else
++		ret = -ENOTTY;
++
++	vfio_group_try_dissolve_container(group);
++
++err_pin_pages:
++	vfio_group_put(group);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(vfio_mmap_pages);
++
++int vfio_munmap_pages(struct device *dev, unsigned long user_pfn,
++			unsigned long page_size)
++{
++	struct vfio_container *container;
++	struct vfio_group *group;
++	struct vfio_iommu_driver *driver;
++	int ret;
++
++	if (!dev || !user_pfn || !page_size)
++		return -EINVAL;
++
++	group = vfio_group_get_from_dev(dev);
++	if (!group)
++		return -ENODEV;
++
++	ret = vfio_group_add_container_user(group);
++	if (ret)
++		goto err_pin_pages;
++
++	container = group->container;
++	driver = container->iommu_driver;
++	if (likely(driver && driver->ops->munmap_pages))
++		ret = driver->ops->munmap_pages(container->iommu_data, user_pfn,
++						page_size);
++	else
++		ret = -ENOTTY;
++
++	vfio_group_try_dissolve_container(group);
++
++err_pin_pages:
++	vfio_group_put(group);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(vfio_munmap_pages);
++
++int vfio_dma_find(struct device *dev, unsigned long user_pfn, int npage,
++		unsigned long *phys_pfn)
++{
++	struct vfio_container *container;
++	struct vfio_group *group;
++	struct vfio_iommu_driver *driver;
++	int ret;
++
++	if (!dev || !user_pfn || !npage || !phys_pfn)
++		return -EINVAL;
++
++	if (npage > VFIO_PIN_PAGES_MAX_ENTRIES)
++		return -E2BIG;
++
++	group = vfio_group_get_from_dev(dev);
++	if (!group)
++		return -ENODEV;
++
++	ret = vfio_group_add_container_user(group);
++	if (ret)
++		goto err_pin_pages;
++
++	container = group->container;
++	driver = container->iommu_driver;
++	if (driver && driver->ops->dma_find)
++		ret = driver->ops->dma_find(container->iommu_data, user_pfn,
++					npage, phys_pfn);
++	else
++		ret = -ENOTTY;
++
++	vfio_group_try_dissolve_container(group);
++
++err_pin_pages:
++	vfio_group_put(group);
++	return ret;
++}
++EXPORT_SYMBOL(vfio_dma_find);
++
+ /*
+  * Pin a set of guest PFNs and return their associated host PFNs for local
+  * domain only.
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index 2ada8e6..df115dc 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -414,7 +414,7 @@ static long vfio_pin_pages_remote(struct vfio_dma *dma, unsigned long vaddr,
+ 		goto out;
+ 
+ 	/* Lock all the consecutive pages from pfn_base */
+-	for (vaddr += PAGE_SIZE, iova += PAGE_SIZE; pinned < npage;
++	for (vaddr += PAGE_SIZE, iova += PAGE_SIZE; (pinned < npage && pinned < 512);
+ 	     pinned++, vaddr += PAGE_SIZE, iova += PAGE_SIZE) {
+ 		ret = vaddr_get_pfn(current->mm, vaddr, dma->prot, &pfn);
+ 		if (ret)
+@@ -768,7 +768,7 @@ static long vfio_unmap_unpin(struct vfio_iommu *iommu, struct vfio_dma *dma,
+ 		phys_addr_t phys, next;
+ 
+ 		phys = iommu_iova_to_phys(domain->domain, iova);
+-		if (WARN_ON(!phys)) {
++		if (!phys) {
+ 			iova += PAGE_SIZE;
+ 			continue;
+ 		}
+@@ -1154,6 +1154,156 @@ static int vfio_dma_do_map(struct vfio_iommu *iommu,
+ 	return ret;
+ }
+ 
++static int vfio_iommu_type1_munmap_pages(void *iommu_data,
++					unsigned long user_pfn,
++					unsigned long page_size)
++{
++	struct vfio_iommu *iommu = iommu_data;
++	struct vfio_domain *domain;
++	struct vfio_dma *dma;
++	dma_addr_t iova = user_pfn  << PAGE_SHIFT;
++	int ret = 0;
++	phys_addr_t phys;
++	size_t unmapped;
++	long unlocked = 0;
++
++	if (!iommu || !user_pfn || !page_size)
++		return -EINVAL;
++
++	/* Supported for v2 version only */
++	if (!iommu->v2)
++		return -EACCES;
++
++	mutex_lock(&iommu->lock);
++	dma = vfio_find_dma(iommu, iova, page_size);
++	if (!dma) {
++		ret = -EINVAL;
++		goto out_unlock;
++	}
++
++	domain = list_first_entry(&iommu->domain_list,
++			struct vfio_domain, next);
++	phys = iommu_iova_to_phys(domain->domain, iova);
++	if (!phys) {
++		goto out_unlock;
++	} else {
++		unmapped = iommu_unmap(domain->domain, iova, page_size);
++		unlocked = vfio_unpin_pages_remote(dma, iova,
++					phys >> PAGE_SHIFT,
++					unmapped >> PAGE_SHIFT, true);
++	}
++
++out_unlock:
++	mutex_unlock(&iommu->lock);
++	return ret;
++}
++
++static int vfio_iommu_type1_mmap_pages(void *iommu_data,
++				unsigned long user_pfn,
++				unsigned long page_size, int prot,
++				unsigned long pfn)
++{
++	struct vfio_iommu *iommu = iommu_data;
++	struct vfio_domain *domain;
++	struct vfio_dma *dma;
++	dma_addr_t iova = user_pfn  << PAGE_SHIFT;
++	int ret = 0;
++	size_t unmapped;
++	phys_addr_t phys;
++	long unlocked = 0;
++
++	if (!iommu || !user_pfn || !page_size || !pfn)
++		return -EINVAL;
++
++	/* Supported for v2 version only */
++	if (!iommu->v2)
++		return -EACCES;
++
++	mutex_lock(&iommu->lock);
++
++	if (!IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu)) {
++		ret = -EACCES;
++		goto out_unlock;
++	}
++
++	dma = vfio_find_dma(iommu, iova, page_size);
++	if (!dma) {
++		ret = -EINVAL;
++		goto out_unlock;
++	}
++
++	domain = list_first_entry(&iommu->domain_list,
++		struct vfio_domain, next);
++
++	phys = iommu_iova_to_phys(domain->domain, iova);
++	if (phys) {
++		unmapped = iommu_unmap(domain->domain, iova, page_size);
++		unlocked = vfio_unpin_pages_remote(dma, iova,
++					phys >> PAGE_SHIFT,
++					unmapped >> PAGE_SHIFT, false);
++	}
++
++	ret = vfio_iommu_map(iommu, iova, pfn, page_size >> PAGE_SHIFT, prot);
++	if (ret) {
++		pr_warn("%s: gfn: %lx, pfn: %lx, npages：%lu\n", __func__,
++			user_pfn, pfn, page_size >> PAGE_SHIFT);
++	}
++
++out_unlock:
++	mutex_unlock(&iommu->lock);
++	return ret;
++}
++
++u64 vfio_iommu_iova_to_phys(struct vfio_iommu *iommu, dma_addr_t iova)
++{
++	struct vfio_domain *d;
++	u64 phys;
++
++	list_for_each_entry(d, &iommu->domain_list, next) {
++		phys = iommu_iova_to_phys(d->domain, iova);
++		if (phys)
++			return phys;
++	}
++	return 0;
++}
++
++static int vfio_iommu_type1_dma_find(void *iommu_data,
++					unsigned long user_pfn,
++					int npage, unsigned long *phys_pfn)
++{
++	struct vfio_iommu *iommu = iommu_data;
++	int i = 0;
++	struct vfio_dma *dma;
++	u64 phys;
++	dma_addr_t iova;
++
++	if (!iommu || !user_pfn)
++		return -EINVAL;
++
++	/* Supported for v2 version only */
++	if (!iommu->v2)
++		return -EACCES;
++
++	 mutex_lock(&iommu->lock);
++
++	iova = user_pfn << PAGE_SHIFT;
++	dma = vfio_find_dma(iommu, iova, PAGE_SIZE);
++	if (!dma)
++		goto unpin_exit;
++
++	if (((user_pfn + npage) << PAGE_SHIFT) <= (dma->iova + dma->size))
++		i = npage;
++	else
++		goto unpin_exit;
++
++	phys = vfio_iommu_iova_to_phys(iommu, iova);
++	*phys_pfn = phys >> PAGE_SHIFT;
++
++unpin_exit:
++	mutex_unlock(&iommu->lock);
++	return i;
++}
++
+ static int vfio_bus_type(struct device *dev, void *data)
+ {
+ 	struct bus_type **bus = data;
+@@ -2336,6 +2486,9 @@ static int vfio_iommu_type1_unregister_notifier(void *iommu_data,
+ 	.detach_group		= vfio_iommu_type1_detach_group,
+ 	.pin_pages		= vfio_iommu_type1_pin_pages,
+ 	.unpin_pages		= vfio_iommu_type1_unpin_pages,
++	.mmap_pages             = vfio_iommu_type1_mmap_pages,
++	.munmap_pages           = vfio_iommu_type1_munmap_pages,
++	.dma_find		= vfio_iommu_type1_dma_find,
+ 	.register_notifier	= vfio_iommu_type1_register_notifier,
+ 	.unregister_notifier	= vfio_iommu_type1_unregister_notifier,
+ };
+diff --git a/include/linux/vfio.h b/include/linux/vfio.h
+index e42a711..d7df495 100644
+--- a/include/linux/vfio.h
++++ b/include/linux/vfio.h
+@@ -77,6 +77,15 @@ struct vfio_iommu_driver_ops {
+ 				     unsigned long *phys_pfn);
+ 	int		(*unpin_pages)(void *iommu_data,
+ 				       unsigned long *user_pfn, int npage);
++	int		(*mmap_pages)(void *iommu_data,
++					unsigned long user_pfn,
++					unsigned long page_size,
++					int prot, unsigned long pfn);
++	int		(*munmap_pages)(void *iommu_data,
++					unsigned long user_pfn,
++					unsigned long page_size);
++	int		(*dma_find)(void *iommu_data, unsigned long user_pfn,
++					int npage, unsigned long *phys_pfn);
+ 	int		(*register_notifier)(void *iommu_data,
+ 					     unsigned long *events,
+ 					     struct notifier_block *nb);
+@@ -106,7 +115,13 @@ extern int vfio_pin_pages(struct device *dev, unsigned long *user_pfn,
+ 			  int npage, int prot, unsigned long *phys_pfn);
+ extern int vfio_unpin_pages(struct device *dev, unsigned long *user_pfn,
+ 			    int npage);
+-
++extern int vfio_dma_find(struct device *dev, unsigned long user_pfn, int npage,
++			unsigned long *phys_pfn);
++extern int vfio_mmap_pages(struct device *dev, unsigned long user_pfn,
++			unsigned long page_size, int prot,
++			unsigned long pfn);
++extern int vfio_munmap_pages(struct device *dev, unsigned long user_pfn,
++			unsigned long page_size);
+ /* each type has independent events */
+ enum vfio_notify_type {
+ 	VFIO_IOMMU_NOTIFY = 0,
+
+From patchwork Tue Jan  7 14:46:39 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: weiqi <weiqi4@huawei.com>
+X-Patchwork-Id: 11320971
+Return-Path: <SRS0=92ZW=24=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 181B914B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  7 Jan 2020 14:47:16 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id E0CA22077B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  7 Jan 2020 14:47:15 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728326AbgAGOrM (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 7 Jan 2020 09:47:12 -0500
+Received: from szxga04-in.huawei.com ([45.249.212.190]:9120 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1728080AbgAGOrM (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 7 Jan 2020 09:47:12 -0500
+Received: from DGGEMS411-HUB.china.huawei.com (unknown [172.30.72.59])
+        by Forcepoint Email with ESMTP id 3A7811D2FC4068FC053E;
+        Tue,  7 Jan 2020 22:47:07 +0800 (CST)
+Received: from localhost (10.177.98.84) by DGGEMS411-HUB.china.huawei.com
+ (10.3.19.211) with Microsoft SMTP Server id 14.3.439.0; Tue, 7 Jan 2020
+ 22:46:58 +0800
+From: weiqi <weiqi4@huawei.com>
+To: <alexander.h.duyck@linux.intel.com>, <alex.williamson@redhat.com>
+CC: <kvm@vger.kernel.org>, <linux-kernel@vger.kernel.org>,
+        <pbonzini@redhat.com>, <x86@kernel.org>, wei qi <weiqi4@huawei.com>
+Subject: [PATCH 2/2] KVM: add support for page hinting
+Date: Tue, 7 Jan 2020 22:46:39 +0800
+Message-ID: <1578408399-20092-3-git-send-email-weiqi4@huawei.com>
+X-Mailer: git-send-email 1.8.4.msysgit.0
+In-Reply-To: <1578408399-20092-1-git-send-email-weiqi4@huawei.com>
+References: <1578408399-20092-1-git-send-email-weiqi4@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.177.98.84]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: wei qi <weiqi4@huawei.com>
+
+add support for page hinting.
+
+Signed-off-by: wei qi <weiqi4@huawei.com>
+---
+ arch/x86/kvm/mmu/mmu.c   | 79 +++++++++++++++++++++++++++++++++++++++
+ arch/x86/kvm/x86.c       | 96 ++++++++++++++++++++++++++++++++++++++++++++++++
+ include/linux/kvm_host.h | 41 +++++++++++++++++++++
+ include/uapi/linux/kvm.h |  7 ++++
+ virt/kvm/vfio.c          | 11 ------
+ 5 files changed, 223 insertions(+), 11 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index 6f92b40..0cf2584 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -4259,6 +4259,71 @@ int kvm_handle_page_fault(struct kvm_vcpu *vcpu, u64 error_code,
+ 	return kvm_mtrr_check_gfn_range_consistency(vcpu, gfn, page_num);
+ }
+ 
++#include <linux/vfio.h>
++static void kvm_vfio_mmap_range(struct kvm_vcpu *vcpu, struct kvm_device *tmp,
++				gfn_t gfn, kvm_pfn_t pfn)
++{
++	struct kvm_vfio *kv = tmp->private;
++	struct kvm_vfio_group *kvg;
++
++	list_for_each_entry(kvg, &kv->group_list, node) {
++		struct vfio_group *group = kvg->vfio_group;
++		struct vfio_device *it, *device = NULL;
++
++		list_for_each_entry(it, &group->device_list, group_next) {
++			int flags;
++			unsigned long page_size;
++			struct kvm_memory_slot *memslot;
++			int size;
++			unsigned long old_pfn = 0;
++			gfn_t gfn_base;
++			kvm_pfn_t pfn_base;
++
++			device = it;
++			memslot = kvm_vcpu_gfn_to_memslot(vcpu, gfn);
++			page_size = kvm_host_page_size(vcpu->kvm, gfn);
++
++			/* only discard free pages, just check 2M hugetlb */
++			if (page_size >> PAGE_SHIFT != 512)
++				return;
++
++			gfn_base = ((gfn << PAGE_SHIFT) & (~(page_size - 1)))
++					>> PAGE_SHIFT;
++			pfn_base = ((pfn << PAGE_SHIFT) & (~(page_size - 1)))
++					>> PAGE_SHIFT;
++
++			while ((gfn << PAGE_SHIFT) & (page_size - 1))
++				page_size >>= 1;
++
++			while (__gfn_to_hva_memslot(memslot, gfn) &
++						(page_size - 1))
++				page_size >>= 1;
++
++			size = vfio_dma_find(device->dev, gfn_base,
++					page_size >> PAGE_SHIFT, &old_pfn);
++			if (!size) {
++				pr_err("%s:not find dma: gfn: %llx, size: %lu.\n",
++					__func__, gfn_base,
++					page_size >> PAGE_SHIFT);
++				return;
++			}
++			if (!old_pfn)
++				pr_err("%s: not find pfn: gfn: %llx, size: %lu.\n",
++					__func__, gfn_base,
++					page_size >> PAGE_SHIFT);
++
++			if (pfn_base == old_pfn)
++				return;
++
++			flags = IOMMU_READ;
++			if (!(memslot->flags & KVM_MEM_READONLY))
++				flags |= IOMMU_WRITE;
++			vfio_mmap_pages(device->dev, gfn,
++					page_size, flags, pfn);
++		}
++	}
++}
++
+ static int tdp_page_fault(struct kvm_vcpu *vcpu, gva_t gpa, u32 error_code,
+ 			  bool prefault)
+ {
+@@ -4317,6 +4382,20 @@ static int tdp_page_fault(struct kvm_vcpu *vcpu, gva_t gpa, u32 error_code,
+ 			 prefault, lpage_disallowed);
+ out_unlock:
+ 	spin_unlock(&vcpu->kvm->mmu_lock);
++
++	if (!is_noslot_pfn(pfn) && gfn) {
++		struct kvm_device *tmp;
++
++		list_for_each_entry(tmp, &vcpu->kvm->devices, vm_node) {
++			if (tmp->ops && tmp->ops->name &&
++				(!strcmp(tmp->ops->name, "kvm-vfio"))) {
++				spin_lock(&vcpu->kvm->discard_lock);
++				kvm_vfio_mmap_range(vcpu, tmp, gfn, pfn);
++				spin_unlock(&vcpu->kvm->discard_lock);
++			}
++		}
++	}
++
+ 	kvm_release_pfn_clean(pfn);
+ 	return r;
+ }
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index cf91713..264c65e 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -4837,6 +4837,92 @@ int kvm_vm_ioctl_enable_cap(struct kvm *kvm,
+ 	return r;
+ }
+ 
++#include <linux/vfio.h>
++static void kvm_vfio_ummap_range(struct kvm *kvm, struct kvm_device *tmp,
++				gfn_t gfn, int npages, unsigned long hva)
++{
++	struct kvm_vfio *kv = tmp->private;
++	struct kvm_vfio_group *kvg;
++
++	list_for_each_entry(kvg, &kv->group_list, node) {
++		struct vfio_group *group = kvg->vfio_group;
++		struct vfio_device *it, *device = NULL;
++
++		list_for_each_entry(it, &group->device_list, group_next) {
++			unsigned long page_size, page_size_base;
++			unsigned long addr;
++			int size;
++			unsigned long old_pfn = 0;
++			int ret = 0;
++			size_t unmapped = npages;
++			gfn_t iova_gfn = gfn;
++			unsigned long iova_hva = hva;
++
++			device = it;
++			while (unmapped) {
++				addr = gfn_to_hva(kvm, iova_gfn);
++				page_size_base = page_size =
++						kvm_host_page_size(kvm,
++						iova_gfn);
++
++				if (addr != iova_hva)
++					return;
++
++				while ((iova_gfn << PAGE_SHIFT) &
++					(page_size - 1))
++					page_size >>= 1;
++
++				while (addr & (page_size - 1))
++					page_size >>= 1;
++
++				if (page_size_base != page_size)
++					return;
++
++				size = vfio_dma_find(device->dev, iova_gfn,
++						page_size >> PAGE_SHIFT,
++						&old_pfn);
++				if (!size)
++					return;
++
++				if (!old_pfn)
++					return;
++
++				ret = vfio_munmap_pages(device->dev,
++						iova_gfn, page_size);
++				unmapped -= page_size >> PAGE_SHIFT;
++				iova_hva += page_size;
++				iova_gfn += page_size >> PAGE_SHIFT;
++			}
++		}
++	}
++}
++
++
++static int kvm_vm_ioctl_discard_range(struct kvm *kvm,
++				struct kvm_discard_msg *msg)
++{
++	gfn_t gfn, end_gfn;
++	int idx;
++	struct kvm_device *tmp;
++	unsigned long hva = msg->iov_base;
++	int npages = msg->iov_len >> PAGE_SHIFT;
++
++	gfn = gpa_to_gfn(msg->in_addr);
++	end_gfn = gpa_to_gfn(msg->in_addr + msg->iov_len);
++
++	idx = srcu_read_lock(&kvm->srcu);
++
++	list_for_each_entry(tmp, &kvm->devices, vm_node) {
++		if (tmp->ops->name && (!strcmp(tmp->ops->name, "kvm-vfio"))) {
++			spin_lock(&kvm->discard_lock);
++			kvm_vfio_ummap_range(kvm, tmp, gfn, npages, hva);
++			spin_unlock(&kvm->discard_lock);
++		}
++	}
++	srcu_read_unlock(&kvm->srcu, idx);
++	return 0;
++}
++
+ long kvm_arch_vm_ioctl(struct file *filp,
+ 		       unsigned int ioctl, unsigned long arg)
+ {
+@@ -5134,6 +5220,16 @@ long kvm_arch_vm_ioctl(struct file *filp,
+ 	case KVM_SET_PMU_EVENT_FILTER:
+ 		r = kvm_vm_ioctl_set_pmu_event_filter(kvm, argp);
+ 		break;
++	case KVM_DISCARD_RANGE: {
++		struct kvm_discard_msg discard_msg;
++
++		r = -EFAULT;
++		if (copy_from_user(&discard_msg, argp, sizeof(discard_msg)))
++			goto out;
++
++		r = kvm_vm_ioctl_discard_range(kvm, &discard_msg);
++		break;
++	}
+ 	default:
+ 		r = -ENOTTY;
+ 	}
+diff --git a/include/linux/kvm_host.h b/include/linux/kvm_host.h
+index 538c25e..6667e6b 100644
+--- a/include/linux/kvm_host.h
++++ b/include/linux/kvm_host.h
+@@ -442,6 +442,7 @@ struct kvm_memslots {
+ 
+ struct kvm {
+ 	spinlock_t mmu_lock;
++	spinlock_t discard_lock;
+ 	struct mutex slots_lock;
+ 	struct mm_struct *mm; /* userspace tied to this vm */
+ 	struct kvm_memslots __rcu *memslots[KVM_ADDRESS_SPACE_NUM];
+@@ -502,6 +503,46 @@ struct kvm {
+ 	struct srcu_struct irq_srcu;
+ 	pid_t userspace_pid;
+ };
++struct vfio_device {
++	struct kref                     kref;
++	struct device                   *dev;
++	const struct vfio_device_ops    *ops;
++	struct vfio_group               *group;
++	struct list_head                group_next;
++	void                            *device_data;
++};
++
++struct vfio_group {
++	struct kref                     kref;
++	int                             minor;
++	atomic_t                        container_users;
++	struct iommu_group              *iommu_group;
++	struct vfio_container           *container;
++	struct list_head                device_list;
++	struct mutex                    device_lock;
++	struct device                   *dev;
++	struct notifier_block           nb;
++	struct list_head                vfio_next;
++	struct list_head                container_next;
++	struct list_head                unbound_list;
++	struct mutex                    unbound_lock;
++	atomic_t                        opened;
++	wait_queue_head_t               container_q;
++	bool                            noiommu;
++	struct kvm                      *kvm;
++	struct blocking_notifier_head   notifier;
++};
++
++struct kvm_vfio_group {
++	struct list_head node;
++	struct vfio_group *vfio_group;
++};
++
++struct kvm_vfio {
++	struct list_head group_list;
++	struct mutex lock;
++	bool noncoherent;
++};
+ 
+ #define kvm_err(fmt, ...) \
+ 	pr_err("kvm [%i]: " fmt, task_pid_nr(current), ## __VA_ARGS__)
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index f0a16b4..53331fe 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -1264,6 +1264,13 @@ struct kvm_vfio_spapr_tce {
+ 					struct kvm_userspace_memory_region)
+ #define KVM_SET_TSS_ADDR          _IO(KVMIO,   0x47)
+ #define KVM_SET_IDENTITY_MAP_ADDR _IOW(KVMIO,  0x48, __u64)
++struct kvm_discard_msg {
++	__u64 iov_len;
++	__u64 iov_base;
++	__u64 in_addr;
++};
++#define KVM_DISCARD_RANGE   _IOW(KVMIO, 0x49, struct kvm_discard_msg)
++
+ 
+ /* enable ucontrol for s390 */
+ struct kvm_s390_ucas_mapping {
+diff --git a/virt/kvm/vfio.c b/virt/kvm/vfio.c
+index 8fcbc50..f6dc61e 100644
+--- a/virt/kvm/vfio.c
++++ b/virt/kvm/vfio.c
+@@ -21,17 +21,6 @@
+ #include <asm/kvm_ppc.h>
+ #endif
+ 
+-struct kvm_vfio_group {
+-	struct list_head node;
+-	struct vfio_group *vfio_group;
+-};
+-
+-struct kvm_vfio {
+-	struct list_head group_list;
+-	struct mutex lock;
+-	bool noncoherent;
+-};
+-
+ static struct vfio_group *kvm_vfio_group_get_external_user(struct file *filep)
+ {
+ 	struct vfio_group *vfio_group;
