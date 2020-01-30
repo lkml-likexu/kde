@@ -1,0 +1,1847 @@
+From patchwork Wed Jan 29 12:11:45 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Liu, Yi L" <yi.l.liu@intel.com>
+X-Patchwork-Id: 11356027
+Return-Path: <SRS0=InjK=3S=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 54F89112B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 29 Jan 2020 12:07:12 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 287E222522
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 29 Jan 2020 12:07:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726834AbgA2MHI (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 29 Jan 2020 07:07:08 -0500
+Received: from mga03.intel.com ([134.134.136.65]:59027 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726632AbgA2MGk (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 29 Jan 2020 07:06:40 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 29 Jan 2020 04:06:38 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,377,1574150400";
+   d="scan'208";a="222433135"
+Received: from jacob-builder.jf.intel.com ([10.7.199.155])
+  by orsmga008.jf.intel.com with ESMTP; 29 Jan 2020 04:06:38 -0800
+From: "Liu, Yi L" <yi.l.liu@intel.com>
+To: alex.williamson@redhat.com, eric.auger@redhat.com
+Cc: kevin.tian@intel.com, jacob.jun.pan@linux.intel.com,
+        joro@8bytes.org, ashok.raj@intel.com, yi.l.liu@intel.com,
+        jun.j.tian@intel.com, yi.y.sun@intel.com,
+        jean-philippe.brucker@arm.com, peterx@redhat.com,
+        iommu@lists.linux-foundation.org, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [RFC v3 1/8] vfio: Add VFIO_IOMMU_PASID_REQUEST(alloc/free)
+Date: Wed, 29 Jan 2020 04:11:45 -0800
+Message-Id: <1580299912-86084-2-git-send-email-yi.l.liu@intel.com>
+X-Mailer: git-send-email 2.7.4
+In-Reply-To: <1580299912-86084-1-git-send-email-yi.l.liu@intel.com>
+References: <1580299912-86084-1-git-send-email-yi.l.liu@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Liu Yi L <yi.l.liu@intel.com>
+
+For a long time, devices have only one DMA address space from platform
+IOMMU's point of view. This is true for both bare metal and directed-
+access in virtualization environment. Reason is the source ID of DMA in
+PCIe are BDF (bus/dev/fnc ID), which results in only device granularity
+DMA isolation. However, this is changing with the latest advancement of
+I/O technology. More and more platform vendors are utilizing the PCIe
+PASID TLP prefix in DMA requests, thus to give devices with multiple DMA
+address spaces as identified by their individual PASIDs. For example,
+Shared Virtual Addressing (SVA, a.k.a Shared Virtual Memory) is able to
+let device access multiple process virtual address space by binding the
+virtual address space with a PASID. Wherein the PASID is allocated in
+software and programmed to device per device specific manner. Devices
+which support PASID capability are called PASID-capable devices. If such
+devices are passed through to VMs, guest software are also able to bind
+guest process virtual address space on such devices. Therefore, the guest
+software could reuse the bare metal software programming model, which
+means guest software will also allocate PASID and program it to device
+directly. This is a dangerous situation since it has potential PASID
+conflicts and unauthorized address space access. It would be safer to
+let host intercept in the guest software's PASID allocation. Thus PASID
+are managed system-wide.
+
+This patch adds VFIO_IOMMU_PASID_REQUEST ioctl which aims to passdown
+PASID allocation/free request from the virtual IOMMU. Additionally, such
+requests are intended to be invoked by QEMU or other applications which
+are running in userspace, it is necessary to have a mechanism to prevent
+single application from abusing available PASIDs in system. With such
+consideration, this patch tracks the VFIO PASID allocation per-VM. There
+was a discussion to make quota to be per assigned devices. e.g. if a VM
+has many assigned devices, then it should have more quota. However, it
+is not sure how many PASIDs an assigned devices will use. e.g. it is
+possible that a VM with multiples assigned devices but requests less
+PASIDs. Therefore per-VM quota would be better.
+
+This patch uses struct mm pointer as a per-VM token. We also considered
+using task structure pointer and vfio_iommu structure pointer. However,
+task structure is per-thread, which means it cannot achieve per-VM PASID
+alloc tracking purpose. While for vfio_iommu structure, it is visible
+only within vfio. Therefore, structure mm pointer is selected. This patch
+adds a structure vfio_mm. A vfio_mm is created when the first vfio
+container is opened by a VM. On the reverse order, vfio_mm is free when
+the last vfio container is released. Each VM is assigned with a PASID
+quota, so that it is not able to request PASID beyond its quota. This
+patch adds a default quota of 1000. This quota could be tuned by
+administrator. Making PASID quota tunable will be added in another patch
+in this series.
+
+Previous discussions:
+https://patchwork.kernel.org/patch/11209429/
+
+Cc: Kevin Tian <kevin.tian@intel.com>
+CC: Jacob Pan <jacob.jun.pan@linux.intel.com>
+Cc: Alex Williamson <alex.williamson@redhat.com>
+Cc: Eric Auger <eric.auger@redhat.com>
+Cc: Jean-Philippe Brucker <jean-philippe.brucker@arm.com>
+Signed-off-by: Liu Yi L <yi.l.liu@intel.com>
+Signed-off-by: Yi Sun <yi.y.sun@linux.intel.com>
+Signed-off-by: Jacob Pan <jacob.jun.pan@linux.intel.com>
+---
+ drivers/vfio/vfio.c             | 125 ++++++++++++++++++++++++++++++++++++++++
+ drivers/vfio/vfio_iommu_type1.c |  92 +++++++++++++++++++++++++++++
+ include/linux/vfio.h            |  15 +++++
+ include/uapi/linux/vfio.h       |  41 +++++++++++++
+ 4 files changed, 273 insertions(+)
+
+diff --git a/drivers/vfio/vfio.c b/drivers/vfio/vfio.c
+index c848262..c43c757 100644
+--- a/drivers/vfio/vfio.c
++++ b/drivers/vfio/vfio.c
+@@ -32,6 +32,7 @@
+ #include <linux/vfio.h>
+ #include <linux/wait.h>
+ #include <linux/sched/signal.h>
++#include <linux/sched/mm.h>
+ 
+ #define DRIVER_VERSION	"0.3"
+ #define DRIVER_AUTHOR	"Alex Williamson <alex.williamson@redhat.com>"
+@@ -46,6 +47,8 @@ static struct vfio {
+ 	struct mutex			group_lock;
+ 	struct cdev			group_cdev;
+ 	dev_t				group_devt;
++	struct list_head		vfio_mm_list;
++	struct mutex			vfio_mm_lock;
+ 	wait_queue_head_t		release_q;
+ } vfio;
+ 
+@@ -2129,6 +2132,126 @@ int vfio_unregister_notifier(struct device *dev, enum vfio_notify_type type,
+ EXPORT_SYMBOL(vfio_unregister_notifier);
+ 
+ /**
++ * VFIO_MM objects - create, release, get, put, search
++ * Caller of the function should have held vfio.vfio_mm_lock.
++ */
++static struct vfio_mm *vfio_create_mm(struct mm_struct *mm)
++{
++	struct vfio_mm *vmm;
++
++	vmm = kzalloc(sizeof(*vmm), GFP_KERNEL);
++	if (!vmm)
++		return ERR_PTR(-ENOMEM);
++
++	kref_init(&vmm->kref);
++	vmm->mm = mm;
++	vmm->pasid_quota = VFIO_DEFAULT_PASID_QUOTA;
++	vmm->pasid_count = 0;
++	mutex_init(&vmm->pasid_lock);
++
++	list_add(&vmm->vfio_next, &vfio.vfio_mm_list);
++
++	return vmm;
++}
++
++static void vfio_mm_unlock_and_free(struct vfio_mm *vmm)
++{
++	mutex_unlock(&vfio.vfio_mm_lock);
++	kfree(vmm);
++}
++
++/* called with vfio.vfio_mm_lock held */
++static void vfio_mm_release(struct kref *kref)
++{
++	struct vfio_mm *vmm = container_of(kref, struct vfio_mm, kref);
++
++	list_del(&vmm->vfio_next);
++	vfio_mm_unlock_and_free(vmm);
++}
++
++void vfio_mm_put(struct vfio_mm *vmm)
++{
++	kref_put_mutex(&vmm->kref, vfio_mm_release, &vfio.vfio_mm_lock);
++}
++EXPORT_SYMBOL_GPL(vfio_mm_put);
++
++/* Assume vfio_mm_lock or vfio_mm reference is held */
++static void vfio_mm_get(struct vfio_mm *vmm)
++{
++	kref_get(&vmm->kref);
++}
++
++struct vfio_mm *vfio_mm_get_from_task(struct task_struct *task)
++{
++	struct mm_struct *mm = get_task_mm(task);
++	struct vfio_mm *vmm;
++
++	mutex_lock(&vfio.vfio_mm_lock);
++	list_for_each_entry(vmm, &vfio.vfio_mm_list, vfio_next) {
++		if (vmm->mm == mm) {
++			vfio_mm_get(vmm);
++			goto out;
++		}
++	}
++
++	vmm = vfio_create_mm(mm);
++	if (IS_ERR(vmm))
++		vmm = NULL;
++out:
++	mutex_unlock(&vfio.vfio_mm_lock);
++	mmput(mm);
++	return vmm;
++}
++EXPORT_SYMBOL_GPL(vfio_mm_get_from_task);
++
++int vfio_mm_pasid_alloc(struct vfio_mm *vmm, int min, int max)
++{
++	ioasid_t pasid;
++	int ret = -ENOSPC;
++
++	mutex_lock(&vmm->pasid_lock);
++	if (vmm->pasid_count >= vmm->pasid_quota) {
++		ret = -ENOSPC;
++		goto out_unlock;
++	}
++	/* Track ioasid allocation owner by mm */
++	pasid = ioasid_alloc((struct ioasid_set *)vmm->mm, min,
++				max, NULL);
++	if (pasid == INVALID_IOASID) {
++		ret = -ENOSPC;
++		goto out_unlock;
++	}
++	vmm->pasid_count++;
++
++	ret = pasid;
++out_unlock:
++	mutex_unlock(&vmm->pasid_lock);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(vfio_mm_pasid_alloc);
++
++int vfio_mm_pasid_free(struct vfio_mm *vmm, ioasid_t pasid)
++{
++	void *pdata;
++	int ret = 0;
++
++	mutex_lock(&vmm->pasid_lock);
++	pdata = ioasid_find((struct ioasid_set *)vmm->mm,
++				pasid, NULL);
++	if (IS_ERR(pdata)) {
++		ret = PTR_ERR(pdata);
++		goto out_unlock;
++	}
++	ioasid_free(pasid);
++
++	vmm->pasid_count--;
++out_unlock:
++	mutex_unlock(&vmm->pasid_lock);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(vfio_mm_pasid_free);
++
++/**
+  * Module/class support
+  */
+ static char *vfio_devnode(struct device *dev, umode_t *mode)
+@@ -2151,8 +2274,10 @@ static int __init vfio_init(void)
+ 	idr_init(&vfio.group_idr);
+ 	mutex_init(&vfio.group_lock);
+ 	mutex_init(&vfio.iommu_drivers_lock);
++	mutex_init(&vfio.vfio_mm_lock);
+ 	INIT_LIST_HEAD(&vfio.group_list);
+ 	INIT_LIST_HEAD(&vfio.iommu_drivers_list);
++	INIT_LIST_HEAD(&vfio.vfio_mm_list);
+ 	init_waitqueue_head(&vfio.release_q);
+ 
+ 	ret = misc_register(&vfio_dev);
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index 2ada8e6..e836d04 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -70,6 +70,7 @@ struct vfio_iommu {
+ 	unsigned int		dma_avail;
+ 	bool			v2;
+ 	bool			nesting;
++	struct vfio_mm		*vmm;
+ };
+ 
+ struct vfio_domain {
+@@ -2039,6 +2040,7 @@ static void vfio_iommu_type1_detach_group(void *iommu_data,
+ static void *vfio_iommu_type1_open(unsigned long arg)
+ {
+ 	struct vfio_iommu *iommu;
++	struct vfio_mm *vmm = NULL;
+ 
+ 	iommu = kzalloc(sizeof(*iommu), GFP_KERNEL);
+ 	if (!iommu)
+@@ -2064,6 +2066,10 @@ static void *vfio_iommu_type1_open(unsigned long arg)
+ 	iommu->dma_avail = dma_entry_limit;
+ 	mutex_init(&iommu->lock);
+ 	BLOCKING_INIT_NOTIFIER_HEAD(&iommu->notifier);
++	vmm = vfio_mm_get_from_task(current);
++	if (!vmm)
++		pr_err("Failed to get vfio_mm track\n");
++	iommu->vmm = vmm;
+ 
+ 	return iommu;
+ }
+@@ -2105,6 +2111,8 @@ static void vfio_iommu_type1_release(void *iommu_data)
+ 	}
+ 
+ 	vfio_iommu_iova_free(&iommu->iova_list);
++	if (iommu->vmm)
++		vfio_mm_put(iommu->vmm);
+ 
+ 	kfree(iommu);
+ }
+@@ -2193,6 +2201,48 @@ static int vfio_iommu_iova_build_caps(struct vfio_iommu *iommu,
+ 	return ret;
+ }
+ 
++static int vfio_iommu_type1_pasid_alloc(struct vfio_iommu *iommu,
++					 int min,
++					 int max)
++{
++	struct vfio_mm *vmm = iommu->vmm;
++	int ret = 0;
++
++	mutex_lock(&iommu->lock);
++	if (!IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu)) {
++		ret = -EINVAL;
++		goto out_unlock;
++	}
++	if (vmm)
++		ret = vfio_mm_pasid_alloc(vmm, min, max);
++	else
++		ret = -ENOSPC;
++out_unlock:
++	mutex_unlock(&iommu->lock);
++	return ret;
++}
++
++static int vfio_iommu_type1_pasid_free(struct vfio_iommu *iommu,
++				       unsigned int pasid)
++{
++	struct vfio_mm *vmm = iommu->vmm;
++	int ret = 0;
++
++	mutex_lock(&iommu->lock);
++	if (!IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu)) {
++		ret = -EINVAL;
++		goto out_unlock;
++	}
++
++	if (vmm)
++		ret = vfio_mm_pasid_free(vmm, pasid);
++	else
++		ret = -ENOSPC;
++out_unlock:
++	mutex_unlock(&iommu->lock);
++	return ret;
++}
++
+ static long vfio_iommu_type1_ioctl(void *iommu_data,
+ 				   unsigned int cmd, unsigned long arg)
+ {
+@@ -2297,6 +2347,48 @@ static long vfio_iommu_type1_ioctl(void *iommu_data,
+ 
+ 		return copy_to_user((void __user *)arg, &unmap, minsz) ?
+ 			-EFAULT : 0;
++
++	} else if (cmd == VFIO_IOMMU_PASID_REQUEST) {
++		struct vfio_iommu_type1_pasid_request req;
++		u32 min, max, pasid;
++		int ret, result;
++		unsigned long offset;
++
++		offset = offsetof(struct vfio_iommu_type1_pasid_request,
++				  alloc_pasid.result);
++		minsz = offsetofend(struct vfio_iommu_type1_pasid_request,
++				    flags);
++
++		if (copy_from_user(&req, (void __user *)arg, minsz))
++			return -EFAULT;
++
++		if (req.argsz < minsz)
++			return -EINVAL;
++
++		switch (req.flags & VFIO_PASID_REQUEST_MASK) {
++		case VFIO_IOMMU_PASID_ALLOC:
++			if (copy_from_user(&min,
++				(void __user *)arg + minsz, sizeof(min)))
++				return -EFAULT;
++			if (copy_from_user(&max,
++				(void __user *)arg + minsz + sizeof(min),
++				sizeof(max)))
++				return -EFAULT;
++			ret = 0;
++			result = vfio_iommu_type1_pasid_alloc(iommu, min, max);
++			if (result > 0)
++				ret = copy_to_user(
++					      (void __user *) (arg + offset),
++					      &result, sizeof(result));
++			return ret;
++		case VFIO_IOMMU_PASID_FREE:
++			if (copy_from_user(&pasid,
++				(void __user *)arg + minsz, sizeof(pasid)))
++				return -EFAULT;
++			return vfio_iommu_type1_pasid_free(iommu, pasid);
++		default:
++			return -EINVAL;
++		}
+ 	}
+ 
+ 	return -ENOTTY;
+diff --git a/include/linux/vfio.h b/include/linux/vfio.h
+index e42a711..b6c9c8c 100644
+--- a/include/linux/vfio.h
++++ b/include/linux/vfio.h
+@@ -89,6 +89,21 @@ extern int vfio_register_iommu_driver(const struct vfio_iommu_driver_ops *ops);
+ extern void vfio_unregister_iommu_driver(
+ 				const struct vfio_iommu_driver_ops *ops);
+ 
++#define VFIO_DEFAULT_PASID_QUOTA	1000
++struct vfio_mm {
++	struct kref			kref;
++	struct mutex			pasid_lock;
++	int				pasid_quota;
++	int				pasid_count;
++	struct mm_struct		*mm;
++	struct list_head		vfio_next;
++};
++
++extern struct vfio_mm *vfio_mm_get_from_task(struct task_struct *task);
++extern void vfio_mm_put(struct vfio_mm *vmm);
++extern int vfio_mm_pasid_alloc(struct vfio_mm *vmm, int min, int max);
++extern int vfio_mm_pasid_free(struct vfio_mm *vmm, ioasid_t pasid);
++
+ /*
+  * External user API
+  */
+diff --git a/include/uapi/linux/vfio.h b/include/uapi/linux/vfio.h
+index 9e843a1..298ac80 100644
+--- a/include/uapi/linux/vfio.h
++++ b/include/uapi/linux/vfio.h
+@@ -794,6 +794,47 @@ struct vfio_iommu_type1_dma_unmap {
+ #define VFIO_IOMMU_ENABLE	_IO(VFIO_TYPE, VFIO_BASE + 15)
+ #define VFIO_IOMMU_DISABLE	_IO(VFIO_TYPE, VFIO_BASE + 16)
+ 
++/*
++ * PASID (Process Address Space ID) is a PCIe concept which
++ * has been extended to support DMA isolation in fine-grain.
++ * With device assigned to user space (e.g. VMs), PASID alloc
++ * and free need to be system wide. This structure defines
++ * the info for pasid alloc/free between user space and kernel
++ * space.
++ *
++ * @flag=VFIO_IOMMU_PASID_ALLOC, refer to the @alloc_pasid
++ * @flag=VFIO_IOMMU_PASID_FREE, refer to @free_pasid
++ */
++struct vfio_iommu_type1_pasid_request {
++	__u32	argsz;
++#define VFIO_IOMMU_PASID_ALLOC	(1 << 0)
++#define VFIO_IOMMU_PASID_FREE	(1 << 1)
++	__u32	flags;
++	union {
++		struct {
++			__u32 min;
++			__u32 max;
++			__u32 result;
++		} alloc_pasid;
++		__u32 free_pasid;
++	};
++};
++
++#define VFIO_PASID_REQUEST_MASK	(VFIO_IOMMU_PASID_ALLOC | \
++					 VFIO_IOMMU_PASID_FREE)
++
++/**
++ * VFIO_IOMMU_PASID_REQUEST - _IOWR(VFIO_TYPE, VFIO_BASE + 22,
++ *				struct vfio_iommu_type1_pasid_request)
++ *
++ * Availability of this feature depends on PASID support in the device,
++ * its bus, the underlying IOMMU and the CPU architecture. In VFIO, it
++ * is available after VFIO_SET_IOMMU.
++ *
++ * returns: 0 on success, -errno on failure.
++ */
++#define VFIO_IOMMU_PASID_REQUEST	_IO(VFIO_TYPE, VFIO_BASE + 22)
++
+ /* -------- Additional API for SPAPR TCE (Server POWERPC) IOMMU -------- */
+ 
+ /*
+
+From patchwork Wed Jan 29 12:11:46 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Liu, Yi L" <yi.l.liu@intel.com>
+X-Patchwork-Id: 11356021
+Return-Path: <SRS0=InjK=3S=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 93B38188B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 29 Jan 2020 12:07:07 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 7913A207FD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 29 Jan 2020 12:07:07 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726814AbgA2MHE (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 29 Jan 2020 07:07:04 -0500
+Received: from mga03.intel.com ([134.134.136.65]:59025 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726622AbgA2MGk (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 29 Jan 2020 07:06:40 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 29 Jan 2020 04:06:38 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,377,1574150400";
+   d="scan'208";a="222433139"
+Received: from jacob-builder.jf.intel.com ([10.7.199.155])
+  by orsmga008.jf.intel.com with ESMTP; 29 Jan 2020 04:06:38 -0800
+From: "Liu, Yi L" <yi.l.liu@intel.com>
+To: alex.williamson@redhat.com, eric.auger@redhat.com
+Cc: kevin.tian@intel.com, jacob.jun.pan@linux.intel.com,
+        joro@8bytes.org, ashok.raj@intel.com, yi.l.liu@intel.com,
+        jun.j.tian@intel.com, yi.y.sun@intel.com,
+        jean-philippe.brucker@arm.com, peterx@redhat.com,
+        iommu@lists.linux-foundation.org, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [RFC v3 2/8] vfio/type1: Make per-application (VM) PASID quota
+ tunable
+Date: Wed, 29 Jan 2020 04:11:46 -0800
+Message-Id: <1580299912-86084-3-git-send-email-yi.l.liu@intel.com>
+X-Mailer: git-send-email 2.7.4
+In-Reply-To: <1580299912-86084-1-git-send-email-yi.l.liu@intel.com>
+References: <1580299912-86084-1-git-send-email-yi.l.liu@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Liu Yi L <yi.l.liu@intel.com>
+
+The PASID quota is per-application (VM) according to vfio's PASID
+management rule. For better flexibility, quota shall be user tunable
+. This patch provides a VFIO based user interface for which quota can
+be adjusted. However, quota cannot be adjusted downward below the
+number of outstanding PASIDs.
+
+This patch only makes the per-VM PASID quota tunable. While for the
+way to tune the default PASID quota, it may require a new vfio module
+option or other way. This may be another patchset in future.
+
+Previous discussions:
+https://patchwork.kernel.org/patch/11209429/
+
+Cc: Kevin Tian <kevin.tian@intel.com>
+CC: Jacob Pan <jacob.jun.pan@linux.intel.com>
+Cc: Alex Williamson <alex.williamson@redhat.com>
+Cc: Eric Auger <eric.auger@redhat.com>
+Cc: Jean-Philippe Brucker <jean-philippe.brucker@arm.com>
+Signed-off-by: Liu Yi L <yi.l.liu@intel.com>
+---
+ drivers/vfio/vfio_iommu_type1.c | 33 +++++++++++++++++++++++++++++++++
+ include/uapi/linux/vfio.h       | 22 ++++++++++++++++++++++
+ 2 files changed, 55 insertions(+)
+
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index e836d04..1cf75f5 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -2243,6 +2243,27 @@ static int vfio_iommu_type1_pasid_free(struct vfio_iommu *iommu,
+ 	return ret;
+ }
+ 
++static int vfio_iommu_type1_set_pasid_quota(struct vfio_iommu *iommu,
++					    u32 quota)
++{
++	struct vfio_mm *vmm = iommu->vmm;
++	int ret = 0;
++
++	mutex_lock(&iommu->lock);
++	mutex_lock(&vmm->pasid_lock);
++	if (vmm->pasid_count > quota) {
++		ret = -EINVAL;
++		goto out_unlock;
++	}
++	vmm->pasid_quota = quota;
++	ret = quota;
++
++out_unlock:
++	mutex_unlock(&vmm->pasid_lock);
++	mutex_unlock(&iommu->lock);
++	return ret;
++}
++
+ static long vfio_iommu_type1_ioctl(void *iommu_data,
+ 				   unsigned int cmd, unsigned long arg)
+ {
+@@ -2389,6 +2410,18 @@ static long vfio_iommu_type1_ioctl(void *iommu_data,
+ 		default:
+ 			return -EINVAL;
+ 		}
++	} else if (cmd == VFIO_IOMMU_SET_PASID_QUOTA) {
++		struct vfio_iommu_type1_pasid_quota quota;
++
++		minsz = offsetofend(struct vfio_iommu_type1_pasid_quota,
++				    quota);
++
++		if (copy_from_user(&quota, (void __user *)arg, minsz))
++			return -EFAULT;
++
++		if (quota.argsz < minsz)
++			return -EINVAL;
++		return vfio_iommu_type1_set_pasid_quota(iommu, quota.quota);
+ 	}
+ 
+ 	return -ENOTTY;
+diff --git a/include/uapi/linux/vfio.h b/include/uapi/linux/vfio.h
+index 298ac80..d4bf415 100644
+--- a/include/uapi/linux/vfio.h
++++ b/include/uapi/linux/vfio.h
+@@ -835,6 +835,28 @@ struct vfio_iommu_type1_pasid_request {
+  */
+ #define VFIO_IOMMU_PASID_REQUEST	_IO(VFIO_TYPE, VFIO_BASE + 22)
+ 
++/**
++ * @quota: the new pasid quota which a userspace application (e.g. VM)
++ * is configured.
++ */
++struct vfio_iommu_type1_pasid_quota {
++	__u32	argsz;
++	__u32	flags;
++	__u32	quota;
++};
++
++/**
++ * VFIO_IOMMU_SET_PASID_QUOTA - _IOW(VFIO_TYPE, VFIO_BASE + 23,
++ *				struct vfio_iommu_type1_pasid_quota)
++ *
++ * Availability of this feature depends on PASID support in the device,
++ * its bus, the underlying IOMMU and the CPU architecture. In VFIO, it
++ * is available after VFIO_SET_IOMMU.
++ *
++ * returns: latest quota on success, -errno on failure.
++ */
++#define VFIO_IOMMU_SET_PASID_QUOTA	_IO(VFIO_TYPE, VFIO_BASE + 23)
++
+ /* -------- Additional API for SPAPR TCE (Server POWERPC) IOMMU -------- */
+ 
+ /*
+
+From patchwork Wed Jan 29 12:11:47 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Liu, Yi L" <yi.l.liu@intel.com>
+X-Patchwork-Id: 11355993
+Return-Path: <SRS0=InjK=3S=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id AB93F138C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 29 Jan 2020 12:06:59 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 94A262173E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 29 Jan 2020 12:06:59 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726772AbgA2MGw (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 29 Jan 2020 07:06:52 -0500
+Received: from mga03.intel.com ([134.134.136.65]:59025 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726707AbgA2MGm (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 29 Jan 2020 07:06:42 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 29 Jan 2020 04:06:38 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,377,1574150400";
+   d="scan'208";a="222433142"
+Received: from jacob-builder.jf.intel.com ([10.7.199.155])
+  by orsmga008.jf.intel.com with ESMTP; 29 Jan 2020 04:06:38 -0800
+From: "Liu, Yi L" <yi.l.liu@intel.com>
+To: alex.williamson@redhat.com, eric.auger@redhat.com
+Cc: kevin.tian@intel.com, jacob.jun.pan@linux.intel.com,
+        joro@8bytes.org, ashok.raj@intel.com, yi.l.liu@intel.com,
+        jun.j.tian@intel.com, yi.y.sun@intel.com,
+        jean-philippe.brucker@arm.com, peterx@redhat.com,
+        iommu@lists.linux-foundation.org, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [RFC v3 3/8] vfio: Reclaim PASIDs when application is down
+Date: Wed, 29 Jan 2020 04:11:47 -0800
+Message-Id: <1580299912-86084-4-git-send-email-yi.l.liu@intel.com>
+X-Mailer: git-send-email 2.7.4
+In-Reply-To: <1580299912-86084-1-git-send-email-yi.l.liu@intel.com>
+References: <1580299912-86084-1-git-send-email-yi.l.liu@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Liu Yi L <yi.l.liu@intel.com>
+
+When userspace application is down, kernel should reclaim the PASIDs
+allocated for this application to avoid PASID leak. This patch adds
+a PASID list in vfio_mm structure to track the allocated PASIDs. The
+PASID reclaim will be triggered when last vfio container is released.
+
+Previous discussions:
+https://patchwork.kernel.org/patch/11209429/
+
+Cc: Kevin Tian <kevin.tian@intel.com>
+CC: Jacob Pan <jacob.jun.pan@linux.intel.com>
+Cc: Alex Williamson <alex.williamson@redhat.com>
+Cc: Eric Auger <eric.auger@redhat.com>
+Cc: Jean-Philippe Brucker <jean-philippe.brucker@arm.com>
+Signed-off-by: Liu Yi L <yi.l.liu@intel.com>
+---
+ drivers/vfio/vfio.c  | 61 +++++++++++++++++++++++++++++++++++++++++++++++++---
+ include/linux/vfio.h |  6 ++++++
+ 2 files changed, 64 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/vfio/vfio.c b/drivers/vfio/vfio.c
+index c43c757..425d60a 100644
+--- a/drivers/vfio/vfio.c
++++ b/drivers/vfio/vfio.c
+@@ -2148,15 +2148,31 @@ static struct vfio_mm *vfio_create_mm(struct mm_struct *mm)
+ 	vmm->pasid_quota = VFIO_DEFAULT_PASID_QUOTA;
+ 	vmm->pasid_count = 0;
+ 	mutex_init(&vmm->pasid_lock);
++	INIT_LIST_HEAD(&vmm->pasid_list);
+ 
+ 	list_add(&vmm->vfio_next, &vfio.vfio_mm_list);
+ 
+ 	return vmm;
+ }
+ 
++static void vfio_mm_reclaim_pasid(struct vfio_mm *vmm)
++{
++	struct pasid_node *pnode, *tmp;
++
++	mutex_lock(&vmm->pasid_lock);
++	list_for_each_entry_safe(pnode, tmp, &vmm->pasid_list, next) {
++		pr_info("%s, reclaim pasid: %u\n", __func__, pnode->pasid);
++		list_del(&pnode->next);
++		ioasid_free(pnode->pasid);
++		kfree(pnode);
++	}
++	mutex_unlock(&vmm->pasid_lock);
++}
++
+ static void vfio_mm_unlock_and_free(struct vfio_mm *vmm)
+ {
+ 	mutex_unlock(&vfio.vfio_mm_lock);
++	vfio_mm_reclaim_pasid(vmm);
+ 	kfree(vmm);
+ }
+ 
+@@ -2204,6 +2220,39 @@ struct vfio_mm *vfio_mm_get_from_task(struct task_struct *task)
+ }
+ EXPORT_SYMBOL_GPL(vfio_mm_get_from_task);
+ 
++/**
++ * Caller should hold vmm->pasid_lock
++ */
++static int vfio_mm_insert_pasid_node(struct vfio_mm *vmm, u32 pasid)
++{
++	struct pasid_node *pnode;
++
++	pnode = kzalloc(sizeof(*pnode), GFP_KERNEL);
++	if (!pnode)
++		return -ENOMEM;
++	pnode->pasid = pasid;
++	list_add(&pnode->next, &vmm->pasid_list);
++
++	return 0;
++}
++
++/**
++ * Caller should hold vmm->pasid_lock
++ */
++static void vfio_mm_remove_pasid_node(struct vfio_mm *vmm, u32 pasid)
++{
++	struct pasid_node *pnode, *tmp;
++
++	list_for_each_entry_safe(pnode, tmp, &vmm->pasid_list, next) {
++		if (pnode->pasid == pasid) {
++			list_del(&pnode->next);
++			kfree(pnode);
++			break;
++		}
++	}
++
++}
++
+ int vfio_mm_pasid_alloc(struct vfio_mm *vmm, int min, int max)
+ {
+ 	ioasid_t pasid;
+@@ -2221,9 +2270,15 @@ int vfio_mm_pasid_alloc(struct vfio_mm *vmm, int min, int max)
+ 		ret = -ENOSPC;
+ 		goto out_unlock;
+ 	}
+-	vmm->pasid_count++;
+ 
+-	ret = pasid;
++	if (vfio_mm_insert_pasid_node(vmm, pasid)) {
++		ret = -ENOSPC;
++		ioasid_free(pasid);
++	} else {
++		ret = pasid;
++		vmm->pasid_count++;
++	}
++
+ out_unlock:
+ 	mutex_unlock(&vmm->pasid_lock);
+ 	return ret;
+@@ -2243,7 +2298,7 @@ int vfio_mm_pasid_free(struct vfio_mm *vmm, ioasid_t pasid)
+ 		goto out_unlock;
+ 	}
+ 	ioasid_free(pasid);
+-
++	vfio_mm_remove_pasid_node(vmm, pasid);
+ 	vmm->pasid_count--;
+ out_unlock:
+ 	mutex_unlock(&vmm->pasid_lock);
+diff --git a/include/linux/vfio.h b/include/linux/vfio.h
+index b6c9c8c..a2ea7e0 100644
+--- a/include/linux/vfio.h
++++ b/include/linux/vfio.h
+@@ -89,12 +89,18 @@ extern int vfio_register_iommu_driver(const struct vfio_iommu_driver_ops *ops);
+ extern void vfio_unregister_iommu_driver(
+ 				const struct vfio_iommu_driver_ops *ops);
+ 
++struct pasid_node {
++	u32			pasid;
++	struct list_head	next;
++};
++
+ #define VFIO_DEFAULT_PASID_QUOTA	1000
+ struct vfio_mm {
+ 	struct kref			kref;
+ 	struct mutex			pasid_lock;
+ 	int				pasid_quota;
+ 	int				pasid_count;
++	struct list_head		pasid_list;
+ 	struct mm_struct		*mm;
+ 	struct list_head		vfio_next;
+ };
+
+From patchwork Wed Jan 29 12:11:48 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Liu, Yi L" <yi.l.liu@intel.com>
+X-Patchwork-Id: 11356031
+Return-Path: <SRS0=InjK=3S=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C66B4138C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 29 Jan 2020 12:07:17 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id AF62522522
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 29 Jan 2020 12:07:17 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726869AbgA2MHO (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 29 Jan 2020 07:07:14 -0500
+Received: from mga03.intel.com ([134.134.136.65]:59025 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726184AbgA2MGk (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 29 Jan 2020 07:06:40 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 29 Jan 2020 04:06:38 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,377,1574150400";
+   d="scan'208";a="222433145"
+Received: from jacob-builder.jf.intel.com ([10.7.199.155])
+  by orsmga008.jf.intel.com with ESMTP; 29 Jan 2020 04:06:38 -0800
+From: "Liu, Yi L" <yi.l.liu@intel.com>
+To: alex.williamson@redhat.com, eric.auger@redhat.com
+Cc: kevin.tian@intel.com, jacob.jun.pan@linux.intel.com,
+        joro@8bytes.org, ashok.raj@intel.com, yi.l.liu@intel.com,
+        jun.j.tian@intel.com, yi.y.sun@intel.com,
+        jean-philippe.brucker@arm.com, peterx@redhat.com,
+        iommu@lists.linux-foundation.org, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [RFC v3 4/8] vfio/type1: Add VFIO_NESTING_GET_IOMMU_UAPI_VERSION
+Date: Wed, 29 Jan 2020 04:11:48 -0800
+Message-Id: <1580299912-86084-5-git-send-email-yi.l.liu@intel.com>
+X-Mailer: git-send-email 2.7.4
+In-Reply-To: <1580299912-86084-1-git-send-email-yi.l.liu@intel.com>
+References: <1580299912-86084-1-git-send-email-yi.l.liu@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Liu Yi L <yi.l.liu@intel.com>
+
+In Linux Kernel, the IOMMU nesting translation (a.k.a. IOMMU dual stage
+translation capability) is abstracted in uapi/iommu.h, in which the uAPIs
+like bind_gpasid/iommu_cache_invalidate/fault_report/pgreq_resp are defined.
+
+VFIO_TYPE1_NESTING_IOMMU stands for the vfio iommu type which is backed by
+IOMMU nesting translation capability. VFIO exposes the nesting capability
+to userspace and also exposes uAPIs (will be added in later patches) to user
+space for setting up nesting translation from userspace. Thus applications
+like QEMU could support vIOMMU for pass-through devices with IOMMU nesting
+translation capability.
+
+As VFIO expose the nesting IOMMU programming to userspace, it also needs to
+provide an API for the uapi/iommu.h version check to ensure compatibility.
+This patch reports the iommu uapi version to userspace. Applications could
+use this API to do version check before further using the nesting uAPIs.
+
+Cc: Kevin Tian <kevin.tian@intel.com>
+CC: Jacob Pan <jacob.jun.pan@linux.intel.com>
+Cc: Alex Williamson <alex.williamson@redhat.com>
+Cc: Eric Auger <eric.auger@redhat.com>
+Cc: Jean-Philippe Brucker <jean-philippe.brucker@arm.com>
+Signed-off-by: Liu Yi L <yi.l.liu@intel.com>
+---
+ drivers/vfio/vfio.c       |  3 +++
+ include/uapi/linux/vfio.h | 10 ++++++++++
+ 2 files changed, 13 insertions(+)
+
+diff --git a/drivers/vfio/vfio.c b/drivers/vfio/vfio.c
+index 425d60a..9087ad4 100644
+--- a/drivers/vfio/vfio.c
++++ b/drivers/vfio/vfio.c
+@@ -1170,6 +1170,9 @@ static long vfio_fops_unl_ioctl(struct file *filep,
+ 	case VFIO_GET_API_VERSION:
+ 		ret = VFIO_API_VERSION;
+ 		break;
++	case VFIO_NESTING_GET_IOMMU_UAPI_VERSION:
++		ret = iommu_get_uapi_version();
++		break;
+ 	case VFIO_CHECK_EXTENSION:
+ 		ret = vfio_ioctl_check_extension(container, arg);
+ 		break;
+diff --git a/include/uapi/linux/vfio.h b/include/uapi/linux/vfio.h
+index d4bf415..62113be 100644
+--- a/include/uapi/linux/vfio.h
++++ b/include/uapi/linux/vfio.h
+@@ -857,6 +857,16 @@ struct vfio_iommu_type1_pasid_quota {
+  */
+ #define VFIO_IOMMU_SET_PASID_QUOTA	_IO(VFIO_TYPE, VFIO_BASE + 23)
+ 
++/**
++ * VFIO_NESTING_GET_IOMMU_UAPI_VERSION - _IO(VFIO_TYPE, VFIO_BASE + 24)
++ *
++ * Report the version of the IOMMU UAPI when dual stage IOMMU is supported.
++ * In VFIO, it is needed for VFIO_TYPE1_NESTING_IOMMU.
++ * Availability: Always.
++ * Return: IOMMU UAPI version
++ */
++#define VFIO_NESTING_GET_IOMMU_UAPI_VERSION	_IO(VFIO_TYPE, VFIO_BASE + 24)
++
+ /* -------- Additional API for SPAPR TCE (Server POWERPC) IOMMU -------- */
+ 
+ /*
+
+From patchwork Wed Jan 29 12:11:49 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Liu, Yi L" <yi.l.liu@intel.com>
+X-Patchwork-Id: 11356029
+Return-Path: <SRS0=InjK=3S=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 38902138C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 29 Jan 2020 12:07:14 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 2021820720
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 29 Jan 2020 12:07:14 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726590AbgA2MGk (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 29 Jan 2020 07:06:40 -0500
+Received: from mga03.intel.com ([134.134.136.65]:59025 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726067AbgA2MGj (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 29 Jan 2020 07:06:39 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 29 Jan 2020 04:06:39 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,377,1574150400";
+   d="scan'208";a="222433148"
+Received: from jacob-builder.jf.intel.com ([10.7.199.155])
+  by orsmga008.jf.intel.com with ESMTP; 29 Jan 2020 04:06:38 -0800
+From: "Liu, Yi L" <yi.l.liu@intel.com>
+To: alex.williamson@redhat.com, eric.auger@redhat.com
+Cc: kevin.tian@intel.com, jacob.jun.pan@linux.intel.com,
+        joro@8bytes.org, ashok.raj@intel.com, yi.l.liu@intel.com,
+        jun.j.tian@intel.com, yi.y.sun@intel.com,
+        jean-philippe.brucker@arm.com, peterx@redhat.com,
+        iommu@lists.linux-foundation.org, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [RFC v3 5/8] vfio/type1: Report 1st-level/stage-1 page table format
+ to userspace
+Date: Wed, 29 Jan 2020 04:11:49 -0800
+Message-Id: <1580299912-86084-6-git-send-email-yi.l.liu@intel.com>
+X-Mailer: git-send-email 2.7.4
+In-Reply-To: <1580299912-86084-1-git-send-email-yi.l.liu@intel.com>
+References: <1580299912-86084-1-git-send-email-yi.l.liu@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Liu Yi L <yi.l.liu@intel.com>
+
+VFIO exposes IOMMU nesting translation (a.k.a dual stage translation)
+capability to userspace. Thus applications like QEMU could support
+vIOMMU with hardware's nesting translation capability for pass-through
+devices. Before setting up nesting translation for pass-through devices,
+QEMU and other applications need to learn the supported 1st-lvl/stage-1
+translation structure format like page table format.
+
+Take vSVA (virtual Shared Virtual Addressing) as an example, to support
+vSVA for pass-through devices, QEMU setup nesting translation for pass-
+through devices. The guest page table are configured to host as 1st-lvl/
+stage-1 page table. Therefore, guest format should be compatible with
+host side.
+
+This patch reports the supported 1st-lvl/stage-1 page table format on the
+current platform to userspace. QEMU and other alike applications should
+use this format info when trying to setup IOMMU nesting translation on
+host IOMMU.
+
+Cc: Kevin Tian <kevin.tian@intel.com>
+CC: Jacob Pan <jacob.jun.pan@linux.intel.com>
+Cc: Alex Williamson <alex.williamson@redhat.com>
+Cc: Eric Auger <eric.auger@redhat.com>
+Cc: Jean-Philippe Brucker <jean-philippe.brucker@arm.com>
+Signed-off-by: Liu Yi L <yi.l.liu@intel.com>
+---
+ drivers/vfio/vfio_iommu_type1.c | 79 +++++++++++++++++++++++++++++++++++++++++
+ include/uapi/linux/vfio.h       |  7 ++++
+ 2 files changed, 86 insertions(+)
+
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index 1cf75f5..e0bbcfb 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -2243,6 +2243,81 @@ static int vfio_iommu_type1_pasid_free(struct vfio_iommu *iommu,
+ 	return ret;
+ }
+ 
++static int vfio_iommu_get_pasid_format(struct vfio_iommu *iommu,
++					u32 *pasid_format)
++{
++	struct vfio_domain *domain;
++	u32 format = 0, tmp_format = 0;
++	int ret;
++
++	mutex_lock(&iommu->lock);
++	if (list_empty(&iommu->domain_list)) {
++		mutex_unlock(&iommu->lock);
++		return -EINVAL;
++	}
++
++	list_for_each_entry(domain, &iommu->domain_list, next) {
++		if (iommu_domain_get_attr(domain->domain,
++			DOMAIN_ATTR_PASID_FORMAT, &format)) {
++			ret = -EINVAL;
++			format = 0;
++			goto out_unlock;
++		}
++		/*
++		 * format is always non-zero (the first format is
++		 * IOMMU_PASID_FORMAT_INTEL_VTD which is 1). For
++		 * the reason of potential different backed IOMMU
++		 * formats, here we expect to have identical formats
++		 * in the domain list, no miexed formats support.
++		 * return -EINVAL to fail the attempt of setup
++		 * VFIO_TYPE1_NESTING_IOMMU if non-identical formats
++		 * are detected.
++		 */
++		if (tmp_format && tmp_format != format) {
++			ret = -EINVAL;
++			format = 0;
++			goto out_unlock;
++		}
++
++		tmp_format = format;
++	}
++	ret = 0;
++
++out_unlock:
++	if (format)
++		*pasid_format = format;
++	mutex_unlock(&iommu->lock);
++	return ret;
++}
++
++static int vfio_iommu_info_add_nesting_cap(struct vfio_iommu *iommu,
++					 struct vfio_info_cap *caps)
++{
++	struct vfio_info_cap_header *header;
++	struct vfio_iommu_type1_info_cap_nesting *nesting_cap;
++	u32 format = 0;
++	int ret;
++
++	ret = vfio_iommu_get_pasid_format(iommu, &format);
++	if (ret) {
++		pr_warn("Failed to get domain format\n");
++		return ret;
++	}
++
++	header = vfio_info_cap_add(caps, sizeof(*nesting_cap) + sizeof(format),
++				   VFIO_IOMMU_TYPE1_INFO_CAP_NESTING, 1);
++	if (IS_ERR(header))
++		return PTR_ERR(header);
++
++	nesting_cap = container_of(header,
++				struct vfio_iommu_type1_info_cap_nesting,
++				header);
++
++	nesting_cap->pasid_format = format;
++
++	return 0;
++}
++
+ static int vfio_iommu_type1_set_pasid_quota(struct vfio_iommu *iommu,
+ 					    u32 quota)
+ {
+@@ -2313,6 +2388,10 @@ static long vfio_iommu_type1_ioctl(void *iommu_data,
+ 		if (ret)
+ 			return ret;
+ 
++		ret = vfio_iommu_info_add_nesting_cap(iommu, &caps);
++		if (ret)
++			return ret;
++
+ 		if (caps.size) {
+ 			info.flags |= VFIO_IOMMU_INFO_CAPS;
+ 
+diff --git a/include/uapi/linux/vfio.h b/include/uapi/linux/vfio.h
+index 62113be..633c07f 100644
+--- a/include/uapi/linux/vfio.h
++++ b/include/uapi/linux/vfio.h
+@@ -748,6 +748,13 @@ struct vfio_iommu_type1_info_cap_iova_range {
+ 	struct	vfio_iova_range iova_ranges[];
+ };
+ 
++#define VFIO_IOMMU_TYPE1_INFO_CAP_NESTING  2
++
++struct vfio_iommu_type1_info_cap_nesting {
++	struct	vfio_info_cap_header header;
++	__u32	pasid_format;
++};
++
+ #define VFIO_IOMMU_GET_INFO _IO(VFIO_TYPE, VFIO_BASE + 12)
+ 
+ /**
+
+From patchwork Wed Jan 29 12:11:50 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Liu, Yi L" <yi.l.liu@intel.com>
+X-Patchwork-Id: 11356005
+Return-Path: <SRS0=InjK=3S=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3C8DD1800
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 29 Jan 2020 12:07:03 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 1DEC5207FD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 29 Jan 2020 12:07:03 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726670AbgA2MGl (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 29 Jan 2020 07:06:41 -0500
+Received: from mga03.intel.com ([134.134.136.65]:59025 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726617AbgA2MGk (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 29 Jan 2020 07:06:40 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 29 Jan 2020 04:06:39 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,377,1574150400";
+   d="scan'208";a="222433151"
+Received: from jacob-builder.jf.intel.com ([10.7.199.155])
+  by orsmga008.jf.intel.com with ESMTP; 29 Jan 2020 04:06:39 -0800
+From: "Liu, Yi L" <yi.l.liu@intel.com>
+To: alex.williamson@redhat.com, eric.auger@redhat.com
+Cc: kevin.tian@intel.com, jacob.jun.pan@linux.intel.com,
+        joro@8bytes.org, ashok.raj@intel.com, yi.l.liu@intel.com,
+        jun.j.tian@intel.com, yi.y.sun@intel.com,
+        jean-philippe.brucker@arm.com, peterx@redhat.com,
+        iommu@lists.linux-foundation.org, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [RFC v3 6/8] vfio/type1: Bind guest page tables to host
+Date: Wed, 29 Jan 2020 04:11:50 -0800
+Message-Id: <1580299912-86084-7-git-send-email-yi.l.liu@intel.com>
+X-Mailer: git-send-email 2.7.4
+In-Reply-To: <1580299912-86084-1-git-send-email-yi.l.liu@intel.com>
+References: <1580299912-86084-1-git-send-email-yi.l.liu@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Liu Yi L <yi.l.liu@intel.com>
+
+VFIO_TYPE1_NESTING_IOMMU is an IOMMU type which stands for hardware
+IOMMUs that have nesting DMA translation (a.k.a dual stage address
+translation). For such IOMMUs, there are two stages/levels of address
+translation, and software may let userspace/VM to own the first-level/
+stage-1 translation structures. Example of such usage is vSVA (virtual
+Shared Virtual Addressing). VM owns the first-level/stage-1 translation
+structures and bind the structures to host, then hardware IOMMU would
+utilize nesting translation when handling DMA remapping.
+
+This patch adds vfio support for binding guest translation structure
+to host iommu. And for VFIO_TYPE1_NESTING_IOMMU, not only bind guest
+page table is needed, it also requires to expose interface to guest
+for iommu cache invalidation when guest modified the first-level/
+stage-1 translation structures since hardware needs to be notified to
+flush stale iotlbs. This would be introduced in next patch.
+
+In this patch, guest page table bind and unbind are done by using
+flag VFIO_IOMMU_BIND_GUEST_PGTBL and VFIO_IOMMU_UNBIND_GUEST_PGTBL
+under IOCTL:VFIO_IOMMU_BIND, the bind/unbind data are conveyed by
+struct iommu_gpasid_bind_data. Before binding guest page table to host,
+VM should have got a PASID allocated by host via VFIO_IOMMU_PASID_REQUEST.
+
+Bind guest translation structures (here is guest page table) to host
+are the first step to setup vSVA (Virtual Shared Virtual Addressing).
+
+Cc: Kevin Tian <kevin.tian@intel.com>
+CC: Jacob Pan <jacob.jun.pan@linux.intel.com>
+Cc: Alex Williamson <alex.williamson@redhat.com>
+Cc: Eric Auger <eric.auger@redhat.com>
+Cc: Jean-Philippe Brucker <jean-philippe.brucker@arm.com>
+Signed-off-by: Jean-Philippe Brucker <jean-philippe.brucker@arm.com>
+Signed-off-by: Liu Yi L <yi.l.liu@intel.com>
+Signed-off-by: Jacob Pan <jacob.jun.pan@linux.intel.com>
+---
+ drivers/vfio/vfio_iommu_type1.c | 152 ++++++++++++++++++++++++++++++++++++++++
+ include/uapi/linux/vfio.h       |  46 ++++++++++++
+ 2 files changed, 198 insertions(+)
+
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index e0bbcfb..5e715a9 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -125,6 +125,33 @@ struct vfio_regions {
+ #define IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu)	\
+ 					(!list_empty(&iommu->domain_list))
+ 
++struct domain_capsule {
++	struct iommu_domain *domain;
++	void *data;
++};
++
++/* iommu->lock must be held */
++static int vfio_iommu_for_each_dev(struct vfio_iommu *iommu,
++		      int (*fn)(struct device *dev, void *data),
++		      void *data)
++{
++	struct domain_capsule dc = {.data = data};
++	struct vfio_domain *d;
++	struct vfio_group *g;
++	int ret = 0;
++
++	list_for_each_entry(d, &iommu->domain_list, next) {
++		dc.domain = d->domain;
++		list_for_each_entry(g, &d->group_list, next) {
++			ret = iommu_group_for_each_dev(g->iommu_group,
++						       &dc, fn);
++			if (ret)
++				break;
++		}
++	}
++	return ret;
++}
++
+ static int put_pfn(unsigned long pfn, int prot);
+ 
+ /*
+@@ -2339,6 +2366,88 @@ static int vfio_iommu_type1_set_pasid_quota(struct vfio_iommu *iommu,
+ 	return ret;
+ }
+ 
++static int vfio_bind_gpasid_fn(struct device *dev, void *data)
++{
++	struct domain_capsule *dc = (struct domain_capsule *)data;
++	struct iommu_gpasid_bind_data *gbind_data =
++		(struct iommu_gpasid_bind_data *) dc->data;
++
++	return iommu_sva_bind_gpasid(dc->domain, dev, gbind_data);
++}
++
++static int vfio_unbind_gpasid_fn(struct device *dev, void *data)
++{
++	struct domain_capsule *dc = (struct domain_capsule *)data;
++	struct iommu_gpasid_bind_data *gbind_data =
++		(struct iommu_gpasid_bind_data *) dc->data;
++
++	return iommu_sva_unbind_gpasid(dc->domain, dev,
++						gbind_data->hpasid);
++}
++
++/**
++ * Unbind specific gpasid, caller of this function requires hold
++ * vfio_iommu->lock
++ */
++static long vfio_iommu_type1_do_guest_unbind(struct vfio_iommu *iommu,
++						void *gbind_data)
++{
++	return vfio_iommu_for_each_dev(iommu,
++			vfio_unbind_gpasid_fn, gbind_data);
++}
++
++static long vfio_iommu_type1_bind_gpasid(struct vfio_iommu *iommu,
++					  void *gbind_data)
++{
++	int ret = 0;
++
++	mutex_lock(&iommu->lock);
++	if (!IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu)) {
++		ret = -EINVAL;
++		goto out_unlock;
++	}
++
++	ret = vfio_iommu_for_each_dev(iommu,
++			vfio_bind_gpasid_fn, gbind_data);
++	/*
++	 * If bind failed, it may not be a total failure. Some devices
++	 * within the iommu group may have bind successfully. Although
++	 * we don't enable pasid capability for non-singletion iommu
++	 * groups, a unbind operation would be helpful to ensure no
++	 * partial binding for an iommu group.
++	 */
++	if (ret)
++		/*
++		 * Undo all binds that already succeeded, no need to
++		 * check the return value here since some device within
++		 * the group has no successful bind when coming to this
++		 * place switch.
++		 */
++		vfio_iommu_type1_do_guest_unbind(iommu, gbind_data);
++
++out_unlock:
++	mutex_unlock(&iommu->lock);
++	return ret;
++}
++
++static long vfio_iommu_type1_unbind_gpasid(struct vfio_iommu *iommu,
++					    void *gbind_data)
++{
++	int ret = 0;
++
++	mutex_lock(&iommu->lock);
++	if (!IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu)) {
++		ret = -EINVAL;
++		goto out_unlock;
++	}
++
++	ret = vfio_iommu_type1_do_guest_unbind(iommu, gbind_data);
++
++out_unlock:
++	mutex_unlock(&iommu->lock);
++	return ret;
++}
++
+ static long vfio_iommu_type1_ioctl(void *iommu_data,
+ 				   unsigned int cmd, unsigned long arg)
+ {
+@@ -2501,6 +2610,49 @@ static long vfio_iommu_type1_ioctl(void *iommu_data,
+ 		if (quota.argsz < minsz)
+ 			return -EINVAL;
+ 		return vfio_iommu_type1_set_pasid_quota(iommu, quota.quota);
++
++	} else if (cmd == VFIO_IOMMU_BIND) {
++		struct vfio_iommu_type1_bind bind;
++		u32 version;
++		int data_size;
++		void *gbind_data;
++
++		minsz = offsetofend(struct vfio_iommu_type1_bind, flags);
++
++		if (copy_from_user(&bind, (void __user *)arg, minsz))
++			return -EFAULT;
++
++		if (bind.argsz < minsz)
++			return -EINVAL;
++
++		/* Get the version of struct iommu_gpasid_bind_data */
++		if (copy_from_user(&version,
++			(void __user *) (arg + minsz),
++					sizeof(version)))
++			return -EFAULT;
++
++		data_size = iommu_uapi_get_data_size(
++				IOMMU_UAPI_BIND_GPASID, version);
++		gbind_data = kzalloc(data_size, GFP_KERNEL);
++		if (!gbind_data)
++			return -ENOMEM;
++
++		if (copy_from_user(gbind_data,
++			(void __user *) (arg + minsz), data_size)) {
++			kfree(gbind_data);
++			return -EFAULT;
++		}
++
++		switch (bind.flags & VFIO_IOMMU_BIND_MASK) {
++		case VFIO_IOMMU_BIND_GUEST_PGTBL:
++			return vfio_iommu_type1_bind_gpasid(iommu,
++							gbind_data);
++		case VFIO_IOMMU_UNBIND_GUEST_PGTBL:
++			return vfio_iommu_type1_unbind_gpasid(iommu,
++							gbind_data);
++		default:
++			return -EINVAL;
++		}
+ 	}
+ 
+ 	return -ENOTTY;
+diff --git a/include/uapi/linux/vfio.h b/include/uapi/linux/vfio.h
+index 633c07f..b05fa97 100644
+--- a/include/uapi/linux/vfio.h
++++ b/include/uapi/linux/vfio.h
+@@ -14,6 +14,7 @@
+ 
+ #include <linux/types.h>
+ #include <linux/ioctl.h>
++#include <linux/iommu.h>
+ 
+ #define VFIO_API_VERSION	0
+ 
+@@ -874,6 +875,51 @@ struct vfio_iommu_type1_pasid_quota {
+  */
+ #define VFIO_NESTING_GET_IOMMU_UAPI_VERSION	_IO(VFIO_TYPE, VFIO_BASE + 24)
+ 
++/**
++ * Supported flags:
++ *	- VFIO_IOMMU_BIND_GUEST_PGTBL: bind guest page tables to host for
++ *			nesting type IOMMUs. In @data field It takes struct
++ *			iommu_gpasid_bind_data.
++ *	- VFIO_IOMMU_UNBIND_GUEST_PGTBL: undo a bind guest page table operation
++ *			invoked by VFIO_IOMMU_BIND_GUEST_PGTBL.
++ *
++ */
++struct vfio_iommu_type1_bind {
++	__u32		argsz;
++	__u32		flags;
++#define VFIO_IOMMU_BIND_GUEST_PGTBL	(1 << 0)
++#define VFIO_IOMMU_UNBIND_GUEST_PGTBL	(1 << 1)
++	__u8		data[];
++};
++
++#define VFIO_IOMMU_BIND_MASK	(VFIO_IOMMU_BIND_GUEST_PGTBL | \
++					VFIO_IOMMU_UNBIND_GUEST_PGTBL)
++
++/**
++ * VFIO_IOMMU_BIND - _IOW(VFIO_TYPE, VFIO_BASE + 25,
++ *				struct vfio_iommu_type1_bind)
++ *
++ * Manage address spaces of devices in this container. Initially a TYPE1
++ * container can only have one address space, managed with
++ * VFIO_IOMMU_MAP/UNMAP_DMA.
++ *
++ * An IOMMU of type VFIO_TYPE1_NESTING_IOMMU can be managed by both MAP/UNMAP
++ * and BIND ioctls at the same time. MAP/UNMAP acts on the stage-2 (host) page
++ * tables, and BIND manages the stage-1 (guest) page tables. Other types of
++ * IOMMU may allow MAP/UNMAP and BIND to coexist, where MAP/UNMAP controls
++ * the traffics only require single stage translation while BIND controls the
++ * traffics require nesting translation. But this depends on the underlying
++ * IOMMU architecture and isn't guaranteed. Example of this is the guest SVA
++ * traffics, such traffics need nesting translation to gain gVA->gPA and then
++ * gPA->hPA translation.
++ *
++ * Availability of this feature depends on the device, its bus, the underlying
++ * IOMMU and the CPU architecture.
++ *
++ * returns: 0 on success, -errno on failure.
++ */
++#define VFIO_IOMMU_BIND		_IO(VFIO_TYPE, VFIO_BASE + 25)
++
+ /* -------- Additional API for SPAPR TCE (Server POWERPC) IOMMU -------- */
+ 
+ /*
+
+From patchwork Wed Jan 29 12:11:51 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Liu, Yi L" <yi.l.liu@intel.com>
+X-Patchwork-Id: 11355999
+Return-Path: <SRS0=InjK=3S=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id A9D45112B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 29 Jan 2020 12:07:01 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 92D6320CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 29 Jan 2020 12:07:01 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726761AbgA2MGw (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 29 Jan 2020 07:06:52 -0500
+Received: from mga03.intel.com ([134.134.136.65]:59027 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726708AbgA2MGm (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 29 Jan 2020 07:06:42 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 29 Jan 2020 04:06:39 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,377,1574150400";
+   d="scan'208";a="222433154"
+Received: from jacob-builder.jf.intel.com ([10.7.199.155])
+  by orsmga008.jf.intel.com with ESMTP; 29 Jan 2020 04:06:39 -0800
+From: "Liu, Yi L" <yi.l.liu@intel.com>
+To: alex.williamson@redhat.com, eric.auger@redhat.com
+Cc: kevin.tian@intel.com, jacob.jun.pan@linux.intel.com,
+        joro@8bytes.org, ashok.raj@intel.com, yi.l.liu@intel.com,
+        jun.j.tian@intel.com, yi.y.sun@intel.com,
+        jean-philippe.brucker@arm.com, peterx@redhat.com,
+        iommu@lists.linux-foundation.org, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [RFC v3 7/8] vfio/type1: Add VFIO_IOMMU_CACHE_INVALIDATE
+Date: Wed, 29 Jan 2020 04:11:51 -0800
+Message-Id: <1580299912-86084-8-git-send-email-yi.l.liu@intel.com>
+X-Mailer: git-send-email 2.7.4
+In-Reply-To: <1580299912-86084-1-git-send-email-yi.l.liu@intel.com>
+References: <1580299912-86084-1-git-send-email-yi.l.liu@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Liu Yi L <yi.l.liu@linux.intel.com>
+
+For IOMMU with type VFIO_TYPE1_NESTING_IOMMU, guest "owns" the
+first-level/stage-1 translation structures, the host IOMMU driver
+has no knowledge of first-level/stage-1 structure cache updates
+unless the guest invalidation requests are trapped and passed down
+to the host.
+
+This patch adds the VFIO_IOMMU_CACHE_INVALIDATE ioctl with aims
+at propagating guest first-level/stage-1 IOMMU cache invalidations
+to the host to keep IOMMU cache updated.
+
+With this patch, vSVA (Virtual Shared Virtual Addressing) can be
+used safely as the host IOMMU iotlb correctness are ensured.
+
+Cc: Kevin Tian <kevin.tian@intel.com>
+CC: Jacob Pan <jacob.jun.pan@linux.intel.com>
+Cc: Alex Williamson <alex.williamson@redhat.com>
+Cc: Eric Auger <eric.auger@redhat.com>
+Cc: Jean-Philippe Brucker <jean-philippe.brucker@arm.com>
+Signed-off-by: Liu Yi L <yi.l.liu@linux.intel.com>
+Signed-off-by: Eric Auger <eric.auger@redhat.com>
+Signed-off-by: Jacob Pan <jacob.jun.pan@linux.intel.com>
+---
+ drivers/vfio/vfio_iommu_type1.c | 48 +++++++++++++++++++++++++++++++++++++++++
+ include/uapi/linux/vfio.h       | 22 +++++++++++++++++++
+ 2 files changed, 70 insertions(+)
+
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index 5e715a9..2168318 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -2448,6 +2448,15 @@ static long vfio_iommu_type1_unbind_gpasid(struct vfio_iommu *iommu,
+ 	return ret;
+ }
+ 
++static int vfio_cache_inv_fn(struct device *dev, void *data)
++{
++	struct domain_capsule *dc = (struct domain_capsule *)data;
++	struct iommu_cache_invalidate_info *cache_inv_info =
++		(struct iommu_cache_invalidate_info *) dc->data;
++
++	return iommu_cache_invalidate(dc->domain, dev, cache_inv_info);
++}
++
+ static long vfio_iommu_type1_ioctl(void *iommu_data,
+ 				   unsigned int cmd, unsigned long arg)
+ {
+@@ -2653,6 +2662,45 @@ static long vfio_iommu_type1_ioctl(void *iommu_data,
+ 		default:
+ 			return -EINVAL;
+ 		}
++	} else if (cmd == VFIO_IOMMU_CACHE_INVALIDATE) {
++		struct vfio_iommu_type1_cache_invalidate cache_inv;
++		u32 version;
++		int info_size;
++		void *cache_info;
++		int ret;
++
++		minsz = offsetofend(struct vfio_iommu_type1_cache_invalidate,
++				    flags);
++
++		if (copy_from_user(&cache_inv, (void __user *)arg, minsz))
++			return -EFAULT;
++
++		if (cache_inv.argsz < minsz || cache_inv.flags)
++			return -EINVAL;
++
++		/* Get the version of struct iommu_cache_invalidate_info */
++		if (copy_from_user(&version,
++			(void __user *) (arg + minsz), sizeof(version)))
++			return -EFAULT;
++
++		info_size = iommu_uapi_get_data_size(
++					IOMMU_UAPI_CACHE_INVAL, version);
++
++		cache_info = kzalloc(info_size, GFP_KERNEL);
++		if (!cache_info)
++			return -ENOMEM;
++
++		if (copy_from_user(cache_info,
++			(void __user *) (arg + minsz), info_size)) {
++			kfree(cache_info);
++			return -EFAULT;
++		}
++
++		mutex_lock(&iommu->lock);
++		ret = vfio_iommu_for_each_dev(iommu, vfio_cache_inv_fn,
++					    cache_info);
++		mutex_unlock(&iommu->lock);
++		return ret;
+ 	}
+ 
+ 	return -ENOTTY;
+diff --git a/include/uapi/linux/vfio.h b/include/uapi/linux/vfio.h
+index b05fa97..b959d0a 100644
+--- a/include/uapi/linux/vfio.h
++++ b/include/uapi/linux/vfio.h
+@@ -920,6 +920,28 @@ struct vfio_iommu_type1_bind {
+  */
+ #define VFIO_IOMMU_BIND		_IO(VFIO_TYPE, VFIO_BASE + 25)
+ 
++/**
++ * VFIO_IOMMU_CACHE_INVALIDATE - _IOW(VFIO_TYPE, VFIO_BASE + 26,
++ *			struct vfio_iommu_type1_cache_invalidate)
++ *
++ * Propagate guest IOMMU cache invalidation to the host. The cache
++ * invalidation information is conveyed by @cache_info, the content
++ * format would be structures defined in uapi/linux/iommu.h. User
++ * should be aware of that the struct  iommu_cache_invalidate_info
++ * has a @version field, vfio needs to parse this field before getting
++ * data from userspace.
++ *
++ * Availability of this IOCTL is after VFIO_SET_IOMMU.
++ *
++ * returns: 0 on success, -errno on failure.
++ */
++struct vfio_iommu_type1_cache_invalidate {
++	__u32   argsz;
++	__u32   flags;
++	struct	iommu_cache_invalidate_info cache_info;
++};
++#define VFIO_IOMMU_CACHE_INVALIDATE      _IO(VFIO_TYPE, VFIO_BASE + 26)
++
+ /* -------- Additional API for SPAPR TCE (Server POWERPC) IOMMU -------- */
+ 
+ /*
+
+From patchwork Wed Jan 29 12:11:52 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Liu, Yi L" <yi.l.liu@intel.com>
+X-Patchwork-Id: 11355985
+Return-Path: <SRS0=InjK=3S=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 166C9138C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 29 Jan 2020 12:06:44 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id F2903207FD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 29 Jan 2020 12:06:43 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726722AbgA2MGn (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 29 Jan 2020 07:06:43 -0500
+Received: from mga03.intel.com ([134.134.136.65]:59029 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726712AbgA2MGm (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 29 Jan 2020 07:06:42 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 29 Jan 2020 04:06:39 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,377,1574150400";
+   d="scan'208";a="222433157"
+Received: from jacob-builder.jf.intel.com ([10.7.199.155])
+  by orsmga008.jf.intel.com with ESMTP; 29 Jan 2020 04:06:39 -0800
+From: "Liu, Yi L" <yi.l.liu@intel.com>
+To: alex.williamson@redhat.com, eric.auger@redhat.com
+Cc: kevin.tian@intel.com, jacob.jun.pan@linux.intel.com,
+        joro@8bytes.org, ashok.raj@intel.com, yi.l.liu@intel.com,
+        jun.j.tian@intel.com, yi.y.sun@intel.com,
+        jean-philippe.brucker@arm.com, peterx@redhat.com,
+        iommu@lists.linux-foundation.org, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [RFC v3 8/8] vfio/type1: Add vSVA support for IOMMU-backed mdevs
+Date: Wed, 29 Jan 2020 04:11:52 -0800
+Message-Id: <1580299912-86084-9-git-send-email-yi.l.liu@intel.com>
+X-Mailer: git-send-email 2.7.4
+In-Reply-To: <1580299912-86084-1-git-send-email-yi.l.liu@intel.com>
+References: <1580299912-86084-1-git-send-email-yi.l.liu@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Liu Yi L <yi.l.liu@intel.com>
+
+Recent years, mediated device pass-through framework (e.g. vfio-mdev)
+are used to achieve flexible device sharing across domains (e.g. VMs).
+Also there are hardware assisted mediated pass-through solutions from
+platform vendors. e.g. Intel VT-d scalable mode which supports Intel
+Scalable I/O Virtualization technology. Such mdevs are called IOMMU-
+backed mdevs as there are IOMMU enforced DMA isolation for such mdevs.
+In kernel, IOMMU-backed mdevs are exposed to IOMMU layer by aux-domain
+concept, which means mdevs are protected by an iommu domain which is
+aux-domain of its physical device. Details can be found in the KVM
+presentation from Kevin Tian. IOMMU-backed equals to IOMMU-capable.
+
+https://events19.linuxfoundation.org/wp-content/uploads/2017/12/\
+Hardware-Assisted-Mediated-Pass-Through-with-VFIO-Kevin-Tian-Intel.pdf
+
+This patch supports NESTING IOMMU for IOMMU-backed mdevs by figuring
+out the physical device of an IOMMU-backed mdev and then invoking IOMMU
+requests to IOMMU layer with the physical device and the mdev's aux
+domain info.
+
+With this patch, vSVA (Virtual Shared Virtual Addressing) can be used
+on IOMMU-backed mdevs.
+
+Cc: Kevin Tian <kevin.tian@intel.com>
+CC: Jacob Pan <jacob.jun.pan@linux.intel.com>
+CC: Jun Tian <jun.j.tian@intel.com>
+Cc: Alex Williamson <alex.williamson@redhat.com>
+Cc: Eric Auger <eric.auger@redhat.com>
+Cc: Jean-Philippe Brucker <jean-philippe.brucker@arm.com>
+Signed-off-by: Liu Yi L <yi.l.liu@intel.com>
+---
+ drivers/vfio/vfio_iommu_type1.c | 23 ++++++++++++++++++++---
+ 1 file changed, 20 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index 2168318..5aea355 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -127,6 +127,7 @@ struct vfio_regions {
+ 
+ struct domain_capsule {
+ 	struct iommu_domain *domain;
++	struct vfio_group *group;
+ 	void *data;
+ };
+ 
+@@ -143,6 +144,7 @@ static int vfio_iommu_for_each_dev(struct vfio_iommu *iommu,
+ 	list_for_each_entry(d, &iommu->domain_list, next) {
+ 		dc.domain = d->domain;
+ 		list_for_each_entry(g, &d->group_list, next) {
++			dc.group = g;
+ 			ret = iommu_group_for_each_dev(g->iommu_group,
+ 						       &dc, fn);
+ 			if (ret)
+@@ -2372,7 +2374,12 @@ static int vfio_bind_gpasid_fn(struct device *dev, void *data)
+ 	struct iommu_gpasid_bind_data *gbind_data =
+ 		(struct iommu_gpasid_bind_data *) dc->data;
+ 
+-	return iommu_sva_bind_gpasid(dc->domain, dev, gbind_data);
++	if (dc->group->mdev_group)
++		return iommu_sva_bind_gpasid(dc->domain,
++			vfio_mdev_get_iommu_device(dev), gbind_data);
++	else
++		return iommu_sva_bind_gpasid(dc->domain,
++						dev, gbind_data);
+ }
+ 
+ static int vfio_unbind_gpasid_fn(struct device *dev, void *data)
+@@ -2381,7 +2388,12 @@ static int vfio_unbind_gpasid_fn(struct device *dev, void *data)
+ 	struct iommu_gpasid_bind_data *gbind_data =
+ 		(struct iommu_gpasid_bind_data *) dc->data;
+ 
+-	return iommu_sva_unbind_gpasid(dc->domain, dev,
++	if (dc->group->mdev_group)
++		return iommu_sva_unbind_gpasid(dc->domain,
++					vfio_mdev_get_iommu_device(dev),
++					gbind_data->hpasid);
++	else
++		return iommu_sva_unbind_gpasid(dc->domain, dev,
+ 						gbind_data->hpasid);
+ }
+ 
+@@ -2454,7 +2466,12 @@ static int vfio_cache_inv_fn(struct device *dev, void *data)
+ 	struct iommu_cache_invalidate_info *cache_inv_info =
+ 		(struct iommu_cache_invalidate_info *) dc->data;
+ 
+-	return iommu_cache_invalidate(dc->domain, dev, cache_inv_info);
++	if (dc->group->mdev_group)
++		return iommu_cache_invalidate(dc->domain,
++			vfio_mdev_get_iommu_device(dev), cache_inv_info);
++	else
++		return iommu_cache_invalidate(dc->domain,
++						dev, cache_inv_info);
+ }
+ 
+ static long vfio_iommu_type1_ioctl(void *iommu_data,
