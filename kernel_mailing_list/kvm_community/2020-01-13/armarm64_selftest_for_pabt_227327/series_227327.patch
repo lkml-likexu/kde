@@ -1,0 +1,706 @@
+From patchwork Mon Jan 13 13:00:41 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andrew Jones <drjones@redhat.com>
+X-Patchwork-Id: 11330115
+Return-Path: <SRS0=ekPD=3C=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 51602930
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 13 Jan 2020 13:00:54 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 264F32080D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 13 Jan 2020 13:00:54 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="YfC0BPab"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728665AbgAMNAx (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 13 Jan 2020 08:00:53 -0500
+Received: from us-smtp-delivery-1.mimecast.com ([207.211.31.120]:55472 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S1726567AbgAMNAx (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 13 Jan 2020 08:00:53 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1578920451;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=OwXlzBEQhwCa8wParpIDpsxijVGaBsk9N2BIUCVw5x0=;
+        b=YfC0BPabh7j76b72CpbGLqkOt/dPvBXn2KqCX0xXoWejMi7/djQdKJ2qiX8T40jBOafqwU
+        aQMCk7JptWcPicA71/uo+4cmx3pPwlhUqzmIsXiLRsPDVETSGiaoAv5XWifAzbncFqBRn8
+        qd8DrEHH7ysDKwSeLifvDmtK7mw5ZzU=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-113-SUHtmpXOOaWK3twCgs47zQ-1; Mon, 13 Jan 2020 08:00:48 -0500
+X-MC-Unique: SUHtmpXOOaWK3twCgs47zQ-1
+Received: from smtp.corp.redhat.com (int-mx01.intmail.prod.int.phx2.redhat.com
+ [10.5.11.11])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 4271218A6EC9;
+        Mon, 13 Jan 2020 13:00:47 +0000 (UTC)
+Received: from kamzik.brq.redhat.com (unknown [10.43.2.160])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 0D30C6A846;
+        Mon, 13 Jan 2020 13:00:45 +0000 (UTC)
+From: Andrew Jones <drjones@redhat.com>
+To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu
+Cc: pbonzini@redhat.com, alexandru.elisei@arm.com
+Subject: [PATCH kvm-unit-tests 1/3] arm/arm64: Improve memory region
+ management
+Date: Mon, 13 Jan 2020 14:00:41 +0100
+Message-Id: <20200113130043.30851-2-drjones@redhat.com>
+In-Reply-To: <20200113130043.30851-1-drjones@redhat.com>
+References: <20200113130043.30851-1-drjones@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.11
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Add expected I/O regions and provide a way to check memory region
+properties of a physical address. We also bump the initial number
+of regions and even prepare for a unit test to reallocate for
+growth if necessary.
+
+Signed-off-by: Andrew Jones <drjones@redhat.com>
+---
+ lib/arm/asm/setup.h |  8 +++++--
+ lib/arm/mmu.c       | 24 ++++++-------------
+ lib/arm/setup.c     | 56 +++++++++++++++++++++++++++++++++------------
+ 3 files changed, 55 insertions(+), 33 deletions(-)
+
+diff --git a/lib/arm/asm/setup.h b/lib/arm/asm/setup.h
+index 81cac019b1d1..c8afb2493f8d 100644
+--- a/lib/arm/asm/setup.h
++++ b/lib/arm/asm/setup.h
+@@ -13,16 +13,20 @@
+ extern u64 cpus[NR_CPUS];	/* per-cpu IDs (MPIDRs) */
+ extern int nr_cpus;
+ 
+-#define NR_MEM_REGIONS		8
+ #define MR_F_PRIMARY		(1U << 0)
++#define MR_F_IO			(1U << 1)
++#define MR_F_UNKNOWN		(1U << 31)
++
+ struct mem_region {
+ 	phys_addr_t start;
+ 	phys_addr_t end;
+ 	unsigned int flags;
+ };
+-extern struct mem_region mem_regions[NR_MEM_REGIONS];
++extern struct mem_region *mem_regions;
+ extern phys_addr_t __phys_offset, __phys_end;
+ 
++extern unsigned int mem_region_get_flags(phys_addr_t paddr);
++
+ #define PHYS_OFFSET		(__phys_offset)
+ #define PHYS_END		(__phys_end)
+ 
+diff --git a/lib/arm/mmu.c b/lib/arm/mmu.c
+index 5fb56180d334..540a1e842d5b 100644
+--- a/lib/arm/mmu.c
++++ b/lib/arm/mmu.c
+@@ -152,6 +152,7 @@ void mmu_set_range_sect(pgd_t *pgtable, uintptr_t virt_offset,
+ void *setup_mmu(phys_addr_t phys_end)
+ {
+ 	uintptr_t code_end = (uintptr_t)&etext;
++	struct mem_region *r;
+ 
+ 	/* 0G-1G = I/O, 1G-3G = identity, 3G-4G = vmalloc */
+ 	if (phys_end > (3ul << 30))
+@@ -163,23 +164,12 @@ void *setup_mmu(phys_addr_t phys_end)
+ 
+ 	mmu_idmap = alloc_page();
+ 
+-	/*
+-	 * mach-virt I/O regions:
+-	 *   - The first 1G (arm/arm64)
+-	 *   - 512M at 256G (arm64, arm uses highmem=off)
+-	 *   - 512G at 512G (arm64, arm uses highmem=off)
+-	 */
+-	mmu_set_range_sect(mmu_idmap,
+-		0, 0, (1ul << 30),
+-		__pgprot(PMD_SECT_UNCACHED | PMD_SECT_USER));
+-#ifdef __aarch64__
+-	mmu_set_range_sect(mmu_idmap,
+-		(1ul << 38), (1ul << 38), (1ul << 38) | (1ul << 29),
+-		__pgprot(PMD_SECT_UNCACHED | PMD_SECT_USER));
+-	mmu_set_range_sect(mmu_idmap,
+-		(1ul << 39), (1ul << 39), (1ul << 40),
+-		__pgprot(PMD_SECT_UNCACHED | PMD_SECT_USER));
+-#endif
++	for (r = mem_regions; r->end; ++r) {
++		if (!(r->flags & MR_F_IO))
++			continue;
++		mmu_set_range_sect(mmu_idmap, r->start, r->start, r->end,
++				   __pgprot(PMD_SECT_UNCACHED | PMD_SECT_USER));
++	}
+ 
+ 	/* armv8 requires code shared between EL1 and EL0 to be read-only */
+ 	mmu_set_range_ptes(mmu_idmap, PHYS_OFFSET,
+diff --git a/lib/arm/setup.c b/lib/arm/setup.c
+index 4f02fca85607..385e135f4865 100644
+--- a/lib/arm/setup.c
++++ b/lib/arm/setup.c
+@@ -24,6 +24,8 @@
+ 
+ #include "io.h"
+ 
++#define NR_INITIAL_MEM_REGIONS 16
++
+ extern unsigned long stacktop;
+ 
+ char *initrd;
+@@ -32,7 +34,8 @@ u32 initrd_size;
+ u64 cpus[NR_CPUS] = { [0 ... NR_CPUS-1] = (u64)~0 };
+ int nr_cpus;
+ 
+-struct mem_region mem_regions[NR_MEM_REGIONS];
++static struct mem_region __initial_mem_regions[NR_INITIAL_MEM_REGIONS + 1];
++struct mem_region *mem_regions = __initial_mem_regions;
+ phys_addr_t __phys_offset, __phys_end;
+ 
+ int mpidr_to_cpu(uint64_t mpidr)
+@@ -65,41 +68,66 @@ static void cpu_init(void)
+ 	set_cpu_online(0, true);
+ }
+ 
++unsigned int mem_region_get_flags(phys_addr_t paddr)
++{
++	struct mem_region *r;
++
++	for (r = mem_regions; r->end; ++r) {
++		if (paddr >= r->start && paddr < r->end)
++			return r->flags;
++	}
++
++	return MR_F_UNKNOWN;
++}
++
+ static void mem_init(phys_addr_t freemem_start)
+ {
+-	struct dt_pbus_reg regs[NR_MEM_REGIONS];
++	struct dt_pbus_reg regs[NR_INITIAL_MEM_REGIONS];
+ 	struct mem_region primary, mem = {
+ 		.start = (phys_addr_t)-1,
+ 	};
+ 	phys_addr_t base, top;
+-	int nr_regs, i;
++	int nr_regs, nr_io = 0, i;
+ 
+-	nr_regs = dt_get_memory_params(regs, NR_MEM_REGIONS);
++	/*
++	 * mach-virt I/O regions:
++	 *   - The first 1G (arm/arm64)
++	 *   - 512M at 256G (arm64, arm uses highmem=off)
++	 *   - 512G at 512G (arm64, arm uses highmem=off)
++	 */
++	mem_regions[nr_io++] = (struct mem_region){ 0, (1ul << 30), MR_F_IO };
++#ifdef __aarch64__
++	mem_regions[nr_io++] = (struct mem_region){ (1ul << 38), (1ul << 38) | (1ul << 29), MR_F_IO };
++	mem_regions[nr_io++] = (struct mem_region){ (1ul << 39), (1ul << 40), MR_F_IO };
++#endif
++
++	nr_regs = dt_get_memory_params(regs, NR_INITIAL_MEM_REGIONS - nr_io);
+ 	assert(nr_regs > 0);
+ 
+ 	primary = (struct mem_region){ 0 };
+ 
+ 	for (i = 0; i < nr_regs; ++i) {
+-		mem_regions[i].start = regs[i].addr;
+-		mem_regions[i].end = regs[i].addr + regs[i].size;
++		struct mem_region *r = &mem_regions[nr_io + i];
++
++		r->start = regs[i].addr;
++		r->end = regs[i].addr + regs[i].size;
+ 
+ 		/*
+ 		 * pick the region we're in for our primary region
+ 		 */
+-		if (freemem_start >= mem_regions[i].start
+-				&& freemem_start < mem_regions[i].end) {
+-			mem_regions[i].flags |= MR_F_PRIMARY;
+-			primary = mem_regions[i];
++		if (freemem_start >= r->start && freemem_start < r->end) {
++			r->flags |= MR_F_PRIMARY;
++			primary = *r;
+ 		}
+ 
+ 		/*
+ 		 * set the lowest and highest addresses found,
+ 		 * ignoring potential gaps
+ 		 */
+-		if (mem_regions[i].start < mem.start)
+-			mem.start = mem_regions[i].start;
+-		if (mem_regions[i].end > mem.end)
+-			mem.end = mem_regions[i].end;
++		if (r->start < mem.start)
++			mem.start = r->start;
++		if (r->end > mem.end)
++			mem.end = r->end;
+ 	}
+ 	assert(primary.end != 0);
+ 	assert(!(mem.start & ~PHYS_MASK) && !((mem.end - 1) & ~PHYS_MASK));
+
+From patchwork Mon Jan 13 13:00:42 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andrew Jones <drjones@redhat.com>
+X-Patchwork-Id: 11330119
+Return-Path: <SRS0=ekPD=3C=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id EDFA992A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 13 Jan 2020 13:01:01 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id C2267207FF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 13 Jan 2020 13:01:01 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="ifHeLtqz"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728750AbgAMNAy (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 13 Jan 2020 08:00:54 -0500
+Received: from us-smtp-delivery-1.mimecast.com ([207.211.31.120]:20393 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S1726567AbgAMNAy (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 13 Jan 2020 08:00:54 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1578920453;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=iYCjGxzJCWEwpMFHkJ6WPIm1RckrAtr3ks7PkFNvEmw=;
+        b=ifHeLtqzfwG0BqXxGIPhZCFZKm5a12+GdSZR36t7h/k/CYgPAXnqk2ro/GBuEAjCAKSRvF
+        EwEFsdbhrPkOwVYZ7yt8/l+p3QolOctGOL3nZGRPA8WqqI4Y0TrWQbMvnfpmefGxtpH0EO
+        skuvco4GKEuemXPdscLfAg9dRoEWmlc=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-243-bjXci8QmO6ms46qwsLSVNQ-1; Mon, 13 Jan 2020 08:00:50 -0500
+X-MC-Unique: bjXci8QmO6ms46qwsLSVNQ-1
+Received: from smtp.corp.redhat.com (int-mx01.intmail.prod.int.phx2.redhat.com
+ [10.5.11.11])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id C5C408024E1;
+        Mon, 13 Jan 2020 13:00:48 +0000 (UTC)
+Received: from kamzik.brq.redhat.com (unknown [10.43.2.160])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 8B3C380F5F;
+        Mon, 13 Jan 2020 13:00:47 +0000 (UTC)
+From: Andrew Jones <drjones@redhat.com>
+To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu
+Cc: pbonzini@redhat.com, alexandru.elisei@arm.com
+Subject: [PATCH kvm-unit-tests 2/3] arm/arm64: selftest: Allow test_exception
+ clobber list to be extended
+Date: Mon, 13 Jan 2020 14:00:42 +0100
+Message-Id: <20200113130043.30851-3-drjones@redhat.com>
+In-Reply-To: <20200113130043.30851-1-drjones@redhat.com>
+References: <20200113130043.30851-1-drjones@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.11
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+test_exception() callers may need to extend the clobber list. Also
+there's no reason for the callers to need to assume that R0 and R1
+are already in the list.
+
+Signed-off-by: Andrew Jones <drjones@redhat.com>
+---
+ arm/selftest.c | 105 ++++++++++++++++++++++++-------------------------
+ 1 file changed, 51 insertions(+), 54 deletions(-)
+
+diff --git a/arm/selftest.c b/arm/selftest.c
+index 89759cf9f592..6d74fa1fa4c4 100644
+--- a/arm/selftest.c
++++ b/arm/selftest.c
+@@ -74,24 +74,22 @@ static bool svc_works;
+  * that causes an exception. The test handler will check that its
+  * capture of the current register state matches the capture done
+  * here.
+- *
+- * NOTE: update clobber list if passed insns needs more than r0,r1
+  */
+-#define test_exception(pre_insns, excptn_insn, post_insns)	\
+-	asm volatile(						\
+-		pre_insns "\n"					\
+-		"mov	r0, %0\n"				\
+-		"stmia	r0, { r0-lr }\n"			\
+-		"mrs	r1, cpsr\n"				\
+-		"str	r1, [r0, #" xstr(S_PSR) "]\n"		\
+-		"mov	r1, #-1\n"				\
+-		"str	r1, [r0, #" xstr(S_OLD_R0) "]\n"	\
+-		"add	r1, pc, #8\n"				\
+-		"str	r1, [r0, #" xstr(S_R1) "]\n"		\
+-		"str	r1, [r0, #" xstr(S_PC) "]\n"		\
+-		excptn_insn "\n"				\
+-		post_insns "\n"					\
+-	:: "r" (&expected_regs) : "r0", "r1")
++#define test_exception(pre_insns, excptn_insn, post_insns, clobbers...)	\
++	asm volatile(							\
++		pre_insns "\n"						\
++		"mov	r0, %0\n"					\
++		"stmia	r0, { r0-lr }\n"				\
++		"mrs	r1, cpsr\n"					\
++		"str	r1, [r0, #" xstr(S_PSR) "]\n"			\
++		"mov	r1, #-1\n"					\
++		"str	r1, [r0, #" xstr(S_OLD_R0) "]\n"		\
++		"add	r1, pc, #8\n"					\
++		"str	r1, [r0, #" xstr(S_R1) "]\n"			\
++		"str	r1, [r0, #" xstr(S_PC) "]\n"			\
++		excptn_insn "\n"					\
++		post_insns "\n"						\
++	:: "r" (&expected_regs) : "r0", "r1", ##clobbers)
+ 
+ static bool check_regs(struct pt_regs *regs)
+ {
+@@ -119,7 +117,7 @@ static bool check_und(void)
+ 	install_exception_handler(EXCPTN_UND, und_handler);
+ 
+ 	/* issue an instruction to a coprocessor we don't have */
+-	test_exception("", "mcr p2, 0, r0, c0, c0", "");
++	test_exception("", "mcr p2, 0, r0, c0, c0", "", "r0");
+ 
+ 	install_exception_handler(EXCPTN_UND, NULL);
+ 
+@@ -156,7 +154,8 @@ static bool check_svc(void)
+ 			"push	{ r0,lr }\n",
+ 			"svc	#123\n",
+ 			"pop	{ r0,lr }\n"
+-			"msr	spsr_cxsf, r0\n"
++			"msr	spsr_cxsf, r0\n",
++			"r0", "lr"
+ 		);
+ 	} else {
+ 		test_exception("", "svc #123", "");
+@@ -178,41 +177,39 @@ static void user_psci_system_off(struct pt_regs *regs)
+  * that causes an exception. The test handler will check that its
+  * capture of the current register state matches the capture done
+  * here.
+- *
+- * NOTE: update clobber list if passed insns needs more than x0,x1
+  */
+-#define test_exception(pre_insns, excptn_insn, post_insns)	\
+-	asm volatile(						\
+-		pre_insns "\n"					\
+-		"mov	x1, %0\n"				\
+-		"ldr	x0, [x1, #" xstr(S_PSTATE) "]\n"	\
+-		"mrs	x1, nzcv\n"				\
+-		"orr	w0, w0, w1\n"				\
+-		"mov	x1, %0\n"				\
+-		"str	w0, [x1, #" xstr(S_PSTATE) "]\n"	\
+-		"mov	x0, sp\n"				\
+-		"str	x0, [x1, #" xstr(S_SP) "]\n"		\
+-		"adr	x0, 1f\n"				\
+-		"str	x0, [x1, #" xstr(S_PC) "]\n"		\
+-		"stp	 x2,  x3, [x1,  #16]\n"			\
+-		"stp	 x4,  x5, [x1,  #32]\n"			\
+-		"stp	 x6,  x7, [x1,  #48]\n"			\
+-		"stp	 x8,  x9, [x1,  #64]\n"			\
+-		"stp	x10, x11, [x1,  #80]\n"			\
+-		"stp	x12, x13, [x1,  #96]\n"			\
+-		"stp	x14, x15, [x1, #112]\n"			\
+-		"stp	x16, x17, [x1, #128]\n"			\
+-		"stp	x18, x19, [x1, #144]\n"			\
+-		"stp	x20, x21, [x1, #160]\n"			\
+-		"stp	x22, x23, [x1, #176]\n"			\
+-		"stp	x24, x25, [x1, #192]\n"			\
+-		"stp	x26, x27, [x1, #208]\n"			\
+-		"stp	x28, x29, [x1, #224]\n"			\
+-		"str	x30, [x1, #" xstr(S_LR) "]\n"		\
+-		"stp	 x0,  x1, [x1]\n"			\
+-	"1:"	excptn_insn "\n"				\
+-		post_insns "\n"					\
+-	:: "r" (&expected_regs) : "x0", "x1")
++#define test_exception(pre_insns, excptn_insn, post_insns, clobbers...)	\
++	asm volatile(							\
++		pre_insns "\n"						\
++		"mov	x1, %0\n"					\
++		"ldr	x0, [x1, #" xstr(S_PSTATE) "]\n"		\
++		"mrs	x1, nzcv\n"					\
++		"orr	w0, w0, w1\n"					\
++		"mov	x1, %0\n"					\
++		"str	w0, [x1, #" xstr(S_PSTATE) "]\n"		\
++		"mov	x0, sp\n"					\
++		"str	x0, [x1, #" xstr(S_SP) "]\n"			\
++		"adr	x0, 1f\n"					\
++		"str	x0, [x1, #" xstr(S_PC) "]\n"			\
++		"stp	 x2,  x3, [x1,  #16]\n"				\
++		"stp	 x4,  x5, [x1,  #32]\n"				\
++		"stp	 x6,  x7, [x1,  #48]\n"				\
++		"stp	 x8,  x9, [x1,  #64]\n"				\
++		"stp	x10, x11, [x1,  #80]\n"				\
++		"stp	x12, x13, [x1,  #96]\n"				\
++		"stp	x14, x15, [x1, #112]\n"				\
++		"stp	x16, x17, [x1, #128]\n"				\
++		"stp	x18, x19, [x1, #144]\n"				\
++		"stp	x20, x21, [x1, #160]\n"				\
++		"stp	x22, x23, [x1, #176]\n"				\
++		"stp	x24, x25, [x1, #192]\n"				\
++		"stp	x26, x27, [x1, #208]\n"				\
++		"stp	x28, x29, [x1, #224]\n"				\
++		"str	x30, [x1, #" xstr(S_LR) "]\n"			\
++		"stp	 x0,  x1, [x1]\n"				\
++	"1:"	excptn_insn "\n"					\
++		post_insns "\n"						\
++	:: "r" (&expected_regs) : "x0", "x1", ##clobbers)
+ 
+ static bool check_regs(struct pt_regs *regs)
+ {
+@@ -260,7 +257,7 @@ static bool check_und(void)
+ 	install_exception_handler(v, ESR_EL1_EC_UNKNOWN, unknown_handler);
+ 
+ 	/* try to read an el2 sysreg from el0/1 */
+-	test_exception("", "mrs x0, sctlr_el2", "");
++	test_exception("", "mrs x0, sctlr_el2", "", "x0");
+ 
+ 	install_exception_handler(v, ESR_EL1_EC_UNKNOWN, NULL);
+ 
+
+From patchwork Mon Jan 13 13:00:43 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andrew Jones <drjones@redhat.com>
+X-Patchwork-Id: 11330117
+Return-Path: <SRS0=ekPD=3C=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 672F992A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 13 Jan 2020 13:00:57 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 3C2C421569
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 13 Jan 2020 13:00:57 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="eeC0RLHn"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728766AbgAMNAz (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 13 Jan 2020 08:00:55 -0500
+Received: from us-smtp-2.mimecast.com ([207.211.31.81]:27379 "EHLO
+        us-smtp-delivery-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL)
+        by vger.kernel.org with ESMTP id S1726277AbgAMNAy (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 13 Jan 2020 08:00:54 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1578920452;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=wP6Y3rc1foY9/KBm0PlaD6Mr4Cp4jAYaI3HOzXM8Vu8=;
+        b=eeC0RLHnvuWntMOZS8vbAeQQ2WBLrpnZnU23gi1vhBdH65JXRlvNVCFmjzUR+4U29yv+uc
+        SW2oMew8GKzYVDR+bXVGgi/r7SnUYAOM6xlrHkLyi0zq1rBgbN1WBcKYNF3h/XLzuo3Xah
+        EvHx/USH3wbuC3U/DNHhRuUEeWoJyBo=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-253-1Ie-Gl7oMneANM1awoS6AA-1; Mon, 13 Jan 2020 08:00:51 -0500
+X-MC-Unique: 1Ie-Gl7oMneANM1awoS6AA-1
+Received: from smtp.corp.redhat.com (int-mx01.intmail.prod.int.phx2.redhat.com
+ [10.5.11.11])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 3DBA2108BC8F;
+        Mon, 13 Jan 2020 13:00:50 +0000 (UTC)
+Received: from kamzik.brq.redhat.com (unknown [10.43.2.160])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 16D64811E1;
+        Mon, 13 Jan 2020 13:00:48 +0000 (UTC)
+From: Andrew Jones <drjones@redhat.com>
+To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu
+Cc: pbonzini@redhat.com, alexandru.elisei@arm.com
+Subject: [PATCH kvm-unit-tests 3/3] arm/arm64: selftest: Add prefetch abort
+ test
+Date: Mon, 13 Jan 2020 14:00:43 +0100
+Message-Id: <20200113130043.30851-4-drjones@redhat.com>
+In-Reply-To: <20200113130043.30851-1-drjones@redhat.com>
+References: <20200113130043.30851-1-drjones@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.11
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+When a guest tries to execute code from an invalid physical address
+KVM should inject an external abort. This test is based on a test
+originally posted by Alexandru Elisei. This version avoids hard
+coding the invalid physical address used.
+
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>
+Signed-off-by: Andrew Jones <drjones@redhat.com>
+---
+ arm/selftest.c      | 94 +++++++++++++++++++++++++++++++++++++++++++++
+ lib/arm64/asm/esr.h |  3 ++
+ 2 files changed, 97 insertions(+)
+
+diff --git a/arm/selftest.c b/arm/selftest.c
+index 6d74fa1fa4c4..4495b161cdd5 100644
+--- a/arm/selftest.c
++++ b/arm/selftest.c
+@@ -8,6 +8,7 @@
+ #include <libcflat.h>
+ #include <util.h>
+ #include <devicetree.h>
++#include <vmalloc.h>
+ #include <asm/setup.h>
+ #include <asm/ptrace.h>
+ #include <asm/asm-offsets.h>
+@@ -15,6 +16,7 @@
+ #include <asm/thread_info.h>
+ #include <asm/psci.h>
+ #include <asm/smp.h>
++#include <asm/mmu.h>
+ #include <asm/barrier.h>
+ 
+ static cpumask_t ready, valid;
+@@ -65,9 +67,43 @@ static void check_setup(int argc, char **argv)
+ 		report_abort("missing input");
+ }
+ 
++unsigned long check_pabt_invalid_paddr;
++static bool check_pabt_init(void)
++{
++	phys_addr_t highest_end = 0;
++	unsigned long vaddr;
++	struct mem_region *r;
++
++	/*
++	 * We need a physical address that isn't backed by anything. Without
++	 * fully parsing the device tree there's no way to be certain of any
++	 * address, but an unknown address immediately following the highest
++	 * memory region has a reasonable chance. This is because we can
++	 * assume that that memory region could have been larger, if the user
++	 * had configured more RAM, and therefore no MMIO region should be
++	 * there.
++	 */
++	for (r = mem_regions; r->end; ++r) {
++		if (r->flags & MR_F_IO)
++			continue;
++		if (r->end > highest_end)
++			highest_end = PAGE_ALIGN(r->end);
++	}
++
++	if (mem_region_get_flags(highest_end) != MR_F_UNKNOWN)
++		return false;
++
++	vaddr = (unsigned long)vmap(highest_end, PAGE_SIZE);
++	mmu_clear_user(current_thread_info()->pgtable, vaddr);
++	check_pabt_invalid_paddr = vaddr;
++
++	return true;
++}
++
+ static struct pt_regs expected_regs;
+ static bool und_works;
+ static bool svc_works;
++static bool pabt_works;
+ #if defined(__arm__)
+ /*
+  * Capture the current register state and execute an instruction
+@@ -166,6 +202,30 @@ static bool check_svc(void)
+ 	return svc_works;
+ }
+ 
++static void pabt_handler(struct pt_regs *regs)
++{
++	expected_regs.ARM_lr = expected_regs.ARM_pc;
++	expected_regs.ARM_pc = expected_regs.ARM_r9;
++
++	pabt_works = check_regs(regs);
++
++	regs->ARM_pc = regs->ARM_lr;
++}
++
++static bool check_pabt(void)
++{
++	install_exception_handler(EXCPTN_PABT, pabt_handler);
++
++	test_exception("ldr	r9, =check_pabt_invalid_paddr\n"
++		       "ldr	r9, [r9]\n",
++		       "blx	r9\n",
++		       "", "r9", "lr");
++
++	install_exception_handler(EXCPTN_PABT, NULL);
++
++	return pabt_works;
++}
++
+ static void user_psci_system_off(struct pt_regs *regs)
+ {
+ 	__user_psci_system_off();
+@@ -285,6 +345,35 @@ static bool check_svc(void)
+ 	return svc_works;
+ }
+ 
++static void pabt_handler(struct pt_regs *regs, unsigned int esr)
++{
++	bool is_extabt = (esr & ESR_EL1_FSC_MASK) == ESR_EL1_FSC_EXTABT;
++
++	expected_regs.regs[30] = expected_regs.pc + 4;
++	expected_regs.pc = expected_regs.regs[9];
++
++	pabt_works = check_regs(regs) && is_extabt;
++
++	regs->pc = regs->regs[30];
++}
++
++static bool check_pabt(void)
++{
++	enum vector v = check_vector_prep();
++
++	install_exception_handler(v, ESR_EL1_EC_IABT_EL1, pabt_handler);
++
++	test_exception("adrp	x9, check_pabt_invalid_paddr\n"
++		       "add	x9, x9, :lo12:check_pabt_invalid_paddr\n"
++		       "ldr	x9, [x9]\n",
++		       "blr	x9\n",
++		       "", "x9", "x30");
++
++	install_exception_handler(v, ESR_EL1_EC_IABT_EL1, NULL);
++
++	return pabt_works;
++}
++
+ static void user_psci_system_off(struct pt_regs *regs, unsigned int esr)
+ {
+ 	__user_psci_system_off();
+@@ -302,6 +391,11 @@ static void check_vectors(void *arg __unused)
+ 		install_exception_handler(EL0_SYNC_64, ESR_EL1_EC_UNKNOWN,
+ 					  user_psci_system_off);
+ #endif
++	} else {
++		if (!check_pabt_init())
++			report_skip("Couldn't guess an invalid physical address");
++		else
++			report(check_pabt(), "pabt");
+ 	}
+ 	exit(report_summary());
+ }
+diff --git a/lib/arm64/asm/esr.h b/lib/arm64/asm/esr.h
+index 8e5af4d90767..8c351631b0a0 100644
+--- a/lib/arm64/asm/esr.h
++++ b/lib/arm64/asm/esr.h
+@@ -44,4 +44,7 @@
+ #define ESR_EL1_EC_BKPT32	(0x38)
+ #define ESR_EL1_EC_BRK64	(0x3C)
+ 
++#define ESR_EL1_FSC_MASK	(0x3F)
++#define ESR_EL1_FSC_EXTABT	(0x10)
++
+ #endif /* _ASMARM64_ESR_H_ */
