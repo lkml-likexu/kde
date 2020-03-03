@@ -1,0 +1,707 @@
+From patchwork Mon Mar  2 19:57:31 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11416235
+Return-Path: <SRS0=eKZH=4T=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id ADC5E924
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  2 Mar 2020 19:58:00 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 9581722B48
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  2 Mar 2020 19:58:00 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726773AbgCBT5i (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 2 Mar 2020 14:57:38 -0500
+Received: from mga05.intel.com ([192.55.52.43]:30422 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726661AbgCBT5i (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 2 Mar 2020 14:57:38 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga005.fm.intel.com ([10.253.24.32])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 02 Mar 2020 11:57:37 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,508,1574150400";
+   d="scan'208";a="438404973"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by fmsmga005.fm.intel.com with ESMTP; 02 Mar 2020 11:57:37 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Jan Kiszka <jan.kiszka@siemens.com>,
+        Xiaoyao Li <xiaoyao.li@intel.com>
+Subject: [PATCH 1/6] KVM: x86: Fix tracing of CPUID.function when function is
+ out-of-range
+Date: Mon,  2 Mar 2020 11:57:31 -0800
+Message-Id: <20200302195736.24777-2-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200302195736.24777-1-sean.j.christopherson@intel.com>
+References: <20200302195736.24777-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Rework kvm_cpuid() to query entry->function when adjusting the output
+values so that the original function (in the aptly named "function") is
+preserved for tracing.  This fixes a bug where trace_kvm_cpuid() will
+trace the max function for a range instead of the requested function if
+the requested function is out-of-range and an entry for the max function
+exists.
+
+Fixes: 43561123ab37 ("kvm: x86: Improve emulation of CPUID leaves 0BH and 1FH")
+Reported-by: Jan Kiszka <jan.kiszka@siemens.com>
+Cc: Jim Mattson <jmattson@google.com>
+Cc: Xiaoyao Li <xiaoyao.li@intel.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/cpuid.c | 15 +++++++--------
+ 1 file changed, 7 insertions(+), 8 deletions(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index b1c469446b07..6be012937eba 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -997,12 +997,12 @@ static bool cpuid_function_in_range(struct kvm_vcpu *vcpu, u32 function)
+ 	return max && function <= max->eax;
+ }
+ 
++/* Returns true if the requested leaf/function exists in guest CPUID. */
+ bool kvm_cpuid(struct kvm_vcpu *vcpu, u32 *eax, u32 *ebx,
+ 	       u32 *ecx, u32 *edx, bool check_limit)
+ {
+-	u32 function = *eax, index = *ecx;
++	const u32 function = *eax, index = *ecx;
+ 	struct kvm_cpuid_entry2 *entry;
+-	struct kvm_cpuid_entry2 *max;
+ 	bool found;
+ 
+ 	entry = kvm_find_cpuid_entry(vcpu, function, index);
+@@ -1015,18 +1015,17 @@ bool kvm_cpuid(struct kvm_vcpu *vcpu, u32 *eax, u32 *ebx,
+ 	 */
+ 	if (!entry && check_limit && !guest_cpuid_is_amd(vcpu) &&
+ 	    !cpuid_function_in_range(vcpu, function)) {
+-		max = kvm_find_cpuid_entry(vcpu, 0, 0);
+-		if (max) {
+-			function = max->eax;
+-			entry = kvm_find_cpuid_entry(vcpu, function, index);
+-		}
++		entry = kvm_find_cpuid_entry(vcpu, 0, 0);
++		if (entry)
++			entry = kvm_find_cpuid_entry(vcpu, entry->eax, index);
+ 	}
+ 	if (entry) {
+ 		*eax = entry->eax;
+ 		*ebx = entry->ebx;
+ 		*ecx = entry->ecx;
+ 		*edx = entry->edx;
+-		if (function == 7 && index == 0) {
++
++		if (entry->function == 7 && index == 0) {
+ 			u64 data;
+ 		        if (!__kvm_get_msr(vcpu, MSR_IA32_TSX_CTRL, &data, true) &&
+ 			    (data & TSX_CTRL_CPUID_CLEAR))
+
+From patchwork Mon Mar  2 19:57:32 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11416237
+Return-Path: <SRS0=eKZH=4T=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8B087924
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  2 Mar 2020 19:58:08 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 73FA32086A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  2 Mar 2020 19:58:08 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727076AbgCBT6C (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 2 Mar 2020 14:58:02 -0500
+Received: from mga05.intel.com ([192.55.52.43]:30422 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725781AbgCBT5i (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 2 Mar 2020 14:57:38 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga005.fm.intel.com ([10.253.24.32])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 02 Mar 2020 11:57:38 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,508,1574150400";
+   d="scan'208";a="438404978"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by fmsmga005.fm.intel.com with ESMTP; 02 Mar 2020 11:57:37 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Jan Kiszka <jan.kiszka@siemens.com>,
+        Xiaoyao Li <xiaoyao.li@intel.com>
+Subject: [PATCH 2/6] KVM: x86: Fix CPUID range check for Centaur and
+ Hypervisor ranges
+Date: Mon,  2 Mar 2020 11:57:32 -0800
+Message-Id: <20200302195736.24777-3-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200302195736.24777-1-sean.j.christopherson@intel.com>
+References: <20200302195736.24777-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Extend the mask in cpuid_function_in_range() for finding the "class" of
+the function to 0xfffffff00.  While there is no official definition of
+what constitutes a class, e.g. arguably bits 31:16 should be the class
+and bits 15:0 the functions within that class, the Hypervisor logic
+effectively uses bits 31:8 as the class by virtue of checking for
+different bases in increments of 0x100, e.g. KVM advertises its CPUID
+functions starting at 0x40000100 when HyperV features are advertised at
+the default base of 0x40000000.
+
+Masking against 0x80000000 only handles basic and extended leafs, which
+results in Centaur and Hypervisor range checks being performed against
+the basic CPUID range, e.g. if CPUID.0x40000000.EAX=0x4000000A and there
+is no entry for CPUID.0x40000006, then function 0x40000006 would be
+incorrectly reported as out of bounds.
+
+The bad range check doesn't cause function problems for any known VMM
+because out-of-range semantics only come into play if the exact entry
+isn't found, and VMMs either support a very limited Hypervisor range,
+e.g. the official KVM range is 0x40000000-0x40000001 (effectively no
+room for undefined leafs) or explicitly defines gaps to be zero, e.g.
+Qemu explicitly creates zeroed entries up to the Cenatur and Hypervisor
+limits (the latter comes into play when providing HyperV features).
+
+The bad behavior can be visually confirmed by dumping CPUID output in
+the guest when running Qemu with a stable TSC, as Qemu extends the limit
+of range 0x40000000 to 0x40000010 to advertise VMware's cpuid_freq,
+without defining zeroed entries for 0x40000002 - 0x4000000f.
+
+Fixes: 43561123ab37 ("kvm: x86: Improve emulation of CPUID leaves 0BH and 1FH")
+Cc: Jim Mattson <jmattson@google.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/cpuid.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 6be012937eba..c320126e0118 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -993,7 +993,7 @@ static bool cpuid_function_in_range(struct kvm_vcpu *vcpu, u32 function)
+ {
+ 	struct kvm_cpuid_entry2 *max;
+ 
+-	max = kvm_find_cpuid_entry(vcpu, function & 0x80000000, 0);
++	max = kvm_find_cpuid_entry(vcpu, function & 0xffffff00u, 0);
+ 	return max && function <= max->eax;
+ }
+ 
+
+From patchwork Mon Mar  2 19:57:33 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11416229
+Return-Path: <SRS0=eKZH=4T=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D75B01820
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  2 Mar 2020 19:57:49 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id BF2A922B48
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  2 Mar 2020 19:57:49 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726946AbgCBT5l (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 2 Mar 2020 14:57:41 -0500
+Received: from mga05.intel.com ([192.55.52.43]:30422 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726816AbgCBT5j (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 2 Mar 2020 14:57:39 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga005.fm.intel.com ([10.253.24.32])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 02 Mar 2020 11:57:39 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,508,1574150400";
+   d="scan'208";a="438404982"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by fmsmga005.fm.intel.com with ESMTP; 02 Mar 2020 11:57:38 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Jan Kiszka <jan.kiszka@siemens.com>,
+        Xiaoyao Li <xiaoyao.li@intel.com>
+Subject: [PATCH 3/6] KVM: x86: Add dedicated emulator helper for grabbing
+ CPUID.maxphyaddr
+Date: Mon,  2 Mar 2020 11:57:33 -0800
+Message-Id: <20200302195736.24777-4-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200302195736.24777-1-sean.j.christopherson@intel.com>
+References: <20200302195736.24777-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Add a helper to retrieve cpuid_maxphyaddr() instead of manually
+calculating the value in the emulator via raw CPUID output.  In addition
+to consolidating logic, this also paves the way toward simplifying
+kvm_cpuid(), whose somewhat confusing return value exists purely to
+support the emulator's maxphyaddr calculation.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_emulate.h |  1 +
+ arch/x86/kvm/emulate.c             | 10 +---------
+ arch/x86/kvm/x86.c                 |  6 ++++++
+ 3 files changed, 8 insertions(+), 9 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_emulate.h b/arch/x86/include/asm/kvm_emulate.h
+index bf5f5e476f65..ded06515d30f 100644
+--- a/arch/x86/include/asm/kvm_emulate.h
++++ b/arch/x86/include/asm/kvm_emulate.h
+@@ -222,6 +222,7 @@ struct x86_emulate_ops {
+ 
+ 	bool (*get_cpuid)(struct x86_emulate_ctxt *ctxt, u32 *eax, u32 *ebx,
+ 			  u32 *ecx, u32 *edx, bool check_limit);
++	int (*get_cpuid_maxphyaddr)(struct x86_emulate_ctxt *ctxt);
+ 	bool (*guest_has_long_mode)(struct x86_emulate_ctxt *ctxt);
+ 	bool (*guest_has_movbe)(struct x86_emulate_ctxt *ctxt);
+ 	bool (*guest_has_fxsr)(struct x86_emulate_ctxt *ctxt);
+diff --git a/arch/x86/kvm/emulate.c b/arch/x86/kvm/emulate.c
+index dd19fb3539e0..bf02ed51e90f 100644
+--- a/arch/x86/kvm/emulate.c
++++ b/arch/x86/kvm/emulate.c
+@@ -4244,16 +4244,8 @@ static int check_cr_write(struct x86_emulate_ctxt *ctxt)
+ 
+ 		ctxt->ops->get_msr(ctxt, MSR_EFER, &efer);
+ 		if (efer & EFER_LMA) {
+-			u64 maxphyaddr;
+-			u32 eax, ebx, ecx, edx;
++			int maxphyaddr = ctxt->ops->get_cpuid_maxphyaddr(ctxt);
+ 
+-			eax = 0x80000008;
+-			ecx = 0;
+-			if (ctxt->ops->get_cpuid(ctxt, &eax, &ebx, &ecx,
+-						 &edx, false))
+-				maxphyaddr = eax & 0xff;
+-			else
+-				maxphyaddr = 36;
+ 			rsvd = rsvd_bits(maxphyaddr, 63);
+ 			if (ctxt->ops->get_cr(ctxt, 4) & X86_CR4_PCIDE)
+ 				rsvd &= ~X86_CR3_PCID_NOFLUSH;
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index ddd1d296bd20..5467ee71c25b 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -6209,6 +6209,11 @@ static bool emulator_get_cpuid(struct x86_emulate_ctxt *ctxt,
+ 	return kvm_cpuid(emul_to_vcpu(ctxt), eax, ebx, ecx, edx, check_limit);
+ }
+ 
++static int emulator_get_cpuid_maxphyaddr(struct x86_emulate_ctxt *ctxt)
++{
++	return cpuid_maxphyaddr(emul_to_vcpu(ctxt));
++}
++
+ static bool emulator_guest_has_long_mode(struct x86_emulate_ctxt *ctxt)
+ {
+ 	return guest_cpuid_has(emul_to_vcpu(ctxt), X86_FEATURE_LM);
+@@ -6301,6 +6306,7 @@ static const struct x86_emulate_ops emulate_ops = {
+ 	.fix_hypercall       = emulator_fix_hypercall,
+ 	.intercept           = emulator_intercept,
+ 	.get_cpuid           = emulator_get_cpuid,
++	.get_cpuid_maxphyaddr= emulator_get_cpuid_maxphyaddr,
+ 	.guest_has_long_mode = emulator_guest_has_long_mode,
+ 	.guest_has_movbe     = emulator_guest_has_movbe,
+ 	.guest_has_fxsr      = emulator_guest_has_fxsr,
+
+From patchwork Mon Mar  2 19:57:34 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11416233
+Return-Path: <SRS0=eKZH=4T=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 137CF138D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  2 Mar 2020 19:57:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id F09352467E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  2 Mar 2020 19:57:57 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726876AbgCBT5k (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 2 Mar 2020 14:57:40 -0500
+Received: from mga05.intel.com ([192.55.52.43]:30422 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726661AbgCBT5j (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 2 Mar 2020 14:57:39 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga005.fm.intel.com ([10.253.24.32])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 02 Mar 2020 11:57:39 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,508,1574150400";
+   d="scan'208";a="438404986"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by fmsmga005.fm.intel.com with ESMTP; 02 Mar 2020 11:57:39 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Jan Kiszka <jan.kiszka@siemens.com>,
+        Xiaoyao Li <xiaoyao.li@intel.com>
+Subject: [PATCH 4/6] KVM: x86: Drop return value from kvm_cpuid()
+Date: Mon,  2 Mar 2020 11:57:34 -0800
+Message-Id: <20200302195736.24777-5-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200302195736.24777-1-sean.j.christopherson@intel.com>
+References: <20200302195736.24777-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Remove the boolean return from kvm_cpuid() now that all callers ignore
+the return value.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_emulate.h | 2 +-
+ arch/x86/kvm/cpuid.c               | 4 +---
+ arch/x86/kvm/cpuid.h               | 2 +-
+ arch/x86/kvm/x86.c                 | 4 ++--
+ 4 files changed, 5 insertions(+), 7 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_emulate.h b/arch/x86/include/asm/kvm_emulate.h
+index ded06515d30f..20a26dc792ce 100644
+--- a/arch/x86/include/asm/kvm_emulate.h
++++ b/arch/x86/include/asm/kvm_emulate.h
+@@ -220,7 +220,7 @@ struct x86_emulate_ops {
+ 			 struct x86_instruction_info *info,
+ 			 enum x86_intercept_stage stage);
+ 
+-	bool (*get_cpuid)(struct x86_emulate_ctxt *ctxt, u32 *eax, u32 *ebx,
++	void (*get_cpuid)(struct x86_emulate_ctxt *ctxt, u32 *eax, u32 *ebx,
+ 			  u32 *ecx, u32 *edx, bool check_limit);
+ 	int (*get_cpuid_maxphyaddr)(struct x86_emulate_ctxt *ctxt);
+ 	bool (*guest_has_long_mode)(struct x86_emulate_ctxt *ctxt);
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index c320126e0118..869526930cf7 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -997,8 +997,7 @@ static bool cpuid_function_in_range(struct kvm_vcpu *vcpu, u32 function)
+ 	return max && function <= max->eax;
+ }
+ 
+-/* Returns true if the requested leaf/function exists in guest CPUID. */
+-bool kvm_cpuid(struct kvm_vcpu *vcpu, u32 *eax, u32 *ebx,
++void kvm_cpuid(struct kvm_vcpu *vcpu, u32 *eax, u32 *ebx,
+ 	       u32 *ecx, u32 *edx, bool check_limit)
+ {
+ 	const u32 function = *eax, index = *ecx;
+@@ -1049,7 +1048,6 @@ bool kvm_cpuid(struct kvm_vcpu *vcpu, u32 *eax, u32 *ebx,
+ 		}
+ 	}
+ 	trace_kvm_cpuid(function, *eax, *ebx, *ecx, *edx, found);
+-	return found;
+ }
+ EXPORT_SYMBOL_GPL(kvm_cpuid);
+ 
+diff --git a/arch/x86/kvm/cpuid.h b/arch/x86/kvm/cpuid.h
+index 7366c618aa04..5df64ff25663 100644
+--- a/arch/x86/kvm/cpuid.h
++++ b/arch/x86/kvm/cpuid.h
+@@ -22,7 +22,7 @@ int kvm_vcpu_ioctl_set_cpuid2(struct kvm_vcpu *vcpu,
+ int kvm_vcpu_ioctl_get_cpuid2(struct kvm_vcpu *vcpu,
+ 			      struct kvm_cpuid2 *cpuid,
+ 			      struct kvm_cpuid_entry2 __user *entries);
+-bool kvm_cpuid(struct kvm_vcpu *vcpu, u32 *eax, u32 *ebx,
++void kvm_cpuid(struct kvm_vcpu *vcpu, u32 *eax, u32 *ebx,
+ 	       u32 *ecx, u32 *edx, bool check_limit);
+ 
+ int cpuid_query_maxphyaddr(struct kvm_vcpu *vcpu);
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 5467ee71c25b..bfff92fcf0d1 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -6203,10 +6203,10 @@ static int emulator_intercept(struct x86_emulate_ctxt *ctxt,
+ 	return kvm_x86_ops->check_intercept(emul_to_vcpu(ctxt), info, stage);
+ }
+ 
+-static bool emulator_get_cpuid(struct x86_emulate_ctxt *ctxt,
++static void emulator_get_cpuid(struct x86_emulate_ctxt *ctxt,
+ 			u32 *eax, u32 *ebx, u32 *ecx, u32 *edx, bool check_limit)
+ {
+-	return kvm_cpuid(emul_to_vcpu(ctxt), eax, ebx, ecx, edx, check_limit);
++	kvm_cpuid(emul_to_vcpu(ctxt), eax, ebx, ecx, edx, check_limit);
+ }
+ 
+ static int emulator_get_cpuid_maxphyaddr(struct x86_emulate_ctxt *ctxt)
+
+From patchwork Mon Mar  2 19:57:35 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11416227
+Return-Path: <SRS0=eKZH=4T=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B147C1580
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  2 Mar 2020 19:57:41 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 99BE52465E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  2 Mar 2020 19:57:41 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726915AbgCBT5k (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 2 Mar 2020 14:57:40 -0500
+Received: from mga05.intel.com ([192.55.52.43]:30422 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726846AbgCBT5k (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 2 Mar 2020 14:57:40 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga005.fm.intel.com ([10.253.24.32])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 02 Mar 2020 11:57:40 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,508,1574150400";
+   d="scan'208";a="438404989"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by fmsmga005.fm.intel.com with ESMTP; 02 Mar 2020 11:57:39 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Jan Kiszka <jan.kiszka@siemens.com>,
+        Xiaoyao Li <xiaoyao.li@intel.com>
+Subject: [PATCH 5/6] KVM: x86: Rename "found" variable in kvm_cpuid() to
+ "exact_entry_exists"
+Date: Mon,  2 Mar 2020 11:57:35 -0800
+Message-Id: <20200302195736.24777-6-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200302195736.24777-1-sean.j.christopherson@intel.com>
+References: <20200302195736.24777-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Rename "found" in kvm_cpuid() to "exact_entry_exists" to better convey
+that the intent of the tracepoint's "found/not found" output is to trace
+whether the output values are for the actual requested leaf or for some
+other (likely unrelated) leaf that was found while processing entries to
+emulate funky CPU behavior, e.g. the max basic leaf on Intel CPUs when
+the requested CPUID leaf is out of range.
+
+Suggested-by: Jan Kiszka <jan.kiszka@siemens.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/cpuid.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 869526930cf7..b0a4f3c17932 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -1002,10 +1002,10 @@ void kvm_cpuid(struct kvm_vcpu *vcpu, u32 *eax, u32 *ebx,
+ {
+ 	const u32 function = *eax, index = *ecx;
+ 	struct kvm_cpuid_entry2 *entry;
+-	bool found;
++	bool exact_entry_exists;
+ 
+ 	entry = kvm_find_cpuid_entry(vcpu, function, index);
+-	found = entry;
++	exact_entry_exists = !!entry;
+ 	/*
+ 	 * Intel CPUID semantics treats any query for an out-of-range
+ 	 * leaf as if the highest basic leaf (i.e. CPUID.0H:EAX) were
+@@ -1047,7 +1047,7 @@ void kvm_cpuid(struct kvm_vcpu *vcpu, u32 *eax, u32 *ebx,
+ 			}
+ 		}
+ 	}
+-	trace_kvm_cpuid(function, *eax, *ebx, *ecx, *edx, found);
++	trace_kvm_cpuid(function, *eax, *ebx, *ecx, *edx, exact_entry_exists);
+ }
+ EXPORT_SYMBOL_GPL(kvm_cpuid);
+ 
+
+From patchwork Mon Mar  2 19:57:36 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11416231
+Return-Path: <SRS0=eKZH=4T=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B77A217E0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  2 Mar 2020 19:57:54 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id A02832467E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  2 Mar 2020 19:57:54 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727027AbgCBT5v (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 2 Mar 2020 14:57:51 -0500
+Received: from mga05.intel.com ([192.55.52.43]:30422 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726896AbgCBT5l (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 2 Mar 2020 14:57:41 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga005.fm.intel.com ([10.253.24.32])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 02 Mar 2020 11:57:40 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,508,1574150400";
+   d="scan'208";a="438404992"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by fmsmga005.fm.intel.com with ESMTP; 02 Mar 2020 11:57:40 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Jan Kiszka <jan.kiszka@siemens.com>,
+        Xiaoyao Li <xiaoyao.li@intel.com>
+Subject: [PATCH 6/6] KVM: x86: Add requested index to the CPUID tracepoint
+Date: Mon,  2 Mar 2020 11:57:36 -0800
+Message-Id: <20200302195736.24777-7-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200302195736.24777-1-sean.j.christopherson@intel.com>
+References: <20200302195736.24777-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Output the requested index when tracing CPUID emulation; it's basically
+mandatory for leafs where the index is meaningful, and is helpful for
+verifying KVM correctness even when the index isn't meaningful, e.g. the
+trace for a Linux guest's hypervisor_cpuid_base() probing appears to
+be broken (returns all zeroes) at first glance, but is correct because
+the index is non-zero, i.e. the output values correspond to random index
+in the maximum basic leaf.
+
+Suggested-by: Xiaoyao Li <xiaoyao.li@intel.com>
+Cc: Jan Kiszka <jan.kiszka@siemens.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/cpuid.c |  3 ++-
+ arch/x86/kvm/trace.h | 13 ++++++++-----
+ 2 files changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index b0a4f3c17932..a3c9f6bf43f3 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -1047,7 +1047,8 @@ void kvm_cpuid(struct kvm_vcpu *vcpu, u32 *eax, u32 *ebx,
+ 			}
+ 		}
+ 	}
+-	trace_kvm_cpuid(function, *eax, *ebx, *ecx, *edx, exact_entry_exists);
++	trace_kvm_cpuid(function, index, *eax, *ebx, *ecx, *edx,
++			exact_entry_exists);
+ }
+ EXPORT_SYMBOL_GPL(kvm_cpuid);
+ 
+diff --git a/arch/x86/kvm/trace.h b/arch/x86/kvm/trace.h
+index f194dd058470..aa372d0119f0 100644
+--- a/arch/x86/kvm/trace.h
++++ b/arch/x86/kvm/trace.h
+@@ -151,12 +151,14 @@ TRACE_EVENT(kvm_fast_mmio,
+  * Tracepoint for cpuid.
+  */
+ TRACE_EVENT(kvm_cpuid,
+-	TP_PROTO(unsigned int function, unsigned long rax, unsigned long rbx,
+-		 unsigned long rcx, unsigned long rdx, bool found),
+-	TP_ARGS(function, rax, rbx, rcx, rdx, found),
++	TP_PROTO(unsigned int function, unsigned int index, unsigned long rax,
++		 unsigned long rbx, unsigned long rcx, unsigned long rdx,
++		 bool found),
++	TP_ARGS(function, index, rax, rbx, rcx, rdx, found),
+ 
+ 	TP_STRUCT__entry(
+ 		__field(	unsigned int,	function	)
++		__field(	unsigned int,	index		)
+ 		__field(	unsigned long,	rax		)
+ 		__field(	unsigned long,	rbx		)
+ 		__field(	unsigned long,	rcx		)
+@@ -166,6 +168,7 @@ TRACE_EVENT(kvm_cpuid,
+ 
+ 	TP_fast_assign(
+ 		__entry->function	= function;
++		__entry->index		= index;
+ 		__entry->rax		= rax;
+ 		__entry->rbx		= rbx;
+ 		__entry->rcx		= rcx;
+@@ -173,8 +176,8 @@ TRACE_EVENT(kvm_cpuid,
+ 		__entry->found		= found;
+ 	),
+ 
+-	TP_printk("func %x rax %lx rbx %lx rcx %lx rdx %lx, cpuid entry %s",
+-		  __entry->function, __entry->rax,
++	TP_printk("func %x idx %x rax %lx rbx %lx rcx %lx rdx %lx, cpuid entry %s",
++		  __entry->function, __entry->index, __entry->rax,
+ 		  __entry->rbx, __entry->rcx, __entry->rdx,
+ 		  __entry->found ? "found" : "not found")
+ );
