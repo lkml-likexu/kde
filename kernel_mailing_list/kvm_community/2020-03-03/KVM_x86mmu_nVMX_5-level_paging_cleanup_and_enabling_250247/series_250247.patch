@@ -1,0 +1,1029 @@
+From patchwork Tue Mar  3 02:02:34 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11417047
+Return-Path: <SRS0=OzDj=4U=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6EF75138D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  3 Mar 2020 02:02:44 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 57F2A2465E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  3 Mar 2020 02:02:44 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727174AbgCCCCn (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 2 Mar 2020 21:02:43 -0500
+Received: from mga05.intel.com ([192.55.52.43]:54060 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727030AbgCCCCm (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 2 Mar 2020 21:02:42 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga006.fm.intel.com ([10.253.24.20])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 02 Mar 2020 18:02:41 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,509,1574150400";
+   d="scan'208";a="440384933"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by fmsmga006.fm.intel.com with ESMTP; 02 Mar 2020 18:02:41 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v3 1/7] KVM: x86/mmu: Don't drop level/direct from MMU role
+ calculation
+Date: Mon,  2 Mar 2020 18:02:34 -0800
+Message-Id: <20200303020240.28494-2-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200303020240.28494-1-sean.j.christopherson@intel.com>
+References: <20200303020240.28494-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Use the calculated role as-is when propagating it to kvm_mmu.mmu_role,
+i.e. stop masking off meaningful fields.  The concept of masking off
+fields came from kvm_mmu_pte_write(), which (correctly) ignores certain
+fields when comparing kvm_mmu_page.role against kvm_mmu.mmu_role, e.g.
+the current mmu's access and level have no relation to a shadow page's
+access and level.
+
+Masking off the level causes problems for 5-level paging, e.g. CR4.LA57
+has its own redundant flag in the extended role, and nested EPT would
+need a similar hack to support 5-level paging for L2.
+
+Opportunistically rework the mask for kvm_mmu_pte_write() to define the
+fields that should be ignored as opposed to the fields that should be
+checked, i.e. make it opt-out instead of opt-in so that new fields are
+automatically picked up.  While doing so, stop ignoring "direct".  The
+field is effectively ignored anyways because kvm_mmu_pte_write() is only
+reached with an indirect mmu and the loop only walks indirect shadow
+pages, but double checking "direct" literally costs nothing.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/mmu/mmu.c | 35 ++++++++++++++++++-----------------
+ 1 file changed, 18 insertions(+), 17 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index c4e0b97f82ac..80b21b7cf092 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -215,17 +215,6 @@ struct kvm_shadow_walk_iterator {
+ 	unsigned index;
+ };
+ 
+-static const union kvm_mmu_page_role mmu_base_role_mask = {
+-	.cr0_wp = 1,
+-	.gpte_is_8_bytes = 1,
+-	.nxe = 1,
+-	.smep_andnot_wp = 1,
+-	.smap_andnot_wp = 1,
+-	.smm = 1,
+-	.guest_mode = 1,
+-	.ad_disabled = 1,
+-};
+-
+ #define for_each_shadow_entry_using_root(_vcpu, _root, _addr, _walker)     \
+ 	for (shadow_walk_init_using_root(&(_walker), (_vcpu),              \
+ 					 (_root), (_addr));                \
+@@ -4919,7 +4908,6 @@ static void init_kvm_tdp_mmu(struct kvm_vcpu *vcpu)
+ 	union kvm_mmu_role new_role =
+ 		kvm_calc_tdp_mmu_root_page_role(vcpu, false);
+ 
+-	new_role.base.word &= mmu_base_role_mask.word;
+ 	if (new_role.as_u64 == context->mmu_role.as_u64)
+ 		return;
+ 
+@@ -4991,7 +4979,6 @@ void kvm_init_shadow_mmu(struct kvm_vcpu *vcpu)
+ 	union kvm_mmu_role new_role =
+ 		kvm_calc_shadow_mmu_root_page_role(vcpu, false);
+ 
+-	new_role.base.word &= mmu_base_role_mask.word;
+ 	if (new_role.as_u64 == context->mmu_role.as_u64)
+ 		return;
+ 
+@@ -5048,7 +5035,6 @@ void kvm_init_shadow_ept_mmu(struct kvm_vcpu *vcpu, bool execonly,
+ 
+ 	__kvm_mmu_new_cr3(vcpu, new_eptp, new_role.base, false);
+ 
+-	new_role.base.word &= mmu_base_role_mask.word;
+ 	if (new_role.as_u64 == context->mmu_role.as_u64)
+ 		return;
+ 
+@@ -5089,7 +5075,6 @@ static void init_kvm_nested_mmu(struct kvm_vcpu *vcpu)
+ 	union kvm_mmu_role new_role = kvm_calc_mmu_role_common(vcpu, false);
+ 	struct kvm_mmu *g_context = &vcpu->arch.nested_mmu;
+ 
+-	new_role.base.word &= mmu_base_role_mask.word;
+ 	if (new_role.as_u64 == g_context->mmu_role.as_u64)
+ 		return;
+ 
+@@ -5328,6 +5313,22 @@ static u64 *get_written_sptes(struct kvm_mmu_page *sp, gpa_t gpa, int *nspte)
+ 	return spte;
+ }
+ 
++/*
++ * Ignore various flags when determining if a SPTE can be immediately
++ * overwritten for the current MMU.
++ *  - level: explicitly checked in mmu_pte_write_new_pte(), and will never
++ *    match the current MMU role, as MMU's level tracks the root level.
++ *  - access: updated based on the new guest PTE
++ *  - quadrant: handled by get_written_sptes()
++ *  - invalid: always false (loop only walks valid shadow pages)
++ */
++static const union kvm_mmu_page_role role_ign = {
++	.level = 0xf,
++	.access = 0x7,
++	.quadrant = 0x3,
++	.invalid = 0x1,
++};
++
+ static void kvm_mmu_pte_write(struct kvm_vcpu *vcpu, gpa_t gpa,
+ 			      const u8 *new, int bytes,
+ 			      struct kvm_page_track_notifier_node *node)
+@@ -5383,8 +5384,8 @@ static void kvm_mmu_pte_write(struct kvm_vcpu *vcpu, gpa_t gpa,
+ 			entry = *spte;
+ 			mmu_page_zap_pte(vcpu->kvm, sp, spte);
+ 			if (gentry &&
+-			      !((sp->role.word ^ base_role)
+-			      & mmu_base_role_mask.word) && rmap_can_add(vcpu))
++			    !((sp->role.word ^ base_role) & ~role_ign.word) &&
++			    rmap_can_add(vcpu))
+ 				mmu_pte_write_new_pte(vcpu, sp, spte, &gentry);
+ 			if (need_remote_flush(entry, *spte))
+ 				remote_flush = true;
+
+From patchwork Tue Mar  3 02:02:35 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11417057
+Return-Path: <SRS0=OzDj=4U=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id A1ED514E3
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  3 Mar 2020 02:03:08 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 8B1A924673
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  3 Mar 2020 02:03:08 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727222AbgCCCCn (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 2 Mar 2020 21:02:43 -0500
+Received: from mga05.intel.com ([192.55.52.43]:54062 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726773AbgCCCCm (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 2 Mar 2020 21:02:42 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga006.fm.intel.com ([10.253.24.20])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 02 Mar 2020 18:02:41 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,509,1574150400";
+   d="scan'208";a="440384941"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by fmsmga006.fm.intel.com with ESMTP; 02 Mar 2020 18:02:41 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v3 2/7] KVM: x86/mmu: Drop kvm_mmu_extended_role.cr4_la57 hack
+Date: Mon,  2 Mar 2020 18:02:35 -0800
+Message-Id: <20200303020240.28494-3-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200303020240.28494-1-sean.j.christopherson@intel.com>
+References: <20200303020240.28494-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Drop kvm_mmu_extended_role.cr4_la57 now that mmu_role doesn't mask off
+level, which already incorporates the guest's CR4.LA57 for a shadow MMU
+by querying is_la57_mode().
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h | 1 -
+ arch/x86/kvm/mmu/mmu.c          | 1 -
+ 2 files changed, 2 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 5edf6425c747..fe1f786561e3 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -297,7 +297,6 @@ union kvm_mmu_extended_role {
+ 		unsigned int cr4_pke:1;
+ 		unsigned int cr4_smap:1;
+ 		unsigned int cr4_smep:1;
+-		unsigned int cr4_la57:1;
+ 		unsigned int maxphyaddr:6;
+ 	};
+ };
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index 80b21b7cf092..e94f44f84644 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -4862,7 +4862,6 @@ static union kvm_mmu_extended_role kvm_calc_mmu_role_ext(struct kvm_vcpu *vcpu)
+ 	ext.cr4_smap = !!kvm_read_cr4_bits(vcpu, X86_CR4_SMAP);
+ 	ext.cr4_pse = !!is_pse(vcpu);
+ 	ext.cr4_pke = !!kvm_read_cr4_bits(vcpu, X86_CR4_PKE);
+-	ext.cr4_la57 = !!kvm_read_cr4_bits(vcpu, X86_CR4_LA57);
+ 	ext.maxphyaddr = cpuid_maxphyaddr(vcpu);
+ 
+ 	ext.valid = 1;
+
+From patchwork Tue Mar  3 02:02:36 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11417055
+Return-Path: <SRS0=OzDj=4U=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 2F7CE14E3
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  3 Mar 2020 02:03:06 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 0F55D2467B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  3 Mar 2020 02:03:06 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727268AbgCCCCo (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 2 Mar 2020 21:02:44 -0500
+Received: from mga05.intel.com ([192.55.52.43]:54060 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727095AbgCCCCn (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 2 Mar 2020 21:02:43 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga006.fm.intel.com ([10.253.24.20])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 02 Mar 2020 18:02:42 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,509,1574150400";
+   d="scan'208";a="440384950"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by fmsmga006.fm.intel.com with ESMTP; 02 Mar 2020 18:02:41 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v3 3/7] KVM: nVMX: Allow L1 to use 5-level page walks for
+ nested EPT
+Date: Mon,  2 Mar 2020 18:02:36 -0800
+Message-Id: <20200303020240.28494-4-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200303020240.28494-1-sean.j.christopherson@intel.com>
+References: <20200303020240.28494-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Add support for 5-level nested EPT, and advertise said support in the
+EPT capabilities MSR.  KVM's MMU can already handle 5-level legacy page
+tables, there's no reason to force an L1 VMM to use shadow paging if it
+wants to employ 5-level page tables.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/vmx.h     | 12 ++++++++++++
+ arch/x86/kvm/mmu/mmu.c         | 11 ++++++-----
+ arch/x86/kvm/mmu/paging_tmpl.h |  2 +-
+ arch/x86/kvm/vmx/nested.c      | 21 +++++++++++++++++----
+ arch/x86/kvm/vmx/vmx.c         |  3 +--
+ 5 files changed, 37 insertions(+), 12 deletions(-)
+
+diff --git a/arch/x86/include/asm/vmx.h b/arch/x86/include/asm/vmx.h
+index 8521af3fef27..5e090d1f03f8 100644
+--- a/arch/x86/include/asm/vmx.h
++++ b/arch/x86/include/asm/vmx.h
+@@ -500,6 +500,18 @@ enum vmcs_field {
+ 						 VMX_EPT_EXECUTABLE_MASK)
+ #define VMX_EPT_MT_MASK				(7ull << VMX_EPT_MT_EPTE_SHIFT)
+ 
++static inline u8 vmx_eptp_page_walk_level(u64 eptp)
++{
++	u64 encoded_level = eptp & VMX_EPTP_PWL_MASK;
++
++	if (encoded_level == VMX_EPTP_PWL_5)
++		return 5;
++
++	/* @eptp must be pre-validated by the caller. */
++	WARN_ON_ONCE(encoded_level != VMX_EPTP_PWL_4);
++	return 4;
++}
++
+ /* The mask to use to trigger an EPT Misconfiguration in order to track MMIO */
+ #define VMX_EPT_MISCONFIG_WX_VALUE		(VMX_EPT_WRITABLE_MASK |       \
+ 						 VMX_EPT_EXECUTABLE_MASK)
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index e94f44f84644..4bd94aeefb4a 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -4997,14 +4997,14 @@ EXPORT_SYMBOL_GPL(kvm_init_shadow_mmu);
+ 
+ static union kvm_mmu_role
+ kvm_calc_shadow_ept_root_page_role(struct kvm_vcpu *vcpu, bool accessed_dirty,
+-				   bool execonly)
++				   bool execonly, u8 level)
+ {
+ 	union kvm_mmu_role role = {0};
+ 
+ 	/* SMM flag is inherited from root_mmu */
+ 	role.base.smm = vcpu->arch.root_mmu.mmu_role.base.smm;
+ 
+-	role.base.level = PT64_ROOT_4LEVEL;
++	role.base.level = level;
+ 	role.base.gpte_is_8_bytes = true;
+ 	role.base.direct = false;
+ 	role.base.ad_disabled = !accessed_dirty;
+@@ -5028,16 +5028,17 @@ void kvm_init_shadow_ept_mmu(struct kvm_vcpu *vcpu, bool execonly,
+ 			     bool accessed_dirty, gpa_t new_eptp)
+ {
+ 	struct kvm_mmu *context = vcpu->arch.mmu;
++	u8 level = vmx_eptp_page_walk_level(new_eptp);
+ 	union kvm_mmu_role new_role =
+ 		kvm_calc_shadow_ept_root_page_role(vcpu, accessed_dirty,
+-						   execonly);
++						   execonly, level);
+ 
+ 	__kvm_mmu_new_cr3(vcpu, new_eptp, new_role.base, false);
+ 
+ 	if (new_role.as_u64 == context->mmu_role.as_u64)
+ 		return;
+ 
+-	context->shadow_root_level = PT64_ROOT_4LEVEL;
++	context->shadow_root_level = level;
+ 
+ 	context->nx = true;
+ 	context->ept_ad = accessed_dirty;
+@@ -5046,7 +5047,7 @@ void kvm_init_shadow_ept_mmu(struct kvm_vcpu *vcpu, bool execonly,
+ 	context->sync_page = ept_sync_page;
+ 	context->invlpg = ept_invlpg;
+ 	context->update_pte = ept_update_pte;
+-	context->root_level = PT64_ROOT_4LEVEL;
++	context->root_level = level;
+ 	context->direct_map = false;
+ 	context->mmu_role.as_u64 = new_role.as_u64;
+ 
+diff --git a/arch/x86/kvm/mmu/paging_tmpl.h b/arch/x86/kvm/mmu/paging_tmpl.h
+index e4c8a4cbf407..6b15b58f3ecc 100644
+--- a/arch/x86/kvm/mmu/paging_tmpl.h
++++ b/arch/x86/kvm/mmu/paging_tmpl.h
+@@ -66,7 +66,7 @@
+ 	#define PT_GUEST_ACCESSED_SHIFT 8
+ 	#define PT_HAVE_ACCESSED_DIRTY(mmu) ((mmu)->ept_ad)
+ 	#define CMPXCHG cmpxchg64
+-	#define PT_MAX_FULL_LEVELS 4
++	#define PT_MAX_FULL_LEVELS PT64_ROOT_MAX_LEVEL
+ #else
+ 	#error Invalid PTTYPE value
+ #endif
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 0946122a8d3b..c9c2d254f316 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -2582,9 +2582,19 @@ static bool valid_ept_address(struct kvm_vcpu *vcpu, u64 address)
+ 		return false;
+ 	}
+ 
+-	/* only 4 levels page-walk length are valid */
+-	if (CC((address & VMX_EPTP_PWL_MASK) != VMX_EPTP_PWL_4))
++	/* Page-walk levels validity. */
++	switch (address & VMX_EPTP_PWL_MASK) {
++	case VMX_EPTP_PWL_5:
++		if (CC(!(vmx->nested.msrs.ept_caps & VMX_EPT_PAGE_WALK_5_BIT)))
++			return false;
++		break;
++	case VMX_EPTP_PWL_4:
++		if (CC(!(vmx->nested.msrs.ept_caps & VMX_EPT_PAGE_WALK_4_BIT)))
++			return false;
++		break;
++	default:
+ 		return false;
++	}
+ 
+ 	/* Reserved bits should not be set */
+ 	if (CC(address >> maxphyaddr || ((address >> 7) & 0x1f)))
+@@ -6129,8 +6139,11 @@ void nested_vmx_setup_ctls_msrs(struct nested_vmx_msrs *msrs, u32 ept_caps)
+ 		/* nested EPT: emulate EPT also to L1 */
+ 		msrs->secondary_ctls_high |=
+ 			SECONDARY_EXEC_ENABLE_EPT;
+-		msrs->ept_caps = VMX_EPT_PAGE_WALK_4_BIT |
+-			 VMX_EPTP_WB_BIT | VMX_EPT_INVEPT_BIT;
++		msrs->ept_caps =
++			VMX_EPT_PAGE_WALK_4_BIT |
++			VMX_EPT_PAGE_WALK_5_BIT |
++			VMX_EPTP_WB_BIT |
++			VMX_EPT_INVEPT_BIT;
+ 		if (cpu_has_vmx_ept_execute_only())
+ 			msrs->ept_caps |=
+ 				VMX_EPT_EXECUTE_ONLY_BIT;
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index a04017bdae05..d04efe0f0109 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -2985,9 +2985,8 @@ void vmx_set_cr0(struct kvm_vcpu *vcpu, unsigned long cr0)
+ 
+ static int get_ept_level(struct kvm_vcpu *vcpu)
+ {
+-	/* Nested EPT currently only supports 4-level walks. */
+ 	if (is_guest_mode(vcpu) && nested_cpu_has_ept(get_vmcs12(vcpu)))
+-		return 4;
++		return vmx_eptp_page_walk_level(nested_ept_get_cr3(vcpu));
+ 	if (cpu_has_vmx_ept_5levels() && (cpuid_maxphyaddr(vcpu) > 48))
+ 		return 5;
+ 	return 4;
+
+From patchwork Tue Mar  3 02:02:37 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11417059
+Return-Path: <SRS0=OzDj=4U=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C8DA6138D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  3 Mar 2020 02:03:15 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id B197524697
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  3 Mar 2020 02:03:15 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727470AbgCCCDM (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 2 Mar 2020 21:03:12 -0500
+Received: from mga05.intel.com ([192.55.52.43]:54062 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727097AbgCCCCn (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 2 Mar 2020 21:02:43 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga006.fm.intel.com ([10.253.24.20])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 02 Mar 2020 18:02:42 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,509,1574150400";
+   d="scan'208";a="440384958"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by fmsmga006.fm.intel.com with ESMTP; 02 Mar 2020 18:02:42 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v3 4/7] KVM: nVMX: Rename nested_ept_get_cr3() to
+ nested_ept_get_eptp()
+Date: Mon,  2 Mar 2020 18:02:37 -0800
+Message-Id: <20200303020240.28494-5-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200303020240.28494-1-sean.j.christopherson@intel.com>
+References: <20200303020240.28494-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Rename the accessor for vmcs12.EPTP to use "eptp" instead of "cr3".  The
+accessor has no relation to cr3 whatsoever, other than it being assigned
+to the also poorly named kvm_mmu->get_cr3() hook.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 4 ++--
+ arch/x86/kvm/vmx/nested.h | 4 ++--
+ arch/x86/kvm/vmx/vmx.c    | 2 +-
+ 3 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index c9c2d254f316..f8717c1e4e51 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -353,9 +353,9 @@ static void nested_ept_init_mmu_context(struct kvm_vcpu *vcpu)
+ 			to_vmx(vcpu)->nested.msrs.ept_caps &
+ 			VMX_EPT_EXECUTE_ONLY_BIT,
+ 			nested_ept_ad_enabled(vcpu),
+-			nested_ept_get_cr3(vcpu));
++			nested_ept_get_eptp(vcpu));
+ 	vcpu->arch.mmu->set_cr3           = vmx_set_cr3;
+-	vcpu->arch.mmu->get_cr3           = nested_ept_get_cr3;
++	vcpu->arch.mmu->get_cr3           = nested_ept_get_eptp;
+ 	vcpu->arch.mmu->inject_page_fault = nested_ept_inject_page_fault;
+ 	vcpu->arch.mmu->get_pdptr         = kvm_pdptr_read;
+ 
+diff --git a/arch/x86/kvm/vmx/nested.h b/arch/x86/kvm/vmx/nested.h
+index 9aeda46f473e..21d36652f213 100644
+--- a/arch/x86/kvm/vmx/nested.h
++++ b/arch/x86/kvm/vmx/nested.h
+@@ -60,7 +60,7 @@ static inline int vmx_has_valid_vmcs12(struct kvm_vcpu *vcpu)
+ 		vmx->nested.hv_evmcs;
+ }
+ 
+-static inline unsigned long nested_ept_get_cr3(struct kvm_vcpu *vcpu)
++static inline unsigned long nested_ept_get_eptp(struct kvm_vcpu *vcpu)
+ {
+ 	/* return the page table to be shadowed - in our case, EPT12 */
+ 	return get_vmcs12(vcpu)->ept_pointer;
+@@ -68,7 +68,7 @@ static inline unsigned long nested_ept_get_cr3(struct kvm_vcpu *vcpu)
+ 
+ static inline bool nested_ept_ad_enabled(struct kvm_vcpu *vcpu)
+ {
+-	return nested_ept_get_cr3(vcpu) & VMX_EPTP_AD_ENABLE_BIT;
++	return nested_ept_get_eptp(vcpu) & VMX_EPTP_AD_ENABLE_BIT;
+ }
+ 
+ /*
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index d04efe0f0109..85991f2d9ef0 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -2986,7 +2986,7 @@ void vmx_set_cr0(struct kvm_vcpu *vcpu, unsigned long cr0)
+ static int get_ept_level(struct kvm_vcpu *vcpu)
+ {
+ 	if (is_guest_mode(vcpu) && nested_cpu_has_ept(get_vmcs12(vcpu)))
+-		return vmx_eptp_page_walk_level(nested_ept_get_cr3(vcpu));
++		return vmx_eptp_page_walk_level(nested_ept_get_eptp(vcpu));
+ 	if (cpu_has_vmx_ept_5levels() && (cpuid_maxphyaddr(vcpu) > 48))
+ 		return 5;
+ 	return 4;
+
+From patchwork Tue Mar  3 02:02:38 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11417049
+Return-Path: <SRS0=OzDj=4U=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 083DF14E3
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  3 Mar 2020 02:02:46 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id E54E42465E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  3 Mar 2020 02:02:45 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727366AbgCCCCp (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 2 Mar 2020 21:02:45 -0500
+Received: from mga05.intel.com ([192.55.52.43]:54063 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727234AbgCCCCo (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 2 Mar 2020 21:02:44 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga006.fm.intel.com ([10.253.24.20])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 02 Mar 2020 18:02:43 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,509,1574150400";
+   d="scan'208";a="440384963"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by fmsmga006.fm.intel.com with ESMTP; 02 Mar 2020 18:02:42 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v3 5/7] KVM: nVMX: Rename EPTP validity helper and associated
+ variables
+Date: Mon,  2 Mar 2020 18:02:38 -0800
+Message-Id: <20200303020240.28494-6-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200303020240.28494-1-sean.j.christopherson@intel.com>
+References: <20200303020240.28494-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Rename valid_ept_address() to nested_vmx_check_eptp() to follow the nVMX
+nomenclature and to reflect that the function now checks a lot more than
+just the address contained in the EPTP.  Rename address to new_eptp in
+associated code.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 24 ++++++++++++------------
+ 1 file changed, 12 insertions(+), 12 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index f8717c1e4e51..e545a40b93c8 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -2563,13 +2563,13 @@ static int nested_vmx_check_nmi_controls(struct vmcs12 *vmcs12)
+ 	return 0;
+ }
+ 
+-static bool valid_ept_address(struct kvm_vcpu *vcpu, u64 address)
++static bool nested_vmx_check_eptp(struct kvm_vcpu *vcpu, u64 new_eptp)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+ 	int maxphyaddr = cpuid_maxphyaddr(vcpu);
+ 
+ 	/* Check for memory type validity */
+-	switch (address & VMX_EPTP_MT_MASK) {
++	switch (new_eptp & VMX_EPTP_MT_MASK) {
+ 	case VMX_EPTP_MT_UC:
+ 		if (CC(!(vmx->nested.msrs.ept_caps & VMX_EPTP_UC_BIT)))
+ 			return false;
+@@ -2583,7 +2583,7 @@ static bool valid_ept_address(struct kvm_vcpu *vcpu, u64 address)
+ 	}
+ 
+ 	/* Page-walk levels validity. */
+-	switch (address & VMX_EPTP_PWL_MASK) {
++	switch (new_eptp & VMX_EPTP_PWL_MASK) {
+ 	case VMX_EPTP_PWL_5:
+ 		if (CC(!(vmx->nested.msrs.ept_caps & VMX_EPT_PAGE_WALK_5_BIT)))
+ 			return false;
+@@ -2597,11 +2597,11 @@ static bool valid_ept_address(struct kvm_vcpu *vcpu, u64 address)
+ 	}
+ 
+ 	/* Reserved bits should not be set */
+-	if (CC(address >> maxphyaddr || ((address >> 7) & 0x1f)))
++	if (CC(new_eptp >> maxphyaddr || ((new_eptp >> 7) & 0x1f)))
+ 		return false;
+ 
+ 	/* AD, if set, should be supported */
+-	if (address & VMX_EPTP_AD_ENABLE_BIT) {
++	if (new_eptp & VMX_EPTP_AD_ENABLE_BIT) {
+ 		if (CC(!(vmx->nested.msrs.ept_caps & VMX_EPT_AD_BIT)))
+ 			return false;
+ 	}
+@@ -2650,7 +2650,7 @@ static int nested_check_vm_execution_controls(struct kvm_vcpu *vcpu,
+ 		return -EINVAL;
+ 
+ 	if (nested_cpu_has_ept(vmcs12) &&
+-	    CC(!valid_ept_address(vcpu, vmcs12->ept_pointer)))
++	    CC(!nested_vmx_check_eptp(vcpu, vmcs12->ept_pointer)))
+ 		return -EINVAL;
+ 
+ 	if (nested_cpu_has_vmfunc(vmcs12)) {
+@@ -5244,7 +5244,7 @@ static int nested_vmx_eptp_switching(struct kvm_vcpu *vcpu,
+ 				     struct vmcs12 *vmcs12)
+ {
+ 	u32 index = kvm_rcx_read(vcpu);
+-	u64 address;
++	u64 new_eptp;
+ 	bool accessed_dirty;
+ 	struct kvm_mmu *mmu = vcpu->arch.walk_mmu;
+ 
+@@ -5257,23 +5257,23 @@ static int nested_vmx_eptp_switching(struct kvm_vcpu *vcpu,
+ 
+ 
+ 	if (kvm_vcpu_read_guest_page(vcpu, vmcs12->eptp_list_address >> PAGE_SHIFT,
+-				     &address, index * 8, 8))
++				     &new_eptp, index * 8, 8))
+ 		return 1;
+ 
+-	accessed_dirty = !!(address & VMX_EPTP_AD_ENABLE_BIT);
++	accessed_dirty = !!(new_eptp & VMX_EPTP_AD_ENABLE_BIT);
+ 
+ 	/*
+ 	 * If the (L2) guest does a vmfunc to the currently
+ 	 * active ept pointer, we don't have to do anything else
+ 	 */
+-	if (vmcs12->ept_pointer != address) {
+-		if (!valid_ept_address(vcpu, address))
++	if (vmcs12->ept_pointer != new_eptp) {
++		if (!nested_vmx_check_eptp(vcpu, new_eptp))
+ 			return 1;
+ 
+ 		kvm_mmu_unload(vcpu);
+ 		mmu->ept_ad = accessed_dirty;
+ 		mmu->mmu_role.base.ad_disabled = !accessed_dirty;
+-		vmcs12->ept_pointer = address;
++		vmcs12->ept_pointer = new_eptp;
+ 		/*
+ 		 * TODO: Check what's the correct approach in case
+ 		 * mmu reload fails. Currently, we just let the next
+
+From patchwork Tue Mar  3 02:02:39 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11417051
+Return-Path: <SRS0=OzDj=4U=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id A46A3174A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  3 Mar 2020 02:02:46 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 8C6D924673
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  3 Mar 2020 02:02:46 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727389AbgCCCCp (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 2 Mar 2020 21:02:45 -0500
+Received: from mga05.intel.com ([192.55.52.43]:54063 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727291AbgCCCCo (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 2 Mar 2020 21:02:44 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga006.fm.intel.com ([10.253.24.20])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 02 Mar 2020 18:02:44 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,509,1574150400";
+   d="scan'208";a="440384969"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by fmsmga006.fm.intel.com with ESMTP; 02 Mar 2020 18:02:43 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v3 6/7] KVM: x86/mmu: Rename kvm_mmu->get_cr3() to
+ ->get_guest_pgd()
+Date: Mon,  2 Mar 2020 18:02:39 -0800
+Message-Id: <20200303020240.28494-7-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200303020240.28494-1-sean.j.christopherson@intel.com>
+References: <20200303020240.28494-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Rename kvm_mmu->get_cr3() to call out that it is retrieving a guest
+value, as opposed to kvm_mmu->set_cr3(), which sets a host value, and to
+note that it will return something other than CR3 when nested EPT is in
+use.  Hopefully the new name will also make it more obvious that L1's
+nested_cr3 is returned in SVM's nested NPT case.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  2 +-
+ arch/x86/kvm/mmu/mmu.c          | 12 ++++++------
+ arch/x86/kvm/mmu/paging_tmpl.h  |  2 +-
+ arch/x86/kvm/svm.c              |  2 +-
+ arch/x86/kvm/vmx/nested.c       |  2 +-
+ arch/x86/kvm/x86.c              |  2 +-
+ 6 files changed, 11 insertions(+), 11 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index fe1f786561e3..aca19ef1d4a1 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -382,7 +382,7 @@ struct kvm_mmu_root_info {
+  */
+ struct kvm_mmu {
+ 	void (*set_cr3)(struct kvm_vcpu *vcpu, unsigned long root);
+-	unsigned long (*get_cr3)(struct kvm_vcpu *vcpu);
++	unsigned long (*get_guest_pgd)(struct kvm_vcpu *vcpu);
+ 	u64 (*get_pdptr)(struct kvm_vcpu *vcpu, int index);
+ 	int (*page_fault)(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa, u32 err,
+ 			  bool prefault);
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index 4bd94aeefb4a..f72a854edcd3 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -3719,7 +3719,7 @@ static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
+ 		vcpu->arch.mmu->root_hpa = __pa(vcpu->arch.mmu->pae_root);
+ 	} else
+ 		BUG();
+-	vcpu->arch.mmu->root_cr3 = vcpu->arch.mmu->get_cr3(vcpu);
++	vcpu->arch.mmu->root_cr3 = vcpu->arch.mmu->get_guest_pgd(vcpu);
+ 
+ 	return 0;
+ }
+@@ -3731,7 +3731,7 @@ static int mmu_alloc_shadow_roots(struct kvm_vcpu *vcpu)
+ 	gfn_t root_gfn, root_cr3;
+ 	int i;
+ 
+-	root_cr3 = vcpu->arch.mmu->get_cr3(vcpu);
++	root_cr3 = vcpu->arch.mmu->get_guest_pgd(vcpu);
+ 	root_gfn = root_cr3 >> PAGE_SHIFT;
+ 
+ 	if (mmu_check_root(vcpu, root_gfn))
+@@ -4068,7 +4068,7 @@ static int kvm_arch_setup_async_pf(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa,
+ 	arch.token = (vcpu->arch.apf.id++ << 12) | vcpu->vcpu_id;
+ 	arch.gfn = gfn;
+ 	arch.direct_map = vcpu->arch.mmu->direct_map;
+-	arch.cr3 = vcpu->arch.mmu->get_cr3(vcpu);
++	arch.cr3 = vcpu->arch.mmu->get_guest_pgd(vcpu);
+ 
+ 	return kvm_setup_async_pf(vcpu, cr2_or_gpa,
+ 				  kvm_vcpu_gfn_to_hva(vcpu, gfn), &arch);
+@@ -4918,7 +4918,7 @@ static void init_kvm_tdp_mmu(struct kvm_vcpu *vcpu)
+ 	context->shadow_root_level = kvm_x86_ops->get_tdp_level(vcpu);
+ 	context->direct_map = true;
+ 	context->set_cr3 = kvm_x86_ops->set_tdp_cr3;
+-	context->get_cr3 = get_cr3;
++	context->get_guest_pgd = get_cr3;
+ 	context->get_pdptr = kvm_pdptr_read;
+ 	context->inject_page_fault = kvm_inject_page_fault;
+ 
+@@ -5065,7 +5065,7 @@ static void init_kvm_softmmu(struct kvm_vcpu *vcpu)
+ 
+ 	kvm_init_shadow_mmu(vcpu);
+ 	context->set_cr3           = kvm_x86_ops->set_cr3;
+-	context->get_cr3           = get_cr3;
++	context->get_guest_pgd     = get_cr3;
+ 	context->get_pdptr         = kvm_pdptr_read;
+ 	context->inject_page_fault = kvm_inject_page_fault;
+ }
+@@ -5079,7 +5079,7 @@ static void init_kvm_nested_mmu(struct kvm_vcpu *vcpu)
+ 		return;
+ 
+ 	g_context->mmu_role.as_u64 = new_role.as_u64;
+-	g_context->get_cr3           = get_cr3;
++	g_context->get_guest_pgd     = get_cr3;
+ 	g_context->get_pdptr         = kvm_pdptr_read;
+ 	g_context->inject_page_fault = kvm_inject_page_fault;
+ 
+diff --git a/arch/x86/kvm/mmu/paging_tmpl.h b/arch/x86/kvm/mmu/paging_tmpl.h
+index 6b15b58f3ecc..1ddbfff64ccc 100644
+--- a/arch/x86/kvm/mmu/paging_tmpl.h
++++ b/arch/x86/kvm/mmu/paging_tmpl.h
+@@ -333,7 +333,7 @@ static int FNAME(walk_addr_generic)(struct guest_walker *walker,
+ 	trace_kvm_mmu_pagetable_walk(addr, access);
+ retry_walk:
+ 	walker->level = mmu->root_level;
+-	pte           = mmu->get_cr3(vcpu);
++	pte           = mmu->get_guest_pgd(vcpu);
+ 	have_ad       = PT_HAVE_ACCESSED_DIRTY(mmu);
+ 
+ #if PTTYPE == 64
+diff --git a/arch/x86/kvm/svm.c b/arch/x86/kvm/svm.c
+index fd3fc9fbefff..30f474dd9462 100644
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -3012,7 +3012,7 @@ static void nested_svm_init_mmu_context(struct kvm_vcpu *vcpu)
+ 	vcpu->arch.mmu = &vcpu->arch.guest_mmu;
+ 	kvm_init_shadow_mmu(vcpu);
+ 	vcpu->arch.mmu->set_cr3           = nested_svm_set_tdp_cr3;
+-	vcpu->arch.mmu->get_cr3           = nested_svm_get_tdp_cr3;
++	vcpu->arch.mmu->get_guest_pgd     = nested_svm_get_tdp_cr3;
+ 	vcpu->arch.mmu->get_pdptr         = nested_svm_get_tdp_pdptr;
+ 	vcpu->arch.mmu->inject_page_fault = nested_svm_inject_npf_exit;
+ 	vcpu->arch.mmu->shadow_root_level = get_npt_level(vcpu);
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index e545a40b93c8..c6163f1b2517 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -355,7 +355,7 @@ static void nested_ept_init_mmu_context(struct kvm_vcpu *vcpu)
+ 			nested_ept_ad_enabled(vcpu),
+ 			nested_ept_get_eptp(vcpu));
+ 	vcpu->arch.mmu->set_cr3           = vmx_set_cr3;
+-	vcpu->arch.mmu->get_cr3           = nested_ept_get_eptp;
++	vcpu->arch.mmu->get_guest_pgd     = nested_ept_get_eptp;
+ 	vcpu->arch.mmu->inject_page_fault = nested_ept_inject_page_fault;
+ 	vcpu->arch.mmu->get_pdptr         = kvm_pdptr_read;
+ 
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index ddd1d296bd20..cbce1c1b18a0 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -10153,7 +10153,7 @@ void kvm_arch_async_page_ready(struct kvm_vcpu *vcpu, struct kvm_async_pf *work)
+ 		return;
+ 
+ 	if (!vcpu->arch.mmu->direct_map &&
+-	      work->arch.cr3 != vcpu->arch.mmu->get_cr3(vcpu))
++	      work->arch.cr3 != vcpu->arch.mmu->get_guest_pgd(vcpu))
+ 		return;
+ 
+ 	kvm_mmu_do_page_fault(vcpu, work->cr2_or_gpa, 0, true);
+
+From patchwork Tue Mar  3 02:02:40 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11417053
+Return-Path: <SRS0=OzDj=4U=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id DB4D9138D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  3 Mar 2020 02:03:01 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id C56082467B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue,  3 Mar 2020 02:03:01 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727407AbgCCCDA (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 2 Mar 2020 21:03:00 -0500
+Received: from mga05.intel.com ([192.55.52.43]:54064 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727306AbgCCCCo (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 2 Mar 2020 21:02:44 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga006.fm.intel.com ([10.253.24.20])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 02 Mar 2020 18:02:44 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,509,1574150400";
+   d="scan'208";a="440384975"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by fmsmga006.fm.intel.com with ESMTP; 02 Mar 2020 18:02:43 -0800
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v3 7/7] KVM: nVMX: Drop unnecessary check on ept caps for
+ execute-only
+Date: Mon,  2 Mar 2020 18:02:40 -0800
+Message-Id: <20200303020240.28494-8-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200303020240.28494-1-sean.j.christopherson@intel.com>
+References: <20200303020240.28494-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Drop the call to cpu_has_vmx_ept_execute_only() when calculating which
+EPT capabilities will be exposed to L1 for nested EPT.  The resulting
+configuration is immediately sanitized by the passed in @ept_caps, and
+except for the call from vmx_check_processor_compat(), @ept_caps is the
+capabilities that are queried by cpu_has_vmx_ept_execute_only().  For
+vmx_check_processor_compat(), KVM *wants* to ignore vmx_capability.ept
+so that a divergence in EPT capabilities between CPUs is detected.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index c6163f1b2517..5b87e8d3aec6 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -6143,10 +6143,9 @@ void nested_vmx_setup_ctls_msrs(struct nested_vmx_msrs *msrs, u32 ept_caps)
+ 			VMX_EPT_PAGE_WALK_4_BIT |
+ 			VMX_EPT_PAGE_WALK_5_BIT |
+ 			VMX_EPTP_WB_BIT |
+-			VMX_EPT_INVEPT_BIT;
+-		if (cpu_has_vmx_ept_execute_only())
+-			msrs->ept_caps |=
+-				VMX_EPT_EXECUTE_ONLY_BIT;
++			VMX_EPT_INVEPT_BIT |
++			VMX_EPT_EXECUTE_ONLY_BIT;
++
+ 		msrs->ept_caps &= ept_caps;
+ 		msrs->ept_caps |= VMX_EPT_EXTENT_GLOBAL_BIT |
+ 			VMX_EPT_EXTENT_CONTEXT_BIT | VMX_EPT_2MB_PAGE_BIT |
