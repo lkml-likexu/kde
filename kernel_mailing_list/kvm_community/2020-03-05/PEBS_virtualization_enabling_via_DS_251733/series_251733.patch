@@ -1,0 +1,1908 @@
+From patchwork Thu Mar  5 17:56:55 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Luwei Kang <luwei.kang@intel.com>
+X-Patchwork-Id: 11421453
+Return-Path: <SRS0=eotC=4W=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6D91B139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 09:58:59 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 53E9121556
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 09:58:59 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727041AbgCEJ64 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 5 Mar 2020 04:58:56 -0500
+Received: from mga01.intel.com ([192.55.52.88]:50986 "EHLO mga01.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725912AbgCEJ64 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 5 Mar 2020 04:58:56 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga101.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 05 Mar 2020 01:58:55 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,517,1574150400";
+   d="scan'208";a="234366402"
+Received: from snr.bj.intel.com ([10.240.193.90])
+  by orsmga008.jf.intel.com with ESMTP; 05 Mar 2020 01:58:49 -0800
+From: Luwei Kang <luwei.kang@intel.com>
+To: x86@kernel.org, linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: peterz@infradead.org, mingo@redhat.com, acme@kernel.org,
+        mark.rutland@arm.com, alexander.shishkin@linux.intel.com,
+        jolsa@redhat.com, namhyung@kernel.org, tglx@linutronix.de,
+        bp@alien8.de, hpa@zytor.com, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        pawan.kumar.gupta@linux.intel.com, ak@linux.intel.com,
+        thomas.lendacky@amd.com, fenghua.yu@intel.com,
+        kan.liang@linux.intel.com, like.xu@linux.intel.com
+Subject: [PATCH v1 01/11] perf/x86/core: Support KVM to assign a dedicated
+ counter for guest PEBS
+Date: Fri,  6 Mar 2020 01:56:55 +0800
+Message-Id: <1583431025-19802-2-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+References: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Kan Liang <kan.liang@linux.intel.com>
+
+The PEBS event created by host needs to be assigned specific counters
+requested by the guest, which means the guest and host counter indexes
+have to be the same or fail to create. This is needed because PEBS leaks
+counter indexes into the guest. Otherwise, the guest driver will be
+confused by the counter indexes in the status field of the PEBS record.
+
+A guest_dedicated_idx field is added to indicate the counter index
+specifically requested by KVM. The dedicated event constraints would
+constrain the counter in the host to the same numbered counter in guest.
+
+A intel_ctrl_guest_dedicated_mask field is added to indicate the enabled
+counters for guest PEBS events. The IA32_PEBS_ENABLE MSR will be switched
+during the VMX transitions if intel_ctrl_guest_owned is set.
+
+Originally-by: Andi Kleen <ak@linux.intel.com>
+Signed-off-by: Kan Liang <kan.liang@linux.intel.com>
+---
+ arch/x86/events/intel/core.c | 60 +++++++++++++++++++++++++++++++++++++++++++-
+ arch/x86/events/perf_event.h |  1 +
+ include/linux/perf_event.h   |  2 ++
+ kernel/events/core.c         |  1 +
+ 4 files changed, 63 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/events/intel/core.c b/arch/x86/events/intel/core.c
+index dff6623..ef95076 100644
+--- a/arch/x86/events/intel/core.c
++++ b/arch/x86/events/intel/core.c
+@@ -368,6 +368,29 @@
+ 	EVENT_CONSTRAINT_END
+ };
+ 
++#define GUEST_DEDICATED_CONSTRAINT(idx) {          \
++	{ .idxmsk64 = (1ULL << (idx)) },        \
++	.weight = 1,                            \
++}
++
++static struct event_constraint dedicated_gp_c[MAX_PEBS_EVENTS] = {
++	GUEST_DEDICATED_CONSTRAINT(0),
++	GUEST_DEDICATED_CONSTRAINT(1),
++	GUEST_DEDICATED_CONSTRAINT(2),
++	GUEST_DEDICATED_CONSTRAINT(3),
++	GUEST_DEDICATED_CONSTRAINT(4),
++	GUEST_DEDICATED_CONSTRAINT(5),
++	GUEST_DEDICATED_CONSTRAINT(6),
++	GUEST_DEDICATED_CONSTRAINT(7),
++};
++
++static struct event_constraint dedicated_fixed_c[MAX_FIXED_PEBS_EVENTS] = {
++	GUEST_DEDICATED_CONSTRAINT(INTEL_PMC_IDX_FIXED),
++	GUEST_DEDICATED_CONSTRAINT(INTEL_PMC_IDX_FIXED + 1),
++	GUEST_DEDICATED_CONSTRAINT(INTEL_PMC_IDX_FIXED + 2),
++	GUEST_DEDICATED_CONSTRAINT(INTEL_PMC_IDX_FIXED + 3),
++};
++
+ static u64 intel_pmu_event_map(int hw_event)
+ {
+ 	return intel_perfmon_event_map[hw_event];
+@@ -2158,6 +2181,7 @@ static void intel_pmu_disable_event(struct perf_event *event)
+ 	}
+ 
+ 	cpuc->intel_ctrl_guest_mask &= ~(1ull << hwc->idx);
++	cpuc->intel_ctrl_guest_dedicated_mask &= ~(1ull << hwc->idx);
+ 	cpuc->intel_ctrl_host_mask &= ~(1ull << hwc->idx);
+ 	cpuc->intel_cp_status &= ~(1ull << hwc->idx);
+ 
+@@ -2246,6 +2270,10 @@ static void intel_pmu_enable_event(struct perf_event *event)
+ 	if (event->attr.exclude_guest)
+ 		cpuc->intel_ctrl_host_mask |= (1ull << hwc->idx);
+ 
++	if (unlikely(event->guest_dedicated_idx >= 0)) {
++		WARN_ON(hwc->idx != event->guest_dedicated_idx);
++		cpuc->intel_ctrl_guest_dedicated_mask |= (1ull << hwc->idx);
++	}
+ 	if (unlikely(event_is_checkpointed(event)))
+ 		cpuc->intel_cp_status |= (1ull << hwc->idx);
+ 
+@@ -3036,7 +3064,21 @@ static void intel_commit_scheduling(struct cpu_hw_events *cpuc, int idx, int cnt
+ 	if (cpuc->excl_cntrs)
+ 		return intel_get_excl_constraints(cpuc, event, idx, c2);
+ 
+-	return c2;
++	if (event->guest_dedicated_idx < 0)
++		return c2;
++
++	BUILD_BUG_ON(ARRAY_SIZE(dedicated_fixed_c) != MAX_FIXED_PEBS_EVENTS);
++	if (c2->idxmsk64 & (1ULL << event->guest_dedicated_idx)) {
++		if (event->guest_dedicated_idx < MAX_PEBS_EVENTS)
++			return &dedicated_gp_c[event->guest_dedicated_idx];
++		else if ((event->guest_dedicated_idx >= INTEL_PMC_IDX_FIXED) &&
++			 (event->guest_dedicated_idx < INTEL_PMC_IDX_FIXED +
++							MAX_FIXED_PEBS_EVENTS))
++			return &dedicated_fixed_c[event->guest_dedicated_idx -
++							INTEL_PMC_IDX_FIXED];
++	}
++
++	return &emptyconstraint;
+ }
+ 
+ static void intel_put_excl_constraints(struct cpu_hw_events *cpuc,
+@@ -3373,6 +3415,22 @@ static struct perf_guest_switch_msr *intel_guest_get_msrs(int *nr)
+ 		*nr = 2;
+ 	}
+ 
++	if (cpuc->intel_ctrl_guest_dedicated_mask) {
++		arr[0].guest |= cpuc->intel_ctrl_guest_dedicated_mask;
++		arr[1].msr = MSR_IA32_PEBS_ENABLE;
++		arr[1].host = cpuc->pebs_enabled &
++				~cpuc->intel_ctrl_guest_dedicated_mask;
++		arr[1].guest = cpuc->intel_ctrl_guest_dedicated_mask;
++		*nr = 2;
++	} else {
++		/* Remove MSR_IA32_PEBS_ENABLE from MSR switch list in KVM */
++		if (*nr == 1) {
++			arr[1].msr = MSR_IA32_PEBS_ENABLE;
++			arr[1].host = arr[1].guest = 0;
++			*nr = 2;
++		}
++	}
++
+ 	return arr;
+ }
+ 
+diff --git a/arch/x86/events/perf_event.h b/arch/x86/events/perf_event.h
+index f1cd1ca..621529c 100644
+--- a/arch/x86/events/perf_event.h
++++ b/arch/x86/events/perf_event.h
+@@ -242,6 +242,7 @@ struct cpu_hw_events {
+ 	 * Intel host/guest exclude bits
+ 	 */
+ 	u64				intel_ctrl_guest_mask;
++	u64				intel_ctrl_guest_dedicated_mask;
+ 	u64				intel_ctrl_host_mask;
+ 	struct perf_guest_switch_msr	guest_switch_msrs[X86_PMC_IDX_MAX];
+ 
+diff --git a/include/linux/perf_event.h b/include/linux/perf_event.h
+index 547773f..3bccb88 100644
+--- a/include/linux/perf_event.h
++++ b/include/linux/perf_event.h
+@@ -750,6 +750,8 @@ struct perf_event {
+ 	void *security;
+ #endif
+ 	struct list_head		sb_list;
++	/* the guest specified counter index of KVM owned event, e.g PEBS */
++	int				guest_dedicated_idx;
+ #endif /* CONFIG_PERF_EVENTS */
+ };
+ 
+diff --git a/kernel/events/core.c b/kernel/events/core.c
+index e453589..7a7b56c 100644
+--- a/kernel/events/core.c
++++ b/kernel/events/core.c
+@@ -10731,6 +10731,7 @@ static void account_event(struct perf_event *event)
+ 	event->id		= atomic64_inc_return(&perf_event_id);
+ 
+ 	event->state		= PERF_EVENT_STATE_INACTIVE;
++	event->guest_dedicated_idx = -1;
+ 
+ 	if (task) {
+ 		event->attach_state = PERF_ATTACH_TASK;
+
+From patchwork Thu Mar  5 17:56:56 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Luwei Kang <luwei.kang@intel.com>
+X-Patchwork-Id: 11421455
+Return-Path: <SRS0=eotC=4W=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 779861580
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 09:59:07 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 5EBDE208CD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 09:59:07 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727023AbgCEJ7E (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 5 Mar 2020 04:59:04 -0500
+Received: from mga09.intel.com ([134.134.136.24]:64850 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725880AbgCEJ7D (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 5 Mar 2020 04:59:03 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga102.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 05 Mar 2020 01:59:02 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,517,1574150400";
+   d="scan'208";a="234366434"
+Received: from snr.bj.intel.com ([10.240.193.90])
+  by orsmga008.jf.intel.com with ESMTP; 05 Mar 2020 01:58:56 -0800
+From: Luwei Kang <luwei.kang@intel.com>
+To: x86@kernel.org, linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: peterz@infradead.org, mingo@redhat.com, acme@kernel.org,
+        mark.rutland@arm.com, alexander.shishkin@linux.intel.com,
+        jolsa@redhat.com, namhyung@kernel.org, tglx@linutronix.de,
+        bp@alien8.de, hpa@zytor.com, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        pawan.kumar.gupta@linux.intel.com, ak@linux.intel.com,
+        thomas.lendacky@amd.com, fenghua.yu@intel.com,
+        kan.liang@linux.intel.com, like.xu@linux.intel.com
+Subject: [PATCH v1 02/11] perf/x86/ds: Handle guest PEBS events overflow and
+ inject fake PMI
+Date: Fri,  6 Mar 2020 01:56:56 +0800
+Message-Id: <1583431025-19802-3-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+References: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Kan Liang <kan.liang@linux.intel.com>
+
+With PEBS virtualization, the PEBS record gets delivered to the guest,
+but host still sees the PMI. This would normally result in a spurious
+PEBS PMI that is ignored. But we need to inject the PMI into the guest,
+so that the guest PMI handler can handle the PEBS record.
+
+Check for this case in the perf PEBS handler. If a guest PEBS counter
+overflowed, a fake event will be triggered. The fake event results in
+calling the KVM PMI callback, which injects the PMI into the guest.
+
+No matter how many PEBS counters are overflowed, only triggering one
+fake event is enough. Then the guest handler would retrieve the correct
+information from its own PEBS records including the guest state.
+
+Originally-by: Andi Kleen <ak@linux.intel.com>
+Signed-off-by: Kan Liang <kan.liang@linux.intel.com>
+---
+ arch/x86/events/intel/ds.c | 59 ++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 59 insertions(+)
+
+diff --git a/arch/x86/events/intel/ds.c b/arch/x86/events/intel/ds.c
+index dc43cc1..6722f39 100644
+--- a/arch/x86/events/intel/ds.c
++++ b/arch/x86/events/intel/ds.c
+@@ -1721,6 +1721,62 @@ void intel_pmu_auto_reload_read(struct perf_event *event)
+ 	return 0;
+ }
+ 
++/*
++ * We may be running with virtualized PEBS, so the PEBS record
++ * was logged into the guest's DS and is invisible to host.
++ *
++ * For guest-dedicated counters we always have to check if the
++ * counters are overflowed, because PEBS thresholds
++ * are not reported in the PERF_GLOBAL_STATUS.
++ *
++ * In this case we just trigger a fake event for KVM to forward
++ * to the guest as PMI. The guest will then see the real PEBS
++ * record and read the counter values.
++ *
++ * The contents of the event do not matter.
++ */
++static int intel_pmu_handle_guest_pebs(struct cpu_hw_events *cpuc,
++				       struct pt_regs *iregs,
++				       struct debug_store *ds)
++{
++	struct perf_sample_data data;
++	struct perf_event *event;
++	int bit;
++
++	/*
++	 * Ideally, we should check guest DS to understand if the
++	 * guest-dedicated PEBS counters are overflowed.
++	 *
++	 * However, it brings high overhead to retrieve guest DS in host.
++	 * The host and guest cannot have pending PEBS events simultaneously.
++	 * So we check host DS instead.
++	 *
++	 * If PEBS interrupt threshold on host is not exceeded in a NMI,
++	 * the guest-dedicated counter must be overflowed.
++	 */
++	if (!cpuc->intel_ctrl_guest_dedicated_mask || !in_nmi() ||
++	    (ds->pebs_interrupt_threshold <= ds->pebs_index))
++		return 0;
++
++	for_each_set_bit(bit,
++		(unsigned long *)&cpuc->intel_ctrl_guest_dedicated_mask,
++			INTEL_PMC_IDX_FIXED + x86_pmu.num_counters_fixed) {
++
++		event = cpuc->events[bit];
++		if (!event->attr.precise_ip)
++			continue;
++
++		perf_sample_data_init(&data, 0, event->hw.last_period);
++		if (perf_event_overflow(event, &data, iregs))
++			x86_pmu_stop(event, 0);
++
++		/* Inject one fake event is enough. */
++		return 1;
++	}
++
++	return 0;
++}
++
+ static void __intel_pmu_pebs_event(struct perf_event *event,
+ 				   struct pt_regs *iregs,
+ 				   void *base, void *top,
+@@ -1954,6 +2010,9 @@ static void intel_pmu_drain_pebs_icl(struct pt_regs *iregs)
+ 	if (!x86_pmu.pebs_active)
+ 		return;
+ 
++	if (intel_pmu_handle_guest_pebs(cpuc, iregs, ds))
++		return;
++
+ 	base = (struct pebs_basic *)(unsigned long)ds->pebs_buffer_base;
+ 	top = (struct pebs_basic *)(unsigned long)ds->pebs_index;
+ 
+
+From patchwork Thu Mar  5 17:56:57 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Luwei Kang <luwei.kang@intel.com>
+X-Patchwork-Id: 11421457
+Return-Path: <SRS0=eotC=4W=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id A4DBF1580
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 09:59:14 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 8D200208CD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 09:59:14 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727126AbgCEJ7L (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 5 Mar 2020 04:59:11 -0500
+Received: from mga03.intel.com ([134.134.136.65]:7415 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727071AbgCEJ7L (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 5 Mar 2020 04:59:11 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga103.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 05 Mar 2020 01:59:10 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,517,1574150400";
+   d="scan'208";a="234366468"
+Received: from snr.bj.intel.com ([10.240.193.90])
+  by orsmga008.jf.intel.com with ESMTP; 05 Mar 2020 01:59:03 -0800
+From: Luwei Kang <luwei.kang@intel.com>
+To: x86@kernel.org, linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: peterz@infradead.org, mingo@redhat.com, acme@kernel.org,
+        mark.rutland@arm.com, alexander.shishkin@linux.intel.com,
+        jolsa@redhat.com, namhyung@kernel.org, tglx@linutronix.de,
+        bp@alien8.de, hpa@zytor.com, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        pawan.kumar.gupta@linux.intel.com, ak@linux.intel.com,
+        thomas.lendacky@amd.com, fenghua.yu@intel.com,
+        kan.liang@linux.intel.com, like.xu@linux.intel.com
+Subject: [PATCH v1 03/11] perf/x86: Expose a function to disable auto-reload
+Date: Fri,  6 Mar 2020 01:56:57 +0800
+Message-Id: <1583431025-19802-4-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+References: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Kan Liang <kan.liang@linux.intel.com>
+
+KVM needs to disable PEBS auto-reload for guest owned event to avoid
+unnecessory drain_pebs() in host.
+
+Expose a function to disable auto-reload mechanism by unset the related
+flag. The function has to be invoked before event enabling, otherwise
+there is no effect.
+
+Signed-off-by: Kan Liang <kan.liang@linux.intel.com>
+---
+ arch/x86/events/intel/core.c      | 14 ++++++++++++++
+ arch/x86/include/asm/perf_event.h |  2 ++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/arch/x86/events/intel/core.c b/arch/x86/events/intel/core.c
+index ef95076..cd17601 100644
+--- a/arch/x86/events/intel/core.c
++++ b/arch/x86/events/intel/core.c
+@@ -3299,6 +3299,20 @@ static int core_pmu_hw_config(struct perf_event *event)
+ 	return intel_pmu_bts_config(event);
+ }
+ 
++/*
++ * Disable PEBS auto-reload mechanism by unset the flag.
++ * The function has to be invoked before event enabling,
++ * otherwise there is no effect.
++ *
++ * Currently, it's used by KVM to disable PEBS auto-reload
++ * for guest owned event.
++ */
++void perf_x86_pmu_unset_auto_reload(struct perf_event *event)
++{
++	event->hw.flags &= ~PERF_X86_EVENT_AUTO_RELOAD;
++}
++EXPORT_SYMBOL_GPL(perf_x86_pmu_unset_auto_reload);
++
+ static int intel_pmu_hw_config(struct perf_event *event)
+ {
+ 	int ret = x86_pmu_hw_config(event);
+diff --git a/arch/x86/include/asm/perf_event.h b/arch/x86/include/asm/perf_event.h
+index 29964b0..6179234 100644
+--- a/arch/x86/include/asm/perf_event.h
++++ b/arch/x86/include/asm/perf_event.h
+@@ -325,6 +325,7 @@ struct perf_guest_switch_msr {
+ extern void perf_get_x86_pmu_capability(struct x86_pmu_capability *cap);
+ extern void perf_check_microcode(void);
+ extern int x86_perf_rdpmc_index(struct perf_event *event);
++extern void perf_x86_pmu_unset_auto_reload(struct perf_event *event);
+ #else
+ static inline void perf_get_x86_pmu_capability(struct x86_pmu_capability *cap)
+ {
+@@ -333,6 +334,7 @@ static inline void perf_get_x86_pmu_capability(struct x86_pmu_capability *cap)
+ 
+ static inline void perf_events_lapic_init(void)	{ }
+ static inline void perf_check_microcode(void) { }
++static inline void perf_x86_pmu_unset_auto_reload(struct perf_event *event) { }
+ #endif
+ 
+ #if defined(CONFIG_PERF_EVENTS) && defined(CONFIG_CPU_SUP_INTEL)
+
+From patchwork Thu Mar  5 17:56:58 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Luwei Kang <luwei.kang@intel.com>
+X-Patchwork-Id: 11421459
+Return-Path: <SRS0=eotC=4W=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1DDE5139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 09:59:22 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id EF71E21556
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 09:59:21 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727178AbgCEJ7S (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 5 Mar 2020 04:59:18 -0500
+Received: from mga06.intel.com ([134.134.136.31]:18619 "EHLO mga06.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727085AbgCEJ7S (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 5 Mar 2020 04:59:18 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga104.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 05 Mar 2020 01:59:17 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,517,1574150400";
+   d="scan'208";a="234366513"
+Received: from snr.bj.intel.com ([10.240.193.90])
+  by orsmga008.jf.intel.com with ESMTP; 05 Mar 2020 01:59:11 -0800
+From: Luwei Kang <luwei.kang@intel.com>
+To: x86@kernel.org, linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: peterz@infradead.org, mingo@redhat.com, acme@kernel.org,
+        mark.rutland@arm.com, alexander.shishkin@linux.intel.com,
+        jolsa@redhat.com, namhyung@kernel.org, tglx@linutronix.de,
+        bp@alien8.de, hpa@zytor.com, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        pawan.kumar.gupta@linux.intel.com, ak@linux.intel.com,
+        thomas.lendacky@amd.com, fenghua.yu@intel.com,
+        kan.liang@linux.intel.com, like.xu@linux.intel.com
+Subject: [PATCH v1 04/11] KVM: x86/pmu: Decouple event enablement from event
+ creation
+Date: Fri,  6 Mar 2020 01:56:58 +0800
+Message-Id: <1583431025-19802-5-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+References: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Kan Liang <kan.liang@linux.intel.com>
+
+KVM needs to specially configure the event before enabling the event, e.g.
+set event to assign a dedicated counter and handle auto-reload flags.
+
+Set disabled = 1 when allocating the event. So perf will not enable the
+event by default. Then enable the event explicitly. Previously, the process
+is creating and enabling. Now, it's creating, KVM configure, and enabling.
+
+Signed-off-by: Kan Liang <kan.liang@linux.intel.com>
+---
+ arch/x86/kvm/pmu.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/x86/kvm/pmu.c b/arch/x86/kvm/pmu.c
+index bcc6a73..b4f9e97 100644
+--- a/arch/x86/kvm/pmu.c
++++ b/arch/x86/kvm/pmu.c
+@@ -109,6 +109,7 @@ static void pmc_reprogram_counter(struct kvm_pmc *pmc, u32 type,
+ 		.exclude_user = exclude_user,
+ 		.exclude_kernel = exclude_kernel,
+ 		.config = config,
++		.disabled = 1,
+ 	};
+ 
+ 	attr.sample_period = (-pmc->counter) & pmc_bitmask(pmc);
+@@ -136,6 +137,7 @@ static void pmc_reprogram_counter(struct kvm_pmc *pmc, u32 type,
+ 
+ 	pmc->perf_event = event;
+ 	pmc_to_pmu(pmc)->event_count++;
++	perf_event_enable(event);
+ 	clear_bit(pmc->idx, pmc_to_pmu(pmc)->reprogram_pmi);
+ }
+ 
+
+From patchwork Thu Mar  5 17:56:59 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Luwei Kang <luwei.kang@intel.com>
+X-Patchwork-Id: 11421463
+Return-Path: <SRS0=eotC=4W=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 32F7D174A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 09:59:31 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 1329121744
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 09:59:31 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727152AbgCEJ72 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 5 Mar 2020 04:59:28 -0500
+Received: from mga02.intel.com ([134.134.136.20]:16885 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725816AbgCEJ71 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 5 Mar 2020 04:59:27 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 05 Mar 2020 01:59:25 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,517,1574150400";
+   d="scan'208";a="234366551"
+Received: from snr.bj.intel.com ([10.240.193.90])
+  by orsmga008.jf.intel.com with ESMTP; 05 Mar 2020 01:59:18 -0800
+From: Luwei Kang <luwei.kang@intel.com>
+To: x86@kernel.org, linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: peterz@infradead.org, mingo@redhat.com, acme@kernel.org,
+        mark.rutland@arm.com, alexander.shishkin@linux.intel.com,
+        jolsa@redhat.com, namhyung@kernel.org, tglx@linutronix.de,
+        bp@alien8.de, hpa@zytor.com, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        pawan.kumar.gupta@linux.intel.com, ak@linux.intel.com,
+        thomas.lendacky@amd.com, fenghua.yu@intel.com,
+        kan.liang@linux.intel.com, like.xu@linux.intel.com
+Subject: [PATCH v1 05/11] KVM: x86/pmu: Add support to reprogram PEBS event
+ for guest counters
+Date: Fri,  6 Mar 2020 01:56:59 +0800
+Message-Id: <1583431025-19802-6-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+References: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Like Xu <like.xu@linux.intel.com>
+
+When the event precise level is non-zero, the performance counter
+will be reprogramed for PEBS event and set PBES PMI bit in global_status
+when the PEBS event is overflowed. Since KVM never knows the setting
+of precise level in guest because it's a SW parameter, we force all PEBS
+events to be precise level 1 for enough accuracy with a dedicated counter.
+
+Originally-by: Andi Kleen <ak@linux.intel.com>
+Signed-off-by: Like Xu <like.xu@linux.intel.com>
+Co-developed-by: Kan Liang <kan.liang@linux.intel.com>
+Signed-off-by: Kan Liang <kan.liang@linux.intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  1 +
+ arch/x86/kvm/pmu.c              | 69 ++++++++++++++++++++++++++++++++++++++++-
+ arch/x86/kvm/vmx/pmu_intel.c    |  1 +
+ 3 files changed, 70 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 98959e8..83abb49 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -478,6 +478,7 @@ struct kvm_pmu {
+ 	u64 global_ctrl_mask;
+ 	u64 global_ovf_ctrl_mask;
+ 	u64 reserved_bits;
++	u64 pebs_enable;
+ 	u8 version;
+ 	struct kvm_pmc gp_counters[INTEL_PMC_MAX_GENERIC];
+ 	struct kvm_pmc fixed_counters[INTEL_PMC_MAX_FIXED];
+diff --git a/arch/x86/kvm/pmu.c b/arch/x86/kvm/pmu.c
+index b4f9e97..b2bdacb 100644
+--- a/arch/x86/kvm/pmu.c
++++ b/arch/x86/kvm/pmu.c
+@@ -77,6 +77,11 @@ static void kvm_perf_overflow_intr(struct perf_event *perf_event,
+ 
+ 	if (!test_and_set_bit(pmc->idx, pmu->reprogram_pmi)) {
+ 		__set_bit(pmc->idx, (unsigned long *)&pmu->global_status);
++
++		/* Indicate PEBS overflow to guest. */
++		if (perf_event->attr.precise_ip)
++			__set_bit(62, (unsigned long *)&pmu->global_status);
++
+ 		kvm_make_request(KVM_REQ_PMU, pmc->vcpu);
+ 
+ 		/*
+@@ -99,6 +104,7 @@ static void pmc_reprogram_counter(struct kvm_pmc *pmc, u32 type,
+ 				  bool exclude_kernel, bool intr,
+ 				  bool in_tx, bool in_tx_cp)
+ {
++	struct kvm_pmu *pmu = vcpu_to_pmu(pmc->vcpu);
+ 	struct perf_event *event;
+ 	struct perf_event_attr attr = {
+ 		.type = type,
+@@ -111,6 +117,7 @@ static void pmc_reprogram_counter(struct kvm_pmc *pmc, u32 type,
+ 		.config = config,
+ 		.disabled = 1,
+ 	};
++	bool pebs = test_bit(pmc->idx, (unsigned long *)&pmu->pebs_enable);
+ 
+ 	attr.sample_period = (-pmc->counter) & pmc_bitmask(pmc);
+ 
+@@ -126,8 +133,50 @@ static void pmc_reprogram_counter(struct kvm_pmc *pmc, u32 type,
+ 		attr.config |= HSW_IN_TX_CHECKPOINTED;
+ 	}
+ 
++	if (pebs) {
++		/*
++		 * Host never knows the precision level set by guest.
++		 * Force Host's PEBS event to precision level 1, which will
++		 * not impact the accuracy of the results for guest PEBS events.
++		 * Because,
++		 * - For most cases, there is no difference among precision
++		 *   level 1 to 3 for PEBS events.
++		 * - The functions as below checks the precision level in host.
++		 *   But the results from these functions in host are replaced
++		 *   by guest when sampling the guest.
++		 *   The accuracy for guest PEBS events will not be impacted.
++		 *    -- event_constraints() impacts the index of counter.
++		 *	The index for host event is exactly the same as guest.
++		 *	It's decided by guest.
++		 *    -- pebs_update_adaptive_cfg() impacts the value of
++		 *	MSR_PEBS_DATA_CFG. When guest is switched in,
++		 *	the MSR value will be replaced by the value from guest.
++		 *    -- setup_sample () impacts the output of a PEBS record.
++		 *	Guest handles the PEBS records.
++		 */
++		attr.precise_ip = 1;
++		/*
++		 * When the host's PMI handler completes, it's going to
++		 * enter the guest and trigger the guest's PMI handler.
++		 *
++		 * At this moment, this function may be called by
++		 * kvm_pmu_handle_event(). However the next sample_period
++		 * hasn't been determined by guest yet and the left period,
++		 * which probably be 0, is used for current sample_period.
++		 *
++		 * In this case, perf will mistakenly treat it as non
++		 * sampling events. The PEBS event will error out.
++		 *
++		 * Fill it with maximum period to prevent the error out.
++		 * The guest PMI handler will soon reprogram the counter.
++		 */
++		if (!attr.sample_period)
++			attr.sample_period = (-1ULL) & pmc_bitmask(pmc);
++	}
++
+ 	event = perf_event_create_kernel_counter(&attr, -1, current,
+-						 intr ? kvm_perf_overflow_intr :
++						 (intr || pebs) ?
++						 kvm_perf_overflow_intr :
+ 						 kvm_perf_overflow, pmc);
+ 	if (IS_ERR(event)) {
+ 		pr_debug_ratelimited("kvm_pmu: event creation failed %ld for pmc->idx = %d\n",
+@@ -135,6 +184,20 @@ static void pmc_reprogram_counter(struct kvm_pmc *pmc, u32 type,
+ 		return;
+ 	}
+ 
++	if (pebs) {
++		event->guest_dedicated_idx = pmc->idx;
++		/*
++		 * For guest PEBS events, guest takes the responsibility to
++		 * drain PEBS buffers, and load proper values to reset counters.
++		 *
++		 * Host will unconditionally set auto-reload flag for PEBS
++		 * events with fixed period which is not necessary. Host should
++		 * do nothing in drain_pebs() but inject the PMI into the guest.
++		 *
++		 * Unset the auto-reload flag for guest PEBS events.
++		 */
++		perf_x86_pmu_unset_auto_reload(event);
++	}
+ 	pmc->perf_event = event;
+ 	pmc_to_pmu(pmc)->event_count++;
+ 	perf_event_enable(event);
+@@ -158,6 +221,10 @@ static bool pmc_resume_counter(struct kvm_pmc *pmc)
+ 	if (!pmc->perf_event)
+ 		return false;
+ 
++	if (test_bit(pmc->idx, (unsigned long *)&pmc_to_pmu(pmc)->pebs_enable)
++		!= (!!pmc->perf_event->attr.precise_ip))
++		return false;
++
+ 	/* recalibrate sample period and check if it's accepted by perf core */
+ 	if (perf_event_period(pmc->perf_event,
+ 			(-pmc->counter) & pmc_bitmask(pmc)))
+diff --git a/arch/x86/kvm/vmx/pmu_intel.c b/arch/x86/kvm/vmx/pmu_intel.c
+index fd21cdb..ebadc33 100644
+--- a/arch/x86/kvm/vmx/pmu_intel.c
++++ b/arch/x86/kvm/vmx/pmu_intel.c
+@@ -293,6 +293,7 @@ static void intel_pmu_refresh(struct kvm_vcpu *vcpu)
+ 	pmu->counter_bitmask[KVM_PMC_GP] = 0;
+ 	pmu->counter_bitmask[KVM_PMC_FIXED] = 0;
+ 	pmu->version = 0;
++	pmu->pebs_enable = 0;
+ 	pmu->reserved_bits = 0xffffffff00200000ull;
+ 
+ 	entry = kvm_find_cpuid_entry(vcpu, 0xa, 0);
+
+From patchwork Thu Mar  5 17:57:00 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Luwei Kang <luwei.kang@intel.com>
+X-Patchwork-Id: 11421465
+Return-Path: <SRS0=eotC=4W=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 2F2F1139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 09:59:38 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 18E6A21556
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 09:59:37 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727255AbgCEJ7e (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 5 Mar 2020 04:59:34 -0500
+Received: from mga04.intel.com ([192.55.52.120]:14648 "EHLO mga04.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726920AbgCEJ7d (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 5 Mar 2020 04:59:33 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga104.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 05 Mar 2020 01:59:33 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,517,1574150400";
+   d="scan'208";a="234366585"
+Received: from snr.bj.intel.com ([10.240.193.90])
+  by orsmga008.jf.intel.com with ESMTP; 05 Mar 2020 01:59:26 -0800
+From: Luwei Kang <luwei.kang@intel.com>
+To: x86@kernel.org, linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: peterz@infradead.org, mingo@redhat.com, acme@kernel.org,
+        mark.rutland@arm.com, alexander.shishkin@linux.intel.com,
+        jolsa@redhat.com, namhyung@kernel.org, tglx@linutronix.de,
+        bp@alien8.de, hpa@zytor.com, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        pawan.kumar.gupta@linux.intel.com, ak@linux.intel.com,
+        thomas.lendacky@amd.com, fenghua.yu@intel.com,
+        kan.liang@linux.intel.com, like.xu@linux.intel.com,
+        Luwei Kang <luwei.kang@intel.com>
+Subject: [PATCH v1 06/11] KVM: x86/pmu: Implement is_pebs_via_ds_supported pmu
+ ops
+Date: Fri,  6 Mar 2020 01:57:00 +0800
+Message-Id: <1583431025-19802-7-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+References: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+PEBS virtualization enabling in KVM guest via DS is only supported on
+Icelake server. This patch introduce a new pmu ops is_pebs_via_ds_supported
+to check if PEBS feature can be supported in KVM guest.
+
+Originally-by: Andi Kleen <ak@linux.intel.com>
+Signed-off-by: Luwei Kang <luwei.kang@intel.com>
+Co-developed-by: Kan Liang <kan.liang@linux.intel.com>
+Signed-off-by: Kan Liang <kan.liang@linux.intel.com>
+Co-developed-by: Like Xu <like.xu@linux.intel.com>
+Signed-off-by: Like Xu <like.xu@linux.intel.com>
+---
+ arch/x86/kvm/pmu.h           |  1 +
+ arch/x86/kvm/vmx/pmu_intel.c | 18 ++++++++++++++++++
+ 2 files changed, 19 insertions(+)
+
+diff --git a/arch/x86/kvm/pmu.h b/arch/x86/kvm/pmu.h
+index 1333298..476780b 100644
+--- a/arch/x86/kvm/pmu.h
++++ b/arch/x86/kvm/pmu.h
+@@ -32,6 +32,7 @@ struct kvm_pmu_ops {
+ 	struct kvm_pmc *(*msr_idx_to_pmc)(struct kvm_vcpu *vcpu, u32 msr);
+ 	int (*is_valid_rdpmc_ecx)(struct kvm_vcpu *vcpu, unsigned int idx);
+ 	bool (*is_valid_msr)(struct kvm_vcpu *vcpu, u32 msr);
++	bool (*is_pebs_via_ds_supported)(void);
+ 	int (*get_msr)(struct kvm_vcpu *vcpu, u32 msr, u64 *data);
+ 	int (*set_msr)(struct kvm_vcpu *vcpu, struct msr_data *msr_info);
+ 	void (*refresh)(struct kvm_vcpu *vcpu);
+diff --git a/arch/x86/kvm/vmx/pmu_intel.c b/arch/x86/kvm/vmx/pmu_intel.c
+index ebadc33..a67bd34 100644
+--- a/arch/x86/kvm/vmx/pmu_intel.c
++++ b/arch/x86/kvm/vmx/pmu_intel.c
+@@ -12,6 +12,7 @@
+ #include <linux/kvm_host.h>
+ #include <linux/perf_event.h>
+ #include <asm/perf_event.h>
++#include <asm/intel-family.h>
+ #include "x86.h"
+ #include "cpuid.h"
+ #include "lapic.h"
+@@ -172,6 +173,22 @@ static bool intel_is_valid_msr(struct kvm_vcpu *vcpu, u32 msr)
+ 	return ret;
+ }
+ 
++static bool intel_is_pebs_via_ds_supported(void)
++{
++	if (!boot_cpu_has(X86_FEATURE_PEBS))
++		return false;
++
++	switch (boot_cpu_data.x86_model) {
++	case INTEL_FAM6_ICELAKE_D:
++	case INTEL_FAM6_ICELAKE_X:
++		break;
++	default:
++		return false;
++	}
++
++	return true;
++}
++
+ static struct kvm_pmc *intel_msr_idx_to_pmc(struct kvm_vcpu *vcpu, u32 msr)
+ {
+ 	struct kvm_pmu *pmu = vcpu_to_pmu(vcpu);
+@@ -401,6 +418,7 @@ struct kvm_pmu_ops intel_pmu_ops = {
+ 	.msr_idx_to_pmc = intel_msr_idx_to_pmc,
+ 	.is_valid_rdpmc_ecx = intel_is_valid_rdpmc_ecx,
+ 	.is_valid_msr = intel_is_valid_msr,
++	.is_pebs_via_ds_supported = intel_is_pebs_via_ds_supported,
+ 	.get_msr = intel_pmu_get_msr,
+ 	.set_msr = intel_pmu_set_msr,
+ 	.refresh = intel_pmu_refresh,
+
+From patchwork Thu Mar  5 17:57:01 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Luwei Kang <luwei.kang@intel.com>
+X-Patchwork-Id: 11421467
+Return-Path: <SRS0=eotC=4W=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6A5C9139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 09:59:45 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 4BF69208CD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 09:59:45 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727312AbgCEJ7m (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 5 Mar 2020 04:59:42 -0500
+Received: from mga11.intel.com ([192.55.52.93]:9013 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726956AbgCEJ7l (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 5 Mar 2020 04:59:41 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 05 Mar 2020 01:59:41 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,517,1574150400";
+   d="scan'208";a="234366616"
+Received: from snr.bj.intel.com ([10.240.193.90])
+  by orsmga008.jf.intel.com with ESMTP; 05 Mar 2020 01:59:34 -0800
+From: Luwei Kang <luwei.kang@intel.com>
+To: x86@kernel.org, linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: peterz@infradead.org, mingo@redhat.com, acme@kernel.org,
+        mark.rutland@arm.com, alexander.shishkin@linux.intel.com,
+        jolsa@redhat.com, namhyung@kernel.org, tglx@linutronix.de,
+        bp@alien8.de, hpa@zytor.com, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        pawan.kumar.gupta@linux.intel.com, ak@linux.intel.com,
+        thomas.lendacky@amd.com, fenghua.yu@intel.com,
+        kan.liang@linux.intel.com, like.xu@linux.intel.com,
+        Luwei Kang <luwei.kang@intel.com>
+Subject: [PATCH v1 07/11] KVM: x86/pmu: Expose CPUIDs feature bits PDCM, DS,
+ DTES64
+Date: Fri,  6 Mar 2020 01:57:01 +0800
+Message-Id: <1583431025-19802-8-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+References: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The CPUID features PDCM, DS and DTES64 are required for PEBS feature.
+This patch expose CPUID feature PDCM, DS and DTES64 to guest when PEBS
+is supported in KVM.
+
+Originally-by: Andi Kleen <ak@linux.intel.com>
+Signed-off-by: Luwei Kang <luwei.kang@intel.com>
+Co-developed-by: Kan Liang <kan.liang@linux.intel.com>
+Signed-off-by: Kan Liang <kan.liang@linux.intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  2 ++
+ arch/x86/kvm/cpuid.c            |  9 ++++++---
+ arch/x86/kvm/svm.c              | 12 ++++++++++++
+ arch/x86/kvm/vmx/capabilities.h | 17 +++++++++++++++++
+ arch/x86/kvm/vmx/vmx.c          |  2 ++
+ 5 files changed, 39 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 83abb49..033d9f9 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1180,6 +1180,8 @@ struct kvm_x86_ops {
+ 	bool (*umip_emulated)(void);
+ 	bool (*pt_supported)(void);
+ 	bool (*pku_supported)(void);
++	bool (*pdcm_supported)(void);
++	bool (*dtes64_supported)(void);
+ 
+ 	int (*check_nested_events)(struct kvm_vcpu *vcpu, bool external_intr);
+ 	void (*request_immediate_exit)(struct kvm_vcpu *vcpu);
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index b1c4694..92dabf3 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -446,6 +446,9 @@ static inline int __do_cpuid_func(struct kvm_cpuid_entry2 *entry, u32 function,
+ 	unsigned f_rdtscp = kvm_x86_ops->rdtscp_supported() ? F(RDTSCP) : 0;
+ 	unsigned f_xsaves = kvm_x86_ops->xsaves_supported() ? F(XSAVES) : 0;
+ 	unsigned f_intel_pt = kvm_x86_ops->pt_supported() ? F(INTEL_PT) : 0;
++	unsigned int f_pdcm = kvm_x86_ops->pdcm_supported() ? F(PDCM) : 0;
++	unsigned int f_ds = kvm_x86_ops->dtes64_supported() ? F(DS) : 0;
++	unsigned int f_dtes64 = kvm_x86_ops->dtes64_supported() ? F(DTES64) : 0;
+ 
+ 	/* cpuid 1.edx */
+ 	const u32 kvm_cpuid_1_edx_x86_features =
+@@ -454,7 +457,7 @@ static inline int __do_cpuid_func(struct kvm_cpuid_entry2 *entry, u32 function,
+ 		F(CX8) | F(APIC) | 0 /* Reserved */ | F(SEP) |
+ 		F(MTRR) | F(PGE) | F(MCA) | F(CMOV) |
+ 		F(PAT) | F(PSE36) | 0 /* PSN */ | F(CLFLUSH) |
+-		0 /* Reserved, DS, ACPI */ | F(MMX) |
++		0 /* Reserved */ | f_ds | 0 /* ACPI */ | F(MMX) |
+ 		F(FXSR) | F(XMM) | F(XMM2) | F(SELFSNOOP) |
+ 		0 /* HTT, TM, Reserved, PBE */;
+ 	/* cpuid 0x80000001.edx */
+@@ -471,10 +474,10 @@ static inline int __do_cpuid_func(struct kvm_cpuid_entry2 *entry, u32 function,
+ 	const u32 kvm_cpuid_1_ecx_x86_features =
+ 		/* NOTE: MONITOR (and MWAIT) are emulated as NOP,
+ 		 * but *not* advertised to guests via CPUID ! */
+-		F(XMM3) | F(PCLMULQDQ) | 0 /* DTES64, MONITOR */ |
++		F(XMM3) | F(PCLMULQDQ) | f_dtes64 | 0 /* MONITOR */ |
+ 		0 /* DS-CPL, VMX, SMX, EST */ |
+ 		0 /* TM2 */ | F(SSSE3) | 0 /* CNXT-ID */ | 0 /* Reserved */ |
+-		F(FMA) | F(CX16) | 0 /* xTPR Update, PDCM */ |
++		F(FMA) | F(CX16) | 0 /* xTPR Update */ | f_pdcm |
+ 		F(PCID) | 0 /* Reserved, DCA */ | F(XMM4_1) |
+ 		F(XMM4_2) | F(X2APIC) | F(MOVBE) | F(POPCNT) |
+ 		0 /* Reserved*/ | F(AES) | F(XSAVE) | 0 /* OSXSAVE */ | F(AVX) |
+diff --git a/arch/x86/kvm/svm.c b/arch/x86/kvm/svm.c
+index 24c0b2b..984ab6c 100644
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -6123,6 +6123,16 @@ static bool svm_pku_supported(void)
+ 	return false;
+ }
+ 
++static bool svm_pdcm_supported(void)
++{
++	return false;
++}
++
++static bool svm_dtes64_supported(void)
++{
++	return false;
++}
++
+ #define PRE_EX(exit)  { .exit_code = (exit), \
+ 			.stage = X86_ICPT_PRE_EXCEPT, }
+ #define POST_EX(exit) { .exit_code = (exit), \
+@@ -7485,6 +7495,8 @@ static void svm_pre_update_apicv_exec_ctrl(struct kvm *kvm, bool activate)
+ 	.umip_emulated = svm_umip_emulated,
+ 	.pt_supported = svm_pt_supported,
+ 	.pku_supported = svm_pku_supported,
++	.pdcm_supported = svm_pdcm_supported,
++	.dtes64_supported = svm_dtes64_supported,
+ 
+ 	.set_supported_cpuid = svm_set_supported_cpuid,
+ 
+diff --git a/arch/x86/kvm/vmx/capabilities.h b/arch/x86/kvm/vmx/capabilities.h
+index f486e26..9e352b5 100644
+--- a/arch/x86/kvm/vmx/capabilities.h
++++ b/arch/x86/kvm/vmx/capabilities.h
+@@ -5,6 +5,7 @@
+ #include <asm/vmx.h>
+ 
+ #include "lapic.h"
++#include "pmu.h"
+ 
+ extern bool __read_mostly enable_vpid;
+ extern bool __read_mostly flexpriority_enabled;
+@@ -151,6 +152,22 @@ static inline bool vmx_pku_supported(void)
+ 	return boot_cpu_has(X86_FEATURE_PKU);
+ }
+ 
++static inline bool vmx_pdcm_supported(void)
++{
++	if (kvm_x86_ops->pmu_ops->is_pebs_via_ds_supported)
++		return kvm_x86_ops->pmu_ops->is_pebs_via_ds_supported();
++
++	return false;
++}
++
++static inline bool vmx_dtes64_supported(void)
++{
++	if (kvm_x86_ops->pmu_ops->is_pebs_via_ds_supported)
++		return kvm_x86_ops->pmu_ops->is_pebs_via_ds_supported();
++
++	return false;
++}
++
+ static inline bool cpu_has_vmx_rdtscp(void)
+ {
+ 	return vmcs_config.cpu_based_2nd_exec_ctrl &
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 40b1e61..cef7089 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -7951,6 +7951,8 @@ static bool vmx_check_apicv_inhibit_reasons(ulong bit)
+ 	.umip_emulated = vmx_umip_emulated,
+ 	.pt_supported = vmx_pt_supported,
+ 	.pku_supported = vmx_pku_supported,
++	.pdcm_supported = vmx_pdcm_supported,
++	.dtes64_supported = vmx_dtes64_supported,
+ 
+ 	.request_immediate_exit = vmx_request_immediate_exit,
+ 
+
+From patchwork Thu Mar  5 17:57:02 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Luwei Kang <luwei.kang@intel.com>
+X-Patchwork-Id: 11421469
+Return-Path: <SRS0=eotC=4W=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id EB1251580
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 09:59:54 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id CD92021741
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 09:59:54 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727370AbgCEJ7u (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 5 Mar 2020 04:59:50 -0500
+Received: from mga01.intel.com ([192.55.52.88]:51102 "EHLO mga01.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726874AbgCEJ7t (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 5 Mar 2020 04:59:49 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga101.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 05 Mar 2020 01:59:49 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,517,1574150400";
+   d="scan'208";a="234366630"
+Received: from snr.bj.intel.com ([10.240.193.90])
+  by orsmga008.jf.intel.com with ESMTP; 05 Mar 2020 01:59:42 -0800
+From: Luwei Kang <luwei.kang@intel.com>
+To: x86@kernel.org, linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: peterz@infradead.org, mingo@redhat.com, acme@kernel.org,
+        mark.rutland@arm.com, alexander.shishkin@linux.intel.com,
+        jolsa@redhat.com, namhyung@kernel.org, tglx@linutronix.de,
+        bp@alien8.de, hpa@zytor.com, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        pawan.kumar.gupta@linux.intel.com, ak@linux.intel.com,
+        thomas.lendacky@amd.com, fenghua.yu@intel.com,
+        kan.liang@linux.intel.com, like.xu@linux.intel.com,
+        Luwei Kang <luwei.kang@intel.com>
+Subject: [PATCH v1 08/11] KVM: x86/pmu: PEBS MSRs emulation
+Date: Fri,  6 Mar 2020 01:57:02 +0800
+Message-Id: <1583431025-19802-9-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+References: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This patch implement the PEBS MSRs emulation in KVM, include
+IA32_PEBS_ENABLE and IA32_DS_AREA.
+
+The IA32_DS_AREA register will be added into the MSR-load list when PEBS is
+enabled in KVM guest that to make the guest's DS value can be loaded to the
+real HW before VM-entry, and will be removed when PEBS is disabled.
+
+Originally-by: Andi Kleen <ak@linux.intel.com>
+Signed-off-by: Luwei Kang <luwei.kang@intel.com>
+Co-developed-by: Kan Liang <kan.liang@linux.intel.com>
+Signed-off-by: Kan Liang <kan.liang@linux.intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  4 ++++
+ arch/x86/kvm/vmx/pmu_intel.c    | 45 +++++++++++++++++++++++++++++++++++++++++
+ arch/x86/kvm/vmx/vmx.c          |  4 ++--
+ arch/x86/kvm/vmx/vmx.h          |  4 ++++
+ arch/x86/kvm/x86.c              |  7 +++++++
+ 5 files changed, 62 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 033d9f9..33b990b 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -479,6 +479,8 @@ struct kvm_pmu {
+ 	u64 global_ovf_ctrl_mask;
+ 	u64 reserved_bits;
+ 	u64 pebs_enable;
++	u64 pebs_enable_mask;
++	u64 ds_area;
+ 	u8 version;
+ 	struct kvm_pmc gp_counters[INTEL_PMC_MAX_GENERIC];
+ 	struct kvm_pmc fixed_counters[INTEL_PMC_MAX_FIXED];
+@@ -493,6 +495,8 @@ struct kvm_pmu {
+ 	 */
+ 	bool need_cleanup;
+ 
++	bool has_pebs_via_ds;
++
+ 	/*
+ 	 * The total number of programmed perf_events and it helps to avoid
+ 	 * redundant check before cleanup if guest don't use vPMU at all.
+diff --git a/arch/x86/kvm/vmx/pmu_intel.c b/arch/x86/kvm/vmx/pmu_intel.c
+index a67bd34..227589a 100644
+--- a/arch/x86/kvm/vmx/pmu_intel.c
++++ b/arch/x86/kvm/vmx/pmu_intel.c
+@@ -67,6 +67,21 @@ static void global_ctrl_changed(struct kvm_pmu *pmu, u64 data)
+ 		reprogram_counter(pmu, bit);
+ }
+ 
++static void pebs_enable_changed(struct kvm_pmu *pmu, u64 data)
++{
++	struct vcpu_vmx *vmx = to_vmx(pmu_to_vcpu(pmu));
++	u64 host_ds_area;
++
++	if (data) {
++		rdmsrl_safe(MSR_IA32_DS_AREA, &host_ds_area);
++		add_atomic_switch_msr(vmx, MSR_IA32_DS_AREA,
++			pmu->ds_area, host_ds_area, false);
++	} else
++		clear_atomic_switch_msr(vmx, MSR_IA32_DS_AREA);
++
++	pmu->pebs_enable = data;
++}
++
+ static unsigned intel_find_arch_event(struct kvm_pmu *pmu,
+ 				      u8 event_select,
+ 				      u8 unit_mask)
+@@ -163,6 +178,10 @@ static bool intel_is_valid_msr(struct kvm_vcpu *vcpu, u32 msr)
+ 	case MSR_CORE_PERF_GLOBAL_OVF_CTRL:
+ 		ret = pmu->version > 1;
+ 		break;
++	case MSR_IA32_DS_AREA:
++	case MSR_IA32_PEBS_ENABLE:
++		ret = pmu->has_pebs_via_ds;
++		break;
+ 	default:
+ 		ret = get_gp_pmc(pmu, msr, MSR_IA32_PERFCTR0) ||
+ 			get_gp_pmc(pmu, msr, MSR_P6_EVNTSEL0) ||
+@@ -219,6 +238,12 @@ static int intel_pmu_get_msr(struct kvm_vcpu *vcpu, u32 msr, u64 *data)
+ 	case MSR_CORE_PERF_GLOBAL_OVF_CTRL:
+ 		*data = pmu->global_ovf_ctrl;
+ 		return 0;
++	case MSR_IA32_PEBS_ENABLE:
++		*data = pmu->pebs_enable;
++		return 0;
++	case MSR_IA32_DS_AREA:
++		*data = pmu->ds_area;
++		return 0;
+ 	default:
+ 		if ((pmc = get_gp_pmc(pmu, msr, MSR_IA32_PERFCTR0))) {
+ 			u64 val = pmc_read_counter(pmc);
+@@ -275,6 +300,17 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 			return 0;
+ 		}
+ 		break;
++	case MSR_IA32_PEBS_ENABLE:
++		if (pmu->pebs_enable == data)
++			return 0;
++		if (!(data & pmu->pebs_enable_mask)) {
++			pebs_enable_changed(pmu, data);
++			return 0;
++		}
++		break;
++	case MSR_IA32_DS_AREA:
++		pmu->ds_area = data;
++		return 0;
+ 	default:
+ 		if ((pmc = get_gp_pmc(pmu, msr, MSR_IA32_PERFCTR0))) {
+ 			if (!msr_info->host_initiated)
+@@ -351,6 +387,15 @@ static void intel_pmu_refresh(struct kvm_vcpu *vcpu)
+ 		pmu->global_ovf_ctrl_mask &=
+ 				~MSR_CORE_PERF_GLOBAL_OVF_CTRL_TRACE_TOPA_PMI;
+ 
++	entry = kvm_find_cpuid_entry(vcpu, 1, 0);
++	if (entry && (entry->ecx & X86_FEATURE_DTES64) &&
++		     (entry->ecx & X86_FEATURE_PDCM) &&
++		     (entry->edx & X86_FEATURE_DS) &&
++		      intel_is_pebs_via_ds_supported()) {
++		pmu->has_pebs_via_ds = 1;
++		pmu->pebs_enable_mask = ~pmu->global_ctrl;
++	}
++
+ 	entry = kvm_find_cpuid_entry(vcpu, 7, 0);
+ 	if (entry &&
+ 	    (boot_cpu_has(X86_FEATURE_HLE) || boot_cpu_has(X86_FEATURE_RTM)) &&
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index cef7089..c6d9a87 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -864,7 +864,7 @@ int vmx_find_msr_index(struct vmx_msrs *m, u32 msr)
+ 	return -ENOENT;
+ }
+ 
+-static void clear_atomic_switch_msr(struct vcpu_vmx *vmx, unsigned msr)
++void clear_atomic_switch_msr(struct vcpu_vmx *vmx, unsigned msr)
+ {
+ 	int i;
+ 	struct msr_autoload *m = &vmx->msr_autoload;
+@@ -916,7 +916,7 @@ static void add_atomic_switch_msr_special(struct vcpu_vmx *vmx,
+ 	vm_exit_controls_setbit(vmx, exit);
+ }
+ 
+-static void add_atomic_switch_msr(struct vcpu_vmx *vmx, unsigned msr,
++void add_atomic_switch_msr(struct vcpu_vmx *vmx, unsigned msr,
+ 				  u64 guest_val, u64 host_val, bool entry_only)
+ {
+ 	int i, j = 0;
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index e64da06..ea899e7 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -536,4 +536,8 @@ static inline bool vmx_has_waitpkg(struct vcpu_vmx *vmx)
+ 
+ void dump_vmcs(void);
+ 
++extern void clear_atomic_switch_msr(struct vcpu_vmx *vmx, unsigned msr);
++extern void add_atomic_switch_msr(struct vcpu_vmx *vmx, unsigned msr,
++			u64 guest_val, u64 host_val, bool entry_only);
++
+ #endif /* __KVM_X86_VMX_H */
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 5de2006..7a23406 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -1193,6 +1193,7 @@ bool kvm_rdpmc(struct kvm_vcpu *vcpu)
+ 	MSR_ARCH_PERFMON_EVENTSEL0 + 12, MSR_ARCH_PERFMON_EVENTSEL0 + 13,
+ 	MSR_ARCH_PERFMON_EVENTSEL0 + 14, MSR_ARCH_PERFMON_EVENTSEL0 + 15,
+ 	MSR_ARCH_PERFMON_EVENTSEL0 + 16, MSR_ARCH_PERFMON_EVENTSEL0 + 17,
++	MSR_IA32_PEBS_ENABLE, MSR_IA32_DS_AREA,
+ };
+ 
+ static u32 msrs_to_save[ARRAY_SIZE(msrs_to_save_all)];
+@@ -5263,6 +5264,12 @@ static void kvm_init_msr_list(void)
+ 			if (!kvm_x86_ops->rdtscp_supported())
+ 				continue;
+ 			break;
++		case MSR_IA32_PEBS_ENABLE:
++		case MSR_IA32_DS_AREA:
++			if (!kvm_x86_ops->pmu_ops ||
++			    !kvm_x86_ops->pmu_ops->is_pebs_via_ds_supported())
++				continue;
++			break;
+ 		case MSR_IA32_RTIT_CTL:
+ 		case MSR_IA32_RTIT_STATUS:
+ 			if (!kvm_x86_ops->pt_supported())
+
+From patchwork Thu Mar  5 17:57:03 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Luwei Kang <luwei.kang@intel.com>
+X-Patchwork-Id: 11421471
+Return-Path: <SRS0=eotC=4W=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E97B3139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 10:00:04 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id D264F21556
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 10:00:04 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727363AbgCEJ75 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 5 Mar 2020 04:59:57 -0500
+Received: from mga14.intel.com ([192.55.52.115]:52162 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726988AbgCEJ75 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 5 Mar 2020 04:59:57 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 05 Mar 2020 01:59:56 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,517,1574150400";
+   d="scan'208";a="234366650"
+Received: from snr.bj.intel.com ([10.240.193.90])
+  by orsmga008.jf.intel.com with ESMTP; 05 Mar 2020 01:59:50 -0800
+From: Luwei Kang <luwei.kang@intel.com>
+To: x86@kernel.org, linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: peterz@infradead.org, mingo@redhat.com, acme@kernel.org,
+        mark.rutland@arm.com, alexander.shishkin@linux.intel.com,
+        jolsa@redhat.com, namhyung@kernel.org, tglx@linutronix.de,
+        bp@alien8.de, hpa@zytor.com, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        pawan.kumar.gupta@linux.intel.com, ak@linux.intel.com,
+        thomas.lendacky@amd.com, fenghua.yu@intel.com,
+        kan.liang@linux.intel.com, like.xu@linux.intel.com,
+        Luwei Kang <luwei.kang@intel.com>
+Subject: [PATCH v1 09/11] KVM: x86/pmu: Expose PEBS feature to guest
+Date: Fri,  6 Mar 2020 01:57:03 +0800
+Message-Id: <1583431025-19802-10-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+References: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This patch exposed some bits of MSRs to KVM guest which realate with PEBS
+feature. It include some bits in IA32_PERF_CAPABILITIES and IA32_MISC_ENABLE.
+
+Originally-by: Andi Kleen <ak@linux.intel.com>
+Signed-off-by: Luwei Kang <luwei.kang@intel.com>
+Co-developed-by: Kan Liang <kan.liang@linux.intel.com>
+Signed-off-by: Kan Liang <kan.liang@linux.intel.com>
+---
+ arch/x86/include/asm/kvm_host.h  |  1 +
+ arch/x86/include/asm/msr-index.h |  3 +++
+ arch/x86/kvm/vmx/pmu_intel.c     | 15 +++++++++++++++
+ arch/x86/kvm/x86.c               |  6 +++++-
+ 4 files changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 33b990b..35d230e 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -481,6 +481,7 @@ struct kvm_pmu {
+ 	u64 pebs_enable;
+ 	u64 pebs_enable_mask;
+ 	u64 ds_area;
++	u64 perf_cap;
+ 	u8 version;
+ 	struct kvm_pmc gp_counters[INTEL_PMC_MAX_GENERIC];
+ 	struct kvm_pmc fixed_counters[INTEL_PMC_MAX_FIXED];
+diff --git a/arch/x86/include/asm/msr-index.h b/arch/x86/include/asm/msr-index.h
+index d5e517d..2bf66e9 100644
+--- a/arch/x86/include/asm/msr-index.h
++++ b/arch/x86/include/asm/msr-index.h
+@@ -151,6 +151,9 @@
+ #define MSR_PEBS_DATA_CFG		0x000003f2
+ #define MSR_IA32_DS_AREA		0x00000600
+ #define MSR_IA32_PERF_CAPABILITIES	0x00000345
++#define PERF_CAP_PEBS_TRAP		BIT_ULL(6)
++#define PERF_CAP_ARCH_REG		BIT_ULL(7)
++#define PERF_CAP_PEBS_FORMAT		0xf00
+ #define MSR_PEBS_LD_LAT_THRESHOLD	0x000003f6
+ 
+ #define MSR_IA32_RTIT_CTL		0x00000570
+diff --git a/arch/x86/kvm/vmx/pmu_intel.c b/arch/x86/kvm/vmx/pmu_intel.c
+index 227589a..8161488 100644
+--- a/arch/x86/kvm/vmx/pmu_intel.c
++++ b/arch/x86/kvm/vmx/pmu_intel.c
+@@ -180,6 +180,7 @@ static bool intel_is_valid_msr(struct kvm_vcpu *vcpu, u32 msr)
+ 		break;
+ 	case MSR_IA32_DS_AREA:
+ 	case MSR_IA32_PEBS_ENABLE:
++	case MSR_IA32_PERF_CAPABILITIES:
+ 		ret = pmu->has_pebs_via_ds;
+ 		break;
+ 	default:
+@@ -244,6 +245,9 @@ static int intel_pmu_get_msr(struct kvm_vcpu *vcpu, u32 msr, u64 *data)
+ 	case MSR_IA32_DS_AREA:
+ 		*data = pmu->ds_area;
+ 		return 0;
++	case MSR_IA32_PERF_CAPABILITIES:
++		*data = pmu->perf_cap;
++		return 0;
+ 	default:
+ 		if ((pmc = get_gp_pmc(pmu, msr, MSR_IA32_PERFCTR0))) {
+ 			u64 val = pmc_read_counter(pmc);
+@@ -311,6 +315,8 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 	case MSR_IA32_DS_AREA:
+ 		pmu->ds_area = data;
+ 		return 0;
++	case MSR_IA32_PERF_CAPABILITIES:
++		break; /* RO MSR */
+ 	default:
+ 		if ((pmc = get_gp_pmc(pmu, msr, MSR_IA32_PERFCTR0))) {
+ 			if (!msr_info->host_initiated)
+@@ -396,6 +402,15 @@ static void intel_pmu_refresh(struct kvm_vcpu *vcpu)
+ 		pmu->pebs_enable_mask = ~pmu->global_ctrl;
+ 	}
+ 
++	if (pmu->has_pebs_via_ds) {
++		u64 perf_cap;
++
++		rdmsrl(MSR_IA32_PERF_CAPABILITIES, perf_cap);
++		pmu->perf_cap = (perf_cap & (PERF_CAP_PEBS_TRAP |
++					     PERF_CAP_ARCH_REG |
++					     PERF_CAP_PEBS_FORMAT));
++	}
++
+ 	entry = kvm_find_cpuid_entry(vcpu, 7, 0);
+ 	if (entry &&
+ 	    (boot_cpu_has(X86_FEATURE_HLE) || boot_cpu_has(X86_FEATURE_RTM)) &&
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 7a23406..5ab8447 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -3086,7 +3086,11 @@ int kvm_get_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 		msr_info->data = (u64)vcpu->arch.ia32_tsc_adjust_msr;
+ 		break;
+ 	case MSR_IA32_MISC_ENABLE:
+-		msr_info->data = vcpu->arch.ia32_misc_enable_msr;
++		if (vcpu_to_pmu(vcpu)->has_pebs_via_ds)
++			msr_info->data = (vcpu->arch.ia32_misc_enable_msr &
++					~MSR_IA32_MISC_ENABLE_PEBS_UNAVAIL);
++		else
++			msr_info->data = vcpu->arch.ia32_misc_enable_msr;
+ 		break;
+ 	case MSR_IA32_SMBASE:
+ 		if (!msr_info->host_initiated)
+
+From patchwork Thu Mar  5 17:57:04 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Luwei Kang <luwei.kang@intel.com>
+X-Patchwork-Id: 11421475
+Return-Path: <SRS0=eotC=4W=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8E9FF92A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 10:00:12 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 7A0E421556
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 10:00:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727422AbgCEKAG (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 5 Mar 2020 05:00:06 -0500
+Received: from mga12.intel.com ([192.55.52.136]:9294 "EHLO mga12.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727053AbgCEKAF (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 5 Mar 2020 05:00:05 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga106.fm.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 05 Mar 2020 02:00:05 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,517,1574150400";
+   d="scan'208";a="234366740"
+Received: from snr.bj.intel.com ([10.240.193.90])
+  by orsmga008.jf.intel.com with ESMTP; 05 Mar 2020 01:59:57 -0800
+From: Luwei Kang <luwei.kang@intel.com>
+To: x86@kernel.org, linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: peterz@infradead.org, mingo@redhat.com, acme@kernel.org,
+        mark.rutland@arm.com, alexander.shishkin@linux.intel.com,
+        jolsa@redhat.com, namhyung@kernel.org, tglx@linutronix.de,
+        bp@alien8.de, hpa@zytor.com, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        pawan.kumar.gupta@linux.intel.com, ak@linux.intel.com,
+        thomas.lendacky@amd.com, fenghua.yu@intel.com,
+        kan.liang@linux.intel.com, like.xu@linux.intel.com,
+        Luwei Kang <luwei.kang@intel.com>
+Subject: [PATCH v1 10/11] KVM: x86/pmu: Introduce the mask value for fixed
+ counter
+Date: Fri,  6 Mar 2020 01:57:04 +0800
+Message-Id: <1583431025-19802-11-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+References: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The mask value of fixed counter control register should be dynamic
+adjust with the number of fixed counters. This patch introduce a
+variable that include the reserved bits of fix counter control
+register.
+
+Signed-off-by: Luwei Kang <luwei.kang@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h | 1 +
+ arch/x86/kvm/vmx/pmu_intel.c    | 7 ++++++-
+ 2 files changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 35d230e..6f82fb7 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -471,6 +471,7 @@ struct kvm_pmu {
+ 	unsigned nr_arch_fixed_counters;
+ 	unsigned available_event_types;
+ 	u64 fixed_ctr_ctrl;
++	u64 fixed_ctr_ctrl_mask;
+ 	u64 global_ctrl;
+ 	u64 global_status;
+ 	u64 global_ovf_ctrl;
+diff --git a/arch/x86/kvm/vmx/pmu_intel.c b/arch/x86/kvm/vmx/pmu_intel.c
+index 8161488..578b830 100644
+--- a/arch/x86/kvm/vmx/pmu_intel.c
++++ b/arch/x86/kvm/vmx/pmu_intel.c
+@@ -277,7 +277,7 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 	case MSR_CORE_PERF_FIXED_CTR_CTRL:
+ 		if (pmu->fixed_ctr_ctrl == data)
+ 			return 0;
+-		if (!(data & 0xfffffffffffff444ull)) {
++		if (!(data & pmu->fixed_ctr_ctrl_mask)) {
+ 			reprogram_fixed_counters(pmu, data);
+ 			return 0;
+ 		}
+@@ -346,9 +346,11 @@ static void intel_pmu_refresh(struct kvm_vcpu *vcpu)
+ 	struct kvm_cpuid_entry2 *entry;
+ 	union cpuid10_eax eax;
+ 	union cpuid10_edx edx;
++	int i;
+ 
+ 	pmu->nr_arch_gp_counters = 0;
+ 	pmu->nr_arch_fixed_counters = 0;
++	pmu->fixed_ctr_ctrl_mask = 0;
+ 	pmu->counter_bitmask[KVM_PMC_GP] = 0;
+ 	pmu->counter_bitmask[KVM_PMC_FIXED] = 0;
+ 	pmu->version = 0;
+@@ -383,6 +385,9 @@ static void intel_pmu_refresh(struct kvm_vcpu *vcpu)
+ 			((u64)1 << edx.split.bit_width_fixed) - 1;
+ 	}
+ 
++	for (i = 0; i < pmu->nr_arch_fixed_counters; i++)
++		pmu->fixed_ctr_ctrl_mask |= (0xbull << (i * 4));
++	pmu->fixed_ctr_ctrl_mask = ~pmu->fixed_ctr_ctrl_mask;
+ 	pmu->global_ctrl = ((1ull << pmu->nr_arch_gp_counters) - 1) |
+ 		(((1ull << pmu->nr_arch_fixed_counters) - 1) << INTEL_PMC_IDX_FIXED);
+ 	pmu->global_ctrl_mask = ~pmu->global_ctrl;
+
+From patchwork Thu Mar  5 17:57:05 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Luwei Kang <luwei.kang@intel.com>
+X-Patchwork-Id: 11421477
+Return-Path: <SRS0=eotC=4W=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 69E2292A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 10:00:18 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 4959E21739
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  5 Mar 2020 10:00:18 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727434AbgCEKAO (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 5 Mar 2020 05:00:14 -0500
+Received: from mga02.intel.com ([134.134.136.20]:16971 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727052AbgCEKAM (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 5 Mar 2020 05:00:12 -0500
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 05 Mar 2020 02:00:12 -0800
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,517,1574150400";
+   d="scan'208";a="234366830"
+Received: from snr.bj.intel.com ([10.240.193.90])
+  by orsmga008.jf.intel.com with ESMTP; 05 Mar 2020 02:00:05 -0800
+From: Luwei Kang <luwei.kang@intel.com>
+To: x86@kernel.org, linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: peterz@infradead.org, mingo@redhat.com, acme@kernel.org,
+        mark.rutland@arm.com, alexander.shishkin@linux.intel.com,
+        jolsa@redhat.com, namhyung@kernel.org, tglx@linutronix.de,
+        bp@alien8.de, hpa@zytor.com, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, vkuznets@redhat.com,
+        wanpengli@tencent.com, jmattson@google.com, joro@8bytes.org,
+        pawan.kumar.gupta@linux.intel.com, ak@linux.intel.com,
+        thomas.lendacky@amd.com, fenghua.yu@intel.com,
+        kan.liang@linux.intel.com, like.xu@linux.intel.com,
+        Luwei Kang <luwei.kang@intel.com>
+Subject: [PATCH v1 11/11] KVM: x86/pmu: Adaptive PEBS virtualization enabling
+Date: Fri,  6 Mar 2020 01:57:05 +0800
+Message-Id: <1583431025-19802-12-git-send-email-luwei.kang@intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+References: <1583431025-19802-1-git-send-email-luwei.kang@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The PEBS feature enabled the collection of the GPRs, eventing IP, TSC and
+memory access related information. On Icelake, it has been enhanced to collect
+more CPU state information like XMM register values, and LBR To and FROM
+addresses as per customer usage requests. With the addition of these new
+groups of data, the PEBS record size is greatly increased. Adaptive PEBS
+provides Software the capability to configure the PEBS records to capture
+only the data of interest, keeping the record size compact. By default, the
+PEBS record will only contain the Basic group. Optionally, each counter can
+be configured to generate a PEBS records with the groups specified in
+MSR_PEBS_DATA_CFG.
+
+This patch implement the adaptive PEBS virtualization enabling in
+KVM guest, include feature detection, MSRs emulation, expose
+capability.
+
+Signed-off-by: Luwei Kang <luwei.kang@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h  |  3 +++
+ arch/x86/include/asm/msr-index.h |  1 +
+ arch/x86/kvm/pmu.h               |  1 +
+ arch/x86/kvm/vmx/pmu_intel.c     | 46 ++++++++++++++++++++++++++++++++++++++--
+ arch/x86/kvm/x86.c               |  6 ++++++
+ 5 files changed, 55 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 6f82fb7..7b0a023 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -482,6 +482,8 @@ struct kvm_pmu {
+ 	u64 pebs_enable;
+ 	u64 pebs_enable_mask;
+ 	u64 ds_area;
++	u64 pebs_data_cfg;
++	u64 pebs_data_cfg_mask;
+ 	u64 perf_cap;
+ 	u8 version;
+ 	struct kvm_pmc gp_counters[INTEL_PMC_MAX_GENERIC];
+@@ -498,6 +500,7 @@ struct kvm_pmu {
+ 	bool need_cleanup;
+ 
+ 	bool has_pebs_via_ds;
++	bool has_pebs_adaptive;
+ 
+ 	/*
+ 	 * The total number of programmed perf_events and it helps to avoid
+diff --git a/arch/x86/include/asm/msr-index.h b/arch/x86/include/asm/msr-index.h
+index 2bf66e9..d3d6e48 100644
+--- a/arch/x86/include/asm/msr-index.h
++++ b/arch/x86/include/asm/msr-index.h
+@@ -154,6 +154,7 @@
+ #define PERF_CAP_PEBS_TRAP		BIT_ULL(6)
+ #define PERF_CAP_ARCH_REG		BIT_ULL(7)
+ #define PERF_CAP_PEBS_FORMAT		0xf00
++#define PERF_CAP_PEBS_BASELINE		BIT_ULL(14)
+ #define MSR_PEBS_LD_LAT_THRESHOLD	0x000003f6
+ 
+ #define MSR_IA32_RTIT_CTL		0x00000570
+diff --git a/arch/x86/kvm/pmu.h b/arch/x86/kvm/pmu.h
+index 476780b..9de6ef1 100644
+--- a/arch/x86/kvm/pmu.h
++++ b/arch/x86/kvm/pmu.h
+@@ -33,6 +33,7 @@ struct kvm_pmu_ops {
+ 	int (*is_valid_rdpmc_ecx)(struct kvm_vcpu *vcpu, unsigned int idx);
+ 	bool (*is_valid_msr)(struct kvm_vcpu *vcpu, u32 msr);
+ 	bool (*is_pebs_via_ds_supported)(void);
++	bool (*is_pebs_baseline_supported)(void);
+ 	int (*get_msr)(struct kvm_vcpu *vcpu, u32 msr, u64 *data);
+ 	int (*set_msr)(struct kvm_vcpu *vcpu, struct msr_data *msr_info);
+ 	void (*refresh)(struct kvm_vcpu *vcpu);
+diff --git a/arch/x86/kvm/vmx/pmu_intel.c b/arch/x86/kvm/vmx/pmu_intel.c
+index 578b830..6a0eef3 100644
+--- a/arch/x86/kvm/vmx/pmu_intel.c
++++ b/arch/x86/kvm/vmx/pmu_intel.c
+@@ -70,14 +70,21 @@ static void global_ctrl_changed(struct kvm_pmu *pmu, u64 data)
+ static void pebs_enable_changed(struct kvm_pmu *pmu, u64 data)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(pmu_to_vcpu(pmu));
+-	u64 host_ds_area;
++	u64 host_ds_area, host_pebs_data_cfg;
+ 
+ 	if (data) {
+ 		rdmsrl_safe(MSR_IA32_DS_AREA, &host_ds_area);
+ 		add_atomic_switch_msr(vmx, MSR_IA32_DS_AREA,
+ 			pmu->ds_area, host_ds_area, false);
+-	} else
++
++		rdmsrl_safe(MSR_PEBS_DATA_CFG, &host_pebs_data_cfg);
++		add_atomic_switch_msr(vmx, MSR_PEBS_DATA_CFG,
++			pmu->pebs_data_cfg, host_pebs_data_cfg, false);
++
++	} else {
+ 		clear_atomic_switch_msr(vmx, MSR_IA32_DS_AREA);
++		clear_atomic_switch_msr(vmx, MSR_PEBS_DATA_CFG);
++	}
+ 
+ 	pmu->pebs_enable = data;
+ }
+@@ -183,6 +190,9 @@ static bool intel_is_valid_msr(struct kvm_vcpu *vcpu, u32 msr)
+ 	case MSR_IA32_PERF_CAPABILITIES:
+ 		ret = pmu->has_pebs_via_ds;
+ 		break;
++	case MSR_PEBS_DATA_CFG:
++		ret = pmu->has_pebs_adaptive;
++		break;
+ 	default:
+ 		ret = get_gp_pmc(pmu, msr, MSR_IA32_PERFCTR0) ||
+ 			get_gp_pmc(pmu, msr, MSR_P6_EVNTSEL0) ||
+@@ -209,6 +219,18 @@ static bool intel_is_pebs_via_ds_supported(void)
+ 	return true;
+ }
+ 
++static bool intel_is_pebs_baseline_supported(void)
++{
++	u64 perf_cap;
++
++	rdmsrl(MSR_IA32_PERF_CAPABILITIES, perf_cap);
++	if (intel_is_pebs_via_ds_supported() &&
++			(perf_cap & PERF_CAP_PEBS_BASELINE))
++		return true;
++
++	return false;
++}
++
+ static struct kvm_pmc *intel_msr_idx_to_pmc(struct kvm_vcpu *vcpu, u32 msr)
+ {
+ 	struct kvm_pmu *pmu = vcpu_to_pmu(vcpu);
+@@ -245,6 +267,9 @@ static int intel_pmu_get_msr(struct kvm_vcpu *vcpu, u32 msr, u64 *data)
+ 	case MSR_IA32_DS_AREA:
+ 		*data = pmu->ds_area;
+ 		return 0;
++	case MSR_PEBS_DATA_CFG:
++		*data = pmu->pebs_data_cfg;
++		return 0;
+ 	case MSR_IA32_PERF_CAPABILITIES:
+ 		*data = pmu->perf_cap;
+ 		return 0;
+@@ -315,6 +340,12 @@ static int intel_pmu_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 	case MSR_IA32_DS_AREA:
+ 		pmu->ds_area = data;
+ 		return 0;
++	case MSR_PEBS_DATA_CFG:
++		if (!(data & pmu->pebs_data_cfg_mask)) {
++			pmu->pebs_data_cfg = data;
++			return 0;
++		}
++		break;
+ 	case MSR_IA32_PERF_CAPABILITIES:
+ 		break; /* RO MSR */
+ 	default:
+@@ -414,6 +445,16 @@ static void intel_pmu_refresh(struct kvm_vcpu *vcpu)
+ 		pmu->perf_cap = (perf_cap & (PERF_CAP_PEBS_TRAP |
+ 					     PERF_CAP_ARCH_REG |
+ 					     PERF_CAP_PEBS_FORMAT));
++
++		if (perf_cap & PERF_CAP_PEBS_BASELINE) {
++			pmu->has_pebs_adaptive = 1;
++			pmu->perf_cap |= PERF_CAP_PEBS_BASELINE;
++			pmu->pebs_data_cfg_mask = ~0xff00000full;
++			pmu->reserved_bits &= ~ICL_EVENTSEL_ADAPTIVE;
++			for (i = 0; i < pmu->nr_arch_fixed_counters; i++)
++				pmu->fixed_ctr_ctrl_mask &= ~(1ULL <<
++						(INTEL_PMC_IDX_FIXED + i * 4));
++		}
+ 	}
+ 
+ 	entry = kvm_find_cpuid_entry(vcpu, 7, 0);
+@@ -484,6 +525,7 @@ struct kvm_pmu_ops intel_pmu_ops = {
+ 	.is_valid_rdpmc_ecx = intel_is_valid_rdpmc_ecx,
+ 	.is_valid_msr = intel_is_valid_msr,
+ 	.is_pebs_via_ds_supported = intel_is_pebs_via_ds_supported,
++	.is_pebs_baseline_supported = intel_is_pebs_baseline_supported,
+ 	.get_msr = intel_pmu_get_msr,
+ 	.set_msr = intel_pmu_set_msr,
+ 	.refresh = intel_pmu_refresh,
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 5ab8447..aa1344b 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -1194,6 +1194,7 @@ bool kvm_rdpmc(struct kvm_vcpu *vcpu)
+ 	MSR_ARCH_PERFMON_EVENTSEL0 + 14, MSR_ARCH_PERFMON_EVENTSEL0 + 15,
+ 	MSR_ARCH_PERFMON_EVENTSEL0 + 16, MSR_ARCH_PERFMON_EVENTSEL0 + 17,
+ 	MSR_IA32_PEBS_ENABLE, MSR_IA32_DS_AREA,
++	MSR_PEBS_DATA_CFG,
+ };
+ 
+ static u32 msrs_to_save[ARRAY_SIZE(msrs_to_save_all)];
+@@ -5274,6 +5275,11 @@ static void kvm_init_msr_list(void)
+ 			    !kvm_x86_ops->pmu_ops->is_pebs_via_ds_supported())
+ 				continue;
+ 			break;
++		case MSR_PEBS_DATA_CFG:
++			if (!kvm_x86_ops->pmu_ops ||
++			    !kvm_x86_ops->pmu_ops->is_pebs_baseline_supported())
++				continue;
++			break;
+ 		case MSR_IA32_RTIT_CTL:
+ 		case MSR_IA32_RTIT_STATUS:
+ 			if (!kvm_x86_ops->pt_supported())
