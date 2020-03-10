@@ -1,0 +1,210 @@
+From patchwork Mon Mar  9 08:57:27 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Keqian Zhu <zhukeqian1@huawei.com>
+X-Patchwork-Id: 11426465
+Return-Path: <SRS0=BDOO=42=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C39EC14B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Mar 2020 08:59:51 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id A5ED82467D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  9 Mar 2020 08:59:51 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726451AbgCII7r (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 9 Mar 2020 04:59:47 -0400
+Received: from szxga07-in.huawei.com ([45.249.212.35]:41624 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1726027AbgCII7r (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 9 Mar 2020 04:59:47 -0400
+Received: from DGGEMS409-HUB.china.huawei.com (unknown [172.30.72.58])
+        by Forcepoint Email with ESMTP id 609C5D3890AF7904DCED;
+        Mon,  9 Mar 2020 16:59:41 +0800 (CST)
+Received: from linux-kDCJWP.huawei.com (10.175.104.212) by
+ DGGEMS409-HUB.china.huawei.com (10.3.19.209) with Microsoft SMTP Server id
+ 14.3.487.0; Mon, 9 Mar 2020 16:59:35 +0800
+From: Keqian Zhu <zhukeqian1@huawei.com>
+To: <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>,
+        <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>
+CC: <wanghaibin.wang@huawei.com>, Keqian Zhu <zhukeqian1@huawei.com>,
+        Jay Zhou <jianjay.zhou@huawei.com>,
+        Paolo Bonzini <pbonzini@redhat.com>,
+        Peter Xu <peterx@redhat.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>
+Subject: [RFC] KVM: arm64: support enabling dirty log graually in small chunks
+Date: Mon, 9 Mar 2020 16:57:27 +0800
+Message-ID: <20200309085727.1106-1-zhukeqian1@huawei.com>
+X-Mailer: git-send-email 2.19.1
+MIME-Version: 1.0
+X-Originating-IP: [10.175.104.212]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+There is already support of enabling dirty log graually
+in small chunks for x86. This adds support for arm64.
+
+Under the Huawei Kunpeng 920 2.6GHz platform, I did some
+tests with a 128G linux VM and counted the time taken of
+memory_global_dirty_log_start, here is the numbers:
+
+VM Size        Before    After optimization
+128G           527ms     4ms
+
+Signed-off-by: Keqian Zhu <zhukeqian1@huawei.com>
+---
+Cc: Jay Zhou <jianjay.zhou@huawei.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com> 
+Cc: Peter Xu <peterx@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ Documentation/virt/kvm/api.rst    |  2 +-
+ arch/arm64/include/asm/kvm_host.h |  4 ++++
+ virt/kvm/arm/mmu.c                | 30 ++++++++++++++++++++++--------
+ 3 files changed, 27 insertions(+), 9 deletions(-)
+
+diff --git a/Documentation/virt/kvm/api.rst b/Documentation/virt/kvm/api.rst
+index 0adef66585b1..89d4f2680af1 100644
+--- a/Documentation/virt/kvm/api.rst
++++ b/Documentation/virt/kvm/api.rst
+@@ -5735,7 +5735,7 @@ will be initialized to 1 when created.  This also improves performance because
+ dirty logging can be enabled gradually in small chunks on the first call
+ to KVM_CLEAR_DIRTY_LOG.  KVM_DIRTY_LOG_INITIALLY_SET depends on
+ KVM_DIRTY_LOG_MANUAL_PROTECT_ENABLE (it is also only available on
+-x86 for now).
++x86 and arm64 for now).
+ 
+ KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2 was previously available under the name
+ KVM_CAP_MANUAL_DIRTY_LOG_PROTECT, but the implementation had bugs that make
+diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
+index d87aa609d2b6..0deb2ac7d091 100644
+--- a/arch/arm64/include/asm/kvm_host.h
++++ b/arch/arm64/include/asm/kvm_host.h
+@@ -16,6 +16,7 @@
+ #include <linux/jump_label.h>
+ #include <linux/kvm_types.h>
+ #include <linux/percpu.h>
++#include <linux/kvm.h>
+ #include <asm/arch_gicv3.h>
+ #include <asm/barrier.h>
+ #include <asm/cpufeature.h>
+@@ -45,6 +46,9 @@
+ #define KVM_REQ_VCPU_RESET	KVM_ARCH_REQ(2)
+ #define KVM_REQ_RECORD_STEAL	KVM_ARCH_REQ(3)
+ 
++#define KVM_DIRTY_LOG_MANUAL_CAPS   (KVM_DIRTY_LOG_MANUAL_PROTECT_ENABLE | \
++					KVM_DIRTY_LOG_INITIALLY_SET)
++
+ DECLARE_STATIC_KEY_FALSE(userspace_irqchip_in_use);
+ 
+ extern unsigned int kvm_sve_max_vl;
+diff --git a/virt/kvm/arm/mmu.c b/virt/kvm/arm/mmu.c
+index e3b9ee268823..5c7ca84dec85 100644
+--- a/virt/kvm/arm/mmu.c
++++ b/virt/kvm/arm/mmu.c
+@@ -1438,9 +1438,11 @@ static void stage2_wp_ptes(pmd_t *pmd, phys_addr_t addr, phys_addr_t end)
+  * @pud:	pointer to pud entry
+  * @addr:	range start address
+  * @end:	range end address
++ * @wp_ptes:	write protect ptes or not
+  */
+ static void stage2_wp_pmds(struct kvm *kvm, pud_t *pud,
+-			   phys_addr_t addr, phys_addr_t end)
++			   phys_addr_t addr, phys_addr_t end,
++			   bool wp_ptes)
+ {
+ 	pmd_t *pmd;
+ 	phys_addr_t next;
+@@ -1453,7 +1455,7 @@ static void stage2_wp_pmds(struct kvm *kvm, pud_t *pud,
+ 			if (pmd_thp_or_huge(*pmd)) {
+ 				if (!kvm_s2pmd_readonly(pmd))
+ 					kvm_set_s2pmd_readonly(pmd);
+-			} else {
++			} else if (wp_ptes) {
+ 				stage2_wp_ptes(pmd, addr, next);
+ 			}
+ 		}
+@@ -1465,9 +1467,11 @@ static void stage2_wp_pmds(struct kvm *kvm, pud_t *pud,
+  * @pgd:	pointer to pgd entry
+  * @addr:	range start address
+  * @end:	range end address
++ * @wp_ptes:	write protect ptes or not
+  */
+ static void  stage2_wp_puds(struct kvm *kvm, pgd_t *pgd,
+-			    phys_addr_t addr, phys_addr_t end)
++			    phys_addr_t addr, phys_addr_t end,
++			    bool wp_ptes)
+ {
+ 	pud_t *pud;
+ 	phys_addr_t next;
+@@ -1480,7 +1484,7 @@ static void  stage2_wp_puds(struct kvm *kvm, pgd_t *pgd,
+ 				if (!kvm_s2pud_readonly(pud))
+ 					kvm_set_s2pud_readonly(pud);
+ 			} else {
+-				stage2_wp_pmds(kvm, pud, addr, next);
++				stage2_wp_pmds(kvm, pud, addr, next, wp_ptes);
+ 			}
+ 		}
+ 	} while (pud++, addr = next, addr != end);
+@@ -1491,8 +1495,10 @@ static void  stage2_wp_puds(struct kvm *kvm, pgd_t *pgd,
+  * @kvm:	The KVM pointer
+  * @addr:	Start address of range
+  * @end:	End address of range
++ * @wp_ptes:	Write protect ptes or not
+  */
+-static void stage2_wp_range(struct kvm *kvm, phys_addr_t addr, phys_addr_t end)
++static void stage2_wp_range(struct kvm *kvm, phys_addr_t addr,
++			    phys_addr_t end, bool wp_ptes)
+ {
+ 	pgd_t *pgd;
+ 	phys_addr_t next;
+@@ -1513,7 +1519,7 @@ static void stage2_wp_range(struct kvm *kvm, phys_addr_t addr, phys_addr_t end)
+ 			break;
+ 		next = stage2_pgd_addr_end(kvm, addr, end);
+ 		if (stage2_pgd_present(kvm, *pgd))
+-			stage2_wp_puds(kvm, pgd, addr, next);
++			stage2_wp_puds(kvm, pgd, addr, next, wp_ptes);
+ 	} while (pgd++, addr = next, addr != end);
+ }
+ 
+@@ -1535,6 +1541,7 @@ void kvm_mmu_wp_memory_region(struct kvm *kvm, int slot)
+ 	struct kvm_memslots *slots = kvm_memslots(kvm);
+ 	struct kvm_memory_slot *memslot = id_to_memslot(slots, slot);
+ 	phys_addr_t start, end;
++	bool wp_ptes;
+ 
+ 	if (WARN_ON_ONCE(!memslot))
+ 		return;
+@@ -1543,7 +1550,14 @@ void kvm_mmu_wp_memory_region(struct kvm *kvm, int slot)
+ 	end = (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
+ 
+ 	spin_lock(&kvm->mmu_lock);
+-	stage2_wp_range(kvm, start, end);
++	/*
++	 * If we're with initial-all-set, we don't need to write protect
++	 * any small page because they're reported as dirty already.
++	 * However we still need to write-protect huge pages so that the
++	 * page split can happen lazily on the first write to the huge page.
++	 */
++	wp_ptes = !kvm_dirty_log_manual_protect_and_init_set(kvm);
++	stage2_wp_range(kvm, start, end, wp_ptes);
+ 	spin_unlock(&kvm->mmu_lock);
+ 	kvm_flush_remote_tlbs(kvm);
+ }
+@@ -1567,7 +1581,7 @@ static void kvm_mmu_write_protect_pt_masked(struct kvm *kvm,
+ 	phys_addr_t start = (base_gfn +  __ffs(mask)) << PAGE_SHIFT;
+ 	phys_addr_t end = (base_gfn + __fls(mask) + 1) << PAGE_SHIFT;
+ 
+-	stage2_wp_range(kvm, start, end);
++	stage2_wp_range(kvm, start, end, true);
+ }
+ 
+ /*
