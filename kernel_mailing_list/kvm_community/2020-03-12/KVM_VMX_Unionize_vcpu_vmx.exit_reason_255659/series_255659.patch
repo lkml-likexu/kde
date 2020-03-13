@@ -1,0 +1,1304 @@
+From patchwork Thu Mar 12 18:45:12 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11435233
+Return-Path: <SRS0=L3qQ=45=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 18046161F
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:46:02 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 01BC020716
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:46:02 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726706AbgCLSpY (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 12 Mar 2020 14:45:24 -0400
+Received: from mga02.intel.com ([134.134.136.20]:23434 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726643AbgCLSpY (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 12 Mar 2020 14:45:24 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 12 Mar 2020 11:45:23 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,545,1574150400";
+   d="scan'208";a="416041226"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga005.jf.intel.com with ESMTP; 12 Mar 2020 11:45:22 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Xiaoyao Li <xiaoyao.li@intel.com>
+Subject: [PATCH 01/10] KVM: nVMX: Move reflection check into
+ nested_vmx_reflect_vmexit()
+Date: Thu, 12 Mar 2020 11:45:12 -0700
+Message-Id: <20200312184521.24579-2-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+References: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Move the call to nested_vmx_exit_reflected() from vmx_handle_exit() into
+nested_vmx_reflect_vmexit() and change the semantics of the return value
+for nested_vmx_reflect_vmexit() to indicate whether or not the exit was
+reflected into L1.  nested_vmx_exit_reflected() and
+nested_vmx_reflect_vmexit() are intrinsically tied together, calling one
+without simultaneously calling the other makes little sense.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.h | 16 +++++++++++-----
+ arch/x86/kvm/vmx/vmx.c    |  4 ++--
+ 2 files changed, 13 insertions(+), 7 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.h b/arch/x86/kvm/vmx/nested.h
+index 21d36652f213..6bc379cf4755 100644
+--- a/arch/x86/kvm/vmx/nested.h
++++ b/arch/x86/kvm/vmx/nested.h
+@@ -72,12 +72,16 @@ static inline bool nested_ept_ad_enabled(struct kvm_vcpu *vcpu)
+ }
+ 
+ /*
+- * Reflect a VM Exit into L1.
++ * Conditionally reflect a VM-Exit into L1.  Returns %true if the VM-Exit was
++ * reflected into L1.
+  */
+-static inline int nested_vmx_reflect_vmexit(struct kvm_vcpu *vcpu,
+-					    u32 exit_reason)
++static inline bool nested_vmx_reflect_vmexit(struct kvm_vcpu *vcpu,
++					     u32 exit_reason)
+ {
+-	u32 exit_intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
++	u32 exit_intr_info;
++
++	if (!nested_vmx_exit_reflected(vcpu, exit_reason))
++		return false;
+ 
+ 	/*
+ 	 * At this point, the exit interruption info in exit_intr_info
+@@ -85,6 +89,8 @@ static inline int nested_vmx_reflect_vmexit(struct kvm_vcpu *vcpu,
+ 	 * we need to query the in-kernel LAPIC.
+ 	 */
+ 	WARN_ON(exit_reason == EXIT_REASON_EXTERNAL_INTERRUPT);
++
++	exit_intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
+ 	if ((exit_intr_info &
+ 	     (INTR_INFO_VALID_MASK | INTR_INFO_DELIVER_CODE_MASK)) ==
+ 	    (INTR_INFO_VALID_MASK | INTR_INFO_DELIVER_CODE_MASK)) {
+@@ -96,7 +102,7 @@ static inline int nested_vmx_reflect_vmexit(struct kvm_vcpu *vcpu,
+ 
+ 	nested_vmx_vmexit(vcpu, exit_reason, exit_intr_info,
+ 			  vmcs_readl(EXIT_QUALIFICATION));
+-	return 1;
++	return true;
+ }
+ 
+ /*
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 57742ddfd854..c1caac7e8f57 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -5863,8 +5863,8 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu,
+ 	if (vmx->emulation_required)
+ 		return handle_invalid_guest_state(vcpu);
+ 
+-	if (is_guest_mode(vcpu) && nested_vmx_exit_reflected(vcpu, exit_reason))
+-		return nested_vmx_reflect_vmexit(vcpu, exit_reason);
++	if (is_guest_mode(vcpu) && nested_vmx_reflect_vmexit(vcpu, exit_reason))
++		return 1;
+ 
+ 	if (exit_reason & VMX_EXIT_REASONS_FAILED_VMENTRY) {
+ 		dump_vmcs();
+
+From patchwork Thu Mar 12 18:45:13 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11435239
+Return-Path: <SRS0=L3qQ=45=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D6A0B161F
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:46:14 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id B6F7E20716
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:46:14 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726594AbgCLSpX (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 12 Mar 2020 14:45:23 -0400
+Received: from mga02.intel.com ([134.134.136.20]:23434 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726362AbgCLSpX (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 12 Mar 2020 14:45:23 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 12 Mar 2020 11:45:23 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,545,1574150400";
+   d="scan'208";a="416041228"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga005.jf.intel.com with ESMTP; 12 Mar 2020 11:45:23 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Xiaoyao Li <xiaoyao.li@intel.com>
+Subject: [PATCH 02/10] KVM: nVMX: Drop a superfluous WARN on reflecting
+ EXTERNAL_INTERRUPT
+Date: Thu, 12 Mar 2020 11:45:13 -0700
+Message-Id: <20200312184521.24579-3-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+References: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Drop the WARN in nested_vmx_reflect_vmexit() that fires if KVM attempts
+to reflect an external interrupt.  nested_vmx_exit_reflected() is now
+called from nested_vmx_reflect_vmexit() and unconditionally returns
+false for EXTERNAL_INTERRUPT, i.e. barring a compiler or major CPU bug,
+the WARN will never fire.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.h | 9 ++++-----
+ 1 file changed, 4 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.h b/arch/x86/kvm/vmx/nested.h
+index 6bc379cf4755..8f5ff3e259c9 100644
+--- a/arch/x86/kvm/vmx/nested.h
++++ b/arch/x86/kvm/vmx/nested.h
+@@ -84,12 +84,11 @@ static inline bool nested_vmx_reflect_vmexit(struct kvm_vcpu *vcpu,
+ 		return false;
+ 
+ 	/*
+-	 * At this point, the exit interruption info in exit_intr_info
+-	 * is only valid for EXCEPTION_NMI exits.  For EXTERNAL_INTERRUPT
+-	 * we need to query the in-kernel LAPIC.
++	 * vmcs.VM_EXIT_INTR_INFO is only valid for EXCEPTION_NMI exits.  For
++	 * EXTERNAL_INTERRUPT, the value for vmcs12->vm_exit_intr_info would
++	 * need to be synthesized by querying the in-kernel LAPIC, but external
++	 * interrupts are never reflected to L1 so it's a non-issue.
+ 	 */
+-	WARN_ON(exit_reason == EXIT_REASON_EXTERNAL_INTERRUPT);
+-
+ 	exit_intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
+ 	if ((exit_intr_info &
+ 	     (INTR_INFO_VALID_MASK | INTR_INFO_DELIVER_CODE_MASK)) ==
+
+From patchwork Thu Mar 12 18:45:14 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11435235
+Return-Path: <SRS0=L3qQ=45=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6CB4D161F
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:46:06 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 54D2320663
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:46:06 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726766AbgCLSqC (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 12 Mar 2020 14:46:02 -0400
+Received: from mga02.intel.com ([134.134.136.20]:23434 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726362AbgCLSpY (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 12 Mar 2020 14:45:24 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 12 Mar 2020 11:45:23 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,545,1574150400";
+   d="scan'208";a="416041231"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga005.jf.intel.com with ESMTP; 12 Mar 2020 11:45:23 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Xiaoyao Li <xiaoyao.li@intel.com>
+Subject: [PATCH 03/10] KVM: nVMX: Pull exit_reason from vcpu_vmx in
+ nested_vmx_exit_reflected()
+Date: Thu, 12 Mar 2020 11:45:14 -0700
+Message-Id: <20200312184521.24579-4-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+References: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Grab the exit reason from the vcpu struct in nested_vmx_exit_reflected()
+instead of having the exit reason explicitly passed from the caller.
+This fixes a discrepancy between VM-Fail and VM-Exit handling, as the
+VM-Fail case is already handled by checking vcpu_vmx, e.g. the exit
+reason previously passed on the stack is bogus if vmx->fail is set.
+
+Not taking the exit reason on the stack also avoids having to document
+that nested_vmx_exit_reflected() requires the full exit reason, as
+opposed to just the basic exit reason, which is not at all obvious since
+the only usage of the full exit reason is for tracing.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 3 ++-
+ arch/x86/kvm/vmx/nested.h | 9 ++++-----
+ arch/x86/kvm/vmx/vmx.c    | 2 +-
+ 3 files changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 79c7764c77b1..cb05bcbbfc4e 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -5518,11 +5518,12 @@ static bool nested_vmx_exit_handled_vmcs_access(struct kvm_vcpu *vcpu,
+  * should handle it ourselves in L0 (and then continue L2). Only call this
+  * when in is_guest_mode (L2).
+  */
+-bool nested_vmx_exit_reflected(struct kvm_vcpu *vcpu, u32 exit_reason)
++bool nested_vmx_exit_reflected(struct kvm_vcpu *vcpu)
+ {
+ 	u32 intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+ 	struct vmcs12 *vmcs12 = get_vmcs12(vcpu);
++	u32 exit_reason = vmx->exit_reason;
+ 
+ 	if (vmx->nested.nested_run_pending)
+ 		return false;
+diff --git a/arch/x86/kvm/vmx/nested.h b/arch/x86/kvm/vmx/nested.h
+index 8f5ff3e259c9..569cb828b6ca 100644
+--- a/arch/x86/kvm/vmx/nested.h
++++ b/arch/x86/kvm/vmx/nested.h
+@@ -24,7 +24,7 @@ void nested_vmx_set_vmcs_shadowing_bitmap(void);
+ void nested_vmx_free_vcpu(struct kvm_vcpu *vcpu);
+ enum nvmx_vmentry_status nested_vmx_enter_non_root_mode(struct kvm_vcpu *vcpu,
+ 						     bool from_vmentry);
+-bool nested_vmx_exit_reflected(struct kvm_vcpu *vcpu, u32 exit_reason);
++bool nested_vmx_exit_reflected(struct kvm_vcpu *vcpu);
+ void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,
+ 		       u32 exit_intr_info, unsigned long exit_qualification);
+ void nested_sync_vmcs12_to_shadow(struct kvm_vcpu *vcpu);
+@@ -75,12 +75,11 @@ static inline bool nested_ept_ad_enabled(struct kvm_vcpu *vcpu)
+  * Conditionally reflect a VM-Exit into L1.  Returns %true if the VM-Exit was
+  * reflected into L1.
+  */
+-static inline bool nested_vmx_reflect_vmexit(struct kvm_vcpu *vcpu,
+-					     u32 exit_reason)
++static inline bool nested_vmx_reflect_vmexit(struct kvm_vcpu *vcpu)
+ {
+ 	u32 exit_intr_info;
+ 
+-	if (!nested_vmx_exit_reflected(vcpu, exit_reason))
++	if (!nested_vmx_exit_reflected(vcpu))
+ 		return false;
+ 
+ 	/*
+@@ -99,7 +98,7 @@ static inline bool nested_vmx_reflect_vmexit(struct kvm_vcpu *vcpu,
+ 			vmcs_read32(VM_EXIT_INTR_ERROR_CODE);
+ 	}
+ 
+-	nested_vmx_vmexit(vcpu, exit_reason, exit_intr_info,
++	nested_vmx_vmexit(vcpu, to_vmx(vcpu)->exit_reason, exit_intr_info,
+ 			  vmcs_readl(EXIT_QUALIFICATION));
+ 	return true;
+ }
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index c1caac7e8f57..c7715c880ea7 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -5863,7 +5863,7 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu,
+ 	if (vmx->emulation_required)
+ 		return handle_invalid_guest_state(vcpu);
+ 
+-	if (is_guest_mode(vcpu) && nested_vmx_reflect_vmexit(vcpu, exit_reason))
++	if (is_guest_mode(vcpu) && nested_vmx_reflect_vmexit(vcpu))
+ 		return 1;
+ 
+ 	if (exit_reason & VMX_EXIT_REASONS_FAILED_VMENTRY) {
+
+From patchwork Thu Mar 12 18:45:15 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11435219
+Return-Path: <SRS0=L3qQ=45=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E128B92A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:45:28 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id C1EBE2071C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:45:28 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726756AbgCLSp1 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 12 Mar 2020 14:45:27 -0400
+Received: from mga02.intel.com ([134.134.136.20]:23441 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726683AbgCLSpY (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 12 Mar 2020 14:45:24 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 12 Mar 2020 11:45:23 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,545,1574150400";
+   d="scan'208";a="416041235"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga005.jf.intel.com with ESMTP; 12 Mar 2020 11:45:23 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Xiaoyao Li <xiaoyao.li@intel.com>
+Subject: [PATCH 04/10] KVM: VMX: Convert local exit_reason to u16 in
+ nested_vmx_exit_reflected()
+Date: Thu, 12 Mar 2020 11:45:15 -0700
+Message-Id: <20200312184521.24579-5-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+References: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Store only the basic exit reason in the local "exit_reason" variable in
+nested_vmx_exit_reflected().  Except for tracing, all references to
+exit_reason are expecting to encounter only the basic exit reason.
+
+Opportunistically align the params to nested_vmx_exit_handled_msr().
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index cb05bcbbfc4e..1848ca0116c0 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -5374,7 +5374,7 @@ static bool nested_vmx_exit_handled_io(struct kvm_vcpu *vcpu,
+  * MSR bitmap. This may be the case even when L0 doesn't use MSR bitmaps.
+  */
+ static bool nested_vmx_exit_handled_msr(struct kvm_vcpu *vcpu,
+-	struct vmcs12 *vmcs12, u32 exit_reason)
++					struct vmcs12 *vmcs12, u16 exit_reason)
+ {
+ 	u32 msr_index = kvm_rcx_read(vcpu);
+ 	gpa_t bitmap;
+@@ -5523,7 +5523,7 @@ bool nested_vmx_exit_reflected(struct kvm_vcpu *vcpu)
+ 	u32 intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+ 	struct vmcs12 *vmcs12 = get_vmcs12(vcpu);
+-	u32 exit_reason = vmx->exit_reason;
++	u16 exit_reason;
+ 
+ 	if (vmx->nested.nested_run_pending)
+ 		return false;
+@@ -5548,13 +5548,15 @@ bool nested_vmx_exit_reflected(struct kvm_vcpu *vcpu)
+ 	 */
+ 	nested_mark_vmcs12_pages_dirty(vcpu);
+ 
+-	trace_kvm_nested_vmexit(kvm_rip_read(vcpu), exit_reason,
++	trace_kvm_nested_vmexit(kvm_rip_read(vcpu), vmx->exit_reason,
+ 				vmcs_readl(EXIT_QUALIFICATION),
+ 				vmx->idt_vectoring_info,
+ 				intr_info,
+ 				vmcs_read32(VM_EXIT_INTR_ERROR_CODE),
+ 				KVM_ISA_VMX);
+ 
++	exit_reason = vmx->exit_reason;
++
+ 	switch (exit_reason) {
+ 	case EXIT_REASON_EXCEPTION_NMI:
+ 		if (is_nmi(intr_info))
+
+From patchwork Thu Mar 12 18:45:16 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11435231
+Return-Path: <SRS0=L3qQ=45=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1E1EB92A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:46:00 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 06DC8206FA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:46:00 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726926AbgCLSpw (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 12 Mar 2020 14:45:52 -0400
+Received: from mga02.intel.com ([134.134.136.20]:23434 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726718AbgCLSpZ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 12 Mar 2020 14:45:25 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 12 Mar 2020 11:45:23 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,545,1574150400";
+   d="scan'208";a="416041237"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga005.jf.intel.com with ESMTP; 12 Mar 2020 11:45:23 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Xiaoyao Li <xiaoyao.li@intel.com>
+Subject: [PATCH 05/10] KVM: VMX: Convert local exit_reason to u16 in
+ vmx_handle_exit()
+Date: Thu, 12 Mar 2020 11:45:16 -0700
+Message-Id: <20200312184521.24579-6-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+References: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Convert the local "exit_reason" in vmx_handle_exit() from a u32 to a u16
+as most references expect to encounter only the basic exit reason.  Use
+vmx->exit_reason directly for paths that expect the full exit reason,
+i.e. to avoid having to figure out a decent name for a second local
+variable.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 17 ++++++++++-------
+ 1 file changed, 10 insertions(+), 7 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index c7715c880ea7..d43e1d28bb58 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -5844,10 +5844,10 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu,
+ 	enum exit_fastpath_completion exit_fastpath)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+-	u32 exit_reason = vmx->exit_reason;
+ 	u32 vectoring_info = vmx->idt_vectoring_info;
++	u16 exit_reason;
+ 
+-	trace_kvm_exit(exit_reason, vcpu, KVM_ISA_VMX);
++	trace_kvm_exit(vmx->exit_reason, vcpu, KVM_ISA_VMX);
+ 
+ 	/*
+ 	 * Flush logged GPAs PML buffer, this will make dirty_bitmap more
+@@ -5866,11 +5866,11 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu,
+ 	if (is_guest_mode(vcpu) && nested_vmx_reflect_vmexit(vcpu))
+ 		return 1;
+ 
+-	if (exit_reason & VMX_EXIT_REASONS_FAILED_VMENTRY) {
++	if (vmx->exit_reason & VMX_EXIT_REASONS_FAILED_VMENTRY) {
+ 		dump_vmcs();
+ 		vcpu->run->exit_reason = KVM_EXIT_FAIL_ENTRY;
+ 		vcpu->run->fail_entry.hardware_entry_failure_reason
+-			= exit_reason;
++			= vmx->exit_reason;
+ 		return 0;
+ 	}
+ 
+@@ -5882,6 +5882,8 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu,
+ 		return 0;
+ 	}
+ 
++	exit_reason = vmx->exit_reason;
++
+ 	/*
+ 	 * Note:
+ 	 * Do not try to fix EXIT_REASON_EPT_MISCONFIG if it caused by
+@@ -5898,7 +5900,7 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu,
+ 		vcpu->run->internal.suberror = KVM_INTERNAL_ERROR_DELIVERY_EV;
+ 		vcpu->run->internal.ndata = 3;
+ 		vcpu->run->internal.data[0] = vectoring_info;
+-		vcpu->run->internal.data[1] = exit_reason;
++		vcpu->run->internal.data[1] = vmx->exit_reason;
+ 		vcpu->run->internal.data[2] = vcpu->arch.exit_qualification;
+ 		if (exit_reason == EXIT_REASON_EPT_MISCONFIG) {
+ 			vcpu->run->internal.ndata++;
+@@ -5957,13 +5959,14 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu,
+ 	return kvm_vmx_exit_handlers[exit_reason](vcpu);
+ 
+ unexpected_vmexit:
+-	vcpu_unimpl(vcpu, "vmx: unexpected exit reason 0x%x\n", exit_reason);
++	vcpu_unimpl(vcpu, "vmx: unexpected exit reason 0x%x\n",
++		    vmx->exit_reason);
+ 	dump_vmcs();
+ 	vcpu->run->exit_reason = KVM_EXIT_INTERNAL_ERROR;
+ 	vcpu->run->internal.suberror =
+ 			KVM_INTERNAL_ERROR_UNEXPECTED_EXIT_REASON;
+ 	vcpu->run->internal.ndata = 1;
+-	vcpu->run->internal.data[0] = exit_reason;
++	vcpu->run->internal.data[0] = vmx->exit_reason;
+ 	return 0;
+ }
+ 
+
+From patchwork Thu Mar 12 18:45:17 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11435229
+Return-Path: <SRS0=L3qQ=45=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 41C7192A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:45:52 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 2129E20716
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:45:52 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726871AbgCLSpv (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 12 Mar 2020 14:45:51 -0400
+Received: from mga02.intel.com ([134.134.136.20]:23441 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726729AbgCLSpZ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 12 Mar 2020 14:45:25 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 12 Mar 2020 11:45:23 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,545,1574150400";
+   d="scan'208";a="416041240"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga005.jf.intel.com with ESMTP; 12 Mar 2020 11:45:23 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Xiaoyao Li <xiaoyao.li@intel.com>
+Subject: [PATCH 06/10] KVM: nVMX: Convert local exit_reason to u16 in
+ ...enter_non_root_mode()
+Date: Thu, 12 Mar 2020 11:45:17 -0700
+Message-Id: <20200312184521.24579-7-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+References: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Use a u16 for nested_vmx_enter_non_root_mode()'s local "exit_reason" to
+make it clear the intermediate code is only responsible for setting the
+basic exit reason, e.g. FAILED_VMENTRY is unconditionally OR'd in when
+emulating a failed VM-Entry.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 1848ca0116c0..8fbbe2152ab7 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -3182,7 +3182,7 @@ enum nvmx_vmentry_status nested_vmx_enter_non_root_mode(struct kvm_vcpu *vcpu,
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+ 	struct vmcs12 *vmcs12 = get_vmcs12(vcpu);
+ 	bool evaluate_pending_interrupts;
+-	u32 exit_reason = EXIT_REASON_INVALID_STATE;
++	u16 exit_reason = EXIT_REASON_INVALID_STATE;
+ 	u32 exit_qual;
+ 
+ 	evaluate_pending_interrupts = exec_controls_get(vmx) &
+@@ -3308,7 +3308,7 @@ enum nvmx_vmentry_status nested_vmx_enter_non_root_mode(struct kvm_vcpu *vcpu,
+ 		return NVMX_VMENTRY_VMEXIT;
+ 
+ 	load_vmcs12_host_state(vcpu, vmcs12);
+-	vmcs12->vm_exit_reason = exit_reason | VMX_EXIT_REASONS_FAILED_VMENTRY;
++	vmcs12->vm_exit_reason = VMX_EXIT_REASONS_FAILED_VMENTRY | exit_reason;
+ 	vmcs12->exit_qualification = exit_qual;
+ 	if (enable_shadow_vmcs || vmx->nested.hv_evmcs)
+ 		vmx->nested.need_vmcs12_to_shadow_sync = true;
+
+From patchwork Thu Mar 12 18:45:18 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11435227
+Return-Path: <SRS0=L3qQ=45=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 92243161F
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:45:48 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 6FE70206FA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:45:48 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726859AbgCLSpk (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 12 Mar 2020 14:45:40 -0400
+Received: from mga02.intel.com ([134.134.136.20]:23434 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726760AbgCLSp1 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 12 Mar 2020 14:45:27 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 12 Mar 2020 11:45:23 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,545,1574150400";
+   d="scan'208";a="416041243"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga005.jf.intel.com with ESMTP; 12 Mar 2020 11:45:23 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Xiaoyao Li <xiaoyao.li@intel.com>
+Subject: [PATCH 07/10] KVM: nVMX: Cast exit_reason to u16 to check for nested
+ EXTERNAL_INTERRUPT
+Date: Thu, 12 Mar 2020 11:45:18 -0700
+Message-Id: <20200312184521.24579-8-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+References: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Explicitly check only the basic exit reason when emulating an external
+interrupt VM-Exit in nested_vmx_vmexit().  Checking the full exit reason
+doesn't currently cause problems, but only because the only exit reason
+modifier support by KVM is FAILED_VMENTRY, which is mutually exclusive
+with EXTERNAL_INTERRUPT.  Future modifiers, e.g. ENCLAVE_MODE, will
+coexist with EXTERNAL_INTERRUPT.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 8fbbe2152ab7..86b12a2918c5 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -4337,7 +4337,7 @@ void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,
+ 	vcpu->arch.mp_state = KVM_MP_STATE_RUNNABLE;
+ 
+ 	if (likely(!vmx->fail)) {
+-		if (exit_reason == EXIT_REASON_EXTERNAL_INTERRUPT &&
++		if ((u16)exit_reason == EXIT_REASON_EXTERNAL_INTERRUPT &&
+ 		    nested_exit_intr_ack_set(vcpu)) {
+ 			int irq = kvm_cpu_get_interrupt(vcpu);
+ 			WARN_ON(irq < 0);
+
+From patchwork Thu Mar 12 18:45:19 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11435221
+Return-Path: <SRS0=L3qQ=45=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id AD44F1668
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:45:29 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 96B41206FA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:45:29 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726794AbgCLSp2 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 12 Mar 2020 14:45:28 -0400
+Received: from mga02.intel.com ([134.134.136.20]:23441 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726763AbgCLSp2 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 12 Mar 2020 14:45:28 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 12 Mar 2020 11:45:23 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,545,1574150400";
+   d="scan'208";a="416041246"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga005.jf.intel.com with ESMTP; 12 Mar 2020 11:45:23 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Xiaoyao Li <xiaoyao.li@intel.com>
+Subject: [PATCH 08/10] KVM: nVMX: Rename exit_reason to vm_exit_reason for
+ nested VM-Exit
+Date: Thu, 12 Mar 2020 11:45:19 -0700
+Message-Id: <20200312184521.24579-9-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+References: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Use "vm_exit_reason" when passing around the full exit reason for nested
+VM-Exits to make it clear that it's not just the basic exit reason.  The
+basic exit reason (bits 15:0 of vmcs.VM_EXIT_REASON) is colloquially
+referred to as simply "exit reason", e.g. vmx_handle_vmexit() tracks the
+basic exit reason in a local variable named "exit_reason".
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 29 +++++++++++++++--------------
+ arch/x86/kvm/vmx/nested.h |  2 +-
+ 2 files changed, 16 insertions(+), 15 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 86b12a2918c5..c775feca3eb0 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -328,19 +328,19 @@ static void nested_ept_inject_page_fault(struct kvm_vcpu *vcpu,
+ {
+ 	struct vmcs12 *vmcs12 = get_vmcs12(vcpu);
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+-	u32 exit_reason;
++	u32 vm_exit_reason;
+ 	unsigned long exit_qualification = vcpu->arch.exit_qualification;
+ 
+ 	if (vmx->nested.pml_full) {
+-		exit_reason = EXIT_REASON_PML_FULL;
++		vm_exit_reason = EXIT_REASON_PML_FULL;
+ 		vmx->nested.pml_full = false;
+ 		exit_qualification &= INTR_INFO_UNBLOCK_NMI;
+ 	} else if (fault->error_code & PFERR_RSVD_MASK)
+-		exit_reason = EXIT_REASON_EPT_MISCONFIG;
++		vm_exit_reason = EXIT_REASON_EPT_MISCONFIG;
+ 	else
+-		exit_reason = EXIT_REASON_EPT_VIOLATION;
++		vm_exit_reason = EXIT_REASON_EPT_VIOLATION;
+ 
+-	nested_vmx_vmexit(vcpu, exit_reason, 0, exit_qualification);
++	nested_vmx_vmexit(vcpu, vm_exit_reason, 0, exit_qualification);
+ 	vmcs12->guest_physical_address = fault->address;
+ }
+ 
+@@ -3919,11 +3919,11 @@ static void sync_vmcs02_to_vmcs12(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12)
+  * which already writes to vmcs12 directly.
+  */
+ static void prepare_vmcs12(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12,
+-			   u32 exit_reason, u32 exit_intr_info,
++			   u32 vm_exit_reason, u32 exit_intr_info,
+ 			   unsigned long exit_qualification)
+ {
+ 	/* update exit information fields: */
+-	vmcs12->vm_exit_reason = exit_reason;
++	vmcs12->vm_exit_reason = vm_exit_reason;
+ 	vmcs12->exit_qualification = exit_qualification;
+ 	vmcs12->vm_exit_intr_info = exit_intr_info;
+ 
+@@ -4252,7 +4252,7 @@ static void nested_vmx_restore_host_state(struct kvm_vcpu *vcpu)
+  * and modify vmcs12 to make it see what it would expect to see there if
+  * L2 was its real guest. Must only be called when in L2 (is_guest_mode())
+  */
+-void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,
++void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 vm_exit_reason,
+ 		       u32 exit_intr_info, unsigned long exit_qualification)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+@@ -4272,9 +4272,9 @@ void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,
+ 	if (likely(!vmx->fail)) {
+ 		sync_vmcs02_to_vmcs12(vcpu, vmcs12);
+ 
+-		if (exit_reason != -1)
+-			prepare_vmcs12(vcpu, vmcs12, exit_reason, exit_intr_info,
+-				       exit_qualification);
++		if (vm_exit_reason != -1)
++			prepare_vmcs12(vcpu, vmcs12, vm_exit_reason,
++				       exit_intr_info, exit_qualification);
+ 
+ 		/*
+ 		 * Must happen outside of sync_vmcs02_to_vmcs12() as it will
+@@ -4330,14 +4330,15 @@ void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,
+ 	 */
+ 	kvm_make_request(KVM_REQ_APIC_PAGE_RELOAD, vcpu);
+ 
+-	if ((exit_reason != -1) && (enable_shadow_vmcs || vmx->nested.hv_evmcs))
++	if ((vm_exit_reason != -1) &&
++	    (enable_shadow_vmcs || vmx->nested.hv_evmcs))
+ 		vmx->nested.need_vmcs12_to_shadow_sync = true;
+ 
+ 	/* in case we halted in L2 */
+ 	vcpu->arch.mp_state = KVM_MP_STATE_RUNNABLE;
+ 
+ 	if (likely(!vmx->fail)) {
+-		if ((u16)exit_reason == EXIT_REASON_EXTERNAL_INTERRUPT &&
++		if ((u16)vm_exit_reason == EXIT_REASON_EXTERNAL_INTERRUPT &&
+ 		    nested_exit_intr_ack_set(vcpu)) {
+ 			int irq = kvm_cpu_get_interrupt(vcpu);
+ 			WARN_ON(irq < 0);
+@@ -4345,7 +4346,7 @@ void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,
+ 				INTR_INFO_VALID_MASK | INTR_TYPE_EXT_INTR;
+ 		}
+ 
+-		if (exit_reason != -1)
++		if (vm_exit_reason != -1)
+ 			trace_kvm_nested_vmexit_inject(vmcs12->vm_exit_reason,
+ 						       vmcs12->exit_qualification,
+ 						       vmcs12->idt_vectoring_info_field,
+diff --git a/arch/x86/kvm/vmx/nested.h b/arch/x86/kvm/vmx/nested.h
+index 569cb828b6ca..04584bcbcc8d 100644
+--- a/arch/x86/kvm/vmx/nested.h
++++ b/arch/x86/kvm/vmx/nested.h
+@@ -25,7 +25,7 @@ void nested_vmx_free_vcpu(struct kvm_vcpu *vcpu);
+ enum nvmx_vmentry_status nested_vmx_enter_non_root_mode(struct kvm_vcpu *vcpu,
+ 						     bool from_vmentry);
+ bool nested_vmx_exit_reflected(struct kvm_vcpu *vcpu);
+-void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,
++void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 vm_exit_reason,
+ 		       u32 exit_intr_info, unsigned long exit_qualification);
+ void nested_sync_vmcs12_to_shadow(struct kvm_vcpu *vcpu);
+ int vmx_set_vmx_msr(struct kvm_vcpu *vcpu, u32 msr_index, u64 data);
+
+From patchwork Thu Mar 12 18:45:20 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11435225
+Return-Path: <SRS0=L3qQ=45=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B3969161F
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:45:46 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 9DE3820716
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:45:46 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726872AbgCLSpl (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 12 Mar 2020 14:45:41 -0400
+Received: from mga02.intel.com ([134.134.136.20]:23446 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726766AbgCLSp1 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 12 Mar 2020 14:45:27 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 12 Mar 2020 11:45:23 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,545,1574150400";
+   d="scan'208";a="416041250"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga005.jf.intel.com with ESMTP; 12 Mar 2020 11:45:23 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Xiaoyao Li <xiaoyao.li@intel.com>
+Subject: [PATCH 09/10] KVM: VMX: Cache vmx->exit_reason in local u16 in
+ vmx_handle_exit_irqoff()
+Date: Thu, 12 Mar 2020 11:45:20 -0700
+Message-Id: <20200312184521.24579-10-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+References: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Use a u16 to hold the exit reason in vmx_handle_exit_irqoff(), as the
+checks for INTR/NMI/WRMSR expect to encounter only the basic exit reason
+in vmx->exit_reason.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index d43e1d28bb58..910a7cadeaf7 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6287,16 +6287,16 @@ static void handle_external_interrupt_irqoff(struct kvm_vcpu *vcpu)
+ STACK_FRAME_NON_STANDARD(handle_external_interrupt_irqoff);
+ 
+ static void vmx_handle_exit_irqoff(struct kvm_vcpu *vcpu,
+-	enum exit_fastpath_completion *exit_fastpath)
++				   enum exit_fastpath_completion *exit_fastpath)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
++	u16 exit_reason = vmx->exit_reason;
+ 
+-	if (vmx->exit_reason == EXIT_REASON_EXTERNAL_INTERRUPT)
++	if (exit_reason == EXIT_REASON_EXTERNAL_INTERRUPT)
+ 		handle_external_interrupt_irqoff(vcpu);
+-	else if (vmx->exit_reason == EXIT_REASON_EXCEPTION_NMI)
++	else if (exit_reason == EXIT_REASON_EXCEPTION_NMI)
+ 		handle_exception_nmi_irqoff(vmx);
+-	else if (!is_guest_mode(vcpu) &&
+-		vmx->exit_reason == EXIT_REASON_MSR_WRITE)
++	else if (!is_guest_mode(vcpu) && exit_reason == EXIT_REASON_MSR_WRITE)
+ 		*exit_fastpath = handle_fastpath_set_msr_irqoff(vcpu);
+ }
+ 
+
+From patchwork Thu Mar 12 18:45:21 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11435223
+Return-Path: <SRS0=L3qQ=45=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1E0AC92A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:45:37 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id F2138206FA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 12 Mar 2020 18:45:36 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726836AbgCLSpg (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 12 Mar 2020 14:45:36 -0400
+Received: from mga02.intel.com ([134.134.136.20]:23446 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726776AbgCLSp2 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 12 Mar 2020 14:45:28 -0400
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga101.jf.intel.com with ESMTP/TLS/DHE-RSA-AES256-GCM-SHA384;
+ 12 Mar 2020 11:45:23 -0700
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.70,545,1574150400";
+   d="scan'208";a="416041253"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga005.jf.intel.com with ESMTP; 12 Mar 2020 11:45:23 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Xiaoyao Li <xiaoyao.li@intel.com>
+Subject: [PATCH 10/10] KVM: VMX: Convert vcpu_vmx.exit_reason to a union
+Date: Thu, 12 Mar 2020 11:45:21 -0700
+Message-Id: <20200312184521.24579-11-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.24.1
+In-Reply-To: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+References: <20200312184521.24579-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Convert vcpu_vmx.exit_reason from a u32 to a union (of size u32).  The
+full VM_EXIT_REASON field is comprised of a 16-bit basic exit reason in
+bits 15:0, and single-bit modifiers in bits 31:16.
+
+Historically, KVM has only had to worry about handling the "failed
+VM-Entry" modifier, which could only be set in very specific flows and
+required dedicated handling.  I.e. manually stripping the FAILED_VMENTRY
+bit was a somewhat viable approach.  But even with only a single bit to
+worry about, KVM has had several bugs related to comparing a basic exit
+reason against the full exit reason stored in vcpu_vmx.
+
+Upcoming Intel features, e.g. SGX, will add new modifier bits that can
+be set on more or less any VM-Exit, as opposed to the significantly more
+restricted FAILED_VMENTRY, i.e. correctly handling everything in one-off
+flows isn't scalable.  Tracking exit reason in a union forces code to
+explicitly choose between consuming the full exit reason and the basic
+exit reason, and is a convenient way to document and access the
+modifiers.
+
+No functional change intended.
+
+Cc: Xiaoyao Li <xiaoyao.li@intel.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 11 ++++++++---
+ arch/x86/kvm/vmx/nested.h |  2 +-
+ arch/x86/kvm/vmx/vmx.c    | 24 ++++++++++++------------
+ arch/x86/kvm/vmx/vmx.h    | 25 ++++++++++++++++++++++++-
+ 4 files changed, 45 insertions(+), 17 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index c775feca3eb0..0c7cea35dd33 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -5307,7 +5307,12 @@ static int handle_vmfunc(struct kvm_vcpu *vcpu)
+ 	return kvm_skip_emulated_instruction(vcpu);
+ 
+ fail:
+-	nested_vmx_vmexit(vcpu, vmx->exit_reason,
++	/*
++	 * This is effectively a reflected VM-Exit, as opposed to a synthesized
++	 * nested VM-Exit.  Pass the original exit reason, i.e. don't hardcode
++	 * EXIT_REASON_VMFUNC as the exit reason.
++	 */
++	nested_vmx_vmexit(vcpu, vmx->exit_reason.full,
+ 			  vmcs_read32(VM_EXIT_INTR_INFO),
+ 			  vmcs_readl(EXIT_QUALIFICATION));
+ 	return 1;
+@@ -5549,14 +5554,14 @@ bool nested_vmx_exit_reflected(struct kvm_vcpu *vcpu)
+ 	 */
+ 	nested_mark_vmcs12_pages_dirty(vcpu);
+ 
+-	trace_kvm_nested_vmexit(kvm_rip_read(vcpu), vmx->exit_reason,
++	trace_kvm_nested_vmexit(kvm_rip_read(vcpu), vmx->exit_reason.full,
+ 				vmcs_readl(EXIT_QUALIFICATION),
+ 				vmx->idt_vectoring_info,
+ 				intr_info,
+ 				vmcs_read32(VM_EXIT_INTR_ERROR_CODE),
+ 				KVM_ISA_VMX);
+ 
+-	exit_reason = vmx->exit_reason;
++	exit_reason = vmx->exit_reason.basic;
+ 
+ 	switch (exit_reason) {
+ 	case EXIT_REASON_EXCEPTION_NMI:
+diff --git a/arch/x86/kvm/vmx/nested.h b/arch/x86/kvm/vmx/nested.h
+index 04584bcbcc8d..07ce09f88977 100644
+--- a/arch/x86/kvm/vmx/nested.h
++++ b/arch/x86/kvm/vmx/nested.h
+@@ -98,7 +98,7 @@ static inline bool nested_vmx_reflect_vmexit(struct kvm_vcpu *vcpu)
+ 			vmcs_read32(VM_EXIT_INTR_ERROR_CODE);
+ 	}
+ 
+-	nested_vmx_vmexit(vcpu, to_vmx(vcpu)->exit_reason, exit_intr_info,
++	nested_vmx_vmexit(vcpu, to_vmx(vcpu)->exit_reason.full, exit_intr_info,
+ 			  vmcs_readl(EXIT_QUALIFICATION));
+ 	return true;
+ }
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 910a7cadeaf7..521b99f63608 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -1588,7 +1588,7 @@ static int skip_emulated_instruction(struct kvm_vcpu *vcpu)
+ 	 * i.e. we end up advancing IP with some random value.
+ 	 */
+ 	if (!static_cpu_has(X86_FEATURE_HYPERVISOR) ||
+-	    to_vmx(vcpu)->exit_reason != EXIT_REASON_EPT_MISCONFIG) {
++	    to_vmx(vcpu)->exit_reason.basic != EXIT_REASON_EPT_MISCONFIG) {
+ 		rip = kvm_rip_read(vcpu);
+ 		rip += vmcs_read32(VM_EXIT_INSTRUCTION_LEN);
+ 		kvm_rip_write(vcpu, rip);
+@@ -5847,7 +5847,7 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu,
+ 	u32 vectoring_info = vmx->idt_vectoring_info;
+ 	u16 exit_reason;
+ 
+-	trace_kvm_exit(vmx->exit_reason, vcpu, KVM_ISA_VMX);
++	trace_kvm_exit(vmx->exit_reason.full, vcpu, KVM_ISA_VMX);
+ 
+ 	/*
+ 	 * Flush logged GPAs PML buffer, this will make dirty_bitmap more
+@@ -5866,11 +5866,11 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu,
+ 	if (is_guest_mode(vcpu) && nested_vmx_reflect_vmexit(vcpu))
+ 		return 1;
+ 
+-	if (vmx->exit_reason & VMX_EXIT_REASONS_FAILED_VMENTRY) {
++	if (vmx->exit_reason.failed_vmentry) {
+ 		dump_vmcs();
+ 		vcpu->run->exit_reason = KVM_EXIT_FAIL_ENTRY;
+ 		vcpu->run->fail_entry.hardware_entry_failure_reason
+-			= vmx->exit_reason;
++			= vmx->exit_reason.full;
+ 		return 0;
+ 	}
+ 
+@@ -5882,7 +5882,7 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu,
+ 		return 0;
+ 	}
+ 
+-	exit_reason = vmx->exit_reason;
++	exit_reason = vmx->exit_reason.basic;
+ 
+ 	/*
+ 	 * Note:
+@@ -5900,7 +5900,7 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu,
+ 		vcpu->run->internal.suberror = KVM_INTERNAL_ERROR_DELIVERY_EV;
+ 		vcpu->run->internal.ndata = 3;
+ 		vcpu->run->internal.data[0] = vectoring_info;
+-		vcpu->run->internal.data[1] = vmx->exit_reason;
++		vcpu->run->internal.data[1] = vmx->exit_reason.full;
+ 		vcpu->run->internal.data[2] = vcpu->arch.exit_qualification;
+ 		if (exit_reason == EXIT_REASON_EPT_MISCONFIG) {
+ 			vcpu->run->internal.ndata++;
+@@ -5960,13 +5960,13 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu,
+ 
+ unexpected_vmexit:
+ 	vcpu_unimpl(vcpu, "vmx: unexpected exit reason 0x%x\n",
+-		    vmx->exit_reason);
++		    vmx->exit_reason.full);
+ 	dump_vmcs();
+ 	vcpu->run->exit_reason = KVM_EXIT_INTERNAL_ERROR;
+ 	vcpu->run->internal.suberror =
+ 			KVM_INTERNAL_ERROR_UNEXPECTED_EXIT_REASON;
+ 	vcpu->run->internal.ndata = 1;
+-	vcpu->run->internal.data[0] = vmx->exit_reason;
++	vcpu->run->internal.data[0] = vmx->exit_reason.full;
+ 	return 0;
+ }
+ 
+@@ -6290,7 +6290,7 @@ static void vmx_handle_exit_irqoff(struct kvm_vcpu *vcpu,
+ 				   enum exit_fastpath_completion *exit_fastpath)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+-	u16 exit_reason = vmx->exit_reason;
++	u16 exit_reason = vmx->exit_reason.basic;
+ 
+ 	if (exit_reason == EXIT_REASON_EXTERNAL_INTERRUPT)
+ 		handle_external_interrupt_irqoff(vcpu);
+@@ -6672,11 +6672,11 @@ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ 	vmx->nested.nested_run_pending = 0;
+ 	vmx->idt_vectoring_info = 0;
+ 
+-	vmx->exit_reason = vmx->fail ? 0xdead : vmcs_read32(VM_EXIT_REASON);
+-	if ((u16)vmx->exit_reason == EXIT_REASON_MCE_DURING_VMENTRY)
++	vmx->exit_reason.full = vmx->fail ? 0xdead : vmcs_read32(VM_EXIT_REASON);
++	if (vmx->exit_reason.basic == EXIT_REASON_MCE_DURING_VMENTRY)
+ 		kvm_machine_check();
+ 
+-	if (vmx->fail || (vmx->exit_reason & VMX_EXIT_REASONS_FAILED_VMENTRY))
++	if (vmx->fail || vmx->exit_reason.failed_vmentry)
+ 		return;
+ 
+ 	vmx->loaded_vmcs->launched = 1;
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index e64da06c7009..2d9a005d11ab 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -93,6 +93,29 @@ struct pt_desc {
+ 	struct pt_ctx guest;
+ };
+ 
++union vmx_exit_reason {
++	struct {
++		u32	basic			: 16;
++		u32	reserved16		: 1;
++		u32	reserved17		: 1;
++		u32	reserved18		: 1;
++		u32	reserved19		: 1;
++		u32	reserved20		: 1;
++		u32	reserved21		: 1;
++		u32	reserved22		: 1;
++		u32	reserved23		: 1;
++		u32	reserved24		: 1;
++		u32	reserved25		: 1;
++		u32	reserved26		: 1;
++		u32	enclave_mode		: 1;
++		u32	smi_pending_mtf		: 1;
++		u32	smi_from_vmx_root	: 1;
++		u32	reserved30		: 1;
++		u32	failed_vmentry		: 1;
++	};
++	u32 full;
++};
++
+ /*
+  * The nested_vmx structure is part of vcpu_vmx, and holds information we need
+  * for correct emulation of VMX (i.e., nested VMX) on this vcpu.
+@@ -263,7 +286,7 @@ struct vcpu_vmx {
+ 	int vpid;
+ 	bool emulation_required;
+ 
+-	u32 exit_reason;
++	union vmx_exit_reason exit_reason;
+ 
+ 	/* Posted interrupt descriptor */
+ 	struct pi_desc pi_desc;
