@@ -1,0 +1,4314 @@
+From patchwork Fri Mar 20 17:59:57 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450519
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 17B7B159A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:32 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 012E221473
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:32 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727721AbgCTWFV (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:05:21 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37498 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727411AbgCTWEQ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:16 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPk1-0004TO-DC; Fri, 20 Mar 2020 23:03:45 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id DCEF61039FC;
+        Fri, 20 Mar 2020 23:03:44 +0100 (CET)
+Message-Id: <20200320180032.523372590@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 18:59:57 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 01/23] rcu: Dont acquire lock in NMI handler in
+ rcu_nmi_enter_common()
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: "Paul E. McKenney" <paulmck@kernel.org>
+
+The rcu_nmi_enter_common() function can be invoked both in interrupt
+and NMI handlers.  If it is invoked from process context (as opposed
+to userspace or idle context) on a nohz_full CPU, it might acquire the
+CPU's leaf rcu_node structure's ->lock.  Because this lock is held only
+with interrupts disabled, this is safe from an interrupt handler, but
+doing so from an NMI handler can result in self-deadlock.
+
+This commit therefore adds "irq" to the "if" condition so as to only
+acquire the ->lock from irq handlers or process context, never from
+an NMI handler.
+
+Fixes: 5b14557b073c ("rcu: Avoid tick_dep_set_cpu() misordering")
+Reported-by: Thomas Gleixner <tglx@linutronix.de>
+Signed-off-by: Paul E. McKenney <paulmck@kernel.org>
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Reviewed-by: Joel Fernandes (Google) <joel@joelfernandes.org>
+Link: https://lkml.kernel.org/r/20200313024046.27622-1-paulmck@kernel.org
+---
+ kernel/rcu/tree.c |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/kernel/rcu/tree.c
++++ b/kernel/rcu/tree.c
+@@ -816,7 +816,7 @@ static __always_inline void rcu_nmi_ente
+ 			rcu_cleanup_after_idle();
+ 
+ 		incby = 1;
+-	} else if (tick_nohz_full_cpu(rdp->cpu) &&
++	} else if (irq && tick_nohz_full_cpu(rdp->cpu) &&
+ 		   rdp->dynticks_nmi_nesting == DYNTICK_IRQ_NONIDLE &&
+ 		   READ_ONCE(rdp->rcu_urgent_qs) && !rdp->rcu_forced_tick) {
+ 		raw_spin_lock_rcu_node(rdp->mynode);
+
+From patchwork Fri Mar 20 17:59:58 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450527
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 501CE13B1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:49 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 3937E2166E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:49 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727531AbgCTWFs (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:05:48 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37483 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727197AbgCTWEO (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:14 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPk1-0004TP-M1; Fri, 20 Mar 2020 23:03:45 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 256901039FD;
+        Fri, 20 Mar 2020 23:03:45 +0100 (CET)
+Message-Id: <20200320180032.614150506@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 18:59:58 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 02/23] rcu: Add comments marking transitions
+ between RCU watching and not
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: "Paul E. McKenney" <paulmck@kernel.org>
+
+It is not as clear as it might be just where in RCU's idle entry/exit
+code RCU stops and starts watching the current CPU.  This commit therefore
+adds comments calling out the transitions.
+
+Reported-by: Thomas Gleixner <tglx@linutronix.de>
+Signed-off-by: Paul E. McKenney <paulmck@kernel.org>
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Link: https://lkml.kernel.org/r/20200313024046.27622-2-paulmck@kernel.org
+---
+ kernel/rcu/tree.c |   29 +++++++++++++++++++++++++----
+ 1 file changed, 25 insertions(+), 4 deletions(-)
+
+--- a/kernel/rcu/tree.c
++++ b/kernel/rcu/tree.c
+@@ -224,7 +224,9 @@ void rcu_softirq_qs(void)
+ 
+ /*
+  * Record entry into an extended quiescent state.  This is only to be
+- * called when not already in an extended quiescent state.
++ * called when not already in an extended quiescent state, that is,
++ * RCU is watching prior to the call to this function and is no longer
++ * watching upon return.
+  */
+ static void rcu_dynticks_eqs_enter(void)
+ {
+@@ -237,7 +239,7 @@ static void rcu_dynticks_eqs_enter(void)
+ 	 * next idle sojourn.
+ 	 */
+ 	seq = atomic_add_return(RCU_DYNTICK_CTRL_CTR, &rdp->dynticks);
+-	/* Better be in an extended quiescent state! */
++	// RCU is no longer watching.  Better be in extended quiescent state!
+ 	WARN_ON_ONCE(IS_ENABLED(CONFIG_RCU_EQS_DEBUG) &&
+ 		     (seq & RCU_DYNTICK_CTRL_CTR));
+ 	/* Better not have special action (TLB flush) pending! */
+@@ -247,7 +249,8 @@ static void rcu_dynticks_eqs_enter(void)
+ 
+ /*
+  * Record exit from an extended quiescent state.  This is only to be
+- * called from an extended quiescent state.
++ * called from an extended quiescent state, that is, RCU is not watching
++ * prior to the call to this function and is watching upon return.
+  */
+ static void rcu_dynticks_eqs_exit(void)
+ {
+@@ -260,6 +263,7 @@ static void rcu_dynticks_eqs_exit(void)
+ 	 * critical section.
+ 	 */
+ 	seq = atomic_add_return(RCU_DYNTICK_CTRL_CTR, &rdp->dynticks);
++	// RCU is now watching.  Better not be in an extended quiescent state!
+ 	WARN_ON_ONCE(IS_ENABLED(CONFIG_RCU_EQS_DEBUG) &&
+ 		     !(seq & RCU_DYNTICK_CTRL_CTR));
+ 	if (seq & RCU_DYNTICK_CTRL_MASK) {
+@@ -562,6 +566,7 @@ static void rcu_eqs_enter(bool user)
+ 	WARN_ON_ONCE(IS_ENABLED(CONFIG_RCU_EQS_DEBUG) &&
+ 		     rdp->dynticks_nesting == 0);
+ 	if (rdp->dynticks_nesting != 1) {
++		// RCU will still be watching, so just do accounting and leave.
+ 		rdp->dynticks_nesting--;
+ 		return;
+ 	}
+@@ -574,7 +579,9 @@ static void rcu_eqs_enter(bool user)
+ 	rcu_prepare_for_idle();
+ 	rcu_preempt_deferred_qs(current);
+ 	WRITE_ONCE(rdp->dynticks_nesting, 0); /* Avoid irq-access tearing. */
++	// RCU is watching here ...
+ 	rcu_dynticks_eqs_enter();
++	// ... but is no longer watching here.
+ 	rcu_dynticks_task_enter();
+ }
+ 
+@@ -654,7 +661,9 @@ static __always_inline void rcu_nmi_exit
+ 	if (irq)
+ 		rcu_prepare_for_idle();
+ 
++	// RCU is watching here ...
+ 	rcu_dynticks_eqs_enter();
++	// ... but is no longer watching here.
+ 
+ 	if (irq)
+ 		rcu_dynticks_task_enter();
+@@ -729,11 +738,14 @@ static void rcu_eqs_exit(bool user)
+ 	oldval = rdp->dynticks_nesting;
+ 	WARN_ON_ONCE(IS_ENABLED(CONFIG_RCU_EQS_DEBUG) && oldval < 0);
+ 	if (oldval) {
++		// RCU was already watching, so just do accounting and leave.
+ 		rdp->dynticks_nesting++;
+ 		return;
+ 	}
+ 	rcu_dynticks_task_exit();
++	// RCU is not watching here ...
+ 	rcu_dynticks_eqs_exit();
++	// ... but is watching here.
+ 	rcu_cleanup_after_idle();
+ 	trace_rcu_dyntick(TPS("End"), rdp->dynticks_nesting, 1, atomic_read(&rdp->dynticks));
+ 	WARN_ON_ONCE(IS_ENABLED(CONFIG_RCU_EQS_DEBUG) && !user && !is_idle_task(current));
+@@ -810,7 +822,9 @@ static __always_inline void rcu_nmi_ente
+ 		if (irq)
+ 			rcu_dynticks_task_exit();
+ 
++		// RCU is not watching here ...
+ 		rcu_dynticks_eqs_exit();
++		// ... but is watching here.
+ 
+ 		if (irq)
+ 			rcu_cleanup_after_idle();
+@@ -819,9 +833,16 @@ static __always_inline void rcu_nmi_ente
+ 	} else if (irq && tick_nohz_full_cpu(rdp->cpu) &&
+ 		   rdp->dynticks_nmi_nesting == DYNTICK_IRQ_NONIDLE &&
+ 		   READ_ONCE(rdp->rcu_urgent_qs) && !rdp->rcu_forced_tick) {
++		// We get here only if we had already exited the extended
++		// quiescent state and this was an interrupt (not an NMI).
++		// Therefore, (1) RCU is already watching and (2) The fact
++		// that we are in an interrupt handler and that the rcu_node
++		// lock is an irq-disabled lock prevents self-deadlock.
++		// So we can safely recheck under the lock.
+ 		raw_spin_lock_rcu_node(rdp->mynode);
+-		// Recheck under lock.
+ 		if (rdp->rcu_urgent_qs && !rdp->rcu_forced_tick) {
++			// A nohz_full CPU is in the kernel and RCU
++			// needs a quiescent state.  Turn on the tick!
+ 			rdp->rcu_forced_tick = true;
+ 			tick_dep_set_cpu(rdp->cpu, TICK_DEP_BIT_RCU);
+ 		}
+
+From patchwork Fri Mar 20 17:59:59 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450533
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 06B51159A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:06:02 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id E442121473
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:06:01 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727499AbgCTWGB (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:06:01 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37480 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1726973AbgCTWEN (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:13 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPk1-0004TS-TX; Fri, 20 Mar 2020 23:03:46 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 62AEC1039FF;
+        Fri, 20 Mar 2020 23:03:45 +0100 (CET)
+Message-Id: <20200320180032.708673769@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 18:59:59 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 03/23] vmlinux.lds.h: Create section for protection
+ against instrumentation
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Some code pathes, especially the low level entry code, must be protected
+against instrumentation for various reasons:
+
+ - Low level entry code can be a fragile beast, especially on x86.
+
+ - With NO_HZ_FULL RCU state needs to be established before using it.
+
+Having a dedicated section for such code allows to validate with tooling
+that no unsafe functions are invoked.
+
+Add the .noinstr.text section and the noinstr attribute to mark
+functions. noinstr implies notrace. Kprobes will gain a section check
+later.
+
+Provide also two sets of markers:
+
+ - instr_begin()/end()
+
+   This is used to mark code inside in a noinstr function which calls
+   into regular instrumentable text section as safe.
+
+ - noinstr_call_begin()/end()
+
+   Same as above but used to mark indirect calls which cannot be tracked by
+   tooling and need to be audited manually.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ include/asm-generic/sections.h    |    3 +++
+ include/asm-generic/vmlinux.lds.h |    4 ++++
+ include/linux/compiler.h          |   24 ++++++++++++++++++++++++
+ include/linux/compiler_types.h    |    4 ++++
+ scripts/mod/modpost.c             |    2 +-
+ 5 files changed, 36 insertions(+), 1 deletion(-)
+
+--- a/include/asm-generic/sections.h
++++ b/include/asm-generic/sections.h
+@@ -53,6 +53,9 @@ extern char __ctors_start[], __ctors_end
+ /* Start and end of .opd section - used for function descriptors. */
+ extern char __start_opd[], __end_opd[];
+ 
++/* Start and end of instrumentation protected text section */
++extern char __noinstr_text_start[], __noinstr_text_end[];
++
+ extern __visible const void __nosave_begin, __nosave_end;
+ 
+ /* Function descriptor handling (if any).  Override in asm/sections.h */
+--- a/include/asm-generic/vmlinux.lds.h
++++ b/include/asm-generic/vmlinux.lds.h
+@@ -550,6 +550,10 @@
+ #define TEXT_TEXT							\
+ 		ALIGN_FUNCTION();					\
+ 		*(.text.hot TEXT_MAIN .text.fixup .text.unlikely)	\
++		ALIGN_FUNCTION();					\
++		__noinstr_text_start = .;				\
++		*(.noinstr.text)					\
++		__noinstr_text_end = .;					\
+ 		*(.text..refcount)					\
+ 		*(.ref.text)						\
+ 	MEM_KEEP(init.text*)						\
+--- a/include/linux/compiler.h
++++ b/include/linux/compiler.h
+@@ -120,12 +120,36 @@ void ftrace_likely_update(struct ftrace_
+ /* Annotate a C jump table to allow objtool to follow the code flow */
+ #define __annotate_jump_table __section(.rodata..c_jump_table)
+ 
++/* Begin/end of an instrumentation safe region */
++#define instr_begin() ({						\
++	asm volatile("%c0:\n\t"						\
++		     ".pushsection .discard.instr_begin\n\t"		\
++		     ".long %c0b - .\n\t"				\
++		     ".popsection\n\t" : : "i" (__COUNTER__));		\
++})
++
++#define instr_end() ({							\
++	asm volatile("%c0:\n\t"						\
++		     ".pushsection .discard.instr_end\n\t"		\
++		     ".long %c0b - .\n\t"				\
++		     ".popsection\n\t" : : "i" (__COUNTER__));		\
++})
++
+ #else
+ #define annotate_reachable()
+ #define annotate_unreachable()
+ #define __annotate_jump_table
++#define instr_begin()		do { } while(0)
++#define instr_end()		do { } while(0)
+ #endif
+ 
++/*
++ * Annotation for audited indirect calls. Distinct from instr_begin() on
++ * purpose because the called function has to be noinstr as well.
++ */
++#define noinstr_call_begin()		instr_begin()
++#define noinstr_call_end()		instr_end()
++
+ #ifndef ASM_UNREACHABLE
+ # define ASM_UNREACHABLE
+ #endif
+--- a/include/linux/compiler_types.h
++++ b/include/linux/compiler_types.h
+@@ -118,6 +118,10 @@ struct ftrace_likely_data {
+ #define notrace			__attribute__((__no_instrument_function__))
+ #endif
+ 
++/* Section for code which can't be instrumented at all */
++#define noinstr								\
++	noinline notrace __attribute((__section__(".noinstr.text")))
++
+ /*
+  * it doesn't make sense on ARM (currently the only user of __naked)
+  * to trace naked functions because then mcount is called without
+--- a/scripts/mod/modpost.c
++++ b/scripts/mod/modpost.c
+@@ -953,7 +953,7 @@ static void check_section(const char *mo
+ 
+ #define DATA_SECTIONS ".data", ".data.rel"
+ #define TEXT_SECTIONS ".text", ".text.unlikely", ".sched.text", \
+-		".kprobes.text", ".cpuidle.text"
++		".kprobes.text", ".cpuidle.text", ".noinstr.text"
+ #define OTHER_TEXT_SECTIONS ".ref.text", ".head.text", ".spinlock.text", \
+ 		".fixup", ".entry.text", ".exception.text", ".text.*", \
+ 		".coldtext"
+
+From patchwork Fri Mar 20 18:00:00 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450531
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3E447159A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:06:00 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 1B93520777
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:06:00 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727382AbgCTWEO (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:04:14 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37479 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727141AbgCTWEN (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:13 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPk2-0004TV-5V; Fri, 20 Mar 2020 23:03:46 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 9E74CFFC8D;
+        Fri, 20 Mar 2020 23:03:45 +0100 (CET)
+Message-Id: <20200320180032.799569116@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:00 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 04/23] kprobes: Prevent probes in .noinstr.text
+ section
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Instrumentation is forbidden in the .noinstr.text section. Make kprobes
+respect this.
+
+This lacks support for .noinstr.text sections in modules, which is required
+to handle VMX and SVM.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ kernel/kprobes.c |   11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+--- a/kernel/kprobes.c
++++ b/kernel/kprobes.c
+@@ -1443,10 +1443,21 @@ static bool __within_kprobe_blacklist(un
+ 	return false;
+ }
+ 
++/* Functions in .noinstr.text must not be probed */
++static bool within_noinstr_text(unsigned long addr)
++{
++	/* FIXME: Handle module .noinstr.text */
++	return addr >= (unsigned long)__noinstr_text_start &&
++	       addr < (unsigned long)__noinstr_text_end;
++}
++
+ bool within_kprobe_blacklist(unsigned long addr)
+ {
+ 	char symname[KSYM_NAME_LEN], *p;
+ 
++	if (within_noinstr_text(addr))
++		return true;
++
+ 	if (__within_kprobe_blacklist(addr))
+ 		return true;
+ 
+
+From patchwork Fri Mar 20 18:00:01 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450513
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 59FB613B1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:19 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 42F9C21556
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727693AbgCTWFO (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:05:14 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37505 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727425AbgCTWES (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:18 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPk2-0004TY-Bh; Fri, 20 Mar 2020 23:03:46 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id DB9A41039FC;
+        Fri, 20 Mar 2020 23:03:45 +0100 (CET)
+Message-Id: <20200320180032.895128936@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:01 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 05/23] tracing: Provide lockdep less
+ trace_hardirqs_on/off() variants
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+trace_hardirqs_on/off() is only partially safe vs. RCU idle. The tracer
+core itself is safe, but the resulting tracepoints can be utilized by
+e.g. BPF which is unsafe.
+
+Provide variants which do not contain the lockdep invocation so the lockdep
+and tracer invocations can be split at the call site and placed properly.
+
+The new variants also do not use rcuidle as they are going to be called
+from entry code after/before context tracking.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+V2: New patch
+---
+ include/linux/irqflags.h        |    4 ++++
+ kernel/trace/trace_preemptirq.c |   23 +++++++++++++++++++++++
+ 2 files changed, 27 insertions(+)
+
+--- a/include/linux/irqflags.h
++++ b/include/linux/irqflags.h
+@@ -29,6 +29,8 @@
+ #endif
+ 
+ #ifdef CONFIG_TRACE_IRQFLAGS
++  extern void __trace_hardirqs_on(void);
++  extern void __trace_hardirqs_off(void);
+   extern void trace_hardirqs_on(void);
+   extern void trace_hardirqs_off(void);
+ # define trace_hardirq_context(p)	((p)->hardirq_context)
+@@ -52,6 +54,8 @@ do {						\
+ 	current->softirq_context--;		\
+ } while (0)
+ #else
++# define __trace_hardirqs_on()		do { } while (0)
++# define __trace_hardirqs_off()		do { } while (0)
+ # define trace_hardirqs_on()		do { } while (0)
+ # define trace_hardirqs_off()		do { } while (0)
+ # define trace_hardirq_context(p)	0
+--- a/kernel/trace/trace_preemptirq.c
++++ b/kernel/trace/trace_preemptirq.c
+@@ -19,6 +19,17 @@
+ /* Per-cpu variable to prevent redundant calls when IRQs already off */
+ static DEFINE_PER_CPU(int, tracing_irq_cpu);
+ 
++void __trace_hardirqs_on(void)
++{
++	if (this_cpu_read(tracing_irq_cpu)) {
++		if (!in_nmi())
++			trace_irq_enable(CALLER_ADDR0, CALLER_ADDR1);
++		tracer_hardirqs_on(CALLER_ADDR0, CALLER_ADDR1);
++		this_cpu_write(tracing_irq_cpu, 0);
++	}
++}
++NOKPROBE_SYMBOL(__trace_hardirqs_on);
++
+ void trace_hardirqs_on(void)
+ {
+ 	if (this_cpu_read(tracing_irq_cpu)) {
+@@ -33,6 +44,18 @@ void trace_hardirqs_on(void)
+ EXPORT_SYMBOL(trace_hardirqs_on);
+ NOKPROBE_SYMBOL(trace_hardirqs_on);
+ 
++void __trace_hardirqs_off(void)
++{
++	if (!this_cpu_read(tracing_irq_cpu)) {
++		this_cpu_write(tracing_irq_cpu, 1);
++		tracer_hardirqs_off(CALLER_ADDR0, CALLER_ADDR1);
++		if (!in_nmi())
++			trace_irq_disable(CALLER_ADDR0, CALLER_ADDR1);
++	}
++
++}
++NOKPROBE_SYMBOL(__trace_hardirqs_off);
++
+ void trace_hardirqs_off(void)
+ {
+ 	if (!this_cpu_read(tracing_irq_cpu)) {
+
+From patchwork Fri Mar 20 18:00:02 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450495
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6874713B1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:04:20 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 50F072166E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:04:20 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727470AbgCTWET (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:04:19 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37496 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727141AbgCTWER (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:17 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPk2-0004Tb-L5; Fri, 20 Mar 2020 23:03:46 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 2324A1039FD;
+        Fri, 20 Mar 2020 23:03:46 +0100 (CET)
+Message-Id: <20200320180032.994128577@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:02 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 06/23] bug: Annotate WARN/BUG/stackfail as noinstr
+ safe
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Warnings, bugs and stack protection fails from noinstr sections, e.g. low
+level and early entry code, are likely to be fatal.
+
+Mark them as "safe" to be invoked from noinstr protected code to avoid
+annotating all usage sites. Getting the information out is important.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ arch/x86/include/asm/bug.h |    3 +++
+ include/asm-generic/bug.h  |    9 +++++++--
+ kernel/panic.c             |    4 +++-
+ 3 files changed, 13 insertions(+), 3 deletions(-)
+
+--- a/arch/x86/include/asm/bug.h
++++ b/arch/x86/include/asm/bug.h
+@@ -70,13 +70,16 @@ do {									\
+ #define HAVE_ARCH_BUG
+ #define BUG()							\
+ do {								\
++	instr_begin();						\
+ 	_BUG_FLAGS(ASM_UD2, 0);					\
+ 	unreachable();						\
+ } while (0)
+ 
+ #define __WARN_FLAGS(flags)					\
+ do {								\
++	instr_begin();						\
+ 	_BUG_FLAGS(ASM_UD2, BUGFLAG_WARNING|(flags));		\
++	instr_end();						\
+ 	annotate_reachable();					\
+ } while (0)
+ 
+--- a/include/asm-generic/bug.h
++++ b/include/asm-generic/bug.h
+@@ -83,14 +83,19 @@ extern __printf(4, 5)
+ void warn_slowpath_fmt(const char *file, const int line, unsigned taint,
+ 		       const char *fmt, ...);
+ #define __WARN()		__WARN_printf(TAINT_WARN, NULL)
+-#define __WARN_printf(taint, arg...)					\
+-	warn_slowpath_fmt(__FILE__, __LINE__, taint, arg)
++#define __WARN_printf(taint, arg...) do {				\
++	instr_begin();							\
++	warn_slowpath_fmt(__FILE__, __LINE__, taint, arg);		\
++	instr_end();							\
++	while (0)
+ #else
+ extern __printf(1, 2) void __warn_printk(const char *fmt, ...);
+ #define __WARN()		__WARN_FLAGS(BUGFLAG_TAINT(TAINT_WARN))
+ #define __WARN_printf(taint, arg...) do {				\
++		instr_begin();						\
+ 		__warn_printk(arg);					\
+ 		__WARN_FLAGS(BUGFLAG_NO_CUT_HERE | BUGFLAG_TAINT(taint));\
++		instr_end();						\
+ 	} while (0)
+ #define WARN_ON_ONCE(condition) ({				\
+ 	int __ret_warn_on = !!(condition);			\
+--- a/kernel/panic.c
++++ b/kernel/panic.c
+@@ -662,10 +662,12 @@ device_initcall(register_warn_debugfs);
+  * Called when gcc's -fstack-protector feature is used, and
+  * gcc detects corruption of the on-stack canary value
+  */
+-__visible void __stack_chk_fail(void)
++__visible noinstr void __stack_chk_fail(void)
+ {
++	instr_begin();
+ 	panic("stack-protector: Kernel stack is corrupted in: %pB",
+ 		__builtin_return_address(0));
++	instr_end();
+ }
+ EXPORT_SYMBOL(__stack_chk_fail);
+ 
+
+From patchwork Fri Mar 20 18:00:03 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450517
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 0E121159A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:23 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id E20D321473
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:22 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727738AbgCTWFW (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:05:22 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37484 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727210AbgCTWEP (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:15 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPk2-0004Te-Sk; Fri, 20 Mar 2020 23:03:47 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 5F3ED1039FF;
+        Fri, 20 Mar 2020 23:03:46 +0100 (CET)
+Message-Id: <20200320180033.092520097@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:03 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 07/23] lockdep: Prepare for noinstr sections
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Peter Zijlstra <peterz@infradead.org>
+
+Lockdep is invoked after RCU stopped watching or before it restarted
+watching from the low level entry/exit code.
+
+lockdep_hardirqs_on() is part of the irq-state tracking; it is the
+callback that indicates we're about to enable IRQs. But because of
+this, lockdep has co-opted this callback to do lock state updates. All
+(still) held locks will get marked with ENABLED_HARDIRQ, which then
+also looks for cycles connecting to USED_IN_HARDIRQ for IRQ recursion
+deadlocks.
+
+This results in quite a lot of lockdep code getting ran, but worse, it
+will want to do stack-traces for the lock state changes. Stack traces
+require RCU.
+
+Because code that requires RCU must not run after we've shut down RCU,
+and shutting down RCU itself requires locks in some circumstances,
+split this into two parts:
+
+  - lockdep_hardirqs_on_prepare() -- updates the held lock state
+  - lockdep_hardirqs_on() -- does the irq state tracking
+
+This allows running the lock state changes and stack-traces with RCU
+enaabled, while doing the IRQ state change later. Of course, this
+opens a window where the lock stack can change. Therefore
+lockdep_hardirqs_on_prepare() will snapshot the chain_key and
+lockdep_hardirqs_on() will validate it still matches. This ensures
+that, even when interleaved code uses locks, the actual lock state
+didn't change between these two calls.
+
+Signed-off-by: Peter Zijlstra <peterz@infradead.org>
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ include/linux/irqflags.h        |    2 +
+ include/linux/sched.h           |    1 
+ kernel/locking/lockdep.c        |   66 +++++++++++++++++++++++++++++-----------
+ kernel/trace/trace_preemptirq.c |    2 +
+ lib/debug_locks.c               |    2 -
+ 5 files changed, 55 insertions(+), 18 deletions(-)
+
+--- a/include/linux/irqflags.h
++++ b/include/linux/irqflags.h
+@@ -19,11 +19,13 @@
+ #ifdef CONFIG_PROVE_LOCKING
+   extern void trace_softirqs_on(unsigned long ip);
+   extern void trace_softirqs_off(unsigned long ip);
++  extern void lockdep_hardirqs_on_prepare(unsigned long ip);
+   extern void lockdep_hardirqs_on(unsigned long ip);
+   extern void lockdep_hardirqs_off(unsigned long ip);
+ #else
+   static inline void trace_softirqs_on(unsigned long ip) { }
+   static inline void trace_softirqs_off(unsigned long ip) { }
++  static inline void lockdep_hardirqs_on_prepare(unsigned long ip) { }
+   static inline void lockdep_hardirqs_on(unsigned long ip) { }
+   static inline void lockdep_hardirqs_off(unsigned long ip) { }
+ #endif
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -976,6 +976,7 @@ struct task_struct {
+ 	unsigned int			hardirq_disable_event;
+ 	int				hardirqs_enabled;
+ 	int				hardirq_context;
++	u64				hardirq_chain_key;
+ 	unsigned long			softirq_disable_ip;
+ 	unsigned long			softirq_enable_ip;
+ 	unsigned int			softirq_disable_event;
+--- a/kernel/locking/lockdep.c
++++ b/kernel/locking/lockdep.c
+@@ -3370,9 +3370,6 @@ static void __trace_hardirqs_on_caller(u
+ {
+ 	struct task_struct *curr = current;
+ 
+-	/* we'll do an OFF -> ON transition: */
+-	curr->hardirqs_enabled = 1;
+-
+ 	/*
+ 	 * We are going to turn hardirqs on, so set the
+ 	 * usage bit for all held locks:
+@@ -3384,16 +3381,13 @@ static void __trace_hardirqs_on_caller(u
+ 	 * bit for all held locks. (disabled hardirqs prevented
+ 	 * this bit from being set before)
+ 	 */
+-	if (curr->softirqs_enabled)
++	if (curr->softirqs_enabled) {
+ 		if (!mark_held_locks(curr, LOCK_ENABLED_SOFTIRQ))
+ 			return;
+-
+-	curr->hardirq_enable_ip = ip;
+-	curr->hardirq_enable_event = ++curr->irq_events;
+-	debug_atomic_inc(hardirqs_on_events);
++	}
+ }
+ 
+-void lockdep_hardirqs_on(unsigned long ip)
++void lockdep_hardirqs_on_prepare(unsigned long ip)
+ {
+ 	if (unlikely(!debug_locks || current->lockdep_recursion))
+ 		return;
+@@ -3429,20 +3423,59 @@ void lockdep_hardirqs_on(unsigned long i
+ 	if (DEBUG_LOCKS_WARN_ON(current->hardirq_context))
+ 		return;
+ 
++	current->hardirq_chain_key = current->curr_chain_key;
++
+ 	current->lockdep_recursion = 1;
+ 	__trace_hardirqs_on_caller(ip);
+ 	current->lockdep_recursion = 0;
+ }
+-NOKPROBE_SYMBOL(lockdep_hardirqs_on);
+ 
++void noinstr lockdep_hardirqs_on(unsigned long ip)
++{
++	struct task_struct *curr = current;
++
++	if (unlikely(!debug_locks || curr->lockdep_recursion))
++		return;
++
++	if (curr->hardirqs_enabled) {
++		/*
++		 * Neither irq nor preemption are disabled here
++		 * so this is racy by nature but losing one hit
++		 * in a stat is not a big deal.
++		 */
++		__debug_atomic_inc(redundant_hardirqs_on);
++		return;
++	}
++
++	/*
++	 * We're enabling irqs and according to our state above irqs weren't
++	 * already enabled, yet we find the hardware thinks they are in fact
++	 * enabled.. someone messed up their IRQ state tracing.
++	 */
++	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled()))
++		return;
++
++	/*
++	 * Ensure the lock stack remained unchanged between
++	 * lockdep_hardirqs_on_prepare() and lockdep_hardirqs_on().
++	 */
++	DEBUG_LOCKS_WARN_ON(current->hardirq_chain_key !=
++			    current->curr_chain_key);
++
++	/* we'll do an OFF -> ON transition: */
++	curr->hardirqs_enabled = 1;
++	curr->hardirq_enable_ip = ip;
++	curr->hardirq_enable_event = ++curr->irq_events;
++	debug_atomic_inc(hardirqs_on_events);
++}
+ /*
+  * Hardirqs were disabled:
+  */
+-void lockdep_hardirqs_off(unsigned long ip)
++void noinstr lockdep_hardirqs_off(unsigned long ip)
+ {
+ 	struct task_struct *curr = current;
+ 
+-	if (unlikely(!debug_locks || current->lockdep_recursion))
++	if (unlikely(!debug_locks || curr->lockdep_recursion))
+ 		return;
+ 
+ 	/*
+@@ -3463,7 +3496,6 @@ void lockdep_hardirqs_off(unsigned long
+ 	} else
+ 		debug_atomic_inc(redundant_hardirqs_off);
+ }
+-NOKPROBE_SYMBOL(lockdep_hardirqs_off);
+ 
+ /*
+  * Softirqs will be enabled:
+@@ -4007,8 +4039,8 @@ static void print_unlock_imbalance_bug(s
+ 	dump_stack();
+ }
+ 
+-static int match_held_lock(const struct held_lock *hlock,
+-					const struct lockdep_map *lock)
++static noinstr int match_held_lock(const struct held_lock *hlock,
++				   const struct lockdep_map *lock)
+ {
+ 	if (hlock->instance == lock)
+ 		return 1;
+@@ -4293,7 +4325,7 @@ static int
+ 	return 0;
+ }
+ 
+-static nokprobe_inline
++static __always_inline
+ int __lock_is_held(const struct lockdep_map *lock, int read)
+ {
+ 	struct task_struct *curr = current;
+@@ -4506,7 +4538,7 @@ void lock_release(struct lockdep_map *lo
+ }
+ EXPORT_SYMBOL_GPL(lock_release);
+ 
+-int lock_is_held_type(const struct lockdep_map *lock, int read)
++noinstr int lock_is_held_type(const struct lockdep_map *lock, int read)
+ {
+ 	unsigned long flags;
+ 	int ret = 0;
+--- a/kernel/trace/trace_preemptirq.c
++++ b/kernel/trace/trace_preemptirq.c
+@@ -39,6 +39,7 @@ void trace_hardirqs_on(void)
+ 		this_cpu_write(tracing_irq_cpu, 0);
+ 	}
+ 
++	lockdep_hardirqs_on_prepare(CALLER_ADDR0);
+ 	lockdep_hardirqs_on(CALLER_ADDR0);
+ }
+ EXPORT_SYMBOL(trace_hardirqs_on);
+@@ -79,6 +80,7 @@ NOKPROBE_SYMBOL(trace_hardirqs_off);
+ 		this_cpu_write(tracing_irq_cpu, 0);
+ 	}
+ 
++	lockdep_hardirqs_on_prepare(CALLER_ADDR0);
+ 	lockdep_hardirqs_on(CALLER_ADDR0);
+ }
+ EXPORT_SYMBOL(trace_hardirqs_on_caller);
+--- a/lib/debug_locks.c
++++ b/lib/debug_locks.c
+@@ -36,7 +36,7 @@ EXPORT_SYMBOL_GPL(debug_locks_silent);
+ /*
+  * Generic 'turn off all lock debugging' function:
+  */
+-int debug_locks_off(void)
++noinstr int debug_locks_off(void)
+ {
+ 	if (debug_locks && __debug_locks_off()) {
+ 		if (!debug_locks_silent) {
+
+From patchwork Fri Mar 20 18:00:04 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450515
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 138E413B1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:21 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id E6E9821556
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:20 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727422AbgCTWEQ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:04:16 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37481 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727175AbgCTWEO (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:14 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPk6-0004Th-5q; Fri, 20 Mar 2020 23:03:50 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 9E0B5FFC8D;
+        Fri, 20 Mar 2020 23:03:46 +0100 (CET)
+Message-Id: <20200320180033.187967761@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:04 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 08/23] x86/entry: Mark enter_from_user_mode()
+ noinstr
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Both the callers in the low level ASM code and __context_tracking_exit()
+which is invoked from enter_from_user_mode() via user_exit_irqoff() are
+marked NOKPROBE. Allowing enter_from_user_mode() to be probed is
+inconsistent at best.
+
+Aside of that while function tracing per se is safe the function trace
+entry/exit points can be used via BPF as well which is not safe to use
+before context tracking has reached CONTEXT_KERNEL and adjusted RCU.
+
+Mark it noinstr which moves it into the instrumentation protected text
+section and includes notrace.
+
+Note, this needs further fixups in context tracking to ensure that the
+full call chain is protected. Will be addressed in follow up changes.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ arch/x86/entry/common.c |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/arch/x86/entry/common.c
++++ b/arch/x86/entry/common.c
+@@ -40,7 +40,7 @@
+ 
+ #ifdef CONFIG_CONTEXT_TRACKING
+ /* Called on entry from user mode with IRQs off. */
+-__visible inline void enter_from_user_mode(void)
++__visible noinstr void enter_from_user_mode(void)
+ {
+ 	CT_WARN_ON(ct_state() != CONTEXT_USER);
+ 	user_exit_irqoff();
+
+From patchwork Fri Mar 20 18:00:05 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450493
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D27B7159A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:04:19 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id B332E2166E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:04:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727460AbgCTWET (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:04:19 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37495 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727405AbgCTWEQ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:16 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPk8-0004Tk-BW; Fri, 20 Mar 2020 23:03:52 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id DA32C1039FC;
+        Fri, 20 Mar 2020 23:03:46 +0100 (CET)
+Message-Id: <20200320180033.280833846@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:05 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 09/23] x86/entry/common: Protect against
+ instrumentation
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Mark the various syscall entries with noinstr to protect them against
+instrumentation and add the noinstr_begin()/end() annotations to mark the
+parts of the functions which are safe to call out into instrumentable code.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ arch/x86/entry/common.c |  133 ++++++++++++++++++++++++++++++++----------------
+ 1 file changed, 89 insertions(+), 44 deletions(-)
+
+--- a/arch/x86/entry/common.c
++++ b/arch/x86/entry/common.c
+@@ -42,13 +42,24 @@
+ /* Called on entry from user mode with IRQs off. */
+ __visible noinstr void enter_from_user_mode(void)
+ {
+-	CT_WARN_ON(ct_state() != CONTEXT_USER);
++	enum ctx_state state = ct_state();
++
+ 	user_exit_irqoff();
++
++	instr_begin();
++	CT_WARN_ON(state != CONTEXT_USER);
++	instr_end();
+ }
+ #else
+ static inline void enter_from_user_mode(void) {}
+ #endif
+ 
++static __always_inline void exit_to_user_mode(void)
++{
++	user_enter_irqoff();
++	mds_user_clear_cpu_buffers();
++}
++
+ static void do_audit_syscall_entry(struct pt_regs *regs, u32 arch)
+ {
+ #ifdef CONFIG_X86_64
+@@ -178,8 +189,7 @@ static void exit_to_usermode_loop(struct
+ 	}
+ }
+ 
+-/* Called with IRQs disabled. */
+-__visible inline void prepare_exit_to_usermode(struct pt_regs *regs)
++static void __prepare_exit_to_usermode(struct pt_regs *regs)
+ {
+ 	struct thread_info *ti = current_thread_info();
+ 	u32 cached_flags;
+@@ -218,10 +228,14 @@ static void exit_to_usermode_loop(struct
+ 	 */
+ 	ti->status &= ~(TS_COMPAT|TS_I386_REGS_POKED);
+ #endif
++}
+ 
+-	user_enter_irqoff();
+-
+-	mds_user_clear_cpu_buffers();
++__visible noinstr void prepare_exit_to_usermode(struct pt_regs *regs)
++{
++	instr_begin();
++	__prepare_exit_to_usermode(regs);
++	instr_end();
++	exit_to_user_mode();
+ }
+ 
+ #define SYSCALL_EXIT_WORK_FLAGS				\
+@@ -250,11 +264,7 @@ static void syscall_slow_exit_work(struc
+ 		tracehook_report_syscall_exit(regs, step);
+ }
+ 
+-/*
+- * Called with IRQs on and fully valid regs.  Returns with IRQs off in a
+- * state such that we can immediately switch to user mode.
+- */
+-__visible inline void syscall_return_slowpath(struct pt_regs *regs)
++static void __syscall_return_slowpath(struct pt_regs *regs)
+ {
+ 	struct thread_info *ti = current_thread_info();
+ 	u32 cached_flags = READ_ONCE(ti->flags);
+@@ -275,15 +285,29 @@ static void syscall_slow_exit_work(struc
+ 		syscall_slow_exit_work(regs, cached_flags);
+ 
+ 	local_irq_disable();
+-	prepare_exit_to_usermode(regs);
++	__prepare_exit_to_usermode(regs);
++}
++
++/*
++ * Called with IRQs on and fully valid regs.  Returns with IRQs off in a
++ * state such that we can immediately switch to user mode.
++ */
++__visible noinstr void syscall_return_slowpath(struct pt_regs *regs)
++{
++	instr_begin();
++	__syscall_return_slowpath(regs);
++	instr_end();
++	exit_to_user_mode();
+ }
+ 
+ #ifdef CONFIG_X86_64
+-__visible void do_syscall_64(unsigned long nr, struct pt_regs *regs)
++__visible noinstr void do_syscall_64(unsigned long nr, struct pt_regs *regs)
+ {
+ 	struct thread_info *ti;
+ 
+ 	enter_from_user_mode();
++	instr_begin();
++
+ 	local_irq_enable();
+ 	ti = current_thread_info();
+ 	if (READ_ONCE(ti->flags) & _TIF_WORK_SYSCALL_ENTRY)
+@@ -300,8 +324,10 @@ static void syscall_slow_exit_work(struc
+ 		regs->ax = x32_sys_call_table[nr](regs);
+ #endif
+ 	}
++	__syscall_return_slowpath(regs);
+ 
+-	syscall_return_slowpath(regs);
++	instr_end();
++	exit_to_user_mode();
+ }
+ #endif
+ 
+@@ -309,10 +335,10 @@ static void syscall_slow_exit_work(struc
+ /*
+  * Does a 32-bit syscall.  Called with IRQs on in CONTEXT_KERNEL.  Does
+  * all entry and exit work and returns with IRQs off.  This function is
+- * extremely hot in workloads that use it, and it's usually called from
++ * ex2tremely hot in workloads that use it, and it's usually called from
+  * do_fast_syscall_32, so forcibly inline it to improve performance.
+  */
+-static __always_inline void do_syscall_32_irqs_on(struct pt_regs *regs)
++static void do_syscall_32_irqs_on(struct pt_regs *regs)
+ {
+ 	struct thread_info *ti = current_thread_info();
+ 	unsigned int nr = (unsigned int)regs->orig_ax;
+@@ -349,27 +375,62 @@ static __always_inline void do_syscall_3
+ #endif /* CONFIG_IA32_EMULATION */
+ 	}
+ 
+-	syscall_return_slowpath(regs);
++	__syscall_return_slowpath(regs);
+ }
+ 
+ /* Handles int $0x80 */
+-__visible void do_int80_syscall_32(struct pt_regs *regs)
++__visible noinstr void do_int80_syscall_32(struct pt_regs *regs)
+ {
+ 	enter_from_user_mode();
++	instr_begin();
++
+ 	local_irq_enable();
+ 	do_syscall_32_irqs_on(regs);
++
++	instr_end();
++	exit_to_user_mode();
++}
++
++static bool __do_fast_syscall_32(struct pt_regs *regs)
++{
++	int res;
++
++	/* Fetch EBP from where the vDSO stashed it. */
++	if (IS_ENABLED(CONFIG_X86_64)) {
++		/*
++		 * Micro-optimization: the pointer we're following is
++		 * explicitly 32 bits, so it can't be out of range.
++		 */
++		res = __get_user(*(u32 *)&regs->bp,
++			 (u32 __user __force *)(unsigned long)(u32)regs->sp);
++	} else {
++		res = get_user(*(u32 *)&regs->bp,
++		       (u32 __user __force *)(unsigned long)(u32)regs->sp);
++	}
++
++	if (res) {
++		/* User code screwed up. */
++		regs->ax = -EFAULT;
++		local_irq_disable();
++		__prepare_exit_to_usermode(regs);
++		return false;
++	}
++
++	/* Now this is just like a normal syscall. */
++	do_syscall_32_irqs_on(regs);
++	return true;
+ }
+ 
+ /* Returns 0 to return using IRET or 1 to return using SYSEXIT/SYSRETL. */
+-__visible long do_fast_syscall_32(struct pt_regs *regs)
++__visible noinstr long do_fast_syscall_32(struct pt_regs *regs)
+ {
+ 	/*
+ 	 * Called using the internal vDSO SYSENTER/SYSCALL32 calling
+ 	 * convention.  Adjust regs so it looks like we entered using int80.
+ 	 */
+-
+ 	unsigned long landing_pad = (unsigned long)current->mm->context.vdso +
+-		vdso_image_32.sym_int80_landing_pad;
++					vdso_image_32.sym_int80_landing_pad;
++	bool success;
+ 
+ 	/*
+ 	 * SYSENTER loses EIP, and even SYSCALL32 needs us to skip forward
+@@ -379,33 +440,17 @@ static __always_inline void do_syscall_3
+ 	regs->ip = landing_pad;
+ 
+ 	enter_from_user_mode();
++	instr_begin();
+ 
+ 	local_irq_enable();
++	success = __do_fast_syscall_32(regs);
+ 
+-	/* Fetch EBP from where the vDSO stashed it. */
+-	if (
+-#ifdef CONFIG_X86_64
+-		/*
+-		 * Micro-optimization: the pointer we're following is explicitly
+-		 * 32 bits, so it can't be out of range.
+-		 */
+-		__get_user(*(u32 *)&regs->bp,
+-			    (u32 __user __force *)(unsigned long)(u32)regs->sp)
+-#else
+-		get_user(*(u32 *)&regs->bp,
+-			 (u32 __user __force *)(unsigned long)(u32)regs->sp)
+-#endif
+-		) {
+-
+-		/* User code screwed up. */
+-		local_irq_disable();
+-		regs->ax = -EFAULT;
+-		prepare_exit_to_usermode(regs);
+-		return 0;	/* Keep it simple: use IRET. */
+-	}
++	instr_end();
++	exit_to_user_mode();
+ 
+-	/* Now this is just like a normal syscall. */
+-	do_syscall_32_irqs_on(regs);
++	/* If it failed, keep it simple: use IRET. */
++	if (!success)
++		return 0;
+ 
+ #ifdef CONFIG_X86_64
+ 	/*
+
+From patchwork Fri Mar 20 18:00:06 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450507
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 86B9113B1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:04 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 6F5AD21841
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:04 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727433AbgCTWFA (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:05:00 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37523 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727617AbgCTWFA (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:05:00 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPk3-0004Tn-Lj; Fri, 20 Mar 2020 23:03:47 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 228851039FD;
+        Fri, 20 Mar 2020 23:03:47 +0100 (CET)
+Message-Id: <20200320180033.373450806@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:06 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 10/23] x86/entry: Move irq tracing on syscall entry
+ to C-code
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Now that the C entry points are safe, move the irq flags tracing code into
+the entry helper:
+
+    - Invoke lockdep before calling into context tracking
+
+    - Use the safe __trace_hardirqs_on() trace function after context
+      tracking established state and RCU is watching.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ arch/x86/entry/common.c          |   21 +++++++++++++++++++--
+ arch/x86/entry/entry_32.S        |   12 ------------
+ arch/x86/entry/entry_64.S        |    2 --
+ arch/x86/entry/entry_64_compat.S |   18 ------------------
+ 4 files changed, 19 insertions(+), 34 deletions(-)
+
+--- a/arch/x86/entry/common.c
++++ b/arch/x86/entry/common.c
+@@ -39,19 +39,36 @@
+ #include <trace/events/syscalls.h>
+ 
+ #ifdef CONFIG_CONTEXT_TRACKING
+-/* Called on entry from user mode with IRQs off. */
++/**
++ * enter_from_user_mode - Establish state when coming from user mode
++ *
++ * Syscall entry disables interrupts, but user mode is traced as interrupts
++ * enabled. Also with NO_HZ_FULL RCU might be idle.
++ *
++ * 1) Tell lockdep that interrupts are disabled
++ * 2) Invoke context tracking if enabled to reactivate RCU
++ * 3) Trace interrupts off state
++ */
+ __visible noinstr void enter_from_user_mode(void)
+ {
+ 	enum ctx_state state = ct_state();
+ 
++	lockdep_hardirqs_off(CALLER_ADDR0);
+ 	user_exit_irqoff();
+ 
+ 	instr_begin();
+ 	CT_WARN_ON(state != CONTEXT_USER);
++	__trace_hardirqs_off();
+ 	instr_end();
+ }
+ #else
+-static inline void enter_from_user_mode(void) {}
++static __always_inline void enter_from_user_mode(void)
++{
++	lockdep_hardirqs_off(CALLER_ADDR0);
++	instr_begin();
++	__trace_hardirqs_off();
++	instr_end();
++}
+ #endif
+ 
+ static __always_inline void exit_to_user_mode(void)
+--- a/arch/x86/entry/entry_32.S
++++ b/arch/x86/entry/entry_32.S
+@@ -960,12 +960,6 @@ SYM_FUNC_START(entry_SYSENTER_32)
+ 	jnz	.Lsysenter_fix_flags
+ .Lsysenter_flags_fixed:
+ 
+-	/*
+-	 * User mode is traced as though IRQs are on, and SYSENTER
+-	 * turned them off.
+-	 */
+-	TRACE_IRQS_OFF
+-
+ 	movl	%esp, %eax
+ 	call	do_fast_syscall_32
+ 	/* XEN PV guests always use IRET path */
+@@ -1075,12 +1069,6 @@ SYM_FUNC_START(entry_INT80_32)
+ 
+ 	SAVE_ALL pt_regs_ax=$-ENOSYS switch_stacks=1	/* save rest */
+ 
+-	/*
+-	 * User mode is traced as though IRQs are on, and the interrupt gate
+-	 * turned them off.
+-	 */
+-	TRACE_IRQS_OFF
+-
+ 	movl	%esp, %eax
+ 	call	do_int80_syscall_32
+ .Lsyscall_32_done:
+--- a/arch/x86/entry/entry_64.S
++++ b/arch/x86/entry/entry_64.S
+@@ -167,8 +167,6 @@ SYM_INNER_LABEL(entry_SYSCALL_64_after_h
+ 
+ 	PUSH_AND_CLEAR_REGS rax=$-ENOSYS
+ 
+-	TRACE_IRQS_OFF
+-
+ 	/* IRQs are off. */
+ 	movq	%rax, %rdi
+ 	movq	%rsp, %rsi
+--- a/arch/x86/entry/entry_64_compat.S
++++ b/arch/x86/entry/entry_64_compat.S
+@@ -129,12 +129,6 @@ SYM_FUNC_START(entry_SYSENTER_compat)
+ 	jnz	.Lsysenter_fix_flags
+ .Lsysenter_flags_fixed:
+ 
+-	/*
+-	 * User mode is traced as though IRQs are on, and SYSENTER
+-	 * turned them off.
+-	 */
+-	TRACE_IRQS_OFF
+-
+ 	movq	%rsp, %rdi
+ 	call	do_fast_syscall_32
+ 	/* XEN PV guests always use IRET path */
+@@ -247,12 +241,6 @@ SYM_INNER_LABEL(entry_SYSCALL_compat_aft
+ 	pushq   $0			/* pt_regs->r15 = 0 */
+ 	xorl	%r15d, %r15d		/* nospec   r15 */
+ 
+-	/*
+-	 * User mode is traced as though IRQs are on, and SYSENTER
+-	 * turned them off.
+-	 */
+-	TRACE_IRQS_OFF
+-
+ 	movq	%rsp, %rdi
+ 	call	do_fast_syscall_32
+ 	/* XEN PV guests always use IRET path */
+@@ -403,12 +391,6 @@ SYM_CODE_START(entry_INT80_compat)
+ 	xorl	%r15d, %r15d		/* nospec   r15 */
+ 	cld
+ 
+-	/*
+-	 * User mode is traced as though IRQs are on, and the interrupt
+-	 * gate turned them off.
+-	 */
+-	TRACE_IRQS_OFF
+-
+ 	movq	%rsp, %rdi
+ 	call	do_int80_syscall_32
+ .Lsyscall_32_done:
+
+From patchwork Fri Mar 20 18:00:07 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450537
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 356BF13B1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:06:12 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 1E8D321556
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:06:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727278AbgCTWEN (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:04:13 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37466 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1726840AbgCTWEM (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:12 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPk5-0004To-0y; Fri, 20 Mar 2020 23:03:49 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 5EF5E1039FF;
+        Fri, 20 Mar 2020 23:03:47 +0100 (CET)
+Message-Id: <20200320180033.481570410@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:07 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 11/23] x86/entry: Move irq flags tracing to
+ prepare_exit_to_usermode()
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This is another step towards more C-code and less convoluted ASM.
+
+Similar to the entry path.
+
+ 1) invoke the tracer and the preparatory lockdep step
+ 2) invoke context tracking which might turn off RCU
+ 3) invoke the final lockdep step
+
+Annotate the code sections in exit_to_user_mode() accordingly so objtool
+won't complain about the tracer and lockdep invocation.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+V3: Convert it to noinstr
+
+V2: New patch simplifying the conversion and addressing Alex' review
+    comment of redundant tracing.
+---
+ arch/x86/entry/common.c          |   17 +++++++++++++++++
+ arch/x86/entry/entry_32.S        |   12 ++++--------
+ arch/x86/entry/entry_64.S        |    4 ----
+ arch/x86/entry/entry_64_compat.S |   14 +++++---------
+ 4 files changed, 26 insertions(+), 21 deletions(-)
+
+--- a/arch/x86/entry/common.c
++++ b/arch/x86/entry/common.c
+@@ -71,10 +71,27 @@ static __always_inline void enter_from_u
+ }
+ #endif
+ 
++/**
++ * exit_to_user_mode - Fixup state when exiting to user mode
++ *
++ * Syscall exit enables interrupts, but the kernel state is interrupts
++ * disabled when this is invoked. Also tell RCU about it.
++ *
++ * 1) Trace interrupts on state
++ * 2) Invoke context tracking if enabled to adjust RCU state
++ * 3) Clear CPU buffers if CPU is affected by MDS and the migitation is on.
++ * 4) Tell lockdep that interrupts are enabled
++ */
+ static __always_inline void exit_to_user_mode(void)
+ {
++	instr_begin();
++	__trace_hardirqs_on();
++	lockdep_hardirqs_on_prepare(CALLER_ADDR0);
++	instr_end();
++
+ 	user_enter_irqoff();
+ 	mds_user_clear_cpu_buffers();
++	lockdep_hardirqs_on(CALLER_ADDR0);
+ }
+ 
+ static void do_audit_syscall_entry(struct pt_regs *regs, u32 arch)
+--- a/arch/x86/entry/entry_32.S
++++ b/arch/x86/entry/entry_32.S
+@@ -811,8 +811,7 @@ SYM_CODE_START(ret_from_fork)
+ 	/* When we fork, we trace the syscall return in the child, too. */
+ 	movl    %esp, %eax
+ 	call    syscall_return_slowpath
+-	STACKLEAK_ERASE
+-	jmp     restore_all
++	jmp     .Lsyscall_32_done
+ 
+ 	/* kernel thread */
+ 1:	movl	%edi, %eax
+@@ -855,7 +854,7 @@ SYM_CODE_START_LOCAL(ret_from_exception)
+ 	TRACE_IRQS_OFF
+ 	movl	%esp, %eax
+ 	call	prepare_exit_to_usermode
+-	jmp	restore_all
++	jmp	restore_all_switch_stack
+ SYM_CODE_END(ret_from_exception)
+ 
+ SYM_ENTRY(__begin_SYSENTER_singlestep_region, SYM_L_GLOBAL, SYM_A_NONE)
+@@ -968,8 +967,7 @@ SYM_FUNC_START(entry_SYSENTER_32)
+ 
+ 	STACKLEAK_ERASE
+ 
+-/* Opportunistic SYSEXIT */
+-	TRACE_IRQS_ON			/* User mode traces as IRQs on. */
++	/* Opportunistic SYSEXIT */
+ 
+ 	/*
+ 	 * Setup entry stack - we keep the pointer in %eax and do the
+@@ -1072,11 +1070,9 @@ SYM_FUNC_START(entry_INT80_32)
+ 	movl	%esp, %eax
+ 	call	do_int80_syscall_32
+ .Lsyscall_32_done:
+-
+ 	STACKLEAK_ERASE
+ 
+-restore_all:
+-	TRACE_IRQS_ON
++restore_all_switch_stack:
+ 	SWITCH_TO_ENTRY_STACK
+ 	CHECK_AND_APPLY_ESPFIX
+ 
+--- a/arch/x86/entry/entry_64.S
++++ b/arch/x86/entry/entry_64.S
+@@ -172,8 +172,6 @@ SYM_INNER_LABEL(entry_SYSCALL_64_after_h
+ 	movq	%rsp, %rsi
+ 	call	do_syscall_64		/* returns with IRQs disabled */
+ 
+-	TRACE_IRQS_ON			/* return enables interrupts */
+-
+ 	/*
+ 	 * Try to use SYSRET instead of IRET if we're returning to
+ 	 * a completely clean 64-bit userspace context.  If we're not,
+@@ -340,7 +338,6 @@ SYM_CODE_START(ret_from_fork)
+ 	UNWIND_HINT_REGS
+ 	movq	%rsp, %rdi
+ 	call	syscall_return_slowpath	/* returns with IRQs disabled */
+-	TRACE_IRQS_ON			/* user mode is traced as IRQS on */
+ 	jmp	swapgs_restore_regs_and_return_to_usermode
+ 
+ 1:
+@@ -617,7 +614,6 @@ SYM_CODE_START_LOCAL(common_interrupt)
+ .Lretint_user:
+ 	mov	%rsp,%rdi
+ 	call	prepare_exit_to_usermode
+-	TRACE_IRQS_ON
+ 
+ SYM_INNER_LABEL(swapgs_restore_regs_and_return_to_usermode, SYM_L_GLOBAL)
+ #ifdef CONFIG_DEBUG_ENTRY
+--- a/arch/x86/entry/entry_64_compat.S
++++ b/arch/x86/entry/entry_64_compat.S
+@@ -132,8 +132,8 @@ SYM_FUNC_START(entry_SYSENTER_compat)
+ 	movq	%rsp, %rdi
+ 	call	do_fast_syscall_32
+ 	/* XEN PV guests always use IRET path */
+-	ALTERNATIVE "testl %eax, %eax; jz .Lsyscall_32_done", \
+-		    "jmp .Lsyscall_32_done", X86_FEATURE_XENPV
++	ALTERNATIVE "testl %eax, %eax; jz swapgs_restore_regs_and_return_to_usermode", \
++		    "jmp swapgs_restore_regs_and_return_to_usermode", X86_FEATURE_XENPV
+ 	jmp	sysret32_from_system_call
+ 
+ .Lsysenter_fix_flags:
+@@ -244,8 +244,8 @@ SYM_INNER_LABEL(entry_SYSCALL_compat_aft
+ 	movq	%rsp, %rdi
+ 	call	do_fast_syscall_32
+ 	/* XEN PV guests always use IRET path */
+-	ALTERNATIVE "testl %eax, %eax; jz .Lsyscall_32_done", \
+-		    "jmp .Lsyscall_32_done", X86_FEATURE_XENPV
++	ALTERNATIVE "testl %eax, %eax; jz swapgs_restore_regs_and_return_to_usermode", \
++		    "jmp swapgs_restore_regs_and_return_to_usermode", X86_FEATURE_XENPV
+ 
+ 	/* Opportunistic SYSRET */
+ sysret32_from_system_call:
+@@ -254,7 +254,7 @@ SYM_INNER_LABEL(entry_SYSCALL_compat_aft
+ 	 * stack. So let's erase the thread stack right now.
+ 	 */
+ 	STACKLEAK_ERASE
+-	TRACE_IRQS_ON			/* User mode traces as IRQs on. */
++
+ 	movq	RBX(%rsp), %rbx		/* pt_regs->rbx */
+ 	movq	RBP(%rsp), %rbp		/* pt_regs->rbp */
+ 	movq	EFLAGS(%rsp), %r11	/* pt_regs->flags (in r11) */
+@@ -393,9 +393,5 @@ SYM_CODE_START(entry_INT80_compat)
+ 
+ 	movq	%rsp, %rdi
+ 	call	do_int80_syscall_32
+-.Lsyscall_32_done:
+-
+-	/* Go back to user mode. */
+-	TRACE_IRQS_ON
+ 	jmp	swapgs_restore_regs_and_return_to_usermode
+ SYM_CODE_END(entry_INT80_compat)
+
+From patchwork Fri Mar 20 18:00:08 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450501
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 68522159A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:04:42 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 48FF8216FD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:04:42 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727505AbgCTWEU (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:04:20 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37508 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727431AbgCTWET (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:19 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPk9-0004Tr-J8; Fri, 20 Mar 2020 23:03:53 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 9A804104084;
+        Fri, 20 Mar 2020 23:03:47 +0100 (CET)
+Message-Id: <20200320180033.589172314@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:08 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 12/23] context_tracking: Ensure that the critical
+ path cannot be instrumented
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+context tracking lacks a few protection mechanisms against instrumentation:
+
+ - While the core functions are marked NOKPROBE they lack protection
+   against function tracing which is required as the function entry/exit
+   points can be utilized by BPF.
+
+ - static functions invoked from the protected functions need to be marked
+   as well as they can be instrumented otherwise.
+
+ - using plain inline allows the compiler to emit traceable and probable
+   functions.
+
+Fix this by marking the functions noinstr and converting the plain inlines
+to __always_inline.
+
+The NOKPROBE_SYMBOL() annotations are removed as the .noinstr.text section
+is already excluded from being probed.
+
+Cures the following objtool warnings:
+
+ vmlinux.o: warning: objtool: enter_from_user_mode()+0x34: call to __context_tracking_exit() leaves .noinstr.text section
+ vmlinux.o: warning: objtool: prepare_exit_to_usermode()+0x29: call to __context_tracking_enter() leaves .noinstr.text section
+ vmlinux.o: warning: objtool: syscall_return_slowpath()+0x29: call to __context_tracking_enter() leaves .noinstr.text section
+ vmlinux.o: warning: objtool: do_syscall_64()+0x7f: call to __context_tracking_enter() leaves .noinstr.text section
+ vmlinux.o: warning: objtool: do_int80_syscall_32()+0x3d: call to __context_tracking_enter() leaves .noinstr.text section
+ vmlinux.o: warning: objtool: do_fast_syscall_32()+0x9c: call to __context_tracking_enter() leaves .noinstr.text section
+
+and generates new ones...
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ include/linux/context_tracking.h       |    6 +++---
+ include/linux/context_tracking_state.h |    6 +++---
+ kernel/context_tracking.c              |   14 ++++++++------
+ 3 files changed, 14 insertions(+), 12 deletions(-)
+
+--- a/include/linux/context_tracking.h
++++ b/include/linux/context_tracking.h
+@@ -33,13 +33,13 @@ static inline void user_exit(void)
+ }
+ 
+ /* Called with interrupts disabled.  */
+-static inline void user_enter_irqoff(void)
++static __always_inline void user_enter_irqoff(void)
+ {
+ 	if (context_tracking_enabled())
+ 		__context_tracking_enter(CONTEXT_USER);
+ 
+ }
+-static inline void user_exit_irqoff(void)
++static __always_inline void user_exit_irqoff(void)
+ {
+ 	if (context_tracking_enabled())
+ 		__context_tracking_exit(CONTEXT_USER);
+@@ -75,7 +75,7 @@ static inline void exception_exit(enum c
+  * is enabled.  If context tracking is disabled, returns
+  * CONTEXT_DISABLED.  This should be used primarily for debugging.
+  */
+-static inline enum ctx_state ct_state(void)
++static __always_inline enum ctx_state ct_state(void)
+ {
+ 	return context_tracking_enabled() ?
+ 		this_cpu_read(context_tracking.state) : CONTEXT_DISABLED;
+--- a/include/linux/context_tracking_state.h
++++ b/include/linux/context_tracking_state.h
+@@ -26,12 +26,12 @@ struct context_tracking {
+ extern struct static_key_false context_tracking_key;
+ DECLARE_PER_CPU(struct context_tracking, context_tracking);
+ 
+-static inline bool context_tracking_enabled(void)
++static __always_inline bool context_tracking_enabled(void)
+ {
+ 	return static_branch_unlikely(&context_tracking_key);
+ }
+ 
+-static inline bool context_tracking_enabled_cpu(int cpu)
++static __always_inline bool context_tracking_enabled_cpu(int cpu)
+ {
+ 	return context_tracking_enabled() && per_cpu(context_tracking.active, cpu);
+ }
+@@ -41,7 +41,7 @@ static inline bool context_tracking_enab
+ 	return context_tracking_enabled() && __this_cpu_read(context_tracking.active);
+ }
+ 
+-static inline bool context_tracking_in_user(void)
++static __always_inline bool context_tracking_in_user(void)
+ {
+ 	return __this_cpu_read(context_tracking.state) == CONTEXT_USER;
+ }
+--- a/kernel/context_tracking.c
++++ b/kernel/context_tracking.c
+@@ -31,7 +31,7 @@ EXPORT_SYMBOL_GPL(context_tracking_key);
+ DEFINE_PER_CPU(struct context_tracking, context_tracking);
+ EXPORT_SYMBOL_GPL(context_tracking);
+ 
+-static bool context_tracking_recursion_enter(void)
++static noinstr bool context_tracking_recursion_enter(void)
+ {
+ 	int recursion;
+ 
+@@ -45,7 +45,7 @@ static bool context_tracking_recursion_e
+ 	return false;
+ }
+ 
+-static void context_tracking_recursion_exit(void)
++static __always_inline void context_tracking_recursion_exit(void)
+ {
+ 	__this_cpu_dec(context_tracking.recursion);
+ }
+@@ -59,7 +59,7 @@ static void context_tracking_recursion_e
+  * instructions to execute won't use any RCU read side critical section
+  * because this function sets RCU in extended quiescent state.
+  */
+-void __context_tracking_enter(enum ctx_state state)
++void noinstr __context_tracking_enter(enum ctx_state state)
+ {
+ 	/* Kernel threads aren't supposed to go to userspace */
+ 	WARN_ON_ONCE(!current->mm);
+@@ -77,8 +77,10 @@ void __context_tracking_enter(enum ctx_s
+ 			 * on the tick.
+ 			 */
+ 			if (state == CONTEXT_USER) {
++				instr_begin();
+ 				trace_user_enter(0);
+ 				vtime_user_enter(current);
++				instr_end();
+ 			}
+ 			rcu_user_enter();
+ 		}
+@@ -99,7 +101,6 @@ void __context_tracking_enter(enum ctx_s
+ 	}
+ 	context_tracking_recursion_exit();
+ }
+-NOKPROBE_SYMBOL(__context_tracking_enter);
+ EXPORT_SYMBOL_GPL(__context_tracking_enter);
+ 
+ void context_tracking_enter(enum ctx_state state)
+@@ -142,7 +143,7 @@ NOKPROBE_SYMBOL(context_tracking_user_en
+  * This call supports re-entrancy. This way it can be called from any exception
+  * handler without needing to know if we came from userspace or not.
+  */
+-void __context_tracking_exit(enum ctx_state state)
++void noinstr __context_tracking_exit(enum ctx_state state)
+ {
+ 	if (!context_tracking_recursion_enter())
+ 		return;
+@@ -155,15 +156,16 @@ void __context_tracking_exit(enum ctx_st
+ 			 */
+ 			rcu_user_exit();
+ 			if (state == CONTEXT_USER) {
++				instr_begin();
+ 				vtime_user_exit(current);
+ 				trace_user_exit(0);
++				instr_end();
+ 			}
+ 		}
+ 		__this_cpu_write(context_tracking.state, CONTEXT_KERNEL);
+ 	}
+ 	context_tracking_recursion_exit();
+ }
+-NOKPROBE_SYMBOL(__context_tracking_exit);
+ EXPORT_SYMBOL_GPL(__context_tracking_exit);
+ 
+ void context_tracking_exit(enum ctx_state state)
+
+From patchwork Fri Mar 20 18:00:09 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450491
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3A96E13B1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:04:19 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 2404721556
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:04:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727445AbgCTWES (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:04:18 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37482 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727196AbgCTWEO (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:14 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPkB-0004Zg-53; Fri, 20 Mar 2020 23:03:55 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id D5FFC1040A1;
+        Fri, 20 Mar 2020 23:03:47 +0100 (CET)
+Message-Id: <20200320180033.681580918@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:09 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 13/23] lib/smp_processor_id: Move it into noinstr
+ section
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+That code is already not traceable. Move it into the noinstr section so the
+objtool section validation does not trigger.
+
+Annotate the warning code as "safe". While it might be not under all
+circumstances, getting the information out is important enough.
+
+Should this ever trigger from the sensitive code which is shielded against
+instrumentation, e.g. low level entry, then the printk is the least of the
+worries.
+
+Addresses the objtool warnings:
+ vmlinux.o: warning: objtool: context_tracking_recursion_enter()+0x7: call to __this_cpu_preempt_check() leaves .noinstr.text section
+ vmlinux.o: warning: objtool: __context_tracking_exit()+0x17: call to __this_cpu_preempt_check() leaves .noinstr.text section
+ vmlinux.o: warning: objtool: __context_tracking_enter()+0x2a: call to __this_cpu_preempt_check() leaves .noinstr.text section
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+V3: New patch
+---
+ lib/smp_processor_id.c |   10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+--- a/lib/smp_processor_id.c
++++ b/lib/smp_processor_id.c
+@@ -8,7 +8,7 @@
+ #include <linux/kprobes.h>
+ #include <linux/sched.h>
+ 
+-notrace static nokprobe_inline
++noinstr static
+ unsigned int check_preemption_disabled(const char *what1, const char *what2)
+ {
+ 	int this_cpu = raw_smp_processor_id();
+@@ -37,6 +37,7 @@ unsigned int check_preemption_disabled(c
+ 	 */
+ 	preempt_disable_notrace();
+ 
++	instr_begin();
+ 	if (!printk_ratelimit())
+ 		goto out_enable;
+ 
+@@ -45,6 +46,7 @@ unsigned int check_preemption_disabled(c
+ 
+ 	printk("caller is %pS\n", __builtin_return_address(0));
+ 	dump_stack();
++	instr_end();
+ 
+ out_enable:
+ 	preempt_enable_no_resched_notrace();
+@@ -52,16 +54,14 @@ unsigned int check_preemption_disabled(c
+ 	return this_cpu;
+ }
+ 
+-notrace unsigned int debug_smp_processor_id(void)
++noinstr unsigned int debug_smp_processor_id(void)
+ {
+ 	return check_preemption_disabled("smp_processor_id", "");
+ }
+ EXPORT_SYMBOL(debug_smp_processor_id);
+-NOKPROBE_SYMBOL(debug_smp_processor_id);
+ 
+-notrace void __this_cpu_preempt_check(const char *op)
++noinstr void __this_cpu_preempt_check(const char *op)
+ {
+ 	check_preemption_disabled("__this_cpu_", op);
+ }
+ EXPORT_SYMBOL(__this_cpu_preempt_check);
+-NOKPROBE_SYMBOL(__this_cpu_preempt_check);
+
+From patchwork Fri Mar 20 18:00:10 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450523
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D34D913B1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:38 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id B36EC2166E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:38 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727783AbgCTWFi (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:05:38 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37487 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1726840AbgCTWEP (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:15 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPk7-0004aL-4A; Fri, 20 Mar 2020 23:03:51 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 1D5C61039FD;
+        Fri, 20 Mar 2020 23:03:48 +0100 (CET)
+Message-Id: <20200320180033.790597451@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:10 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 14/23] x86/speculation/mds: Mark
+ mds_user_clear_cpu_buffers() __always_inline
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Prevent the compiler from uninlining and creating traceable/probable
+functions as this is invoked _after_ context tracking switched to
+CONTEXT_USER and rcu idle.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ arch/x86/include/asm/nospec-branch.h |    4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+--- a/arch/x86/include/asm/nospec-branch.h
++++ b/arch/x86/include/asm/nospec-branch.h
+@@ -319,7 +319,7 @@ DECLARE_STATIC_KEY_FALSE(mds_idle_clear)
+  * combination with microcode which triggers a CPU buffer flush when the
+  * instruction is executed.
+  */
+-static inline void mds_clear_cpu_buffers(void)
++static __always_inline void mds_clear_cpu_buffers(void)
+ {
+ 	static const u16 ds = __KERNEL_DS;
+ 
+@@ -340,7 +340,7 @@ static inline void mds_clear_cpu_buffers
+  *
+  * Clear CPU buffers if the corresponding static key is enabled
+  */
+-static inline void mds_user_clear_cpu_buffers(void)
++static __always_inline void mds_user_clear_cpu_buffers(void)
+ {
+ 	if (static_branch_likely(&mds_user_clear))
+ 		mds_clear_cpu_buffers();
+
+From patchwork Fri Mar 20 18:00:11 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450521
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 4EEE513B1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:36 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 3658E20777
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:36 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727446AbgCTWFc (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:05:32 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37491 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727400AbgCTWEP (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:15 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPk8-0004b5-39; Fri, 20 Mar 2020 23:03:52 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 59EDD1040C5;
+        Fri, 20 Mar 2020 23:03:48 +0100 (CET)
+Message-Id: <20200320180033.897314494@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:11 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 15/23] x86/entry/64: Check IF in
+ __preempt_enable_notrace() thunk
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The preempt_enable_notrace() ASM thunk is called from tracing, entry code
+RCU and other places which are already in or going to be in the noinstr
+section which protects sensitve code from being instrumented.
+
+Calls out of these sections happen with interrupts disabled, which is
+handled in C code, but the push regs, call, pop regs sequence can be
+completely avoided in this case.
+
+This is also a preparatory step for annotating the call from the thunk to
+preempt_enable_notrace() safe from a noinstr section.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+New patch
+---
+ arch/x86/entry/thunk_64.S       |   27 +++++++++++++++++++++++----
+ arch/x86/include/asm/irqflags.h |    3 +--
+ arch/x86/include/asm/paravirt.h |    3 +--
+ 3 files changed, 25 insertions(+), 8 deletions(-)
+
+--- a/arch/x86/entry/thunk_64.S
++++ b/arch/x86/entry/thunk_64.S
+@@ -9,10 +9,28 @@
+ #include "calling.h"
+ #include <asm/asm.h>
+ #include <asm/export.h>
++#include <asm/irqflags.h>
++
++.code64
+ 
+ 	/* rdi:	arg1 ... normal C conventions. rax is saved/restored. */
+-	.macro THUNK name, func, put_ret_addr_in_rdi=0
++	.macro THUNK name, func, put_ret_addr_in_rdi=0, check_if=0
+ SYM_FUNC_START_NOALIGN(\name)
++
++	.if \check_if
++	/*
++	 * Check for interrupts disabled right here. No point in
++	 * going all the way down
++	 */
++	pushq	%rax
++	SAVE_FLAGS(CLBR_RAX)
++	testl	$X86_EFLAGS_IF, %eax
++	popq	%rax
++	jnz	1f
++	ret
++1:
++	.endif
++
+ 	pushq %rbp
+ 	movq %rsp, %rbp
+ 
+@@ -38,8 +56,8 @@ SYM_FUNC_END(\name)
+ 	.endm
+ 
+ #ifdef CONFIG_TRACE_IRQFLAGS
+-	THUNK trace_hardirqs_on_thunk,trace_hardirqs_on_caller,1
+-	THUNK trace_hardirqs_off_thunk,trace_hardirqs_off_caller,1
++	THUNK trace_hardirqs_on_thunk,trace_hardirqs_on_caller, put_ret_addr_in_rdi=1
++	THUNK trace_hardirqs_off_thunk,trace_hardirqs_off_caller, put_ret_addr_in_rdi=1
+ #endif
+ 
+ #ifdef CONFIG_DEBUG_LOCK_ALLOC
+@@ -48,8 +66,9 @@ SYM_FUNC_END(\name)
+ 
+ #ifdef CONFIG_PREEMPTION
+ 	THUNK ___preempt_schedule, preempt_schedule
+-	THUNK ___preempt_schedule_notrace, preempt_schedule_notrace
+ 	EXPORT_SYMBOL(___preempt_schedule)
++
++	THUNK ___preempt_schedule_notrace, preempt_schedule_notrace, check_if=1
+ 	EXPORT_SYMBOL(___preempt_schedule_notrace)
+ #endif
+ 
+--- a/arch/x86/include/asm/irqflags.h
++++ b/arch/x86/include/asm/irqflags.h
+@@ -127,9 +127,8 @@ static inline notrace unsigned long arch
+ #define DISABLE_INTERRUPTS(x)	cli
+ 
+ #ifdef CONFIG_X86_64
+-#ifdef CONFIG_DEBUG_ENTRY
++
+ #define SAVE_FLAGS(x)		pushfq; popq %rax
+-#endif
+ 
+ #define SWAPGS	swapgs
+ /*
+--- a/arch/x86/include/asm/paravirt.h
++++ b/arch/x86/include/asm/paravirt.h
+@@ -900,14 +900,13 @@ extern void default_banner(void);
+ 		  ANNOTATE_RETPOLINE_SAFE;				\
+ 		  jmp PARA_INDIRECT(pv_ops+PV_CPU_usergs_sysret64);)
+ 
+-#ifdef CONFIG_DEBUG_ENTRY
+ #define SAVE_FLAGS(clobbers)                                        \
+ 	PARA_SITE(PARA_PATCH(PV_IRQ_save_fl),			    \
+ 		  PV_SAVE_REGS(clobbers | CLBR_CALLEE_SAVE);        \
+ 		  ANNOTATE_RETPOLINE_SAFE;			    \
+ 		  call PARA_INDIRECT(pv_ops+PV_IRQ_save_fl);	    \
+ 		  PV_RESTORE_REGS(clobbers | CLBR_CALLEE_SAVE);)
+-#endif
++
+ #endif /* CONFIG_PARAVIRT_XXL */
+ #endif	/* CONFIG_X86_64 */
+ 
+
+From patchwork Fri Mar 20 18:00:12 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450525
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3795613B1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:47 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 20D262166E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:47 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727771AbgCTWFh (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:05:37 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37490 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727372AbgCTWEP (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:15 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPk8-0004bo-Q3; Fri, 20 Mar 2020 23:03:52 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 965401040C6;
+        Fri, 20 Mar 2020 23:03:48 +0100 (CET)
+Message-Id: <20200320180034.003248957@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:12 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 16/23] x86/entry/64: Mark
+ ___preempt_schedule_notrace() thunk noinstr
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Code calling this from noinstr sections, e.g. entry code, has interrupts
+disabled, so the actual call into the scheduler code does not happen.
+
+The objtool section check complains nevertheless, so mark the call "safe".
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ arch/x86/entry/thunk_64.S |   18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+--- a/arch/x86/entry/thunk_64.S
++++ b/arch/x86/entry/thunk_64.S
+@@ -49,7 +49,22 @@ SYM_FUNC_START_NOALIGN(\name)
+ 	movq 8(%rbp), %rdi
+ 	.endif
+ 
++	.if \check_if
++1:
++	.pushsection .discard.instr_begin
++	.long 1b - .
++	.popsection
++
++	call \func
++2:
++	.pushsection .discard.instr_end
++	.long 2b - .
++	.popsection
++
++	.else
+ 	call \func
++	.endif
++
+ 	jmp  .L_restore
+ SYM_FUNC_END(\name)
+ 	_ASM_NOKPROBE(\name)
+@@ -68,13 +83,16 @@ SYM_FUNC_END(\name)
+ 	THUNK ___preempt_schedule, preempt_schedule
+ 	EXPORT_SYMBOL(___preempt_schedule)
+ 
++.pushsection .noinstr.text, "ax"
+ 	THUNK ___preempt_schedule_notrace, preempt_schedule_notrace, check_if=1
++.popsection
+ 	EXPORT_SYMBOL(___preempt_schedule_notrace)
+ #endif
+ 
+ #if defined(CONFIG_TRACE_IRQFLAGS) \
+  || defined(CONFIG_DEBUG_LOCK_ALLOC) \
+  || defined(CONFIG_PREEMPTION)
++.section .noinstr.text, "ax"
+ SYM_CODE_START_LOCAL_NOALIGN(.L_restore)
+ 	popq %r11
+ 	popq %r10
+
+From patchwork Fri Mar 20 18:00:13 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450497
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id ECD48159A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:04:20 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id CD70721927
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:04:20 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727492AbgCTWET (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:04:19 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37497 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727406AbgCTWER (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:17 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPkE-0004cR-DQ; Fri, 20 Mar 2020 23:03:58 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id D234D1040C7;
+        Fri, 20 Mar 2020 23:03:48 +0100 (CET)
+Message-Id: <20200320180034.095809808@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:13 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org
+Subject: [RESEND][patch V3 17/23] rcu/tree: Mark the idle relevant functions
+ noinstr
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+These functions are invoked from context tracking and other places in the
+low level entry code. Move them into the .noinstr.text section to exclude
+them from instrumentation.
+
+Mark the places which are safe to invoke traceable functions with
+instr_begin/end() so objtool won't complain.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+V3: New patch
+---
+ kernel/rcu/tree.c        |   66 ++++++++++++++++++++++++++---------------------
+ kernel/rcu/tree_plugin.h |    4 +-
+ kernel/rcu/update.c      |    7 ++--
+ 3 files changed, 42 insertions(+), 35 deletions(-)
+
+--- a/kernel/rcu/tree.c
++++ b/kernel/rcu/tree.c
+@@ -75,9 +75,6 @@
+  */
+ #define RCU_DYNTICK_CTRL_MASK 0x1
+ #define RCU_DYNTICK_CTRL_CTR  (RCU_DYNTICK_CTRL_MASK + 1)
+-#ifndef rcu_eqs_special_exit
+-#define rcu_eqs_special_exit() do { } while (0)
+-#endif
+ 
+ static DEFINE_PER_CPU_SHARED_ALIGNED(struct rcu_data, rcu_data) = {
+ 	.dynticks_nesting = 1,
+@@ -228,7 +225,7 @@ void rcu_softirq_qs(void)
+  * RCU is watching prior to the call to this function and is no longer
+  * watching upon return.
+  */
+-static void rcu_dynticks_eqs_enter(void)
++static noinstr void rcu_dynticks_eqs_enter(void)
+ {
+ 	struct rcu_data *rdp = this_cpu_ptr(&rcu_data);
+ 	int seq;
+@@ -252,7 +249,7 @@ static void rcu_dynticks_eqs_enter(void)
+  * called from an extended quiescent state, that is, RCU is not watching
+  * prior to the call to this function and is watching upon return.
+  */
+-static void rcu_dynticks_eqs_exit(void)
++static noinstr void rcu_dynticks_eqs_exit(void)
+ {
+ 	struct rcu_data *rdp = this_cpu_ptr(&rcu_data);
+ 	int seq;
+@@ -269,8 +266,6 @@ static void rcu_dynticks_eqs_exit(void)
+ 	if (seq & RCU_DYNTICK_CTRL_MASK) {
+ 		atomic_andnot(RCU_DYNTICK_CTRL_MASK, &rdp->dynticks);
+ 		smp_mb__after_atomic(); /* _exit after clearing mask. */
+-		/* Prefer duplicate flushes to losing a flush. */
+-		rcu_eqs_special_exit();
+ 	}
+ }
+ 
+@@ -298,7 +293,7 @@ static void rcu_dynticks_eqs_online(void
+  *
+  * No ordering, as we are sampling CPU-local information.
+  */
+-static bool rcu_dynticks_curr_cpu_in_eqs(void)
++static __always_inline bool rcu_dynticks_curr_cpu_in_eqs(void)
+ {
+ 	struct rcu_data *rdp = this_cpu_ptr(&rcu_data);
+ 
+@@ -557,7 +552,7 @@ EXPORT_SYMBOL_GPL(rcutorture_get_gp_data
+  * the possibility of usermode upcalls having messed up our count
+  * of interrupt nesting level during the prior busy period.
+  */
+-static void rcu_eqs_enter(bool user)
++static noinstr void rcu_eqs_enter(bool user)
+ {
+ 	struct rcu_data *rdp = this_cpu_ptr(&rcu_data);
+ 
+@@ -572,12 +567,14 @@ static void rcu_eqs_enter(bool user)
+ 	}
+ 
+ 	lockdep_assert_irqs_disabled();
++	instr_begin();
+ 	trace_rcu_dyntick(TPS("Start"), rdp->dynticks_nesting, 0, atomic_read(&rdp->dynticks));
+ 	WARN_ON_ONCE(IS_ENABLED(CONFIG_RCU_EQS_DEBUG) && !user && !is_idle_task(current));
+ 	rdp = this_cpu_ptr(&rcu_data);
+ 	do_nocb_deferred_wakeup(rdp);
+ 	rcu_prepare_for_idle();
+ 	rcu_preempt_deferred_qs(current);
++	instr_end();
+ 	WRITE_ONCE(rdp->dynticks_nesting, 0); /* Avoid irq-access tearing. */
+ 	// RCU is watching here ...
+ 	rcu_dynticks_eqs_enter();
+@@ -614,7 +611,7 @@ void rcu_idle_enter(void)
+  * If you add or remove a call to rcu_user_enter(), be sure to test with
+  * CONFIG_RCU_EQS_DEBUG=y.
+  */
+-void rcu_user_enter(void)
++noinstr void rcu_user_enter(void)
+ {
+ 	lockdep_assert_irqs_disabled();
+ 	rcu_eqs_enter(true);
+@@ -647,19 +644,23 @@ static __always_inline void rcu_nmi_exit
+ 	 * leave it in non-RCU-idle state.
+ 	 */
+ 	if (rdp->dynticks_nmi_nesting != 1) {
++		instr_begin();
+ 		trace_rcu_dyntick(TPS("--="), rdp->dynticks_nmi_nesting, rdp->dynticks_nmi_nesting - 2,
+ 				  atomic_read(&rdp->dynticks));
+ 		WRITE_ONCE(rdp->dynticks_nmi_nesting, /* No store tearing. */
+ 			   rdp->dynticks_nmi_nesting - 2);
++		instr_end();
+ 		return;
+ 	}
+ 
++		instr_begin();
+ 	/* This NMI interrupted an RCU-idle CPU, restore RCU-idleness. */
+ 	trace_rcu_dyntick(TPS("Startirq"), rdp->dynticks_nmi_nesting, 0, atomic_read(&rdp->dynticks));
+ 	WRITE_ONCE(rdp->dynticks_nmi_nesting, 0); /* Avoid store tearing. */
+ 
+ 	if (irq)
+ 		rcu_prepare_for_idle();
++	instr_end();
+ 
+ 	// RCU is watching here ...
+ 	rcu_dynticks_eqs_enter();
+@@ -675,7 +676,7 @@ static __always_inline void rcu_nmi_exit
+  * If you add or remove a call to rcu_nmi_exit(), be sure to test
+  * with CONFIG_RCU_EQS_DEBUG=y.
+  */
+-void rcu_nmi_exit(void)
++void noinstr rcu_nmi_exit(void)
+ {
+ 	rcu_nmi_exit_common(false);
+ }
+@@ -728,7 +729,7 @@ void rcu_irq_exit_irqson(void)
+  * allow for the possibility of usermode upcalls messing up our count of
+  * interrupt nesting level during the busy period that is just now starting.
+  */
+-static void rcu_eqs_exit(bool user)
++static void noinstr rcu_eqs_exit(bool user)
+ {
+ 	struct rcu_data *rdp;
+ 	long oldval;
+@@ -746,12 +747,14 @@ static void rcu_eqs_exit(bool user)
+ 	// RCU is not watching here ...
+ 	rcu_dynticks_eqs_exit();
+ 	// ... but is watching here.
++	instr_begin();
+ 	rcu_cleanup_after_idle();
+ 	trace_rcu_dyntick(TPS("End"), rdp->dynticks_nesting, 1, atomic_read(&rdp->dynticks));
+ 	WARN_ON_ONCE(IS_ENABLED(CONFIG_RCU_EQS_DEBUG) && !user && !is_idle_task(current));
+ 	WRITE_ONCE(rdp->dynticks_nesting, 1);
+ 	WARN_ON_ONCE(rdp->dynticks_nmi_nesting);
+ 	WRITE_ONCE(rdp->dynticks_nmi_nesting, DYNTICK_IRQ_NONIDLE);
++	instr_end();
+ }
+ 
+ /**
+@@ -782,7 +785,7 @@ void rcu_idle_exit(void)
+  * If you add or remove a call to rcu_user_exit(), be sure to test with
+  * CONFIG_RCU_EQS_DEBUG=y.
+  */
+-void rcu_user_exit(void)
++void noinstr rcu_user_exit(void)
+ {
+ 	rcu_eqs_exit(1);
+ }
+@@ -830,27 +833,33 @@ static __always_inline void rcu_nmi_ente
+ 			rcu_cleanup_after_idle();
+ 
+ 		incby = 1;
+-	} else if (irq && tick_nohz_full_cpu(rdp->cpu) &&
+-		   rdp->dynticks_nmi_nesting == DYNTICK_IRQ_NONIDLE &&
+-		   READ_ONCE(rdp->rcu_urgent_qs) && !rdp->rcu_forced_tick) {
++	} else if (irq) {
+ 		// We get here only if we had already exited the extended
+ 		// quiescent state and this was an interrupt (not an NMI).
+ 		// Therefore, (1) RCU is already watching and (2) The fact
+ 		// that we are in an interrupt handler and that the rcu_node
+ 		// lock is an irq-disabled lock prevents self-deadlock.
+ 		// So we can safely recheck under the lock.
+-		raw_spin_lock_rcu_node(rdp->mynode);
+-		if (rdp->rcu_urgent_qs && !rdp->rcu_forced_tick) {
+-			// A nohz_full CPU is in the kernel and RCU
+-			// needs a quiescent state.  Turn on the tick!
+-			rdp->rcu_forced_tick = true;
+-			tick_dep_set_cpu(rdp->cpu, TICK_DEP_BIT_RCU);
++		instr_begin();
++		if (tick_nohz_full_cpu(rdp->cpu) &&
++		    rdp->dynticks_nmi_nesting == DYNTICK_IRQ_NONIDLE &&
++		    READ_ONCE(rdp->rcu_urgent_qs) && !rdp->rcu_forced_tick) {
++			raw_spin_lock_rcu_node(rdp->mynode);
++			if (rdp->rcu_urgent_qs && !rdp->rcu_forced_tick) {
++				// A nohz_full CPU is in the kernel and RCU
++				// needs a quiescent state.  Turn on the tick!
++				rdp->rcu_forced_tick = true;
++				tick_dep_set_cpu(rdp->cpu, TICK_DEP_BIT_RCU);
++			}
++			raw_spin_unlock_rcu_node(rdp->mynode);
+ 		}
+-		raw_spin_unlock_rcu_node(rdp->mynode);
++		instr_end();
+ 	}
++	instr_begin();
+ 	trace_rcu_dyntick(incby == 1 ? TPS("Endirq") : TPS("++="),
+ 			  rdp->dynticks_nmi_nesting,
+ 			  rdp->dynticks_nmi_nesting + incby, atomic_read(&rdp->dynticks));
++	instr_end();
+ 	WRITE_ONCE(rdp->dynticks_nmi_nesting, /* Prevent store tearing. */
+ 		   rdp->dynticks_nmi_nesting + incby);
+ 	barrier();
+@@ -859,11 +868,10 @@ static __always_inline void rcu_nmi_ente
+ /**
+  * rcu_nmi_enter - inform RCU of entry to NMI context
+  */
+-void rcu_nmi_enter(void)
++noinstr void rcu_nmi_enter(void)
+ {
+ 	rcu_nmi_enter_common(false);
+ }
+-NOKPROBE_SYMBOL(rcu_nmi_enter);
+ 
+ /**
+  * rcu_irq_enter - inform RCU that current CPU is entering irq away from idle
+@@ -932,7 +940,7 @@ static void rcu_disable_urgency_upon_qs(
+  * if the current CPU is not in its idle loop or is in an interrupt or
+  * NMI handler, return true.
+  */
+-bool notrace rcu_is_watching(void)
++noinstr bool rcu_is_watching(void)
+ {
+ 	bool ret;
+ 
+@@ -976,7 +984,7 @@ void rcu_request_urgent_qs_task(struct t
+  * RCU on an offline processor during initial boot, hence the check for
+  * rcu_scheduler_fully_active.
+  */
+-bool rcu_lockdep_current_cpu_online(void)
++noinstr bool rcu_lockdep_current_cpu_online(void)
+ {
+ 	struct rcu_data *rdp;
+ 	struct rcu_node *rnp;
+@@ -984,12 +992,12 @@ bool rcu_lockdep_current_cpu_online(void
+ 
+ 	if (in_nmi() || !rcu_scheduler_fully_active)
+ 		return true;
+-	preempt_disable();
++	preempt_disable_notrace();
+ 	rdp = this_cpu_ptr(&rcu_data);
+ 	rnp = rdp->mynode;
+ 	if (rdp->grpmask & rcu_rnp_online_cpus(rnp))
+ 		ret = true;
+-	preempt_enable();
++	preempt_enable_notrace();
+ 	return ret;
+ }
+ EXPORT_SYMBOL_GPL(rcu_lockdep_current_cpu_online);
+--- a/kernel/rcu/tree_plugin.h
++++ b/kernel/rcu/tree_plugin.h
+@@ -2546,7 +2546,7 @@ static void rcu_bind_gp_kthread(void)
+ }
+ 
+ /* Record the current task on dyntick-idle entry. */
+-static void rcu_dynticks_task_enter(void)
++static void noinstr rcu_dynticks_task_enter(void)
+ {
+ #if defined(CONFIG_TASKS_RCU) && defined(CONFIG_NO_HZ_FULL)
+ 	WRITE_ONCE(current->rcu_tasks_idle_cpu, smp_processor_id());
+@@ -2554,7 +2554,7 @@ static void rcu_dynticks_task_enter(void
+ }
+ 
+ /* Record no current task on dyntick-idle exit. */
+-static void rcu_dynticks_task_exit(void)
++static void noinstr rcu_dynticks_task_exit(void)
+ {
+ #if defined(CONFIG_TASKS_RCU) && defined(CONFIG_NO_HZ_FULL)
+ 	WRITE_ONCE(current->rcu_tasks_idle_cpu, -1);
+--- a/kernel/rcu/update.c
++++ b/kernel/rcu/update.c
+@@ -95,7 +95,7 @@ module_param(rcu_normal_after_boot, int,
+  * Similarly, we avoid claiming an RCU read lock held if the current
+  * CPU is offline.
+  */
+-static bool rcu_read_lock_held_common(bool *ret)
++static noinstr bool rcu_read_lock_held_common(bool *ret)
+ {
+ 	if (!debug_lockdep_rcu_enabled()) {
+ 		*ret = 1;
+@@ -112,7 +112,7 @@ static bool rcu_read_lock_held_common(bo
+ 	return false;
+ }
+ 
+-int rcu_read_lock_sched_held(void)
++noinstr int rcu_read_lock_sched_held(void)
+ {
+ 	bool ret;
+ 
+@@ -246,13 +246,12 @@ struct lockdep_map rcu_callback_map =
+ 	STATIC_LOCKDEP_MAP_INIT("rcu_callback", &rcu_callback_key);
+ EXPORT_SYMBOL_GPL(rcu_callback_map);
+ 
+-int notrace debug_lockdep_rcu_enabled(void)
++noinstr int notrace debug_lockdep_rcu_enabled(void)
+ {
+ 	return rcu_scheduler_active != RCU_SCHEDULER_INACTIVE && debug_locks &&
+ 	       current->lockdep_recursion == 0;
+ }
+ EXPORT_SYMBOL_GPL(debug_lockdep_rcu_enabled);
+-NOKPROBE_SYMBOL(debug_lockdep_rcu_enabled);
+ 
+ /**
+  * rcu_read_lock_held() - might we be in RCU read-side critical section?
+
+From patchwork Fri Mar 20 18:00:14 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450535
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B466F13B1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:06:08 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 9F34C21556
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:06:08 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727580AbgCTWGB (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:06:01 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37472 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1726666AbgCTWEN (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:13 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPk9-0004d8-QA; Fri, 20 Mar 2020 23:03:53 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 1AAE61040C9;
+        Fri, 20 Mar 2020 23:03:49 +0100 (CET)
+Message-Id: <20200320180034.203489576@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:14 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org,
+        Peter Zijlstra <peterz@infradead.org>
+Subject: [RESEND][patch V3 18/23] x86/kvm: Move context tracking where it
+ belongs
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The invocation of guest_enter_irqoff() is way before the actual VMENTER
+happens. guest_exit_irqoff() happens way after the VMEXIT.
+
+While the comment in guest_enter_irqoff() says that KVM does not hold
+references to RCU protected data, for the whole call chain before VMENTER
+and after VMEXIT there is no guarantee that no RCU protected data is
+accessed.
+
+There are tracepoints hidden in MSR access functions and there are calls
+into code which takes locks. The latter might cause lockdep to run into RCU
+trouble. As the call chains are hard to follow it's unclear whether there
+might be RCU trouble lurking in some corner cases.
+
+The VMENTER path after context tracking contains also exit conditions which
+abort the VMENTER. The VMEXIT return path reenables interrupts before
+switching RCU back on which means that the interrupt entry/exit has to
+switch in on and then off again. If tracepoints on local_irq_enable() and
+local_irqdisable() are enabled then two more RCU on/off transitions are
+happening.
+
+Move it down into the VMX/SVM code close to the actual entry/exit. This is
+the first step to bring parts of this code into the .noinstr.text section
+so it can be verified with objtool.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Cc: Tom Lendacky <thomas.lendacky@amd.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: kvm@vger.kernel.org
+---
+ arch/x86/kvm/svm.c     |   18 ++++++++++++++++++
+ arch/x86/kvm/vmx/vmx.c |   10 ++++++++++
+ arch/x86/kvm/x86.c     |    2 --
+ 3 files changed, 28 insertions(+), 2 deletions(-)
+
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -5766,6 +5766,15 @@ static void svm_vcpu_run(struct kvm_vcpu
+ 	 */
+ 	x86_spec_ctrl_set_guest(svm->spec_ctrl, svm->virt_spec_ctrl);
+ 
++	/*
++	 * Tell context tracking that this CPU is about to enter guest
++	 * mode. This has to be after x86_spec_ctrl_set_guest() because
++	 * that can take locks (lockdep needs RCU) and calls into world and
++	 * some more.
++	 */
++	guest_enter_irqoff();
++
++	/* This is wrong vs. lockdep. Will be fixed in the next step */
+ 	local_irq_enable();
+ 
+ 	asm volatile (
+@@ -5869,6 +5878,14 @@ static void svm_vcpu_run(struct kvm_vcpu
+ 	loadsegment(gs, svm->host.gs);
+ #endif
+ #endif
++	/*
++	 * Tell context tracking that this CPU is back.
++	 *
++	 * This needs to be done before the below as native_read_msr()
++	 * contains a tracepoint and x86_spec_ctrl_restore_host() calls
++	 * into world and some more.
++	 */
++	guest_exit_irqoff();
+ 
+ 	/*
+ 	 * We do not use IBRS in the kernel. If this vCPU has used the
+@@ -5890,6 +5907,7 @@ static void svm_vcpu_run(struct kvm_vcpu
+ 
+ 	reload_tss(vcpu);
+ 
++	/* This is wrong vs. lockdep. Will be fixed in the next step */
+ 	local_irq_disable();
+ 
+ 	x86_spec_ctrl_restore_host(svm->spec_ctrl, svm->virt_spec_ctrl);
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6537,6 +6537,11 @@ static void vmx_vcpu_run(struct kvm_vcpu
+ 	 */
+ 	x86_spec_ctrl_set_guest(vmx->spec_ctrl, 0);
+ 
++	/*
++	 * Tell context tracking that this CPU is about to enter guest mode.
++	 */
++	guest_enter_irqoff();
++
+ 	/* L1D Flush includes CPU buffer clear to mitigate MDS */
+ 	if (static_branch_unlikely(&vmx_l1d_should_flush))
+ 		vmx_l1d_flush(vcpu);
+@@ -6552,6 +6557,11 @@ static void vmx_vcpu_run(struct kvm_vcpu
+ 	vcpu->arch.cr2 = read_cr2();
+ 
+ 	/*
++	 * Tell context tracking that this CPU is back.
++	 */
++	guest_exit_irqoff();
++
++	/*
+ 	 * We do not use IBRS in the kernel. If this vCPU has used the
+ 	 * SPEC_CTRL MSR it may have left it on; save the value and
+ 	 * turn it off. This is much more efficient than blindly adding
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -8350,7 +8350,6 @@ static int vcpu_enter_guest(struct kvm_v
+ 	}
+ 
+ 	trace_kvm_entry(vcpu->vcpu_id);
+-	guest_enter_irqoff();
+ 
+ 	fpregs_assert_state_consistent();
+ 	if (test_thread_flag(TIF_NEED_FPU_LOAD))
+@@ -8413,7 +8412,6 @@ static int vcpu_enter_guest(struct kvm_v
+ 	local_irq_disable();
+ 	kvm_after_interrupt(vcpu);
+ 
+-	guest_exit_irqoff();
+ 	if (lapic_in_kernel(vcpu)) {
+ 		s64 delta = vcpu->arch.apic->lapic_timer.advance_expire_delta;
+ 		if (delta != S64_MIN) {
+
+From patchwork Fri Mar 20 18:00:15 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450503
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B10231667
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:04:47 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 9738321D79
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:04:47 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727520AbgCTWEn (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:04:43 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37512 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727473AbgCTWEU (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:20 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPkF-0004dk-8e; Fri, 20 Mar 2020 23:03:59 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 56B941040CB;
+        Fri, 20 Mar 2020 23:03:49 +0100 (CET)
+Message-Id: <20200320180034.297670977@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:15 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>
+Subject: [RESEND][patch V3 19/23] x86/kvm/vmx: Add hardirq tracing to guest
+ enter/exit
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The VMX code does not track hard interrupt state correctly. The state in
+tracing and lockdep is 'OFF' all the way during guest mode. From the host
+point of view this is wrong because the VMENTER reenables interrupts like a
+return to user space and VMENTER disables them again like an entry from
+user space.
+
+Make it do exactly the same thing as enter/exit user mode does.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: kvm@vger.kernel.org
+---
+ arch/x86/kvm/vmx/vmx.c |   25 +++++++++++++++++++++++--
+ 1 file changed, 23 insertions(+), 2 deletions(-)
+
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6538,9 +6538,19 @@ static void vmx_vcpu_run(struct kvm_vcpu
+ 	x86_spec_ctrl_set_guest(vmx->spec_ctrl, 0);
+ 
+ 	/*
+-	 * Tell context tracking that this CPU is about to enter guest mode.
++	 * VMENTER enables interrupts (host state), but the kernel state is
++	 * interrupts disabled when this is invoked. Also tell RCU about
++	 * it. This is the same logic as for exit_to_user_mode().
++	 *
++	 * 1) Trace interrupts on state
++	 * 2) Prepare lockdep with RCU on
++	 * 3) Invoke context tracking if enabled to adjust RCU state
++	 * 4) Tell lockdep that interrupts are enabled
+ 	 */
++	__trace_hardirqs_on();
++	lockdep_hardirqs_on_prepare(CALLER_ADDR0);
+ 	guest_enter_irqoff();
++	lockdep_hardirqs_on(CALLER_ADDR0);
+ 
+ 	/* L1D Flush includes CPU buffer clear to mitigate MDS */
+ 	if (static_branch_unlikely(&vmx_l1d_should_flush))
+@@ -6557,9 +6567,20 @@ static void vmx_vcpu_run(struct kvm_vcpu
+ 	vcpu->arch.cr2 = read_cr2();
+ 
+ 	/*
+-	 * Tell context tracking that this CPU is back.
++	 * VMEXIT disables interrupts (host state), but tracing and lockdep
++	 * have them in state 'on'. Same as enter_from_user_mode().
++	 *
++	 * 1) Tell lockdep that interrupts are disabled
++	 * 2) Invoke context tracking if enabled to reactivate RCU
++	 * 3) Trace interrupts off state
++	 *
++	 * This needs to be done before the below as native_read_msr()
++	 * contains a tracepoint and x86_spec_ctrl_restore_host() calls
++	 * into world and some more.
+ 	 */
++	lockdep_hardirqs_off(CALLER_ADDR0);
+ 	guest_exit_irqoff();
++	__trace_hardirqs_off();
+ 
+ 	/*
+ 	 * We do not use IBRS in the kernel. If this vCPU has used the
+
+From patchwork Fri Mar 20 18:00:16 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450499
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 2247413B1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:04:40 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 0C194216FD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:04:39 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727545AbgCTWEZ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:04:25 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37516 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727523AbgCTWEY (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:24 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPkA-0004eT-UU; Fri, 20 Mar 2020 23:03:55 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 9282D1040CC;
+        Fri, 20 Mar 2020 23:03:49 +0100 (CET)
+Message-Id: <20200320180034.391111270@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:16 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org,
+        Peter Zijlstra <peterz@infradead.org>
+Subject: [RESEND][patch V3 20/23] x86/kvm/svm: Handle hardirqs proper on guest
+ enter/exit
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+SVM hard interrupt disabled state handling is interesting. It disables
+interrupts via CLGI and then invokes local_irq_enable(). This is done after
+context tracking. local_irq_enable() can call into the tracer and lockdep
+which requires to turn RCU on and off.
+
+Replace it with the scheme which is used when exiting to user mode which
+handles tracing and the preparatory lockdep step before context tracking
+and the final lockdep step afterwards. Enable interrupts with a plain STI
+in the assembly code instead. 
+
+Do the reverse operation when coming out of guest mode.
+
+This allows to move the actual entry code into the .noinstr.text section
+and verify correctness with objtool.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Cc: Tom Lendacky <thomas.lendacky@amd.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: kvm@vger.kernel.org
+---
+ arch/x86/kvm/svm.c |   40 ++++++++++++++++++++++++++++------------
+ 1 file changed, 28 insertions(+), 12 deletions(-)
+
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -5767,17 +5767,26 @@ static void svm_vcpu_run(struct kvm_vcpu
+ 	x86_spec_ctrl_set_guest(svm->spec_ctrl, svm->virt_spec_ctrl);
+ 
+ 	/*
+-	 * Tell context tracking that this CPU is about to enter guest
+-	 * mode. This has to be after x86_spec_ctrl_set_guest() because
+-	 * that can take locks (lockdep needs RCU) and calls into world and
+-	 * some more.
++	 * VMENTER enables interrupts (host state), but the kernel state is
++	 * interrupts disabled when this is invoked. Also tell RCU about
++	 * it. This is the same logic as for exit_to_user_mode().
++	 *
++	 * 1) Trace interrupts on state
++	 * 2) Prepare lockdep with RCU on
++	 * 3) Invoke context tracking if enabled to adjust RCU state
++	 * 4) Tell lockdep that interrupts are enabled
++	 *
++	 * This has to be after x86_spec_ctrl_set_guest() because that can
++	 * take locks (lockdep needs RCU) and calls into world and some
++	 * more.
+ 	 */
++	__trace_hardirqs_on();
++	lockdep_hardirqs_on_prepare(CALLER_ADDR0);
+ 	guest_enter_irqoff();
+-
+-	/* This is wrong vs. lockdep. Will be fixed in the next step */
+-	local_irq_enable();
++	lockdep_hardirqs_on(CALLER_ADDR0);
+ 
+ 	asm volatile (
++		"sti \n\t"
+ 		"push %%" _ASM_BP "; \n\t"
+ 		"mov %c[rbx](%[svm]), %%" _ASM_BX " \n\t"
+ 		"mov %c[rcx](%[svm]), %%" _ASM_CX " \n\t"
+@@ -5838,7 +5847,8 @@ static void svm_vcpu_run(struct kvm_vcpu
+ 		"xor %%edx, %%edx \n\t"
+ 		"xor %%esi, %%esi \n\t"
+ 		"xor %%edi, %%edi \n\t"
+-		"pop %%" _ASM_BP
++		"pop %%" _ASM_BP "\n\t"
++		"cli \n\t"
+ 		:
+ 		: [svm]"a"(svm),
+ 		  [vmcb]"i"(offsetof(struct vcpu_svm, vmcb_pa)),
+@@ -5878,14 +5888,23 @@ static void svm_vcpu_run(struct kvm_vcpu
+ 	loadsegment(gs, svm->host.gs);
+ #endif
+ #endif
++
+ 	/*
+-	 * Tell context tracking that this CPU is back.
++	 * VMEXIT disables interrupts (host state, see the CLI in the ASM
++	 * above), but tracing and lockdep have them in state 'on'. Same as
++	 * enter_from_user_mode().
++	 *
++	 * 1) Tell lockdep that interrupts are disabled
++	 * 2) Invoke context tracking if enabled to reactivate RCU
++	 * 3) Trace interrupts off state
+ 	 *
+ 	 * This needs to be done before the below as native_read_msr()
+ 	 * contains a tracepoint and x86_spec_ctrl_restore_host() calls
+ 	 * into world and some more.
+ 	 */
++	lockdep_hardirqs_off(CALLER_ADDR0);
+ 	guest_exit_irqoff();
++	__trace_hardirqs_off();
+ 
+ 	/*
+ 	 * We do not use IBRS in the kernel. If this vCPU has used the
+@@ -5907,9 +5926,6 @@ static void svm_vcpu_run(struct kvm_vcpu
+ 
+ 	reload_tss(vcpu);
+ 
+-	/* This is wrong vs. lockdep. Will be fixed in the next step */
+-	local_irq_disable();
+-
+ 	x86_spec_ctrl_restore_host(svm->spec_ctrl, svm->virt_spec_ctrl);
+ 
+ 	vcpu->arch.cr2 = svm->vmcb->save.cr2;
+
+From patchwork Fri Mar 20 18:00:17 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450529
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C82E613B1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:56 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id B1C4F21473
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:56 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727804AbgCTWFt (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:05:49 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37486 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727334AbgCTWEO (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:14 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPkB-0004fC-LG; Fri, 20 Mar 2020 23:03:55 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id CF2D91039FF;
+        Fri, 20 Mar 2020 23:03:49 +0100 (CET)
+Message-Id: <20200320180034.488016631@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:17 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org,
+        Peter Zijlstra <peterz@infradead.org>
+Subject: [RESEND][patch V3 21/23] context_tracking: Make
+ guest_enter/exit_irqoff() .noinstr ready
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Mark the functions __always_inline and add the annotations for the "safe"
+calls into regular text sections where RCU is watching.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Cc: Tom Lendacky <thomas.lendacky@amd.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: kvm@vger.kernel.org
+---
+ include/linux/context_tracking.h |   21 ++++++++++++++++-----
+ 1 file changed, 16 insertions(+), 5 deletions(-)
+
+--- a/include/linux/context_tracking.h
++++ b/include/linux/context_tracking.h
+@@ -101,12 +101,14 @@ static inline void context_tracking_init
+ 
+ #ifdef CONFIG_VIRT_CPU_ACCOUNTING_GEN
+ /* must be called with irqs disabled */
+-static inline void guest_enter_irqoff(void)
++static __always_inline void guest_enter_irqoff(void)
+ {
++	instr_begin();
+ 	if (vtime_accounting_enabled_this_cpu())
+ 		vtime_guest_enter(current);
+ 	else
+ 		current->flags |= PF_VCPU;
++	instr_end();
+ 
+ 	if (context_tracking_enabled())
+ 		__context_tracking_enter(CONTEXT_GUEST);
+@@ -118,39 +120,48 @@ static inline void guest_enter_irqoff(vo
+ 	 * one time slice). Lets treat guest mode as quiescent state, just like
+ 	 * we do with user-mode execution.
+ 	 */
+-	if (!context_tracking_enabled_this_cpu())
++	if (!context_tracking_enabled_this_cpu()) {
++		instr_begin();
+ 		rcu_virt_note_context_switch(smp_processor_id());
++		instr_end();
++	}
+ }
+ 
+-static inline void guest_exit_irqoff(void)
++static __always_inline void guest_exit_irqoff(void)
+ {
+ 	if (context_tracking_enabled())
+ 		__context_tracking_exit(CONTEXT_GUEST);
+ 
++	instr_begin();
+ 	if (vtime_accounting_enabled_this_cpu())
+ 		vtime_guest_exit(current);
+ 	else
+ 		current->flags &= ~PF_VCPU;
++	instr_end();
+ }
+ 
+ #else
+-static inline void guest_enter_irqoff(void)
++static __always_inline void guest_enter_irqoff(void)
+ {
+ 	/*
+ 	 * This is running in ioctl context so its safe
+ 	 * to assume that it's the stime pending cputime
+ 	 * to flush.
+ 	 */
++	instr_begin();
+ 	vtime_account_kernel(current);
+ 	current->flags |= PF_VCPU;
+ 	rcu_virt_note_context_switch(smp_processor_id());
++	instr_end();
+ }
+ 
+-static inline void guest_exit_irqoff(void)
++static __always_inline void guest_exit_irqoff(void)
+ {
++	instr_begin();
+ 	/* Flush the guest cputime we spent on the guest */
+ 	vtime_account_kernel(current);
+ 	current->flags &= ~PF_VCPU;
++	instr_end();
+ }
+ #endif /* CONFIG_VIRT_CPU_ACCOUNTING_GEN */
+ 
+
+From patchwork Fri Mar 20 18:00:18 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450509
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E13E3159A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:06 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id C0F9721556
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:05:06 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727631AbgCTWE5 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:04:57 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37509 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727433AbgCTWET (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:19 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPkF-0004fa-6o; Fri, 20 Mar 2020 23:03:59 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 17D611040CD;
+        Fri, 20 Mar 2020 23:03:50 +0100 (CET)
+Message-Id: <20200320180034.580811627@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:18 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org,
+        Peter Zijlstra <peterz@infradead.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>
+Subject: [RESEND][patch V3 22/23] x86/kvm/vmx: Move guest enter/exit into
+ .noinstr.text
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Split out the really last steps of guest enter and the early guest exit
+code and mark it .noinstr.text along with the ASM code invoked from there.
+
+The few functions which are invoked from there are either made
+__always_inline or marked with noinstr which moves them into the
+.noinstr.text section.
+
+Use native_wrmsr() in the L1D flush code to prevent a tracepoint from being
+inserted.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: kvm@vger.kernel.org
+---
+ arch/x86/include/asm/hardirq.h  |    4 -
+ arch/x86/include/asm/kvm_host.h |    8 +++
+ arch/x86/kvm/vmx/ops.h          |    4 +
+ arch/x86/kvm/vmx/vmenter.S      |    2 
+ arch/x86/kvm/vmx/vmx.c          |  105 ++++++++++++++++++++++------------------
+ arch/x86/kvm/x86.c              |    2 
+ 6 files changed, 76 insertions(+), 49 deletions(-)
+
+--- a/arch/x86/include/asm/hardirq.h
++++ b/arch/x86/include/asm/hardirq.h
+@@ -67,12 +67,12 @@ static inline void kvm_set_cpu_l1tf_flus
+ 	__this_cpu_write(irq_stat.kvm_cpu_l1tf_flush_l1d, 1);
+ }
+ 
+-static inline void kvm_clear_cpu_l1tf_flush_l1d(void)
++static __always_inline void kvm_clear_cpu_l1tf_flush_l1d(void)
+ {
+ 	__this_cpu_write(irq_stat.kvm_cpu_l1tf_flush_l1d, 0);
+ }
+ 
+-static inline bool kvm_get_cpu_l1tf_flush_l1d(void)
++static __always_inline bool kvm_get_cpu_l1tf_flush_l1d(void)
+ {
+ 	return __this_cpu_read(irq_stat.kvm_cpu_l1tf_flush_l1d);
+ }
+--- a/arch/x86/kvm/vmx/ops.h
++++ b/arch/x86/kvm/vmx/ops.h
+@@ -131,7 +131,9 @@ do {									\
+ 			  : : op1 : "cc" : error, fault);		\
+ 	return;								\
+ error:									\
++	instr_begin();							\
+ 	insn##_error(error_args);					\
++	instr_end();							\
+ 	return;								\
+ fault:									\
+ 	kvm_spurious_fault();						\
+@@ -146,7 +148,9 @@ do {									\
+ 			  : : op1, op2 : "cc" : error, fault);		\
+ 	return;								\
+ error:									\
++	instr_begin();							\
+ 	insn##_error(error_args);					\
++	instr_end();							\
+ 	return;								\
+ fault:									\
+ 	kvm_spurious_fault();						\
+--- a/arch/x86/kvm/vmx/vmenter.S
++++ b/arch/x86/kvm/vmx/vmenter.S
+@@ -27,7 +27,7 @@
+ #define VCPU_R15	__VCPU_REGS_R15 * WORD_SIZE
+ #endif
+ 
+-	.text
++.section .noinstr.text, "ax"
+ 
+ /**
+  * vmx_vmenter - VM-Enter the current loaded VMCS
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -5931,7 +5931,7 @@ static int vmx_handle_exit(struct kvm_vc
+  * information but as all relevant affected CPUs have 32KiB L1D cache size
+  * there is no point in doing so.
+  */
+-static void vmx_l1d_flush(struct kvm_vcpu *vcpu)
++static noinstr void vmx_l1d_flush(struct kvm_vcpu *vcpu)
+ {
+ 	int size = PAGE_SIZE << L1D_CACHE_ORDER;
+ 
+@@ -5964,7 +5964,7 @@ static void vmx_l1d_flush(struct kvm_vcp
+ 	vcpu->stat.l1d_flush++;
+ 
+ 	if (static_cpu_has(X86_FEATURE_FLUSH_L1D)) {
+-		wrmsrl(MSR_IA32_FLUSH_CMD, L1D_FLUSH);
++		native_wrmsrl(MSR_IA32_FLUSH_CMD, L1D_FLUSH);
+ 		return;
+ 	}
+ 
+@@ -6452,7 +6452,7 @@ static void vmx_update_hv_timer(struct k
+ 	}
+ }
+ 
+-void vmx_update_host_rsp(struct vcpu_vmx *vmx, unsigned long host_rsp)
++void noinstr vmx_update_host_rsp(struct vcpu_vmx *vmx, unsigned long host_rsp)
+ {
+ 	if (unlikely(host_rsp != vmx->loaded_vmcs->host_state.rsp)) {
+ 		vmx->loaded_vmcs->host_state.rsp = host_rsp;
+@@ -6462,6 +6462,61 @@ void vmx_update_host_rsp(struct vcpu_vmx
+ 
+ bool __vmx_vcpu_run(struct vcpu_vmx *vmx, unsigned long *regs, bool launched);
+ 
++static noinstr void vmx_vcpu_enter_exit(struct kvm_vcpu *vcpu,
++					struct vcpu_vmx *vmx)
++{
++	instr_begin();
++	/*
++	 * VMENTER enables interrupts (host state), but the kernel state is
++	 * interrupts disabled when this is invoked. Also tell RCU about
++	 * it. This is the same logic as for exit_to_user_mode().
++	 *
++	 * 1) Trace interrupts on state
++	 * 2) Prepare lockdep with RCU on
++	 * 3) Invoke context tracking if enabled to adjust RCU state
++	 * 4) Tell lockdep that interrupts are enabled
++	 */
++	__trace_hardirqs_on();
++	lockdep_hardirqs_on_prepare(CALLER_ADDR0);
++	instr_end();
++
++	guest_enter_irqoff();
++	lockdep_hardirqs_on(CALLER_ADDR0);
++
++	/* L1D Flush includes CPU buffer clear to mitigate MDS */
++	if (static_branch_unlikely(&vmx_l1d_should_flush))
++		vmx_l1d_flush(vcpu);
++	else if (static_branch_unlikely(&mds_user_clear))
++		mds_clear_cpu_buffers();
++
++	if (vcpu->arch.cr2 != read_cr2())
++		write_cr2(vcpu->arch.cr2);
++
++	vmx->fail = __vmx_vcpu_run(vmx, (unsigned long *)&vcpu->arch.regs,
++				   vmx->loaded_vmcs->launched);
++
++	vcpu->arch.cr2 = read_cr2();
++
++	/*
++	 * VMEXIT disables interrupts (host state), but tracing and lockdep
++	 * have them in state 'on'. Same as enter_from_user_mode().
++	 *
++	 * 1) Tell lockdep that interrupts are disabled
++	 * 2) Invoke context tracking if enabled to reactivate RCU
++	 * 3) Trace interrupts off state
++	 *
++	 * This needs to be done before the below as native_read_msr()
++	 * contains a tracepoint and x86_spec_ctrl_restore_host() calls
++	 * into world and some more.
++	 */
++	lockdep_hardirqs_off(CALLER_ADDR0);
++	guest_exit_irqoff();
++
++	instr_begin();
++	__trace_hardirqs_off();
++	instr_end();
++}
++
+ static void vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+@@ -6538,49 +6593,9 @@ static void vmx_vcpu_run(struct kvm_vcpu
+ 	x86_spec_ctrl_set_guest(vmx->spec_ctrl, 0);
+ 
+ 	/*
+-	 * VMENTER enables interrupts (host state), but the kernel state is
+-	 * interrupts disabled when this is invoked. Also tell RCU about
+-	 * it. This is the same logic as for exit_to_user_mode().
+-	 *
+-	 * 1) Trace interrupts on state
+-	 * 2) Prepare lockdep with RCU on
+-	 * 3) Invoke context tracking if enabled to adjust RCU state
+-	 * 4) Tell lockdep that interrupts are enabled
++	 * The actual VMENTER/EXIT is in the .noinstr.text section.
+ 	 */
+-	__trace_hardirqs_on();
+-	lockdep_hardirqs_on_prepare(CALLER_ADDR0);
+-	guest_enter_irqoff();
+-	lockdep_hardirqs_on(CALLER_ADDR0);
+-
+-	/* L1D Flush includes CPU buffer clear to mitigate MDS */
+-	if (static_branch_unlikely(&vmx_l1d_should_flush))
+-		vmx_l1d_flush(vcpu);
+-	else if (static_branch_unlikely(&mds_user_clear))
+-		mds_clear_cpu_buffers();
+-
+-	if (vcpu->arch.cr2 != read_cr2())
+-		write_cr2(vcpu->arch.cr2);
+-
+-	vmx->fail = __vmx_vcpu_run(vmx, (unsigned long *)&vcpu->arch.regs,
+-				   vmx->loaded_vmcs->launched);
+-
+-	vcpu->arch.cr2 = read_cr2();
+-
+-	/*
+-	 * VMEXIT disables interrupts (host state), but tracing and lockdep
+-	 * have them in state 'on'. Same as enter_from_user_mode().
+-	 *
+-	 * 1) Tell lockdep that interrupts are disabled
+-	 * 2) Invoke context tracking if enabled to reactivate RCU
+-	 * 3) Trace interrupts off state
+-	 *
+-	 * This needs to be done before the below as native_read_msr()
+-	 * contains a tracepoint and x86_spec_ctrl_restore_host() calls
+-	 * into world and some more.
+-	 */
+-	lockdep_hardirqs_off(CALLER_ADDR0);
+-	guest_exit_irqoff();
+-	__trace_hardirqs_off();
++	vmx_vcpu_enter_exit(vcpu, vmx);
+ 
+ 	/*
+ 	 * We do not use IBRS in the kernel. If this vCPU has used the
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -354,7 +354,7 @@ int kvm_set_apic_base(struct kvm_vcpu *v
+ }
+ EXPORT_SYMBOL_GPL(kvm_set_apic_base);
+ 
+-asmlinkage __visible void kvm_spurious_fault(void)
++asmlinkage __visible noinstr void kvm_spurious_fault(void)
+ {
+ 	/* Fault while not rebooting.  We want the trace. */
+ 	BUG_ON(!kvm_rebooting);
+
+From patchwork Fri Mar 20 18:00:19 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11450505
+Return-Path: <SRS0=CcrQ=5F=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8134213B1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:04:54 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 6167D21473
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 20 Mar 2020 22:04:54 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727604AbgCTWEu (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 20 Mar 2020 18:04:50 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:37510 "EHLO
+        Galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727443AbgCTWET (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 20 Mar 2020 18:04:19 -0400
+Received: from p5de0bf0b.dip0.t-ipconnect.de ([93.224.191.11]
+ helo=nanos.tec.linutronix.de)
+        by Galois.linutronix.de with esmtpsa
+ (TLS1.2:DHE_RSA_AES_256_CBC_SHA256:256)
+        (Exim 4.80)
+        (envelope-from <tglx@linutronix.de>)
+        id 1jFPkC-0004gl-PW; Fri, 20 Mar 2020 23:03:57 +0100
+Received: from nanos.tec.linutronix.de (localhost [IPv6:::1])
+        by nanos.tec.linutronix.de (Postfix) with ESMTP id 524131040D0;
+        Fri, 20 Mar 2020 23:03:50 +0100 (CET)
+Message-Id: <20200320180034.672927065@linutronix.de>
+User-Agent: quilt/0.65
+Date: Fri, 20 Mar 2020 19:00:19 +0100
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paul McKenney <paulmck@kernel.org>,
+        Josh Poimboeuf <jpoimboe@redhat.com>,
+        "Joel Fernandes (Google)" <joel@joelfernandes.org>,
+        "Steven Rostedt (VMware)" <rostedt@goodmis.org>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Alexei Starovoitov <ast@kernel.org>,
+        Frederic Weisbecker <frederic@kernel.org>,
+        Mathieu Desnoyers <mathieu.desnoyers@efficios.com>,
+        Brian Gerst <brgerst@gmail.com>,
+        Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Paolo Bonzini <pbonzini@redhat.com>, kvm@vger.kernel.org,
+        Peter Zijlstra <peterz@infradead.org>
+Subject: [RESEND][patch V3 23/23] x86/kvm/svm: Move guest enter/exit into
+ .noinstr.text
+References: <20200320175956.033706968@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+X-Linutronix-Spam-Score: -1.0
+X-Linutronix-Spam-Level: -
+X-Linutronix-Spam-Status: No , -1.0 points, 5.0 required,
+  ALL_TRUSTED=-1,SHORTCIRCUIT=-0.0001
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Split out the really last steps of guest enter and the early guest exit
+code and mark it .noinstr.text. Add the required instr_begin()/end() pairs
+around "safe" code and replace the wrmsr() with native_wrmsr() to prevent a
+tracepoint injection.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Cc: Tom Lendacky <thomas.lendacky@amd.com>
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Cc: kvm@vger.kernel.org
+---
+ arch/x86/kvm/svm.c |  114 ++++++++++++++++++++++++++++-------------------------
+ 1 file changed, 62 insertions(+), 52 deletions(-)
+
+--- a/arch/x86/kvm/svm.c
++++ b/arch/x86/kvm/svm.c
+@@ -5714,58 +5714,9 @@ static void svm_cancel_injection(struct
+ 	svm_complete_interrupts(svm);
+ }
+ 
+-static void svm_vcpu_run(struct kvm_vcpu *vcpu)
++static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu,
++					struct vcpu_svm *svm)
+ {
+-	struct vcpu_svm *svm = to_svm(vcpu);
+-
+-	svm->vmcb->save.rax = vcpu->arch.regs[VCPU_REGS_RAX];
+-	svm->vmcb->save.rsp = vcpu->arch.regs[VCPU_REGS_RSP];
+-	svm->vmcb->save.rip = vcpu->arch.regs[VCPU_REGS_RIP];
+-
+-	/*
+-	 * A vmexit emulation is required before the vcpu can be executed
+-	 * again.
+-	 */
+-	if (unlikely(svm->nested.exit_required))
+-		return;
+-
+-	/*
+-	 * Disable singlestep if we're injecting an interrupt/exception.
+-	 * We don't want our modified rflags to be pushed on the stack where
+-	 * we might not be able to easily reset them if we disabled NMI
+-	 * singlestep later.
+-	 */
+-	if (svm->nmi_singlestep && svm->vmcb->control.event_inj) {
+-		/*
+-		 * Event injection happens before external interrupts cause a
+-		 * vmexit and interrupts are disabled here, so smp_send_reschedule
+-		 * is enough to force an immediate vmexit.
+-		 */
+-		disable_nmi_singlestep(svm);
+-		smp_send_reschedule(vcpu->cpu);
+-	}
+-
+-	pre_svm_run(svm);
+-
+-	sync_lapic_to_cr8(vcpu);
+-
+-	svm->vmcb->save.cr2 = vcpu->arch.cr2;
+-
+-	clgi();
+-	kvm_load_guest_xsave_state(vcpu);
+-
+-	if (lapic_in_kernel(vcpu) &&
+-		vcpu->arch.apic->lapic_timer.timer_advance_ns)
+-		kvm_wait_lapic_expire(vcpu);
+-
+-	/*
+-	 * If this vCPU has touched SPEC_CTRL, restore the guest's value if
+-	 * it's non-zero. Since vmentry is serialising on affected CPUs, there
+-	 * is no need to worry about the conditional branch over the wrmsr
+-	 * being speculatively taken.
+-	 */
+-	x86_spec_ctrl_set_guest(svm->spec_ctrl, svm->virt_spec_ctrl);
+-
+ 	/*
+ 	 * VMENTER enables interrupts (host state), but the kernel state is
+ 	 * interrupts disabled when this is invoked. Also tell RCU about
+@@ -5780,8 +5731,10 @@ static void svm_vcpu_run(struct kvm_vcpu
+ 	 * take locks (lockdep needs RCU) and calls into world and some
+ 	 * more.
+ 	 */
++	instr_begin();
+ 	__trace_hardirqs_on();
+ 	lockdep_hardirqs_on_prepare(CALLER_ADDR0);
++	instr_end();
+ 	guest_enter_irqoff();
+ 	lockdep_hardirqs_on(CALLER_ADDR0);
+ 
+@@ -5881,7 +5834,7 @@ static void svm_vcpu_run(struct kvm_vcpu
+ 	vmexit_fill_RSB();
+ 
+ #ifdef CONFIG_X86_64
+-	wrmsrl(MSR_GS_BASE, svm->host.gs_base);
++	native_wrmsrl(MSR_GS_BASE, svm->host.gs_base);
+ #else
+ 	loadsegment(fs, svm->host.fs);
+ #ifndef CONFIG_X86_32_LAZY_GS
+@@ -5904,7 +5857,64 @@ static void svm_vcpu_run(struct kvm_vcpu
+ 	 */
+ 	lockdep_hardirqs_off(CALLER_ADDR0);
+ 	guest_exit_irqoff();
++	instr_begin();
+ 	__trace_hardirqs_off();
++	instr_end();
++}
++
++static void svm_vcpu_run(struct kvm_vcpu *vcpu)
++{
++	struct vcpu_svm *svm = to_svm(vcpu);
++
++	svm->vmcb->save.rax = vcpu->arch.regs[VCPU_REGS_RAX];
++	svm->vmcb->save.rsp = vcpu->arch.regs[VCPU_REGS_RSP];
++	svm->vmcb->save.rip = vcpu->arch.regs[VCPU_REGS_RIP];
++
++	/*
++	 * A vmexit emulation is required before the vcpu can be executed
++	 * again.
++	 */
++	if (unlikely(svm->nested.exit_required))
++		return;
++
++	/*
++	 * Disable singlestep if we're injecting an interrupt/exception.
++	 * We don't want our modified rflags to be pushed on the stack where
++	 * we might not be able to easily reset them if we disabled NMI
++	 * singlestep later.
++	 */
++	if (svm->nmi_singlestep && svm->vmcb->control.event_inj) {
++		/*
++		 * Event injection happens before external interrupts cause a
++		 * vmexit and interrupts are disabled here, so smp_send_reschedule
++		 * is enough to force an immediate vmexit.
++		 */
++		disable_nmi_singlestep(svm);
++		smp_send_reschedule(vcpu->cpu);
++	}
++
++	pre_svm_run(svm);
++
++	sync_lapic_to_cr8(vcpu);
++
++	svm->vmcb->save.cr2 = vcpu->arch.cr2;
++
++	clgi();
++	kvm_load_guest_xsave_state(vcpu);
++
++	if (lapic_in_kernel(vcpu) &&
++		vcpu->arch.apic->lapic_timer.timer_advance_ns)
++		kvm_wait_lapic_expire(vcpu);
++
++	/*
++	 * If this vCPU has touched SPEC_CTRL, restore the guest's value if
++	 * it's non-zero. Since vmentry is serialising on affected CPUs, there
++	 * is no need to worry about the conditional branch over the wrmsr
++	 * being speculatively taken.
++	 */
++	x86_spec_ctrl_set_guest(svm->spec_ctrl, svm->virt_spec_ctrl);
++
++	svm_vcpu_enter_exit(vcpu, svm);
+ 
+ 	/*
+ 	 * We do not use IBRS in the kernel. If this vCPU has used the
