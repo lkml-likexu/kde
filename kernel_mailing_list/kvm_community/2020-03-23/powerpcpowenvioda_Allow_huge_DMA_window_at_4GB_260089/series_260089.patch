@@ -1,0 +1,1229 @@
+From patchwork Mon Mar 23 07:53:48 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexey Kardashevskiy <aik@ozlabs.ru>
+X-Patchwork-Id: 11452427
+Return-Path: <SRS0=toc3=5I=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B57C015AB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 23 Mar 2020 08:01:02 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 8760520736
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 23 Mar 2020 08:01:02 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727511AbgCWIBB (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 23 Mar 2020 04:01:01 -0400
+Received: from 107-174-27-60-host.colocrossing.com ([107.174.27.60]:50654
+ "EHLO
+        ozlabs.ru" rhost-flags-OK-FAIL-OK-OK) by vger.kernel.org with ESMTP
+        id S1727505AbgCWIBB (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 23 Mar 2020 04:01:01 -0400
+Received: from fstn1-p1.ozlabs.ibm.com (localhost [IPv6:::1])
+        by ozlabs.ru (Postfix) with ESMTP id D46A5AE80062;
+        Mon, 23 Mar 2020 03:52:17 -0400 (EDT)
+From: Alexey Kardashevskiy <aik@ozlabs.ru>
+To: linuxppc-dev@lists.ozlabs.org
+Cc: David Gibson <david@gibson.dropbear.id.au>,
+        kvm-ppc@vger.kernel.org, kvm@vger.kernel.org,
+        Alistair Popple <alistair@popple.id.au>,
+        Fabiano Rosas <farosas@linux.ibm.com>,
+        Alexey Kardashevskiy <aik@ozlabs.ru>
+Subject: [PATCH kernel v2 1/7] powerpc/powernv/ioda: Move TCE bypass base to
+ PE
+Date: Mon, 23 Mar 2020 18:53:48 +1100
+Message-Id: <20200323075354.93825-2-aik@ozlabs.ru>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200323075354.93825-1-aik@ozlabs.ru>
+References: <20200323075354.93825-1-aik@ozlabs.ru>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+We are about to allow another location for the second DMA window and
+we will need to advertise it outside of the powernv platform code.
+
+This moves bypass base address to iommu_table_group so drivers such as
+VFIO SPAPR TCE can see it.
+
+Signed-off-by: Alexey Kardashevskiy <aik@ozlabs.ru>
+---
+ arch/powerpc/include/asm/iommu.h          |  1 +
+ arch/powerpc/platforms/powernv/pci.h      |  1 -
+ arch/powerpc/platforms/powernv/npu-dma.c  |  1 +
+ arch/powerpc/platforms/powernv/pci-ioda.c | 26 ++++++++++-------------
+ 4 files changed, 13 insertions(+), 16 deletions(-)
+
+diff --git a/arch/powerpc/include/asm/iommu.h b/arch/powerpc/include/asm/iommu.h
+index 350101e11ddb..479439ef003e 100644
+--- a/arch/powerpc/include/asm/iommu.h
++++ b/arch/powerpc/include/asm/iommu.h
+@@ -194,6 +194,7 @@ struct iommu_table_group {
+ 	__u64 pgsizes; /* Bitmap of supported page sizes */
+ 	__u32 max_dynamic_windows_supported;
+ 	__u32 max_levels;
++	__u64 tce64_start;
+ 
+ 	struct iommu_group *group;
+ 	struct iommu_table *tables[IOMMU_TABLE_GROUP_MAX_TABLES];
+diff --git a/arch/powerpc/platforms/powernv/pci.h b/arch/powerpc/platforms/powernv/pci.h
+index d3bbdeab3a32..a808dd396522 100644
+--- a/arch/powerpc/platforms/powernv/pci.h
++++ b/arch/powerpc/platforms/powernv/pci.h
+@@ -67,7 +67,6 @@ struct pnv_ioda_pe {
+ 
+ 	/* 64-bit TCE bypass region */
+ 	bool			tce_bypass_enabled;
+-	uint64_t		tce_bypass_base;
+ 
+ 	/* MSIs. MVE index is identical for for 32 and 64 bit MSI
+ 	 * and -1 if not supported. (It's actually identical to the
+diff --git a/arch/powerpc/platforms/powernv/npu-dma.c b/arch/powerpc/platforms/powernv/npu-dma.c
+index b95b9e3c4c98..97a479848003 100644
+--- a/arch/powerpc/platforms/powernv/npu-dma.c
++++ b/arch/powerpc/platforms/powernv/npu-dma.c
+@@ -469,6 +469,7 @@ struct iommu_table_group *pnv_try_setup_npu_table_group(struct pnv_ioda_pe *pe)
+ 	table_group->tce32_start = pe->table_group.tce32_start;
+ 	table_group->tce32_size = pe->table_group.tce32_size;
+ 	table_group->max_levels = pe->table_group.max_levels;
++	table_group->tce64_start = pe->table_group.tce64_start;
+ 	if (!table_group->pgsizes)
+ 		table_group->pgsizes = pe->table_group.pgsizes;
+ 
+diff --git a/arch/powerpc/platforms/powernv/pci-ioda.c b/arch/powerpc/platforms/powernv/pci-ioda.c
+index 22c22cd7bd82..52db10ab4fef 100644
+--- a/arch/powerpc/platforms/powernv/pci-ioda.c
++++ b/arch/powerpc/platforms/powernv/pci-ioda.c
+@@ -1777,7 +1777,7 @@ static void pnv_pci_ioda_dma_dev_setup(struct pci_dev *pdev)
+ 
+ 	pe = &phb->ioda.pe_array[pdn->pe_number];
+ 	WARN_ON(get_dma_ops(&pdev->dev) != &dma_iommu_ops);
+-	pdev->dev.archdata.dma_offset = pe->tce_bypass_base;
++	pdev->dev.archdata.dma_offset = pe->table_group.tce64_start;
+ 	set_iommu_table_base(&pdev->dev, pe->table_group.tables[0]);
+ 	/*
+ 	 * Note: iommu_add_device() will fail here as
+@@ -1869,7 +1869,8 @@ static bool pnv_pci_ioda_iommu_bypass_supported(struct pci_dev *pdev,
+ 
+ 	pe = &phb->ioda.pe_array[pdn->pe_number];
+ 	if (pe->tce_bypass_enabled) {
+-		u64 top = pe->tce_bypass_base + memblock_end_of_DRAM() - 1;
++		u64 top = pe->table_group.tce64_start +
++			memblock_end_of_DRAM() - 1;
+ 		if (dma_mask >= top)
+ 			return true;
+ 	}
+@@ -1903,7 +1904,7 @@ static void pnv_ioda_setup_bus_dma(struct pnv_ioda_pe *pe, struct pci_bus *bus)
+ 
+ 	list_for_each_entry(dev, &bus->devices, bus_list) {
+ 		set_iommu_table_base(&dev->dev, pe->table_group.tables[0]);
+-		dev->dev.archdata.dma_offset = pe->tce_bypass_base;
++		dev->dev.archdata.dma_offset = pe->table_group.tce64_start;
+ 
+ 		if ((pe->flags & PNV_IODA_PE_BUS_ALL) && dev->subordinate)
+ 			pnv_ioda_setup_bus_dma(pe, dev->subordinate);
+@@ -2361,16 +2362,12 @@ static void pnv_pci_ioda2_set_bypass(struct pnv_ioda_pe *pe, bool enable)
+ 
+ 		top = roundup_pow_of_two(top);
+ 		rc = opal_pci_map_pe_dma_window_real(pe->phb->opal_id,
+-						     pe->pe_number,
+-						     window_id,
+-						     pe->tce_bypass_base,
+-						     top);
++				pe->pe_number, window_id,
++				pe->table_group.tce64_start, top);
+ 	} else {
+ 		rc = opal_pci_map_pe_dma_window_real(pe->phb->opal_id,
+-						     pe->pe_number,
+-						     window_id,
+-						     pe->tce_bypass_base,
+-						     0);
++				pe->pe_number, window_id,
++				pe->table_group.tce64_start, 0);
+ 	}
+ 	if (rc)
+ 		pe_err(pe, "OPAL error %lld configuring bypass window\n", rc);
+@@ -2385,7 +2382,8 @@ static long pnv_pci_ioda2_create_table(struct iommu_table_group *table_group,
+ 	struct pnv_ioda_pe *pe = container_of(table_group, struct pnv_ioda_pe,
+ 			table_group);
+ 	int nid = pe->phb->hose->node;
+-	__u64 bus_offset = num ? pe->tce_bypass_base : table_group->tce32_start;
++	__u64 bus_offset = num ?
++		pe->table_group.tce64_start : table_group->tce32_start;
+ 	long ret;
+ 	struct iommu_table *tbl;
+ 
+@@ -2735,9 +2733,6 @@ static void pnv_pci_ioda2_setup_dma_pe(struct pnv_phb *phb,
+ 	if (!pnv_pci_ioda_pe_dma_weight(pe))
+ 		return;
+ 
+-	/* TVE #1 is selected by PCI address bit 59 */
+-	pe->tce_bypass_base = 1ull << 59;
+-
+ 	/* The PE will reserve all possible 32-bits space */
+ 	pe_info(pe, "Setting up 32-bit TCE table at 0..%08x\n",
+ 		phb->ioda.m32_pci_base);
+@@ -2745,6 +2740,7 @@ static void pnv_pci_ioda2_setup_dma_pe(struct pnv_phb *phb,
+ 	/* Setup linux iommu table */
+ 	pe->table_group.tce32_start = 0;
+ 	pe->table_group.tce32_size = phb->ioda.m32_pci_base;
++	pe->table_group.tce64_start = 1UL << 59;
+ 	pe->table_group.max_dynamic_windows_supported =
+ 			IOMMU_TABLE_GROUP_MAX_TABLES;
+ 	pe->table_group.max_levels = POWERNV_IOMMU_MAX_LEVELS;
+
+From patchwork Mon Mar 23 07:53:49 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexey Kardashevskiy <aik@ozlabs.ru>
+X-Patchwork-Id: 11452441
+Return-Path: <SRS0=toc3=5I=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 2E0991667
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 23 Mar 2020 08:01:10 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 1669B20736
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 23 Mar 2020 08:01:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727539AbgCWIBJ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 23 Mar 2020 04:01:09 -0400
+Received: from 107-174-27-60-host.colocrossing.com ([107.174.27.60]:50662
+ "EHLO
+        ozlabs.ru" rhost-flags-OK-FAIL-OK-OK) by vger.kernel.org with ESMTP
+        id S1727524AbgCWIBD (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 23 Mar 2020 04:01:03 -0400
+Received: from fstn1-p1.ozlabs.ibm.com (localhost [IPv6:::1])
+        by ozlabs.ru (Postfix) with ESMTP id 0AE43AE80564;
+        Mon, 23 Mar 2020 03:52:20 -0400 (EDT)
+From: Alexey Kardashevskiy <aik@ozlabs.ru>
+To: linuxppc-dev@lists.ozlabs.org
+Cc: David Gibson <david@gibson.dropbear.id.au>,
+        kvm-ppc@vger.kernel.org, kvm@vger.kernel.org,
+        Alistair Popple <alistair@popple.id.au>,
+        Fabiano Rosas <farosas@linux.ibm.com>,
+        Alexey Kardashevskiy <aik@ozlabs.ru>
+Subject: [PATCH kernel v2 2/7] powerpc/powernv/ioda: Rework for huge DMA
+ window at 4GB
+Date: Mon, 23 Mar 2020 18:53:49 +1100
+Message-Id: <20200323075354.93825-3-aik@ozlabs.ru>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200323075354.93825-1-aik@ozlabs.ru>
+References: <20200323075354.93825-1-aik@ozlabs.ru>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This moves code to make the next patches look simpler. In particular:
+
+1. Separate locals declaration as we will be allocating a smaller DMA
+window if a TVE1_4GB option (allows a huge DMA windows at 4GB) is enabled;
+
+2. Pass the bypass offset directly to pnv_pci_ioda2_create_table()
+as it is the only information needed from @pe;
+
+3. Use PAGE_SHIFT for it_map allocation estimate and @tceshift for
+the IOMMU page size; this makes the distinction clear and allows
+easy switching between different IOMMU page size.
+
+These changes should not cause behavioral change.
+
+Signed-off-by: Alexey Kardashevskiy <aik@ozlabs.ru>
+---
+
+I really need 1), 2) makes the code less dependent on the PE struct member
+value (==easier to follow), 3) is to enable 2MB quickly for the default
+DMA window for debugging/performance testing.
+---
+ arch/powerpc/platforms/powernv/pci-ioda.c | 38 ++++++++++++-----------
+ 1 file changed, 20 insertions(+), 18 deletions(-)
+
+diff --git a/arch/powerpc/platforms/powernv/pci-ioda.c b/arch/powerpc/platforms/powernv/pci-ioda.c
+index 52db10ab4fef..f5f1b4e25530 100644
+--- a/arch/powerpc/platforms/powernv/pci-ioda.c
++++ b/arch/powerpc/platforms/powernv/pci-ioda.c
+@@ -2375,15 +2375,10 @@ static void pnv_pci_ioda2_set_bypass(struct pnv_ioda_pe *pe, bool enable)
+ 		pe->tce_bypass_enabled = enable;
+ }
+ 
+-static long pnv_pci_ioda2_create_table(struct iommu_table_group *table_group,
+-		int num, __u32 page_shift, __u64 window_size, __u32 levels,
++static long pnv_pci_ioda2_create_table(int nid, int num, __u64 bus_offset,
++		__u32 page_shift, __u64 window_size, __u32 levels,
+ 		bool alloc_userspace_copy, struct iommu_table **ptbl)
+ {
+-	struct pnv_ioda_pe *pe = container_of(table_group, struct pnv_ioda_pe,
+-			table_group);
+-	int nid = pe->phb->hose->node;
+-	__u64 bus_offset = num ?
+-		pe->table_group.tce64_start : table_group->tce32_start;
+ 	long ret;
+ 	struct iommu_table *tbl;
+ 
+@@ -2410,21 +2405,23 @@ static long pnv_pci_ioda2_setup_default_config(struct pnv_ioda_pe *pe)
+ {
+ 	struct iommu_table *tbl = NULL;
+ 	long rc;
+-	unsigned long res_start, res_end;
++	u64 max_memory, maxblock, window_size;
++	const unsigned int tceshift = PAGE_SHIFT;
++	unsigned long res_start, res_end, tces_order, tcelevel_order, levels;
+ 
+ 	/*
+ 	 * crashkernel= specifies the kdump kernel's maximum memory at
+ 	 * some offset and there is no guaranteed the result is a power
+ 	 * of 2, which will cause errors later.
+ 	 */
+-	const u64 max_memory = __rounddown_pow_of_two(memory_hotplug_max());
++	max_memory = __rounddown_pow_of_two(memory_hotplug_max());
+ 
+ 	/*
+ 	 * In memory constrained environments, e.g. kdump kernel, the
+ 	 * DMA window can be larger than available memory, which will
+ 	 * cause errors later.
+ 	 */
+-	const u64 maxblock = 1UL << (PAGE_SHIFT + MAX_ORDER - 1);
++	maxblock = 1UL << (PAGE_SHIFT + MAX_ORDER - 1);
+ 
+ 	/*
+ 	 * We create the default window as big as we can. The constraint is
+@@ -2434,11 +2431,11 @@ static long pnv_pci_ioda2_setup_default_config(struct pnv_ioda_pe *pe)
+ 	 * to support crippled devices (i.e. not fully 64bit DMAble) only.
+ 	 */
+ 	/* iommu_table::it_map uses 1 bit per IOMMU page, hence 8 */
+-	const u64 window_size = min((maxblock * 8) << PAGE_SHIFT, max_memory);
++	window_size = min((maxblock * 8) << tceshift, max_memory);
+ 	/* Each TCE level cannot exceed maxblock so go multilevel if needed */
+-	unsigned long tces_order = ilog2(window_size >> PAGE_SHIFT);
+-	unsigned long tcelevel_order = ilog2(maxblock >> 3);
+-	unsigned int levels = tces_order / tcelevel_order;
++	tces_order = ilog2(window_size >> tceshift);
++	tcelevel_order = ilog2(maxblock >> 3);
++	levels = tces_order / tcelevel_order;
+ 
+ 	if (tces_order % tcelevel_order)
+ 		levels += 1;
+@@ -2448,8 +2445,8 @@ static long pnv_pci_ioda2_setup_default_config(struct pnv_ioda_pe *pe)
+ 	 */
+ 	levels = max_t(unsigned int, levels, POWERNV_IOMMU_DEFAULT_LEVELS);
+ 
+-	rc = pnv_pci_ioda2_create_table(&pe->table_group, 0, PAGE_SHIFT,
+-			window_size, levels, false, &tbl);
++	rc = pnv_pci_ioda2_create_table(pe->phb->hose->node,
++			0, 0, tceshift, window_size, levels, false, &tbl);
+ 	if (rc) {
+ 		pe_err(pe, "Failed to create 32-bit TCE table, err %ld",
+ 				rc);
+@@ -2551,8 +2548,13 @@ static long pnv_pci_ioda2_create_table_userspace(
+ 		int num, __u32 page_shift, __u64 window_size, __u32 levels,
+ 		struct iommu_table **ptbl)
+ {
+-	long ret = pnv_pci_ioda2_create_table(table_group,
+-			num, page_shift, window_size, levels, true, ptbl);
++	struct pnv_ioda_pe *pe = container_of(table_group, struct pnv_ioda_pe,
++			table_group);
++	__u64 bus_offset = num ?
++		pe->table_group.tce64_start : table_group->tce32_start;
++	long ret = pnv_pci_ioda2_create_table(pe->phb->hose->node,
++			num, bus_offset, page_shift, window_size, levels, true,
++			ptbl);
+ 
+ 	if (!ret)
+ 		(*ptbl)->it_allocated_size = pnv_pci_ioda2_get_table_size(
+
+From patchwork Mon Mar 23 07:53:50 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexey Kardashevskiy <aik@ozlabs.ru>
+X-Patchwork-Id: 11452439
+Return-Path: <SRS0=toc3=5I=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6B5FA15AB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 23 Mar 2020 08:01:07 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 4B1A920736
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 23 Mar 2020 08:01:07 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727532AbgCWIBG (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 23 Mar 2020 04:01:06 -0400
+Received: from 107-174-27-60-host.colocrossing.com ([107.174.27.60]:50658
+ "EHLO
+        ozlabs.ru" rhost-flags-OK-FAIL-OK-OK) by vger.kernel.org with ESMTP
+        id S1727508AbgCWIBD (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 23 Mar 2020 04:01:03 -0400
+Received: from fstn1-p1.ozlabs.ibm.com (localhost [IPv6:::1])
+        by ozlabs.ru (Postfix) with ESMTP id 353E2AE807DF;
+        Mon, 23 Mar 2020 03:52:23 -0400 (EDT)
+From: Alexey Kardashevskiy <aik@ozlabs.ru>
+To: linuxppc-dev@lists.ozlabs.org
+Cc: David Gibson <david@gibson.dropbear.id.au>,
+        kvm-ppc@vger.kernel.org, kvm@vger.kernel.org,
+        Alistair Popple <alistair@popple.id.au>,
+        Fabiano Rosas <farosas@linux.ibm.com>,
+        Alexey Kardashevskiy <aik@ozlabs.ru>
+Subject: [PATCH kernel v2 3/7] powerpc/powernv/ioda: Allow smaller TCE table
+ levels
+Date: Mon, 23 Mar 2020 18:53:50 +1100
+Message-Id: <20200323075354.93825-4-aik@ozlabs.ru>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200323075354.93825-1-aik@ozlabs.ru>
+References: <20200323075354.93825-1-aik@ozlabs.ru>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Now the minimum allocation size for a TCE table level is PAGE_SIZE (64k)
+as this is the minimum for alloc_pages(). The limit was set in POWER8
+where we did not have sparse RAM so we did not need sparse TCE tables.
+On POWER9 we have gaps in the phys address space for which using multi
+level TCE tables makes sense. The problem with that is that 64K per level
+is too much for 2 levels and 1GB pages as it exceeds the hardware limit
+of 55bits so we need smaller levels.
+
+This drops the minimum level size to 4K.
+
+For a machine with 2 CPUs, top RAM address 0x4000.0000.0000
+(each node gets 32TiB) and 1GiB IOMMU pages:
+Before the patch: 512KiB or 8 pages.
+After the patch: 3 pages: one level1 + 2xlevel2 tables, each can map
+up to 64k>>3<<30 = 8TiB of physical space.
+
+Signed-off-by: Alexey Kardashevskiy <aik@ozlabs.ru>
+---
+ arch/powerpc/platforms/powernv/pci-ioda-tce.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/arch/powerpc/platforms/powernv/pci-ioda-tce.c b/arch/powerpc/platforms/powernv/pci-ioda-tce.c
+index 5dc6847d5f4c..82e680da9d94 100644
+--- a/arch/powerpc/platforms/powernv/pci-ioda-tce.c
++++ b/arch/powerpc/platforms/powernv/pci-ioda-tce.c
+@@ -37,7 +37,7 @@ static __be64 *pnv_alloc_tce_level(int nid, unsigned int shift)
+ 	__be64 *addr;
+ 
+ 	tce_mem = alloc_pages_node(nid, GFP_ATOMIC | __GFP_NOWARN,
+-			shift - PAGE_SHIFT);
++			shift > PAGE_SHIFT ? shift - PAGE_SHIFT : 0);
+ 	if (!tce_mem) {
+ 		pr_err("Failed to allocate a TCE memory, level shift=%d\n",
+ 				shift);
+@@ -282,7 +282,7 @@ long pnv_pci_ioda2_table_alloc_pages(int nid, __u64 bus_offset,
+ 	/* Adjust direct table size from window_size and levels */
+ 	entries_shift = (entries_shift + levels - 1) / levels;
+ 	level_shift = entries_shift + 3;
+-	level_shift = max_t(unsigned int, level_shift, PAGE_SHIFT);
++	level_shift = max_t(unsigned int, level_shift, 12); /* 4K is minimum */
+ 
+ 	if ((level_shift - 3) * levels + page_shift >= 55)
+ 		return -EINVAL;
+
+From patchwork Mon Mar 23 07:53:51 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexey Kardashevskiy <aik@ozlabs.ru>
+X-Patchwork-Id: 11452433
+Return-Path: <SRS0=toc3=5I=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id F065C17D4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 23 Mar 2020 08:01:03 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id CF72720736
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 23 Mar 2020 08:01:03 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727525AbgCWIBD (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 23 Mar 2020 04:01:03 -0400
+Received: from 107-174-27-60-host.colocrossing.com ([107.174.27.60]:50656
+ "EHLO
+        ozlabs.ru" rhost-flags-OK-FAIL-OK-OK) by vger.kernel.org with ESMTP
+        id S1727519AbgCWIBC (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 23 Mar 2020 04:01:02 -0400
+Received: from fstn1-p1.ozlabs.ibm.com (localhost [IPv6:::1])
+        by ozlabs.ru (Postfix) with ESMTP id 3B81EAE807E3;
+        Mon, 23 Mar 2020 03:52:26 -0400 (EDT)
+From: Alexey Kardashevskiy <aik@ozlabs.ru>
+To: linuxppc-dev@lists.ozlabs.org
+Cc: David Gibson <david@gibson.dropbear.id.au>,
+        kvm-ppc@vger.kernel.org, kvm@vger.kernel.org,
+        Alistair Popple <alistair@popple.id.au>,
+        Fabiano Rosas <farosas@linux.ibm.com>,
+        Alexey Kardashevskiy <aik@ozlabs.ru>
+Subject: [PATCH kernel v2 4/7] powerpc/powernv/phb4: Use IOMMU instead of
+ bypassing
+Date: Mon, 23 Mar 2020 18:53:51 +1100
+Message-Id: <20200323075354.93825-5-aik@ozlabs.ru>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200323075354.93825-1-aik@ozlabs.ru>
+References: <20200323075354.93825-1-aik@ozlabs.ru>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+At the moment IODA2 systems do 64bit DMA by bypassing IOMMU which
+allows mapping PCI space to system space at fixed offset (1<<59).
+The bypass is controlled via the "iommu" kernel parameter.
+
+This adds a "iommu_bypass" mode which maps PCI space to system space
+using an actual TCE table with the biggest IOMMU page size available
+(256MB or 1GB) and 2 levels so in a typical case about 4 to 6 system
+pages per PHB are allocated.
+
+This creates a single TCE table per PHB which is shared among devices
+under the same PHB.
+
+With this enabled, all DMA goes via IOMMU. Tests on 100GBit ethernet
+did not show any regression.
+
+The following patch allows using a special PHB4 4GB PCI hack which
+moved 64bit DMA window at 4GB from 1<<59 to improve DMA support.
+
+Signed-off-by: Alexey Kardashevskiy <aik@ozlabs.ru>
+---
+ arch/powerpc/platforms/powernv/pci.h      |   1 +
+ arch/powerpc/platforms/powernv/pci-ioda.c | 128 ++++++++++++++++++----
+ 2 files changed, 107 insertions(+), 22 deletions(-)
+
+diff --git a/arch/powerpc/platforms/powernv/pci.h b/arch/powerpc/platforms/powernv/pci.h
+index a808dd396522..ce00278185b0 100644
+--- a/arch/powerpc/platforms/powernv/pci.h
++++ b/arch/powerpc/platforms/powernv/pci.h
+@@ -100,6 +100,7 @@ struct pnv_phb {
+ 	int			has_dbgfs;
+ 	struct dentry		*dbgfs;
+ #endif
++	struct iommu_table	*bypass_tbl; /* PNV_IOMMU_TCE_BYPASS only */
+ 
+ 	unsigned int		msi_base;
+ 	unsigned int		msi32_support;
+diff --git a/arch/powerpc/platforms/powernv/pci-ioda.c b/arch/powerpc/platforms/powernv/pci-ioda.c
+index f5f1b4e25530..9928a1618a8b 100644
+--- a/arch/powerpc/platforms/powernv/pci-ioda.c
++++ b/arch/powerpc/platforms/powernv/pci-ioda.c
+@@ -51,6 +51,10 @@ static const char * const pnv_phb_names[] = { "IODA1", "IODA2", "NPU_NVLINK",
+ 					      "NPU_OCAPI" };
+ 
+ static void pnv_pci_ioda2_set_bypass(struct pnv_ioda_pe *pe, bool enable);
++static unsigned long pnv_ioda_parse_tce_sizes(struct pnv_phb *phb);
++static long pnv_pci_ioda2_create_table(int nid, int num, __u64 bus_offset,
++		__u32 page_shift, __u64 window_size, __u32 levels,
++		bool alloc_userspace_copy, struct iommu_table **ptbl);
+ 
+ void pe_level_printk(const struct pnv_ioda_pe *pe, const char *level,
+ 			    const char *fmt, ...)
+@@ -83,7 +87,14 @@ void pe_level_printk(const struct pnv_ioda_pe *pe, const char *level,
+ 	va_end(args);
+ }
+ 
+-static bool pnv_iommu_bypass_disabled __read_mostly;
++enum pnv_iommu_bypass_mode {
++	PNV_IOMMU_NO_TRANSLATE,
++	PNV_IOMMU_BYPASS_DISABLED,
++	PNV_IOMMU_TCE_BYPASS
++};
++
++static enum pnv_iommu_bypass_mode pnv_iommu_bypass_mode __read_mostly =
++		PNV_IOMMU_NO_TRANSLATE;
+ static bool pci_reset_phbs __read_mostly;
+ 
+ static int __init iommu_setup(char *str)
+@@ -93,9 +104,13 @@ static int __init iommu_setup(char *str)
+ 
+ 	while (*str) {
+ 		if (!strncmp(str, "nobypass", 8)) {
+-			pnv_iommu_bypass_disabled = true;
++			pnv_iommu_bypass_mode = PNV_IOMMU_BYPASS_DISABLED;
+ 			pr_info("PowerNV: IOMMU bypass window disabled.\n");
+ 			break;
++		} else if (!strncmp(str, "iommu_bypass", 12)) {
++			pnv_iommu_bypass_mode = PNV_IOMMU_TCE_BYPASS;
++			pr_info("PowerNV: IOMMU TCE bypass window selected.\n");
++			break;
+ 		}
+ 		str += strcspn(str, ",");
+ 		if (*str == ',')
+@@ -2351,28 +2366,99 @@ static long pnv_pci_ioda2_set_window(struct iommu_table_group *table_group,
+ 	return 0;
+ }
+ 
++static long pnv_pci_ioda2_set_bypass_iommu(struct pnv_ioda_pe *pe,
++		unsigned long bus_offset)
++{
++	struct pnv_phb *phb = pe->phb;
++	long rc;
++	struct memblock_region *r;
++	unsigned long pgsizes;
++
++
++	pgsizes = pnv_ioda_parse_tce_sizes(phb);
++	if (!pgsizes)
++		return -1;
++
++	if (!phb->bypass_tbl) {
++		struct iommu_table *tbl = NULL;
++
++		rc = pnv_pci_ioda2_create_table(phb->hose->node,
++				1 /* window number */,
++				bus_offset,
++				__fls(pgsizes),
++				roundup_pow_of_two(memory_hotplug_max()),
++				2 /* levels */,
++				false /* userspace cache */,
++				&tbl);
++		if (rc)
++			return -1;
++
++		for_each_memblock(memory, r)
++			pnv_ioda2_tce_build(tbl,
++					    (r->base >> tbl->it_page_shift) +
++					    tbl->it_offset,
++					    r->size >> tbl->it_page_shift,
++					    (unsigned long) __va(r->base),
++					    DMA_BIDIRECTIONAL,
++					    0);
++		phb->bypass_tbl = tbl;
++		pe_info(pe, "Created 64-bit bypass TCE table\n");
++	} else {
++		iommu_tce_table_get(phb->bypass_tbl);
++	}
++
++	rc = pnv_pci_ioda2_set_window(&pe->table_group, 1, phb->bypass_tbl);
++	if (rc) {
++		iommu_tce_table_put(phb->bypass_tbl);
++		return -1;
++	}
++
++	pe->tce_bypass_enabled = true;
++
++	return 0;
++}
++
+ static void pnv_pci_ioda2_set_bypass(struct pnv_ioda_pe *pe, bool enable)
+ {
++	struct pnv_phb *phb = pe->phb;
+ 	uint16_t window_id = (pe->pe_number << 1 ) + 1;
+ 	int64_t rc;
++	phys_addr_t top;
+ 
+-	pe_info(pe, "%sabling 64-bit DMA bypass\n", enable ? "En" : "Dis");
+-	if (enable) {
+-		phys_addr_t top = memblock_end_of_DRAM();
++	if (!enable) {
++		pe_info(pe, "Disabling 64-bit bypass\n");
++		rc = opal_pci_map_pe_dma_window_real(phb->opal_id,
++				pe->pe_number, window_id, 0, 0);
++		if (rc)
++			pe_err(pe, "OPAL error %lld configuring bypass window\n",
++				rc);
+ 
+-		top = roundup_pow_of_two(top);
+-		rc = opal_pci_map_pe_dma_window_real(pe->phb->opal_id,
+-				pe->pe_number, window_id,
+-				pe->table_group.tce64_start, top);
+-	} else {
+-		rc = opal_pci_map_pe_dma_window_real(pe->phb->opal_id,
+-				pe->pe_number, window_id,
+-				pe->table_group.tce64_start, 0);
++		pe->tce_bypass_enabled = false;
++		return;
++	}
++
++	if (pnv_iommu_bypass_mode == PNV_IOMMU_TCE_BYPASS) {
++		if (!pnv_pci_ioda2_set_bypass_iommu(pe,
++				pe->table_group.tce64_start)) {
++			pe->tce_bypass_enabled = true;
++			pe_info(pe, "Enabled 64-bit IOMMU bypass at %llx\n",
++				pe->table_group.tce64_start);
++			return;
++		}
++		/* IOMMU bypass failed, fallback to direct bypass */
++		pnv_iommu_bypass_mode = PNV_IOMMU_NO_TRANSLATE;
++	}
++
++	if (pnv_iommu_bypass_mode == PNV_IOMMU_NO_TRANSLATE) {
++		top = roundup_pow_of_two(memblock_end_of_DRAM());
++		if (!opal_pci_map_pe_dma_window_real(phb->opal_id,
++					pe->pe_number, window_id,
++					pe->table_group.tce64_start, top)) {
++			pe->tce_bypass_enabled = true;
++			pe_info(pe, "Enabled 64-bit direct bypass at %llx\n",
++					pe->table_group.tce64_start);
++		}
+ 	}
+-	if (rc)
+-		pe_err(pe, "OPAL error %lld configuring bypass window\n", rc);
+-	else
+-		pe->tce_bypass_enabled = enable;
+ }
+ 
+ static long pnv_pci_ioda2_create_table(int nid, int num, __u64 bus_offset,
+@@ -2409,6 +2495,9 @@ static long pnv_pci_ioda2_setup_default_config(struct pnv_ioda_pe *pe)
+ 	const unsigned int tceshift = PAGE_SHIFT;
+ 	unsigned long res_start, res_end, tces_order, tcelevel_order, levels;
+ 
++	if (pnv_iommu_bypass_mode != PNV_IOMMU_BYPASS_DISABLED)
++		pnv_pci_ioda2_set_bypass(pe, true);
++
+ 	/*
+ 	 * crashkernel= specifies the kdump kernel's maximum memory at
+ 	 * some offset and there is no guaranteed the result is a power
+@@ -2470,9 +2559,6 @@ static long pnv_pci_ioda2_setup_default_config(struct pnv_ioda_pe *pe)
+ 		return rc;
+ 	}
+ 
+-	if (!pnv_iommu_bypass_disabled)
+-		pnv_pci_ioda2_set_bypass(pe, true);
+-
+ 	/*
+ 	 * Set table base for the case of IOMMU DMA use. Usually this is done
+ 	 * from dma_dev_setup() which is not called when a device is returned
+@@ -2624,8 +2710,6 @@ static void pnv_ioda_setup_bus_iommu_group(struct pnv_ioda_pe *pe,
+ 				bus);
+ }
+ 
+-static unsigned long pnv_ioda_parse_tce_sizes(struct pnv_phb *phb);
+-
+ static void pnv_pci_ioda_setup_iommu_api(void)
+ {
+ 	struct pci_controller *hose;
+
+From patchwork Mon Mar 23 07:53:52 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexey Kardashevskiy <aik@ozlabs.ru>
+X-Patchwork-Id: 11452431
+Return-Path: <SRS0=toc3=5I=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8D0CA1667
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 23 Mar 2020 08:01:03 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 759E82074D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 23 Mar 2020 08:01:03 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727514AbgCWIBC (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 23 Mar 2020 04:01:02 -0400
+Received: from 107-174-27-60-host.colocrossing.com ([107.174.27.60]:50650
+ "EHLO
+        ozlabs.ru" rhost-flags-OK-FAIL-OK-OK) by vger.kernel.org with ESMTP
+        id S1727507AbgCWIBB (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 23 Mar 2020 04:01:01 -0400
+X-Greylist: delayed 414 seconds by postgrey-1.27 at vger.kernel.org;
+ Mon, 23 Mar 2020 04:01:00 EDT
+Received: from fstn1-p1.ozlabs.ibm.com (localhost [IPv6:::1])
+        by ozlabs.ru (Postfix) with ESMTP id 721DCAE807E6;
+        Mon, 23 Mar 2020 03:52:30 -0400 (EDT)
+From: Alexey Kardashevskiy <aik@ozlabs.ru>
+To: linuxppc-dev@lists.ozlabs.org
+Cc: David Gibson <david@gibson.dropbear.id.au>,
+        kvm-ppc@vger.kernel.org, kvm@vger.kernel.org,
+        Alistair Popple <alistair@popple.id.au>,
+        Fabiano Rosas <farosas@linux.ibm.com>,
+        Alexey Kardashevskiy <aik@ozlabs.ru>
+Subject: [PATCH kernel v2 5/7] powerpc/iommu: Add a window number to
+ iommu_table_group_ops::get_table_size
+Date: Mon, 23 Mar 2020 18:53:52 +1100
+Message-Id: <20200323075354.93825-6-aik@ozlabs.ru>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200323075354.93825-1-aik@ozlabs.ru>
+References: <20200323075354.93825-1-aik@ozlabs.ru>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+We are about to add an additional offset within a TCE table which is
+going to increase the size of the window, prepare for this.
+
+This should cause no behavioral change.
+
+Signed-off-by: Alexey Kardashevskiy <aik@ozlabs.ru>
+---
+ arch/powerpc/include/asm/iommu.h          | 1 +
+ arch/powerpc/platforms/powernv/pci.h      | 2 +-
+ arch/powerpc/platforms/powernv/pci-ioda.c | 4 ++--
+ drivers/vfio/vfio_iommu_spapr_tce.c       | 4 ++--
+ 4 files changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/arch/powerpc/include/asm/iommu.h b/arch/powerpc/include/asm/iommu.h
+index 479439ef003e..acf64a73ead1 100644
+--- a/arch/powerpc/include/asm/iommu.h
++++ b/arch/powerpc/include/asm/iommu.h
+@@ -161,6 +161,7 @@ struct iommu_table_group;
+ 
+ struct iommu_table_group_ops {
+ 	unsigned long (*get_table_size)(
++			int num,
+ 			__u32 page_shift,
+ 			__u64 window_size,
+ 			__u32 levels);
+diff --git a/arch/powerpc/platforms/powernv/pci.h b/arch/powerpc/platforms/powernv/pci.h
+index ce00278185b0..d8fa2f65517e 100644
+--- a/arch/powerpc/platforms/powernv/pci.h
++++ b/arch/powerpc/platforms/powernv/pci.h
+@@ -192,7 +192,7 @@ extern int pnv_setup_msi_irqs(struct pci_dev *pdev, int nvec, int type);
+ extern void pnv_teardown_msi_irqs(struct pci_dev *pdev);
+ extern struct pnv_ioda_pe *pnv_ioda_get_pe(struct pci_dev *dev);
+ extern void pnv_set_msi_irq_chip(struct pnv_phb *phb, unsigned int virq);
+-extern unsigned long pnv_pci_ioda2_get_table_size(__u32 page_shift,
++extern unsigned long pnv_pci_ioda2_get_table_size(int num, __u32 page_shift,
+ 		__u64 window_size, __u32 levels);
+ extern int pnv_eeh_post_init(void);
+ 
+diff --git a/arch/powerpc/platforms/powernv/pci-ioda.c b/arch/powerpc/platforms/powernv/pci-ioda.c
+index 9928a1618a8b..27a505a5edb4 100644
+--- a/arch/powerpc/platforms/powernv/pci-ioda.c
++++ b/arch/powerpc/platforms/powernv/pci-ioda.c
+@@ -2597,7 +2597,7 @@ static long pnv_pci_ioda2_unset_window(struct iommu_table_group *table_group,
+ #endif
+ 
+ #ifdef CONFIG_IOMMU_API
+-unsigned long pnv_pci_ioda2_get_table_size(__u32 page_shift,
++unsigned long pnv_pci_ioda2_get_table_size(int num, __u32 page_shift,
+ 		__u64 window_size, __u32 levels)
+ {
+ 	unsigned long bytes = 0;
+@@ -2644,7 +2644,7 @@ static long pnv_pci_ioda2_create_table_userspace(
+ 
+ 	if (!ret)
+ 		(*ptbl)->it_allocated_size = pnv_pci_ioda2_get_table_size(
+-				page_shift, window_size, levels);
++				num, page_shift, window_size, levels);
+ 	return ret;
+ }
+ 
+diff --git a/drivers/vfio/vfio_iommu_spapr_tce.c b/drivers/vfio/vfio_iommu_spapr_tce.c
+index 16b3adc508db..750a0676e9b7 100644
+--- a/drivers/vfio/vfio_iommu_spapr_tce.c
++++ b/drivers/vfio/vfio_iommu_spapr_tce.c
+@@ -613,8 +613,8 @@ static long tce_iommu_create_table(struct tce_container *container,
+ {
+ 	long ret, table_size;
+ 
+-	table_size = table_group->ops->get_table_size(page_shift, window_size,
+-			levels);
++	table_size = table_group->ops->get_table_size(num, page_shift,
++			window_size, levels);
+ 	if (!table_size)
+ 		return -EINVAL;
+ 
+
+From patchwork Mon Mar 23 07:53:53 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexey Kardashevskiy <aik@ozlabs.ru>
+X-Patchwork-Id: 11452437
+Return-Path: <SRS0=toc3=5I=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1F97715AB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 23 Mar 2020 08:01:05 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id F258D20736
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 23 Mar 2020 08:01:04 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727530AbgCWIBE (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 23 Mar 2020 04:01:04 -0400
+Received: from 107-174-27-60-host.colocrossing.com ([107.174.27.60]:50652
+ "EHLO
+        ozlabs.ru" rhost-flags-OK-FAIL-OK-OK) by vger.kernel.org with ESMTP
+        id S1727518AbgCWIBC (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 23 Mar 2020 04:01:02 -0400
+Received: from fstn1-p1.ozlabs.ibm.com (localhost [IPv6:::1])
+        by ozlabs.ru (Postfix) with ESMTP id 81E12AE807EF;
+        Mon, 23 Mar 2020 03:52:33 -0400 (EDT)
+From: Alexey Kardashevskiy <aik@ozlabs.ru>
+To: linuxppc-dev@lists.ozlabs.org
+Cc: David Gibson <david@gibson.dropbear.id.au>,
+        kvm-ppc@vger.kernel.org, kvm@vger.kernel.org,
+        Alistair Popple <alistair@popple.id.au>,
+        Fabiano Rosas <farosas@linux.ibm.com>,
+        Alexey Kardashevskiy <aik@ozlabs.ru>
+Subject: [PATCH kernel v2 6/7] powerpc/powernv/phb4: Add 4GB IOMMU bypass mode
+Date: Mon, 23 Mar 2020 18:53:53 +1100
+Message-Id: <20200323075354.93825-7-aik@ozlabs.ru>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200323075354.93825-1-aik@ozlabs.ru>
+References: <20200323075354.93825-1-aik@ozlabs.ru>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+IODA2 systems (POWER8/9) allow DMA windows at 2 fixed locations - 0 and
+0x800.0000.0000.0000==1<<59, stored in TVT as TVE0/1. PHB4 on POWER9 has
+a "TVT Select 'GTE4GB' Option" which allows mapping both windows at 0 and
+selecting one based on IOBA address - accesses below 4GB go via TVE0 and
+above 4GB - via TVE1. Note that the TVE1's window still has to allocate
+TCEs for below 4GB.
+
+This changes iommu=iommy_bypass mode to move the second window at 4GB
+if possible. When TVE1_4GB enabled, this creates a small (2GB typically)
+32 bit window as there is no need to cover as much of lower DMA space -
+the 4GB+ window does it better anyway.
+
+As the physical TCE table from TVE1 maps PCI space from 0 and we want it
+look like a 1:1 mapping with a fixed 4GB offset, this adds
+a iommu_table::it_tceoff field which is a number of reserved TCEs covering
+first 4GB of DMA space.
+
+This keeps the existing behavior by default as the TVE1_4GB flag is set
+per PHB by device assignment is done on PE basis and managing both modes
+dynamically might get nasty.
+
+Signed-off-by: Alexey Kardashevskiy <aik@ozlabs.ru>
+---
+ arch/powerpc/include/asm/iommu.h           |  1 +
+ arch/powerpc/include/asm/opal-api.h        |  9 ++-
+ arch/powerpc/include/asm/opal.h            |  2 +
+ arch/powerpc/platforms/powernv/opal-call.c |  2 +
+ arch/powerpc/platforms/powernv/pci-ioda.c  | 66 +++++++++++++++++++---
+ 5 files changed, 70 insertions(+), 10 deletions(-)
+
+diff --git a/arch/powerpc/include/asm/iommu.h b/arch/powerpc/include/asm/iommu.h
+index acf64a73ead1..b9c4af9f129c 100644
+--- a/arch/powerpc/include/asm/iommu.h
++++ b/arch/powerpc/include/asm/iommu.h
+@@ -97,6 +97,7 @@ struct iommu_table {
+ 	unsigned long  it_level_size;
+ 	unsigned long  it_allocated_size;
+ 	unsigned long  it_offset;    /* Offset into global table */
++	unsigned long  it_tceoff;
+ 	unsigned long  it_base;      /* mapped address of tce table */
+ 	unsigned long  it_index;     /* which iommu table this is */
+ 	unsigned long  it_type;      /* type: PCI or Virtual Bus */
+diff --git a/arch/powerpc/include/asm/opal-api.h b/arch/powerpc/include/asm/opal-api.h
+index c1f25a760eb1..7873754f5ea6 100644
+--- a/arch/powerpc/include/asm/opal-api.h
++++ b/arch/powerpc/include/asm/opal-api.h
+@@ -214,7 +214,9 @@
+ #define OPAL_SECVAR_GET				176
+ #define OPAL_SECVAR_GET_NEXT			177
+ #define OPAL_SECVAR_ENQUEUE_UPDATE		178
+-#define OPAL_LAST				178
++#define OPAL_PHB_SET_OPTION			179
++#define OPAL_PHB_GET_OPTION			180
++#define OPAL_LAST				180
+ 
+ #define QUIESCE_HOLD			1 /* Spin all calls at entry */
+ #define QUIESCE_REJECT			2 /* Fail all calls with OPAL_BUSY */
+@@ -437,6 +439,11 @@ enum OpalSlotLedState {
+ 	OPAL_SLOT_LED_STATE_ON = 1	/* LED is ON */
+ };
+ 
++enum OpalPhbOption {
++	OPAL_PHB_OPTION_TVE1_4GB = 0x1,
++	OPAL_PHB_OPTION_MMIO_EEH_DISABLE = 0x2,
++};
++
+ /*
+  * Address cycle types for LPC accesses. These also correspond
+  * to the content of the first cell of the "reg" property for
+diff --git a/arch/powerpc/include/asm/opal.h b/arch/powerpc/include/asm/opal.h
+index 9986ac34b8e2..89b712288cdd 100644
+--- a/arch/powerpc/include/asm/opal.h
++++ b/arch/powerpc/include/asm/opal.h
+@@ -142,6 +142,8 @@ int64_t opal_pci_map_pe_dma_window(uint64_t phb_id, uint16_t pe_number, uint16_t
+ int64_t opal_pci_map_pe_dma_window_real(uint64_t phb_id, uint16_t pe_number,
+ 					uint16_t dma_window_number, uint64_t pci_start_addr,
+ 					uint64_t pci_mem_size);
++int64_t opal_phb_set_option(uint64_t phb_id, uint64_t opt, uint64_t setting);
++int64_t opal_phb_get_option(uint64_t phb_id, uint64_t opt, uint64_t *setting);
+ int64_t opal_pci_reset(uint64_t id, uint8_t reset_scope, uint8_t assert_state);
+ 
+ int64_t opal_pci_get_hub_diag_data(uint64_t hub_id, void *diag_buffer,
+diff --git a/arch/powerpc/platforms/powernv/opal-call.c b/arch/powerpc/platforms/powernv/opal-call.c
+index 5cd0f52d258f..3130d5a41570 100644
+--- a/arch/powerpc/platforms/powernv/opal-call.c
++++ b/arch/powerpc/platforms/powernv/opal-call.c
+@@ -293,3 +293,5 @@ OPAL_CALL(opal_mpipl_query_tag,			OPAL_MPIPL_QUERY_TAG);
+ OPAL_CALL(opal_secvar_get,			OPAL_SECVAR_GET);
+ OPAL_CALL(opal_secvar_get_next,			OPAL_SECVAR_GET_NEXT);
+ OPAL_CALL(opal_secvar_enqueue_update,		OPAL_SECVAR_ENQUEUE_UPDATE);
++OPAL_CALL(opal_phb_set_option,			OPAL_PHB_SET_OPTION);
++OPAL_CALL(opal_phb_get_option,			OPAL_PHB_GET_OPTION);
+diff --git a/arch/powerpc/platforms/powernv/pci-ioda.c b/arch/powerpc/platforms/powernv/pci-ioda.c
+index 27a505a5edb4..cba2cb2e1119 100644
+--- a/arch/powerpc/platforms/powernv/pci-ioda.c
++++ b/arch/powerpc/platforms/powernv/pci-ioda.c
+@@ -2367,7 +2367,7 @@ static long pnv_pci_ioda2_set_window(struct iommu_table_group *table_group,
+ }
+ 
+ static long pnv_pci_ioda2_set_bypass_iommu(struct pnv_ioda_pe *pe,
+-		unsigned long bus_offset)
++		unsigned long bus_offset, unsigned long tbl_offset)
+ {
+ 	struct pnv_phb *phb = pe->phb;
+ 	long rc;
+@@ -2376,6 +2376,8 @@ static long pnv_pci_ioda2_set_bypass_iommu(struct pnv_ioda_pe *pe,
+ 
+ 
+ 	pgsizes = pnv_ioda_parse_tce_sizes(phb);
++	/* Filter sizes to have round number of TCEs to cover 0..tbl_offset */
++	pgsizes &= tbl_offset | (tbl_offset - 1);
+ 	if (!pgsizes)
+ 		return -1;
+ 
+@@ -2386,17 +2388,19 @@ static long pnv_pci_ioda2_set_bypass_iommu(struct pnv_ioda_pe *pe,
+ 				1 /* window number */,
+ 				bus_offset,
+ 				__fls(pgsizes),
+-				roundup_pow_of_two(memory_hotplug_max()),
++				roundup_pow_of_two(memory_hotplug_max() +
++						   tbl_offset),
+ 				2 /* levels */,
+ 				false /* userspace cache */,
+ 				&tbl);
+ 		if (rc)
+ 			return -1;
+ 
++		tbl->it_tceoff = tbl_offset >> tbl->it_page_shift;
+ 		for_each_memblock(memory, r)
+ 			pnv_ioda2_tce_build(tbl,
+ 					    (r->base >> tbl->it_page_shift) +
+-					    tbl->it_offset,
++					    tbl->it_offset + tbl->it_tceoff,
+ 					    r->size >> tbl->it_page_shift,
+ 					    (unsigned long) __va(r->base),
+ 					    DMA_BIDIRECTIONAL,
+@@ -2438,8 +2442,22 @@ static void pnv_pci_ioda2_set_bypass(struct pnv_ioda_pe *pe, bool enable)
+ 	}
+ 
+ 	if (pnv_iommu_bypass_mode == PNV_IOMMU_TCE_BYPASS) {
++		if (!opal_phb_set_option(phb->opal_id,
++					OPAL_PHB_OPTION_TVE1_4GB, 1)) {
++			pe->table_group.tce64_start = SZ_4G;
++			if (!pnv_pci_ioda2_set_bypass_iommu(pe,
++					pe->table_group.tce64_start, SZ_4G)) {
++				pe->tce_bypass_enabled = true;
++				pe_info(pe, "Enabled 64-bit IOMMU bypass at %llx\n",
++						pe->table_group.tce64_start);
++				return;
++			}
++			pe_err(pe, "Enabled TVE1_4GB but failed to configure TCE table");
++			opal_phb_set_option(phb->opal_id,
++					    OPAL_PHB_OPTION_TVE1_4GB, 0);
++		}
+ 		if (!pnv_pci_ioda2_set_bypass_iommu(pe,
+-				pe->table_group.tce64_start)) {
++				pe->table_group.tce64_start, 0)) {
+ 			pe->tce_bypass_enabled = true;
+ 			pe_info(pe, "Enabled 64-bit IOMMU bypass at %llx\n",
+ 				pe->table_group.tce64_start);
+@@ -2450,6 +2468,10 @@ static void pnv_pci_ioda2_set_bypass(struct pnv_ioda_pe *pe, bool enable)
+ 	}
+ 
+ 	if (pnv_iommu_bypass_mode == PNV_IOMMU_NO_TRANSLATE) {
++		/*
++		 * FIXME: if we enable dynamic switch, here we need to disable
++		 * OPAL_PCI_PHB_FLAG_TVE1_4GB
++		 */
+ 		top = roundup_pow_of_two(memblock_end_of_DRAM());
+ 		if (!opal_pci_map_pe_dma_window_real(phb->opal_id,
+ 					pe->pe_number, window_id,
+@@ -2521,6 +2543,15 @@ static long pnv_pci_ioda2_setup_default_config(struct pnv_ioda_pe *pe)
+ 	 */
+ 	/* iommu_table::it_map uses 1 bit per IOMMU page, hence 8 */
+ 	window_size = min((maxblock * 8) << tceshift, max_memory);
++
++	/*
++	 * If we get TVE#1_4GB on, there is no point in having a huge default
++	 * DMA window.
++	 */
++	if (pnv_iommu_bypass_mode == PNV_IOMMU_TCE_BYPASS)
++		window_size = min_t(u64, pe->table_group.tce32_size,
++				window_size);
++
+ 	/* Each TCE level cannot exceed maxblock so go multilevel if needed */
+ 	tces_order = ilog2(window_size >> tceshift);
+ 	tcelevel_order = ilog2(maxblock >> 3);
+@@ -2611,6 +2642,9 @@ unsigned long pnv_pci_ioda2_get_table_size(int num, __u32 page_shift,
+ 			!is_power_of_2(window_size))
+ 		return 0;
+ 
++	if (pnv_iommu_bypass_mode == PNV_IOMMU_TCE_BYPASS && num == 1)
++		window_size = roundup_pow_of_two(window_size + SZ_4G);
++
+ 	/* Calculate a direct table size from window_size and levels */
+ 	entries_shift = (entries_shift + levels - 1) / levels;
+ 	table_shift = entries_shift + 3;
+@@ -2636,15 +2670,29 @@ static long pnv_pci_ioda2_create_table_userspace(
+ {
+ 	struct pnv_ioda_pe *pe = container_of(table_group, struct pnv_ioda_pe,
+ 			table_group);
+-	__u64 bus_offset = num ?
+-		pe->table_group.tce64_start : table_group->tce32_start;
+-	long ret = pnv_pci_ioda2_create_table(pe->phb->hose->node,
+-			num, bus_offset, page_shift, window_size, levels, true,
++	__u64 bus_offset, tce_offset = 0, win_size = window_size;
++	long ret;
++
++	if (num == 0) {
++		bus_offset = table_group->tce32_start;
++	} else if (table_group->tce64_start == SZ_4G) {
++		bus_offset = table_group->tce32_start;
++		tce_offset = SZ_4G;
++		win_size = roundup_pow_of_two(window_size + tce_offset);
++	} else {
++		bus_offset = table_group->tce64_start;
++	}
++
++	ret = pnv_pci_ioda2_create_table(pe->phb->hose->node,
++			num, bus_offset, page_shift, win_size, levels, true,
+ 			ptbl);
+ 
+-	if (!ret)
++	if (!ret) {
+ 		(*ptbl)->it_allocated_size = pnv_pci_ioda2_get_table_size(
+ 				num, page_shift, window_size, levels);
++		(*ptbl)->it_tceoff = tce_offset >> page_shift;
++	}
++
+ 	return ret;
+ }
+ 
+
+From patchwork Mon Mar 23 07:53:54 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexey Kardashevskiy <aik@ozlabs.ru>
+X-Patchwork-Id: 11452435
+Return-Path: <SRS0=toc3=5I=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 410CC17EF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 23 Mar 2020 08:01:04 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 2A09F2074D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 23 Mar 2020 08:01:04 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727527AbgCWIBD (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 23 Mar 2020 04:01:03 -0400
+Received: from 107-174-27-60-host.colocrossing.com ([107.174.27.60]:50648
+ "EHLO
+        ozlabs.ru" rhost-flags-OK-FAIL-OK-OK) by vger.kernel.org with ESMTP
+        id S1727507AbgCWIBC (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 23 Mar 2020 04:01:02 -0400
+Received: from fstn1-p1.ozlabs.ibm.com (localhost [IPv6:::1])
+        by ozlabs.ru (Postfix) with ESMTP id 7E139AE807F2;
+        Mon, 23 Mar 2020 03:52:36 -0400 (EDT)
+From: Alexey Kardashevskiy <aik@ozlabs.ru>
+To: linuxppc-dev@lists.ozlabs.org
+Cc: David Gibson <david@gibson.dropbear.id.au>,
+        kvm-ppc@vger.kernel.org, kvm@vger.kernel.org,
+        Alistair Popple <alistair@popple.id.au>,
+        Fabiano Rosas <farosas@linux.ibm.com>,
+        Alexey Kardashevskiy <aik@ozlabs.ru>
+Subject: [PATCH kernel v2 7/7] vfio/spapr_tce: Advertise and allow a huge DMA
+ windows at 4GB
+Date: Mon, 23 Mar 2020 18:53:54 +1100
+Message-Id: <20200323075354.93825-8-aik@ozlabs.ru>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200323075354.93825-1-aik@ozlabs.ru>
+References: <20200323075354.93825-1-aik@ozlabs.ru>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+So far the only option for a big 64big DMA window was a window located
+at 0x800.0000.0000.0000 (1<<59) which creates problems for devices
+supporting smaller DMA masks.
+
+This exploits a POWER9 PHB option to allow the second DMA window to map
+at 0 and advertises it with a 4GB offset to avoid overlap with
+the default 32bit window.
+
+Signed-off-by: Alexey Kardashevskiy <aik@ozlabs.ru>
+---
+ include/uapi/linux/vfio.h           |  2 ++
+ drivers/vfio/vfio_iommu_spapr_tce.c | 13 +++++++------
+ 2 files changed, 9 insertions(+), 6 deletions(-)
+
+diff --git a/include/uapi/linux/vfio.h b/include/uapi/linux/vfio.h
+index 9e843a147ead..c7f89d47335a 100644
+--- a/include/uapi/linux/vfio.h
++++ b/include/uapi/linux/vfio.h
+@@ -831,9 +831,11 @@ struct vfio_iommu_spapr_tce_info {
+ 	__u32 argsz;
+ 	__u32 flags;
+ #define VFIO_IOMMU_SPAPR_INFO_DDW	(1 << 0)	/* DDW supported */
++#define VFIO_IOMMU_SPAPR_INFO_DDW_START	(1 << 1)	/* DDW offset */
+ 	__u32 dma32_window_start;	/* 32 bit window start (bytes) */
+ 	__u32 dma32_window_size;	/* 32 bit window size (bytes) */
+ 	struct vfio_iommu_spapr_tce_ddw_info ddw;
++	__u64 dma64_window_start;
+ };
+ 
+ #define VFIO_IOMMU_SPAPR_TCE_GET_INFO	_IO(VFIO_TYPE, VFIO_BASE + 12)
+diff --git a/drivers/vfio/vfio_iommu_spapr_tce.c b/drivers/vfio/vfio_iommu_spapr_tce.c
+index 750a0676e9b7..315fd56e51a7 100644
+--- a/drivers/vfio/vfio_iommu_spapr_tce.c
++++ b/drivers/vfio/vfio_iommu_spapr_tce.c
+@@ -691,7 +691,7 @@ static long tce_iommu_create_window(struct tce_container *container,
+ 	container->tables[num] = tbl;
+ 
+ 	/* Return start address assigned by platform in create_table() */
+-	*start_addr = tbl->it_offset << tbl->it_page_shift;
++	*start_addr = (tbl->it_offset + tbl->it_tceoff) << tbl->it_page_shift;
+ 
+ 	return 0;
+ 
+@@ -777,7 +777,7 @@ static long tce_iommu_ioctl(void *iommu_data,
+ 				 unsigned int cmd, unsigned long arg)
+ {
+ 	struct tce_container *container = iommu_data;
+-	unsigned long minsz, ddwsz;
++	unsigned long minsz;
+ 	long ret;
+ 
+ 	switch (cmd) {
+@@ -842,12 +842,13 @@ static long tce_iommu_ioctl(void *iommu_data,
+ 			info.ddw.levels = table_group->max_levels;
+ 		}
+ 
+-		ddwsz = offsetofend(struct vfio_iommu_spapr_tce_info, ddw);
++		info.flags |= VFIO_IOMMU_SPAPR_INFO_DDW_START;
++		info.dma64_window_start = table_group->tce64_start;
+ 
+-		if (info.argsz >= ddwsz)
+-			minsz = ddwsz;
++		if (info.argsz > sizeof(info))
++			info.argsz = sizeof(info);
+ 
+-		if (copy_to_user((void __user *)arg, &info, minsz))
++		if (copy_to_user((void __user *)arg, &info, info.argsz))
+ 			return -EFAULT;
+ 
+ 		return 0;
