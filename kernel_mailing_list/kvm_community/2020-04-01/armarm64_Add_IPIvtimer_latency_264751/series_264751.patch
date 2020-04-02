@@ -1,0 +1,229 @@
+From patchwork Wed Apr  1 10:08:11 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Jingyi Wang <wangjingyi11@huawei.com>
+X-Patchwork-Id: 11468857
+Return-Path: <SRS0=PGN4=5R=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 799D9912
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  1 Apr 2020 10:08:51 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 5896620BED
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  1 Apr 2020 10:08:51 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732107AbgDAKIu (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 1 Apr 2020 06:08:50 -0400
+Received: from szxga06-in.huawei.com ([45.249.212.32]:36296 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1731951AbgDAKIu (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 1 Apr 2020 06:08:50 -0400
+Received: from DGGEMS408-HUB.china.huawei.com (unknown [172.30.72.58])
+        by Forcepoint Email with ESMTP id 89E3E897F185FC9B8DBD;
+        Wed,  1 Apr 2020 18:08:35 +0800 (CST)
+Received: from DESKTOP-FPN2511.china.huawei.com (10.173.222.58) by
+ DGGEMS408-HUB.china.huawei.com (10.3.19.208) with Microsoft SMTP Server id
+ 14.3.487.0; Wed, 1 Apr 2020 18:08:28 +0800
+From: Jingyi Wang <wangjingyi11@huawei.com>
+To: <drjones@redhat.com>, <kvm@vger.kernel.org>,
+        <kvmarm@lists.cs.columbia.edu>
+CC: <wanghaibin.wang@huawei.com>, <yuzenghui@huawei.com>,
+        Jingyi Wang <wangjingyi11@huawei.com>
+Subject: [kvm-unit-tests PATCH 1/2] arm/arm64: gic: Add IPI latency test
+Date: Wed, 1 Apr 2020 18:08:11 +0800
+Message-ID: <20200401100812.27616-2-wangjingyi11@huawei.com>
+X-Mailer: git-send-email 2.14.1.windows.1
+In-Reply-To: <20200401100812.27616-1-wangjingyi11@huawei.com>
+References: <20200401100812.27616-1-wangjingyi11@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.173.222.58]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This patch add a test to measure the latency of IPI injection.
+
+Signed-off-by: Jingyi Wang <wangjingyi11@huawei.com>
+---
+ arm/gic.c | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/arm/gic.c b/arm/gic.c
+index fcf4c1f..f5e830e 100644
+--- a/arm/gic.c
++++ b/arm/gic.c
+@@ -27,6 +27,9 @@ struct gic {
+ 	struct {
+ 		void (*send_self)(void);
+ 		void (*send_broadcast)(void);
++		u64 ipi_inject_time;
++		u64 ipi_receive_time[NR_CPUS];
++		int nr_records;
+ 	} ipi;
+ };
+ 
+@@ -142,6 +145,7 @@ static void check_irqnr(u32 irqnr)
+ 
+ static void ipi_handler(struct pt_regs *regs __unused)
+ {
++	gic->ipi.ipi_receive_time[gic->ipi.nr_records++] = get_cntvct();
+ 	u32 irqstat = gic_read_iar();
+ 	u32 irqnr = gic_iar_irqnr(irqstat);
+ 
+@@ -187,9 +191,16 @@ static void ipi_test_self(void)
+ 	stats_reset();
+ 	cpumask_clear(&mask);
+ 	cpumask_set_cpu(smp_processor_id(), &mask);
++
++	gic->ipi.nr_records = 0;
++	gic->ipi.ipi_inject_time = get_cntvct();
+ 	gic->ipi.send_self();
++
+ 	check_acked("IPI: self", &mask);
+ 	report_prefix_pop();
++
++	report_info("The latency of ipi_test_self: %ld cycles",
++			gic->ipi.ipi_receive_time[0] - gic->ipi.ipi_inject_time);
+ }
+ 
+ static void ipi_test_smp(void)
+@@ -202,17 +213,33 @@ static void ipi_test_smp(void)
+ 	cpumask_copy(&mask, &cpu_present_mask);
+ 	for (i = smp_processor_id() & 1; i < nr_cpus; i += 2)
+ 		cpumask_clear_cpu(i, &mask);
++
++	gic->ipi.nr_records = 0;
++	gic->ipi.ipi_inject_time = get_cntvct();
+ 	gic_ipi_send_mask(IPI_IRQ, &mask);
++
+ 	check_acked("IPI: directed", &mask);
+ 	report_prefix_pop();
+ 
++	for (i = 0; i < gic->ipi.nr_records; i++)
++		report_info("The latency of ipi_test_smp(directed): %ld cycles",
++			gic->ipi.ipi_receive_time[i] - gic->ipi.ipi_inject_time);
++
+ 	report_prefix_push("broadcast");
+ 	stats_reset();
+ 	cpumask_copy(&mask, &cpu_present_mask);
+ 	cpumask_clear_cpu(smp_processor_id(), &mask);
++
++	gic->ipi.nr_records = 0;
++	gic->ipi.ipi_inject_time = get_cntvct();
+ 	gic->ipi.send_broadcast();
++
+ 	check_acked("IPI: broadcast", &mask);
+ 	report_prefix_pop();
++
++	for (i = 0; i < gic->ipi.nr_records; i++)
++		report_info("The latency of ipi_test_smp(broadcast): %ld cycles",
++			gic->ipi.ipi_receive_time[i] - gic->ipi.ipi_inject_time);
+ }
+ 
+ static void ipi_enable(void)
+
+From patchwork Wed Apr  1 10:08:12 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Jingyi Wang <wangjingyi11@huawei.com>
+X-Patchwork-Id: 11468853
+Return-Path: <SRS0=PGN4=5R=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 02420912
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  1 Apr 2020 10:08:41 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id D7796208FE
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  1 Apr 2020 10:08:41 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731343AbgDAKIk (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 1 Apr 2020 06:08:40 -0400
+Received: from szxga06-in.huawei.com ([45.249.212.32]:36292 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1725860AbgDAKIk (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 1 Apr 2020 06:08:40 -0400
+Received: from DGGEMS408-HUB.china.huawei.com (unknown [172.30.72.58])
+        by Forcepoint Email with ESMTP id 81EBF35FAB3AE066FAFF;
+        Wed,  1 Apr 2020 18:08:35 +0800 (CST)
+Received: from DESKTOP-FPN2511.china.huawei.com (10.173.222.58) by
+ DGGEMS408-HUB.china.huawei.com (10.3.19.208) with Microsoft SMTP Server id
+ 14.3.487.0; Wed, 1 Apr 2020 18:08:29 +0800
+From: Jingyi Wang <wangjingyi11@huawei.com>
+To: <drjones@redhat.com>, <kvm@vger.kernel.org>,
+        <kvmarm@lists.cs.columbia.edu>
+CC: <wanghaibin.wang@huawei.com>, <yuzenghui@huawei.com>,
+        Jingyi Wang <wangjingyi11@huawei.com>
+Subject: [kvm-unit-tests PATCH 2/2] arm/arm64: Add vtimer latency test
+Date: Wed, 1 Apr 2020 18:08:12 +0800
+Message-ID: <20200401100812.27616-3-wangjingyi11@huawei.com>
+X-Mailer: git-send-email 2.14.1.windows.1
+In-Reply-To: <20200401100812.27616-1-wangjingyi11@huawei.com>
+References: <20200401100812.27616-1-wangjingyi11@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.173.222.58]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This patch add a test to measure the precise vtimer firing time.
+
+Signed-off-by: Jingyi Wang <wangjingyi11@huawei.com>
+---
+ arm/timer.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/arm/timer.c b/arm/timer.c
+index f390e8e..1d5b3dc 100644
+--- a/arm/timer.c
++++ b/arm/timer.c
+@@ -16,6 +16,9 @@
+ #define ARCH_TIMER_CTL_IMASK   (1 << 1)
+ #define ARCH_TIMER_CTL_ISTATUS (1 << 2)
+ 
++static u64 inject_time;
++static u64 receive_time;
++
+ static void *gic_ispendr;
+ static void *gic_isenabler;
+ static void *gic_icenabler;
+@@ -149,6 +152,8 @@ static void irq_handler(struct pt_regs *regs)
+ 	u32 irqstat = gic_read_iar();
+ 	u32 irqnr = gic_iar_irqnr(irqstat);
+ 
++	receive_time = get_cntvct();
++
+ 	if (irqnr != GICC_INT_SPURIOUS)
+ 		gic_write_eoir(irqstat);
+ 
+@@ -163,6 +168,11 @@ static void irq_handler(struct pt_regs *regs)
+ 
+ 	info->write_ctl(ARCH_TIMER_CTL_IMASK | ARCH_TIMER_CTL_ENABLE);
+ 	info->irq_received = true;
++
++	if (inject_time != 0)
++		report_info("vtimer latency: %ld cycles/10ms\n",
++			receive_time - inject_time);
++	inject_time = 0;
+ }
+ 
+ static bool gic_timer_pending(struct timer_info *info)
+@@ -179,6 +189,7 @@ static bool test_cval_10msec(struct timer_info *info)
+ 
+ 	/* Program timer to fire in 10 ms */
+ 	before_timer = info->read_counter();
++	inject_time = get_cntvct();
+ 	info->write_cval(before_timer + time_10ms);
+ 	info->write_ctl(ARCH_TIMER_CTL_ENABLE);
+ 	isb();
