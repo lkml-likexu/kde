@@ -1,0 +1,543 @@
+From patchwork Fri Apr  3 15:30:46 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Hildenbrand <david@redhat.com>
+X-Patchwork-Id: 11473003
+Return-Path: <SRS0=Xk8+=5T=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8489414DD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  3 Apr 2020 15:31:34 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 623FB20CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  3 Apr 2020 15:31:34 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="WE5TVmWF"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404280AbgDCPbG (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 3 Apr 2020 11:31:06 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([205.139.110.120]:55703 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S2404270AbgDCPbF (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 3 Apr 2020 11:31:05 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1585927865;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=KOB528RQaBcIIxwNxgwnDzZl9thgTK4yeE9O3dHXbMk=;
+        b=WE5TVmWFEVinsif276lRNhAR6Yw3MkR1+AlW+l85t0gDkJzwR87b1NZs9KwVrPN2nHqyKX
+        SYexVrF/k3tlojmj5XdIR0YEVR42Gw1IsQ5KRuMNGTpKZA5kFNcDWHJ2nDP5V/emCpbAeh
+        JISZtdr8AZVOXNo9GXFiT6hgt3pPHog=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-350-PkOhlhWAOjGlSOe86hgh-A-1; Fri, 03 Apr 2020 11:31:01 -0400
+X-MC-Unique: PkOhlhWAOjGlSOe86hgh-A-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id B2F351005513;
+        Fri,  3 Apr 2020 15:30:59 +0000 (UTC)
+Received: from t480s.redhat.com (ovpn-112-213.ams2.redhat.com [10.36.112.213])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id A79C326DC4;
+        Fri,  3 Apr 2020 15:30:57 +0000 (UTC)
+From: David Hildenbrand <david@redhat.com>
+To: kvm@vger.kernel.org
+Cc: linux-s390@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Vasily Gorbik <gor@linux.ibm.com>,
+        Heiko Carstens <heiko.carstens@de.ibm.com>,
+        Cornelia Huck <cohuck@redhat.com>,
+        Janosch Frank <frankja@linux.ibm.com>,
+        Christian Borntraeger <borntraeger@de.ibm.com>,
+        David Hildenbrand <david@redhat.com>, stable@vger.kernel.org
+Subject: [PATCH v2 1/5] KVM: s390: vsie: Fix region 1 ASCE sanity shadow
+ address checks
+Date: Fri,  3 Apr 2020 17:30:46 +0200
+Message-Id: <20200403153050.20569-2-david@redhat.com>
+In-Reply-To: <20200403153050.20569-1-david@redhat.com>
+References: <20200403153050.20569-1-david@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+In case we have a region 1 ASCE, our shadow/g3 address can have any value.
+Unfortunately, (-1UL << 64) is undefined and triggers sometimes,
+rejecting valid shadow addresses when trying to walk our shadow table
+hierarchy.
+
+The result is that the prefix cannot get mapped and will loop basically
+forever trying to map it (-EAGAIN loop).
+
+After all, the broken check is only a sanity check, our table shadowing
+code in kvm_s390_shadow_tables() already checks these conditions, injecting
+proper translation exceptions. Turn it into a WARN_ON_ONCE().
+
+Fixes: 4be130a08420 ("s390/mm: add shadow gmap support")
+Tested-by: Janosch Frank <frankja@linux.ibm.com>
+Reported-by: Janosch Frank <frankja@linux.ibm.com>
+Cc: <stable@vger.kernel.org> # v4.8+
+Signed-off-by: David Hildenbrand <david@redhat.com>
+Reviewed-by: Christian Borntraeger <borntraeger@de.ibm.com>
+---
+ arch/s390/mm/gmap.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/arch/s390/mm/gmap.c b/arch/s390/mm/gmap.c
+index 2fbece47ef6f..b93dd54b234a 100644
+--- a/arch/s390/mm/gmap.c
++++ b/arch/s390/mm/gmap.c
+@@ -787,14 +787,18 @@ static void gmap_call_notifier(struct gmap *gmap, unsigned long start,
+ static inline unsigned long *gmap_table_walk(struct gmap *gmap,
+ 					     unsigned long gaddr, int level)
+ {
++	const int asce_type = gmap->asce & _ASCE_TYPE_MASK;
+ 	unsigned long *table;
+ 
+ 	if ((gmap->asce & _ASCE_TYPE_MASK) + 4 < (level * 4))
+ 		return NULL;
+ 	if (gmap_is_shadow(gmap) && gmap->removed)
+ 		return NULL;
+-	if (gaddr & (-1UL << (31 + ((gmap->asce & _ASCE_TYPE_MASK) >> 2)*11)))
++
++	if (WARN_ON_ONCE(asce_type != _ASCE_TYPE_REGION1 &&
++			 gaddr & (-1UL << (31 + (asce_type >> 2) * 11))))
+ 		return NULL;
++
+ 	table = gmap->table;
+ 	switch (gmap->asce & _ASCE_TYPE_MASK) {
+ 	case _ASCE_TYPE_REGION1:
+
+From patchwork Fri Apr  3 15:30:47 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Hildenbrand <david@redhat.com>
+X-Patchwork-Id: 11472999
+Return-Path: <SRS0=Xk8+=5T=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1890C14DD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  3 Apr 2020 15:31:19 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id EC6972073B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  3 Apr 2020 15:31:18 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="HZUB48Hs"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404308AbgDCPbO (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 3 Apr 2020 11:31:14 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([207.211.31.120]:43530 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S2404291AbgDCPbI (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 3 Apr 2020 11:31:08 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1585927867;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=J1iTHN+tnT2p+g/fi18lrfKuFFUGCiTi5w5obFOSEB4=;
+        b=HZUB48HsDX3wx5N15wLzLhTxxj/ajaoQoP/mQf5yMLzAx8kqkizoDAFzcDHCtpFSwxUP/C
+        IIArNKQox4AnbJRvQy6my7hvH/XaAJ+3/OxWza0tUsYUKNayvd5bHRcox8wD3R+nwOx8Pz
+        PE5K/vnEAzB0LuMmxTsEUTSQ8SRn5VU=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-9-m04b8OhgN3i6PG6Oq4RBpg-1; Fri, 03 Apr 2020 11:31:03 -0400
+X-MC-Unique: m04b8OhgN3i6PG6Oq4RBpg-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 1CBD7190B2A0;
+        Fri,  3 Apr 2020 15:31:02 +0000 (UTC)
+Received: from t480s.redhat.com (ovpn-112-213.ams2.redhat.com [10.36.112.213])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 0C83A26DD1;
+        Fri,  3 Apr 2020 15:30:59 +0000 (UTC)
+From: David Hildenbrand <david@redhat.com>
+To: kvm@vger.kernel.org
+Cc: linux-s390@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Vasily Gorbik <gor@linux.ibm.com>,
+        Heiko Carstens <heiko.carstens@de.ibm.com>,
+        Cornelia Huck <cohuck@redhat.com>,
+        Janosch Frank <frankja@linux.ibm.com>,
+        Christian Borntraeger <borntraeger@de.ibm.com>,
+        David Hildenbrand <david@redhat.com>, stable@vger.kernel.org
+Subject: [PATCH v2 2/5] KVM: s390: vsie: Fix delivery of addressing exceptions
+Date: Fri,  3 Apr 2020 17:30:47 +0200
+Message-Id: <20200403153050.20569-3-david@redhat.com>
+In-Reply-To: <20200403153050.20569-1-david@redhat.com>
+References: <20200403153050.20569-1-david@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Whenever we get an -EFAULT, we failed to read in guest 2 physical
+address space. Such addressing exceptions are reported via a program
+intercept to the nested hypervisor.
+
+We faked the intercept, we have to return to guest 2. Instead, right
+now we would be returning -EFAULT from the intercept handler, eventually
+crashing the VM.
+
+Addressing exceptions can only happen if the g2->g3 page tables
+reference invalid g2 addresses (say, either a table or the final page is
+not accessible - so something that basically never happens in sane
+environments.
+
+Identified by manual code inspection.
+
+Fixes: a3508fbe9dc6 ("KVM: s390: vsie: initial support for nested virtualization")
+Cc: <stable@vger.kernel.org> # v4.8+
+Signed-off-by: David Hildenbrand <david@redhat.com>
+---
+ arch/s390/kvm/vsie.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/s390/kvm/vsie.c b/arch/s390/kvm/vsie.c
+index 076090f9e666..4f6c22d72072 100644
+--- a/arch/s390/kvm/vsie.c
++++ b/arch/s390/kvm/vsie.c
+@@ -1202,6 +1202,7 @@ static int vsie_run(struct kvm_vcpu *vcpu, struct vsie_page *vsie_page)
+ 		scb_s->iprcc = PGM_ADDRESSING;
+ 		scb_s->pgmilc = 4;
+ 		scb_s->gpsw.addr = __rewind_psw(scb_s->gpsw, 4);
++		rc = 1;
+ 	}
+ 	return rc;
+ }
+
+From patchwork Fri Apr  3 15:30:48 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Hildenbrand <david@redhat.com>
+X-Patchwork-Id: 11472995
+Return-Path: <SRS0=Xk8+=5T=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 016A6912
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  3 Apr 2020 15:31:12 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id D3EDE2073B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  3 Apr 2020 15:31:11 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="cwqJEDsX"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404302AbgDCPbJ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 3 Apr 2020 11:31:09 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([207.211.31.120]:51166 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S2404294AbgDCPbI (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 3 Apr 2020 11:31:08 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1585927867;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=CD7baw1Qg+npMYnPmj7hxrzhNyYIW5i9m/6usTzXTDc=;
+        b=cwqJEDsXUcuIEETxvUreLUlMinpydsnzhUIw3k+NvDOiaIi10P/WqGEQv/JD7qo9SuvjZ+
+        cK2ZALLY98lGdQFxqJq0nEM5miLn4wUh+B89X6HFmUN9yWR5DK+tNXuTv5xbFo6gHS6JCR
+        BPSh1+hy6k7N9Yw+QWmMHvIT7UniVkU=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-279-E-MBlT1wM_yzRbhycaQEoQ-1; Fri, 03 Apr 2020 11:31:05 -0400
+X-MC-Unique: E-MBlT1wM_yzRbhycaQEoQ-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 51C9B1005516;
+        Fri,  3 Apr 2020 15:31:04 +0000 (UTC)
+Received: from t480s.redhat.com (ovpn-112-213.ams2.redhat.com [10.36.112.213])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 66B0D26DC4;
+        Fri,  3 Apr 2020 15:31:02 +0000 (UTC)
+From: David Hildenbrand <david@redhat.com>
+To: kvm@vger.kernel.org
+Cc: linux-s390@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Vasily Gorbik <gor@linux.ibm.com>,
+        Heiko Carstens <heiko.carstens@de.ibm.com>,
+        Cornelia Huck <cohuck@redhat.com>,
+        Janosch Frank <frankja@linux.ibm.com>,
+        Christian Borntraeger <borntraeger@de.ibm.com>,
+        David Hildenbrand <david@redhat.com>
+Subject: [PATCH v2 3/5] KVM: s390: vsie: Fix possible race when shadowing
+ region 3 tables
+Date: Fri,  3 Apr 2020 17:30:48 +0200
+Message-Id: <20200403153050.20569-4-david@redhat.com>
+In-Reply-To: <20200403153050.20569-1-david@redhat.com>
+References: <20200403153050.20569-1-david@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+We have to properly retry again by returning -EINVAL immediately in case
+somebody else instantiated the table concurrently. We missed to add the
+goto in this function only. The code now matches the other, similar
+shadowing functions.
+
+We are overwriting an existing region 2 table entry. All allocated pages
+are added to the crst_list to be freed later, so they are not lost
+forever. However, when unshadowing the region 2 table, we wouldn't trigger
+unshadowing of the original shadowed region 3 table that we replaced. It
+would get unshadowed when the original region 3 table is modified. As it's
+not connected to the page table hierarchy anymore, it's not going to get
+used anymore. However, for a limited time, this page table will stick
+around, so it's in some sense a temporary memory leak.
+
+Identified by manual code inspection. I don't think this classifies as
+stable material.
+
+Fixes: 998f637cc4b9 ("s390/mm: avoid races on region/segment/page table shadowing")
+Signed-off-by: David Hildenbrand <david@redhat.com>
+---
+ arch/s390/mm/gmap.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/s390/mm/gmap.c b/arch/s390/mm/gmap.c
+index b93dd54b234a..24ef30fb0833 100644
+--- a/arch/s390/mm/gmap.c
++++ b/arch/s390/mm/gmap.c
+@@ -1844,6 +1844,7 @@ int gmap_shadow_r3t(struct gmap *sg, unsigned long saddr, unsigned long r3t,
+ 		goto out_free;
+ 	} else if (*table & _REGION_ENTRY_ORIGIN) {
+ 		rc = -EAGAIN;		/* Race with shadow */
++		goto out_free;
+ 	}
+ 	crst_table_init(s_r3t, _REGION3_ENTRY_EMPTY);
+ 	/* mark as invalid as long as the parent table is not protected */
+
+From patchwork Fri Apr  3 15:30:49 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Hildenbrand <david@redhat.com>
+X-Patchwork-Id: 11473001
+Return-Path: <SRS0=Xk8+=5T=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 2850614DD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  3 Apr 2020 15:31:29 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id 06D472073B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  3 Apr 2020 15:31:29 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="MsT0cfMp"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404345AbgDCPb2 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 3 Apr 2020 11:31:28 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([205.139.110.120]:60103 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S2404293AbgDCPbK (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 3 Apr 2020 11:31:10 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1585927869;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=5Mna+DLBALS7Nv4a/6CqV2AmkqQOOKpm1xodEo/O7Gc=;
+        b=MsT0cfMpBjOopiQKCAqXD9aXdwmFiWMzdqYPyEYzyOjoLik8SM/EgHmS1Dtaq2vLmMPDMx
+        Aw6ZJ4pG0IXiqywCjvNCZrjkvL2nxTaR/vV3Ljj1g91uEYG12lfchdsUveTRrKo0d6AQIC
+        ILXqcnDPceuGZH54ttOhlBvJ2DwJZSE=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-390-3_BoqKm6MkSVwTpjGmDjAA-1; Fri, 03 Apr 2020 11:31:08 -0400
+X-MC-Unique: 3_BoqKm6MkSVwTpjGmDjAA-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 8BBD2800D50;
+        Fri,  3 Apr 2020 15:31:06 +0000 (UTC)
+Received: from t480s.redhat.com (ovpn-112-213.ams2.redhat.com [10.36.112.213])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 9D8D626DD1;
+        Fri,  3 Apr 2020 15:31:04 +0000 (UTC)
+From: David Hildenbrand <david@redhat.com>
+To: kvm@vger.kernel.org
+Cc: linux-s390@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Vasily Gorbik <gor@linux.ibm.com>,
+        Heiko Carstens <heiko.carstens@de.ibm.com>,
+        Cornelia Huck <cohuck@redhat.com>,
+        Janosch Frank <frankja@linux.ibm.com>,
+        Christian Borntraeger <borntraeger@de.ibm.com>,
+        David Hildenbrand <david@redhat.com>
+Subject: [PATCH v2 4/5] KVM: s390: vsie: Move conditional reschedule
+Date: Fri,  3 Apr 2020 17:30:49 +0200
+Message-Id: <20200403153050.20569-5-david@redhat.com>
+In-Reply-To: <20200403153050.20569-1-david@redhat.com>
+References: <20200403153050.20569-1-david@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Let's move it to the outer loop, in case we ever run again into long
+loops, trying to map the prefix. While at it, convert it to cond_resched().
+
+Signed-off-by: David Hildenbrand <david@redhat.com>
+---
+ arch/s390/kvm/vsie.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/arch/s390/kvm/vsie.c b/arch/s390/kvm/vsie.c
+index 4f6c22d72072..ef05b4e167fb 100644
+--- a/arch/s390/kvm/vsie.c
++++ b/arch/s390/kvm/vsie.c
+@@ -1000,8 +1000,6 @@ static int do_vsie_run(struct kvm_vcpu *vcpu, struct vsie_page *vsie_page)
+ 
+ 	handle_last_fault(vcpu, vsie_page);
+ 
+-	if (need_resched())
+-		schedule();
+ 	if (test_cpu_flag(CIF_MCCK_PENDING))
+ 		s390_handle_mcck();
+ 
+@@ -1185,6 +1183,7 @@ static int vsie_run(struct kvm_vcpu *vcpu, struct vsie_page *vsie_page)
+ 		    kvm_s390_vcpu_has_irq(vcpu, 0) ||
+ 		    kvm_s390_vcpu_sie_inhibited(vcpu))
+ 			break;
++		cond_resched();
+ 	}
+ 
+ 	if (rc == -EFAULT) {
+
+From patchwork Fri Apr  3 15:30:50 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Hildenbrand <david@redhat.com>
+X-Patchwork-Id: 11472997
+Return-Path: <SRS0=Xk8+=5T=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D814614DD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  3 Apr 2020 15:31:17 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [209.132.180.67])
+	by mail.kernel.org (Postfix) with ESMTP id B5B2D207FF
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri,  3 Apr 2020 15:31:17 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="MgG92rfS"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404323AbgDCPbO (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 3 Apr 2020 11:31:14 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([205.139.110.120]:41715 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S2404311AbgDCPbM (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 3 Apr 2020 11:31:12 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1585927871;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=o9+iQkDrjMDPGfCAP/TxUctBQwhHf6q/sd2P4Ro4S4c=;
+        b=MgG92rfStsvdHo/aT5/hI1lSjdqHbIoTRaccHa7AMdOTBnK66kLapOXGMOPNrUqBx1DLZr
+        ScdEx6Xadu2uC8h/xkPzavNk7xx3DDjH7ktCoXWhO5lvOAQzPl2R2gA8zuPJZEqSXb6Qrg
+        T426Xdbe/OmdSwFCyZ4nqZ6FTyDaTW0=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-282-f7XVJwvaPGuR86Le5qU1SQ-1; Fri, 03 Apr 2020 11:31:10 -0400
+X-MC-Unique: f7XVJwvaPGuR86Le5qU1SQ-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id BDC4D8017CE;
+        Fri,  3 Apr 2020 15:31:08 +0000 (UTC)
+Received: from t480s.redhat.com (ovpn-112-213.ams2.redhat.com [10.36.112.213])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id D633626DC4;
+        Fri,  3 Apr 2020 15:31:06 +0000 (UTC)
+From: David Hildenbrand <david@redhat.com>
+To: kvm@vger.kernel.org
+Cc: linux-s390@vger.kernel.org, linux-kernel@vger.kernel.org,
+        Vasily Gorbik <gor@linux.ibm.com>,
+        Heiko Carstens <heiko.carstens@de.ibm.com>,
+        Cornelia Huck <cohuck@redhat.com>,
+        Janosch Frank <frankja@linux.ibm.com>,
+        Christian Borntraeger <borntraeger@de.ibm.com>,
+        David Hildenbrand <david@redhat.com>
+Subject: [PATCH v2 5/5] KVM: s390: vsie: gmap_table_walk() simplifications
+Date: Fri,  3 Apr 2020 17:30:50 +0200
+Message-Id: <20200403153050.20569-6-david@redhat.com>
+In-Reply-To: <20200403153050.20569-1-david@redhat.com>
+References: <20200403153050.20569-1-david@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Let's use asce_type where applicable. Also, simplify our sanity check for
+valid table levels and convert it into a WARN_ON_ONCE(). Check if we even
+have a valid gmap shadow as the very first step.
+
+Signed-off-by: David Hildenbrand <david@redhat.com>
+---
+ arch/s390/mm/gmap.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/arch/s390/mm/gmap.c b/arch/s390/mm/gmap.c
+index 24ef30fb0833..a2bd8d7792e9 100644
+--- a/arch/s390/mm/gmap.c
++++ b/arch/s390/mm/gmap.c
+@@ -788,19 +788,19 @@ static inline unsigned long *gmap_table_walk(struct gmap *gmap,
+ 					     unsigned long gaddr, int level)
+ {
+ 	const int asce_type = gmap->asce & _ASCE_TYPE_MASK;
+-	unsigned long *table;
++	unsigned long *table = gmap->table;
+ 
+-	if ((gmap->asce & _ASCE_TYPE_MASK) + 4 < (level * 4))
+-		return NULL;
+ 	if (gmap_is_shadow(gmap) && gmap->removed)
+ 		return NULL;
+ 
++	if (WARN_ON_ONCE(level > (asce_type >> 2) + 1))
++		return NULL;
++
+ 	if (WARN_ON_ONCE(asce_type != _ASCE_TYPE_REGION1 &&
+ 			 gaddr & (-1UL << (31 + (asce_type >> 2) * 11))))
+ 		return NULL;
+ 
+-	table = gmap->table;
+-	switch (gmap->asce & _ASCE_TYPE_MASK) {
++	switch (asce_type) {
+ 	case _ASCE_TYPE_REGION1:
+ 		table += (gaddr & _REGION1_INDEX) >> _REGION1_SHIFT;
+ 		if (level == 4)
