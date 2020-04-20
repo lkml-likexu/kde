@@ -4,7 +4,8 @@
 # for i in `ls 2020*/overview_covers_*.md`
 # do
 # echo ${i}
-# sed '/\`\`\`c/,/X-Mailing-List/d' ${i} | grep -v "\`\`\`" >> cover_letters.txt
+# # sed '/\`\`\`c/,/X-Mailing-List/d' ${i} | grep -v "\`\`\`" >> cover_letters.txt
+# sed '/```c/,/X-Mailing-List/d' ${i} | grep -v "\`\`\`" >> cover_letters.txt
 # done
 
 # cat cover_letters.txt | grep -i "Subject:" | sed s/Subject://g > subjects.txt
