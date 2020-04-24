@@ -1,0 +1,1543 @@
+From patchwork Thu Apr 23 02:25:38 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11504889
+Return-Path: <SRS0=WUL8=6H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E2CF3159A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:27:12 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id D54D4208E4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:27:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726545AbgDWCZ4 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Apr 2020 22:25:56 -0400
+Received: from mga05.intel.com ([192.55.52.43]:43420 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726046AbgDWCZz (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Apr 2020 22:25:55 -0400
+IronPort-SDR: 
+ PBtXlPbCYjHb5PWE2+UKniXZQP0fwMd80Rn55KecCtOjSdBBCa8ZXnNNgYGdavfMRW0ZhWKMLX
+ bka5aVbcKS9Q==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Apr 2020 19:25:54 -0700
+IronPort-SDR: 
+ d4SYGUjyFo0ArnHT9KsSbY4ttXZC48ZmHxFFgQYMg8axD1qCJoGlYChMUaQ/JOlTOtM4X7m7rr
+ kg2WlQY4qTCg==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,305,1583222400";
+   d="scan'208";a="259273932"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga006.jf.intel.com with ESMTP; 22 Apr 2020 19:25:54 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Oliver Upton <oupton@google.com>,
+        Peter Shier <pshier@google.com>
+Subject: [PATCH 01/13] KVM: nVMX: Preserve exception priority irrespective of
+ exiting behavior
+Date: Wed, 22 Apr 2020 19:25:38 -0700
+Message-Id: <20200423022550.15113-2-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+References: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Short circuit vmx_check_nested_events() if an exception is pending and
+needs to be injected into L2, priority between coincident events is not
+dependent on exiting behavior.  This fixes a bug where a single-step #DB
+that is not intercepted by L1 is incorrectly dropped due to servicing a
+VMX Preemption Timer VM-Exit.
+
+Injected exceptions also need to be blocked if nested VM-Enter is
+pending or an exception was already injected, otherwise injecting the
+exception could overwrite an existing event injection from L1.
+Technically, this scenario should be impossible, i.e. KVM shouldn't
+inject its own exception during nested VM-Enter.  This will be addressed
+in a future patch.
+
+Note, event priority between SMI, NMI and INTR is incorrect for L2, e.g.
+SMI should take priority over VM-Exit on NMI/INTR, and NMI that is
+injected into L2 should take priority over VM-Exit INTR.  This will also
+be addressed in a future patch.
+
+Fixes: b6b8a1451fc4 ("KVM: nVMX: Rework interception of IRQs and NMIs")
+Reported-by: Jim Mattson <jmattson@google.com>
+Cc: Oliver Upton <oupton@google.com>
+Cc: Peter Shier <pshier@google.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index f228339cd0a0..dc7315b31fee 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -3716,11 +3716,11 @@ static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
+ 	/*
+ 	 * Process any exceptions that are not debug traps before MTF.
+ 	 */
+-	if (vcpu->arch.exception.pending &&
+-	    !vmx_pending_dbg_trap(vcpu) &&
+-	    nested_vmx_check_exception(vcpu, &exit_qual)) {
++	if (vcpu->arch.exception.pending && !vmx_pending_dbg_trap(vcpu)) {
+ 		if (block_nested_events)
+ 			return -EBUSY;
++		if (!nested_vmx_check_exception(vcpu, &exit_qual))
++			goto no_vmexit;
+ 		nested_vmx_inject_exception_vmexit(vcpu, exit_qual);
+ 		return 0;
+ 	}
+@@ -3733,10 +3733,11 @@ static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
+ 		return 0;
+ 	}
+ 
+-	if (vcpu->arch.exception.pending &&
+-	    nested_vmx_check_exception(vcpu, &exit_qual)) {
++	if (vcpu->arch.exception.pending) {
+ 		if (block_nested_events)
+ 			return -EBUSY;
++		if (!nested_vmx_check_exception(vcpu, &exit_qual))
++			goto no_vmexit;
+ 		nested_vmx_inject_exception_vmexit(vcpu, exit_qual);
+ 		return 0;
+ 	}
+@@ -3771,6 +3772,7 @@ static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
+ 		return 0;
+ 	}
+ 
++no_vmexit:
+ 	vmx_complete_nested_posted_interrupt(vcpu);
+ 	return 0;
+ }
+
+From patchwork Thu Apr 23 02:25:39 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11504891
+Return-Path: <SRS0=WUL8=6H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3ADE9159A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:27:18 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 2B047208E4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:27:18 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726787AbgDWC1O (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Apr 2020 22:27:14 -0400
+Received: from mga05.intel.com ([192.55.52.43]:43420 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725781AbgDWCZz (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Apr 2020 22:25:55 -0400
+IronPort-SDR: 
+ kSu3cH7pfQu2+vbmxptdO2yup/t4YlWft3/4CukXOgcj0FlwREG+9V+zBE+ojAvLOWED5chXIJ
+ /lx/tCY9yQbA==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Apr 2020 19:25:54 -0700
+IronPort-SDR: 
+ Sj0xkETfau7RSHL1gMh2XMRjajiIEIwpVHoIBFwExTsGKMHTA+/lI86EIom76SFCcTbEHaVLOz
+ qk7HRI6CiZ+g==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,305,1583222400";
+   d="scan'208";a="259273935"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga006.jf.intel.com with ESMTP; 22 Apr 2020 19:25:54 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Oliver Upton <oupton@google.com>,
+        Peter Shier <pshier@google.com>
+Subject: [PATCH 02/13] KVM: nVMX: Open a window for pending nested VMX
+ preemption timer
+Date: Wed, 22 Apr 2020 19:25:39 -0700
+Message-Id: <20200423022550.15113-3-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+References: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Add a kvm_x86_ops hook to detect a nested pending "hypervisor timer" and
+use it to effectively open a window for servicing the expired timer.
+Like pending SMIs on VMX, opening a window simply means requesting an
+immediate exit.
+
+This fixes a bug where an expired VMX preemption timer (for L2) will be
+delayed and/or lost if a pending exception is injected into L2.  The
+pending exception is rightly prioritized by vmx_check_nested_events()
+and injected into L2, with the preemption timer left pending.  Because
+no window opened, L2 is free to run uninterrupted.
+
+Fixes: f4124500c2c13 ("KVM: nVMX: Fully emulate preemption timer")
+Reported-by: Jim Mattson <jmattson@google.com>
+Cc: Oliver Upton <oupton@google.com>
+Cc: Peter Shier <pshier@google.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  1 +
+ arch/x86/kvm/vmx/nested.c       | 10 ++++++++--
+ arch/x86/kvm/x86.c              |  4 ++++
+ 3 files changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index f26df2cb0591..65dc2c88d8b2 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1179,6 +1179,7 @@ struct kvm_x86_ops {
+ 	void (*handle_exit_irqoff)(struct kvm_vcpu *vcpu);
+ 
+ 	int (*check_nested_events)(struct kvm_vcpu *vcpu);
++	bool (*nested_hv_timer_pending)(struct kvm_vcpu *vcpu);
+ 	void (*request_immediate_exit)(struct kvm_vcpu *vcpu);
+ 
+ 	void (*sched_in)(struct kvm_vcpu *kvm, int cpu);
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index dc7315b31fee..63cf339a13ac 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -3687,6 +3687,12 @@ static void nested_vmx_update_pending_dbg(struct kvm_vcpu *vcpu)
+ 			    vcpu->arch.exception.payload);
+ }
+ 
++static bool nested_vmx_preemption_timer_pending(struct kvm_vcpu *vcpu)
++{
++	return nested_cpu_has_preemption_timer(get_vmcs12(vcpu)) &&
++	       to_vmx(vcpu)->nested.preemption_timer_expired;
++}
++
+ static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+@@ -3742,8 +3748,7 @@ static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
+ 		return 0;
+ 	}
+ 
+-	if (nested_cpu_has_preemption_timer(get_vmcs12(vcpu)) &&
+-	    vmx->nested.preemption_timer_expired) {
++	if (nested_vmx_preemption_timer_pending(vcpu)) {
+ 		if (block_nested_events)
+ 			return -EBUSY;
+ 		nested_vmx_vmexit(vcpu, EXIT_REASON_PREEMPTION_TIMER, 0, 0);
+@@ -6443,6 +6448,7 @@ __init int nested_vmx_hardware_setup(struct kvm_x86_ops *ops,
+ 	exit_handlers[EXIT_REASON_VMFUNC]	= handle_vmfunc;
+ 
+ 	ops->check_nested_events = vmx_check_nested_events;
++	ops->nested_hv_timer_pending = nested_vmx_preemption_timer_pending;
+ 	ops->get_nested_state = vmx_get_nested_state;
+ 	ops->set_nested_state = vmx_set_nested_state;
+ 	ops->get_vmcs12_pages = nested_get_vmcs12_pages;
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 59958ce2b681..ecd612807546 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -8324,6 +8324,10 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+ 				kvm_x86_ops.enable_nmi_window(vcpu);
+ 			if (kvm_cpu_has_injectable_intr(vcpu) || req_int_win)
+ 				kvm_x86_ops.enable_irq_window(vcpu);
++			if (is_guest_mode(vcpu) &&
++			    kvm_x86_ops.nested_hv_timer_pending &&
++			    kvm_x86_ops.nested_hv_timer_pending(vcpu))
++				req_immediate_exit = true;
+ 			WARN_ON(vcpu->arch.exception.pending);
+ 		}
+ 
+
+From patchwork Thu Apr 23 02:25:40 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11504887
+Return-Path: <SRS0=WUL8=6H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 7FC7A81
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:27:10 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 6E0C72137B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:27:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726762AbgDWC0z (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Apr 2020 22:26:55 -0400
+Received: from mga05.intel.com ([192.55.52.43]:43420 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726543AbgDWCZ4 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Apr 2020 22:25:56 -0400
+IronPort-SDR: 
+ 8L6SDG/pA/vkjoGf4C41ZkD7JFK0dLy2AJUr3uNlQP5PeUJx18o3MagsxnvNpIS9o1y6PZU9o9
+ JvJD06KbnQOw==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Apr 2020 19:25:54 -0700
+IronPort-SDR: 
+ 6s2SpAKQxprKstnQMn+LDiBxmWWYHrjOS7uXJIMNqNubcIK7U9TeYc3C2OdNZ5pCVRJNgM7wiB
+ DK7pq0imshaA==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,305,1583222400";
+   d="scan'208";a="259273938"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga006.jf.intel.com with ESMTP; 22 Apr 2020 19:25:54 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Oliver Upton <oupton@google.com>,
+        Peter Shier <pshier@google.com>
+Subject: [PATCH 03/13] KVM: x86: Set KVM_REQ_EVENT if run is canceled with
+ req_immediate_exit set
+Date: Wed, 22 Apr 2020 19:25:40 -0700
+Message-Id: <20200423022550.15113-4-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+References: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Re-request KVM_REQ_EVENT if vcpu_enter_guest() bails after processing
+pending requests and an immediate exit was requested.  This fixes a bug
+where a pending event, e.g. VMX preemption timer, is delayed and/or lost
+if the exit was deferred due to something other than a higher priority
+_injected_ event, e.g. due to a pending nested VM-Enter.  This bug only
+affects the !injected case as kvm_x86_ops.cancel_injection() sets
+KVM_REQ_EVENT to redo the injection, but that's purely serendipitous
+behavior with respect to the deferred event.
+
+Note, emulated preemption timer isn't the only event that can be
+affected, it simply happens to be the only event where not re-requesting
+KVM_REQ_EVENT is blatantly visible to the guest.
+
+Fixes: f4124500c2c13 ("KVM: nVMX: Fully emulate preemption timer")
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/x86.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index ecd612807546..6af873b7e0ae 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -8489,6 +8489,8 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+ 	return r;
+ 
+ cancel_injection:
++	if (req_immediate_exit)
++		kvm_make_request(KVM_REQ_EVENT, vcpu);
+ 	kvm_x86_ops.cancel_injection(vcpu);
+ 	if (unlikely(vcpu->arch.apic_attention))
+ 		kvm_lapic_sync_from_vapic(vcpu);
+
+From patchwork Thu Apr 23 02:25:41 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11504885
+Return-Path: <SRS0=WUL8=6H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 70D53159A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:56 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 62E68208E4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:56 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726770AbgDWC0z (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Apr 2020 22:26:55 -0400
+Received: from mga05.intel.com ([192.55.52.43]:43423 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726544AbgDWCZ4 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Apr 2020 22:25:56 -0400
+IronPort-SDR: 
+ nrQqXwYFV/ErWlbNz4IlEj2p0bcbgwnKQhQvk/5JtQYs/qn8aQiciKLRWkfcxAK/2HBE5l4ry6
+ GCr0LtxBh4rg==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Apr 2020 19:25:54 -0700
+IronPort-SDR: 
+ yc5y/LBg8ss/whbeXqY+VOPxyY2Vfp3zmkfOzH2qDM24ETc0W/jl7ED60fbXcenVMheRiXOJb3
+ 3I2b6JfUoDEA==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,305,1583222400";
+   d="scan'208";a="259273942"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga006.jf.intel.com with ESMTP; 22 Apr 2020 19:25:54 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Oliver Upton <oupton@google.com>,
+        Peter Shier <pshier@google.com>
+Subject: [PATCH 04/13] KVM: x86: Make return for {interrupt_nmi}_allowed() a
+ bool instead of int
+Date: Wed, 22 Apr 2020 19:25:41 -0700
+Message-Id: <20200423022550.15113-5-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+References: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Return an actual bool for kvm_x86_ops' {interrupt_nmi}_allowed() hook to
+better reflect the return semantics, and to avoid creating an even
+bigger mess when the related VMX code is refactored in upcoming patches.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h | 4 ++--
+ arch/x86/kvm/svm/svm.c          | 9 +++++----
+ arch/x86/kvm/vmx/vmx.c          | 8 ++++----
+ 3 files changed, 11 insertions(+), 10 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 65dc2c88d8b2..787636acd648 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1139,8 +1139,8 @@ struct kvm_x86_ops {
+ 	void (*set_nmi)(struct kvm_vcpu *vcpu);
+ 	void (*queue_exception)(struct kvm_vcpu *vcpu);
+ 	void (*cancel_injection)(struct kvm_vcpu *vcpu);
+-	int (*interrupt_allowed)(struct kvm_vcpu *vcpu);
+-	int (*nmi_allowed)(struct kvm_vcpu *vcpu);
++	bool (*interrupt_allowed)(struct kvm_vcpu *vcpu);
++	bool (*nmi_allowed)(struct kvm_vcpu *vcpu);
+ 	bool (*get_nmi_mask)(struct kvm_vcpu *vcpu);
+ 	void (*set_nmi_mask)(struct kvm_vcpu *vcpu, bool masked);
+ 	void (*enable_nmi_window)(struct kvm_vcpu *vcpu);
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index eb95283ab68d..f21f734861dd 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -3062,11 +3062,12 @@ static void update_cr8_intercept(struct kvm_vcpu *vcpu, int tpr, int irr)
+ 		set_cr_intercept(svm, INTERCEPT_CR8_WRITE);
+ }
+ 
+-static int svm_nmi_allowed(struct kvm_vcpu *vcpu)
++static bool svm_nmi_allowed(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_svm *svm = to_svm(vcpu);
+ 	struct vmcb *vmcb = svm->vmcb;
+-	int ret;
++	bool ret;
++
+ 	ret = !(vmcb->control.int_state & SVM_INTERRUPT_SHADOW_MASK) &&
+ 	      !(svm->vcpu.arch.hflags & HF_NMI_MASK);
+ 	ret = ret && gif_set(svm) && nested_svm_nmi(svm);
+@@ -3094,14 +3095,14 @@ static void svm_set_nmi_mask(struct kvm_vcpu *vcpu, bool masked)
+ 	}
+ }
+ 
+-static int svm_interrupt_allowed(struct kvm_vcpu *vcpu)
++static bool svm_interrupt_allowed(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_svm *svm = to_svm(vcpu);
+ 	struct vmcb *vmcb = svm->vmcb;
+ 
+ 	if (!gif_set(svm) ||
+ 	     (vmcb->control.int_state & SVM_INTERRUPT_SHADOW_MASK))
+-		return 0;
++		return false;
+ 
+ 	if (is_guest_mode(vcpu) && (svm->vcpu.arch.hflags & HF_VINTR_MASK))
+ 		return !!(svm->vcpu.arch.hflags & HF_HIF_MASK);
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 766303b31949..7dd42e7fef94 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -4511,21 +4511,21 @@ void vmx_set_nmi_mask(struct kvm_vcpu *vcpu, bool masked)
+ 	}
+ }
+ 
+-static int vmx_nmi_allowed(struct kvm_vcpu *vcpu)
++static bool vmx_nmi_allowed(struct kvm_vcpu *vcpu)
+ {
+ 	if (to_vmx(vcpu)->nested.nested_run_pending)
+-		return 0;
++		return false;
+ 
+ 	if (!enable_vnmi &&
+ 	    to_vmx(vcpu)->loaded_vmcs->soft_vnmi_blocked)
+-		return 0;
++		return false;
+ 
+ 	return	!(vmcs_read32(GUEST_INTERRUPTIBILITY_INFO) &
+ 		  (GUEST_INTR_STATE_MOV_SS | GUEST_INTR_STATE_STI
+ 		   | GUEST_INTR_STATE_NMI));
+ }
+ 
+-static int vmx_interrupt_allowed(struct kvm_vcpu *vcpu)
++static bool vmx_interrupt_allowed(struct kvm_vcpu *vcpu)
+ {
+ 	if (to_vmx(vcpu)->nested.nested_run_pending)
+ 		return false;
+
+From patchwork Thu Apr 23 02:25:42 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11504881
+Return-Path: <SRS0=WUL8=6H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 4553681
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:52 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 377942080D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:52 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726700AbgDWC0f (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Apr 2020 22:26:35 -0400
+Received: from mga05.intel.com ([192.55.52.43]:43423 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726566AbgDWCZ6 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Apr 2020 22:25:58 -0400
+IronPort-SDR: 
+ 2+yn6XKlbhBdQS6FMbEsWqg7o6buTuxg2T1jynp5suzR+oxkzm//quX/zShXSWp03XrtpCat2H
+ 28VXC/zfTyng==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Apr 2020 19:25:54 -0700
+IronPort-SDR: 
+ bOGXL2Q6vtAyfC1m2AyNtPmwIxm00w36xy+ihcBTehjipx0n8wB3g2BfYwq6uZi9O+N2vNUGcX
+ 3+R6r5JgOYcA==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,305,1583222400";
+   d="scan'208";a="259273944"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga006.jf.intel.com with ESMTP; 22 Apr 2020 19:25:54 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Oliver Upton <oupton@google.com>,
+        Peter Shier <pshier@google.com>
+Subject: [PATCH 05/13] KVM: nVMX: Move nested_exit_on_nmi() to nested.h
+Date: Wed, 22 Apr 2020 19:25:42 -0700
+Message-Id: <20200423022550.15113-6-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+References: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Expose nested_exit_on_nmi() for use by vmx_nmi_allowed() in a future
+patch.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 5 -----
+ arch/x86/kvm/vmx/nested.h | 5 +++++
+ 2 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 63cf339a13ac..40b2427f35b7 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -698,11 +698,6 @@ static bool nested_exit_intr_ack_set(struct kvm_vcpu *vcpu)
+ 		VM_EXIT_ACK_INTR_ON_EXIT;
+ }
+ 
+-static bool nested_exit_on_nmi(struct kvm_vcpu *vcpu)
+-{
+-	return nested_cpu_has_nmi_exiting(get_vmcs12(vcpu));
+-}
+-
+ static int nested_vmx_check_apic_access_controls(struct kvm_vcpu *vcpu,
+ 					  struct vmcs12 *vmcs12)
+ {
+diff --git a/arch/x86/kvm/vmx/nested.h b/arch/x86/kvm/vmx/nested.h
+index 1514ff4db77f..7d7475549b9f 100644
+--- a/arch/x86/kvm/vmx/nested.h
++++ b/arch/x86/kvm/vmx/nested.h
+@@ -225,6 +225,11 @@ static inline bool nested_cpu_has_save_preemption_timer(struct vmcs12 *vmcs12)
+ 	    VM_EXIT_SAVE_VMX_PREEMPTION_TIMER;
+ }
+ 
++static inline bool nested_exit_on_nmi(struct kvm_vcpu *vcpu)
++{
++	return nested_cpu_has_nmi_exiting(get_vmcs12(vcpu));
++}
++
+ /*
+  * In nested virtualization, check if L1 asked to exit on external interrupts.
+  * For most existing hypervisors, this will always return true.
+
+From patchwork Thu Apr 23 02:25:43 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11504873
+Return-Path: <SRS0=WUL8=6H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 147FD81
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:20 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id F10742080D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726590AbgDWCZ7 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Apr 2020 22:25:59 -0400
+Received: from mga05.intel.com ([192.55.52.43]:43420 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726046AbgDWCZ6 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Apr 2020 22:25:58 -0400
+IronPort-SDR: 
+ wM19L4gr9oxiPfoATnG+pwzDYYhXm2MgaLMssCFyKiY2NDUtM788cs3FSZq+DJRdgLh3HKf14J
+ uxN5g3GCLQow==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Apr 2020 19:25:54 -0700
+IronPort-SDR: 
+ PVnCEJYehreoWf0lBzr4dNWvVBTu0u3jmAHrc6AlP3H9rww3JzHGd3riVr/szbSOwSGPe2xgEt
+ pHfBmuMwlx6Q==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,305,1583222400";
+   d="scan'208";a="259273947"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga006.jf.intel.com with ESMTP; 22 Apr 2020 19:25:54 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Oliver Upton <oupton@google.com>,
+        Peter Shier <pshier@google.com>
+Subject: [PATCH 06/13] KVM: nVMX: Report NMIs as allowed when in L2 and
+ Exit-on-NMI is set
+Date: Wed, 22 Apr 2020 19:25:43 -0700
+Message-Id: <20200423022550.15113-7-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+References: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Report NMIs as allowed when the vCPU is in L2 and L2 is being run with
+Exit-on-NMI enabled, as NMIs are always unblocked from L1's perspective
+in this case.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 7dd42e7fef94..c7bb9d90d441 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -4516,6 +4516,9 @@ static bool vmx_nmi_allowed(struct kvm_vcpu *vcpu)
+ 	if (to_vmx(vcpu)->nested.nested_run_pending)
+ 		return false;
+ 
++	if (is_guest_mode(vcpu) && nested_exit_on_nmi(vcpu))
++		return true;
++
+ 	if (!enable_vnmi &&
+ 	    to_vmx(vcpu)->loaded_vmcs->soft_vnmi_blocked)
+ 		return false;
+
+From patchwork Thu Apr 23 02:25:44 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11504879
+Return-Path: <SRS0=WUL8=6H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D9ABF81
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:48 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id CBEDC2137B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:48 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726717AbgDWC0f (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Apr 2020 22:26:35 -0400
+Received: from mga05.intel.com ([192.55.52.43]:43426 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726569AbgDWCZ6 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Apr 2020 22:25:58 -0400
+IronPort-SDR: 
+ XzJtcZ5c2jLyXtvR8d3V5EXIugLSSvqY6G5NDAtatXg/CjBKeC9qt471wipd4nGragA1v0ExMD
+ TB7zN+oi9SyA==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Apr 2020 19:25:55 -0700
+IronPort-SDR: 
+ 5obXN5J3zVIVFquFwCMy3RWEsX06NRvCPuM9JfSHd23MjFR/Dbtycx3vsPh9PJh3eIOcoEi3sR
+ zC3hSFyGnWGQ==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,305,1583222400";
+   d="scan'208";a="259273951"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga006.jf.intel.com with ESMTP; 22 Apr 2020 19:25:54 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Oliver Upton <oupton@google.com>,
+        Peter Shier <pshier@google.com>
+Subject: [PATCH 07/13] KVM: VMX: Split out architectural interrupt/NMI
+ blocking checks
+Date: Wed, 22 Apr 2020 19:25:44 -0700
+Message-Id: <20200423022550.15113-8-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+References: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Move the architectural (non-KVM specific) interrupt/NMI blocking checks
+to a separate helper so that they can be used in a future patch by
+vmx_check_nested_events().
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 41 +++++++++++++++++++++++++----------------
+ arch/x86/kvm/vmx/vmx.h |  2 ++
+ 2 files changed, 27 insertions(+), 16 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index c7bb9d90d441..50c726a21feb 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -4511,34 +4511,43 @@ void vmx_set_nmi_mask(struct kvm_vcpu *vcpu, bool masked)
+ 	}
+ }
+ 
+-static bool vmx_nmi_allowed(struct kvm_vcpu *vcpu)
++bool vmx_nmi_blocked(struct kvm_vcpu *vcpu)
+ {
+-	if (to_vmx(vcpu)->nested.nested_run_pending)
+-		return false;
+-
+ 	if (is_guest_mode(vcpu) && nested_exit_on_nmi(vcpu))
++		return false;
++
++	if (!enable_vnmi && to_vmx(vcpu)->loaded_vmcs->soft_vnmi_blocked)
+ 		return true;
+ 
+-	if (!enable_vnmi &&
+-	    to_vmx(vcpu)->loaded_vmcs->soft_vnmi_blocked)
+-		return false;
+-
+-	return	!(vmcs_read32(GUEST_INTERRUPTIBILITY_INFO) &
+-		  (GUEST_INTR_STATE_MOV_SS | GUEST_INTR_STATE_STI
+-		   | GUEST_INTR_STATE_NMI));
++	return (vmcs_read32(GUEST_INTERRUPTIBILITY_INFO) &
++		(GUEST_INTR_STATE_MOV_SS | GUEST_INTR_STATE_STI |
++		 GUEST_INTR_STATE_NMI));
+ }
+ 
+-static bool vmx_interrupt_allowed(struct kvm_vcpu *vcpu)
++static bool vmx_nmi_allowed(struct kvm_vcpu *vcpu)
+ {
+ 	if (to_vmx(vcpu)->nested.nested_run_pending)
+ 		return false;
+ 
++	return !vmx_nmi_blocked(vcpu);
++}
++
++bool vmx_interrupt_blocked(struct kvm_vcpu *vcpu)
++{
+ 	if (is_guest_mode(vcpu) && nested_exit_on_intr(vcpu))
+-		return true;
++		return false;
+ 
+-	return (vmcs_readl(GUEST_RFLAGS) & X86_EFLAGS_IF) &&
+-		!(vmcs_read32(GUEST_INTERRUPTIBILITY_INFO) &
+-			(GUEST_INTR_STATE_STI | GUEST_INTR_STATE_MOV_SS));
++	return !(vmcs_readl(GUEST_RFLAGS) & X86_EFLAGS_IF) ||
++	       (vmcs_read32(GUEST_INTERRUPTIBILITY_INFO) &
++		(GUEST_INTR_STATE_STI | GUEST_INTR_STATE_MOV_SS));
++}
++
++static bool vmx_interrupt_allowed(struct kvm_vcpu *vcpu)
++{
++	if (to_vmx(vcpu)->nested.nested_run_pending)
++		return false;
++
++	return !vmx_interrupt_blocked(vcpu);
+ }
+ 
+ static int vmx_set_tss_addr(struct kvm *kvm, unsigned int addr)
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index edfb739e5907..b5e773267abe 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -344,6 +344,8 @@ void vmx_set_segment(struct kvm_vcpu *vcpu, struct kvm_segment *var, int seg);
+ u64 construct_eptp(struct kvm_vcpu *vcpu, unsigned long root_hpa);
+ void update_exception_bitmap(struct kvm_vcpu *vcpu);
+ void vmx_update_msr_bitmap(struct kvm_vcpu *vcpu);
++bool vmx_nmi_blocked(struct kvm_vcpu *vcpu);
++bool vmx_interrupt_blocked(struct kvm_vcpu *vcpu);
+ bool vmx_get_nmi_mask(struct kvm_vcpu *vcpu);
+ void vmx_set_nmi_mask(struct kvm_vcpu *vcpu, bool masked);
+ void vmx_set_virtual_apic_mode(struct kvm_vcpu *vcpu);
+
+From patchwork Thu Apr 23 02:25:45 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11504877
+Return-Path: <SRS0=WUL8=6H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 53012159A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:30 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 446F120776
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:30 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726693AbgDWC00 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Apr 2020 22:26:26 -0400
+Received: from mga05.intel.com ([192.55.52.43]:43426 "EHLO mga05.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726579AbgDWCZ7 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Apr 2020 22:25:59 -0400
+IronPort-SDR: 
+ C2+ujekk7e3guA0m+HSKE4LxoB7NFHbX6QGzJk8WfxiXtr406puFURE6H3Eubq0Mz+ngLj4XSs
+ Q9y0WwQoaYnA==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by fmsmga105.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Apr 2020 19:25:55 -0700
+IronPort-SDR: 
+ A6/N5J8iIG6Dvtnsaxb8uhvV0LJZ6i+Vqj5hekMhI5JLba2OleIeuTcaCN5vtBKW3tEl4qf6dC
+ p2McRqgKiGYQ==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,305,1583222400";
+   d="scan'208";a="259273954"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga006.jf.intel.com with ESMTP; 22 Apr 2020 19:25:54 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Oliver Upton <oupton@google.com>,
+        Peter Shier <pshier@google.com>
+Subject: [PATCH 08/13] KVM: nVMX: Preserve IRQ/NMI priority irrespective of
+ exiting behavior
+Date: Wed, 22 Apr 2020 19:25:45 -0700
+Message-Id: <20200423022550.15113-9-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+References: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Short circuit vmx_check_nested_events() if an unblocked IRQ/NMI is
+pending and needs to be injected into L2, priority between coincident
+events is not dependent on exiting behavior.
+
+Fixes: b6b8a1451fc4 ("KVM: nVMX: Rework interception of IRQs and NMIs")
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 40b2427f35b7..1fdaca5fd93d 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -3750,9 +3750,12 @@ static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
+ 		return 0;
+ 	}
+ 
+-	if (vcpu->arch.nmi_pending && nested_exit_on_nmi(vcpu)) {
++	if (vcpu->arch.nmi_pending && !vmx_nmi_blocked(vcpu)) {
+ 		if (block_nested_events)
+ 			return -EBUSY;
++		if (!nested_exit_on_nmi(vcpu))
++			goto no_vmexit;
++
+ 		nested_vmx_vmexit(vcpu, EXIT_REASON_EXCEPTION_NMI,
+ 				  NMI_VECTOR | INTR_TYPE_NMI_INTR |
+ 				  INTR_INFO_VALID_MASK, 0);
+@@ -3765,9 +3768,11 @@ static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
+ 		return 0;
+ 	}
+ 
+-	if (kvm_cpu_has_interrupt(vcpu) && nested_exit_on_intr(vcpu)) {
++	if (kvm_cpu_has_interrupt(vcpu) && !vmx_interrupt_blocked(vcpu)) {
+ 		if (block_nested_events)
+ 			return -EBUSY;
++		if (!nested_exit_on_intr(vcpu))
++			goto no_vmexit;
+ 		nested_vmx_vmexit(vcpu, EXIT_REASON_EXTERNAL_INTERRUPT, 0, 0);
+ 		return 0;
+ 	}
+
+From patchwork Thu Apr 23 02:25:46 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11504875
+Return-Path: <SRS0=WUL8=6H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9044D159A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:23 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 838D421655
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:23 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726684AbgDWC0T (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Apr 2020 22:26:19 -0400
+Received: from mga06.intel.com ([134.134.136.31]:33067 "EHLO mga06.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726583AbgDWCZ7 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Apr 2020 22:25:59 -0400
+IronPort-SDR: 
+ +nBxMxcXqWWx39b15NuvTH0UJG7KCKtBAyuyRdi2WfqI7bzD6at7Mbl9YSoHab3ifDPBt7AI9M
+ BccvzRKMF+EA==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga104.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Apr 2020 19:25:55 -0700
+IronPort-SDR: 
+ GP1MlK79NuNQBiJH1vB+o7Gny4E38M0BKWoSiowH0vr7O/PvyqUKi5hWRgXOJyAzoeKnFstH+T
+ 4TEzb4JKsuzg==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,305,1583222400";
+   d="scan'208";a="259273958"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga006.jf.intel.com with ESMTP; 22 Apr 2020 19:25:54 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Oliver Upton <oupton@google.com>,
+        Peter Shier <pshier@google.com>
+Subject: [PATCH 09/13] KVM: nVMX: Prioritize SMI over nested IRQ/NMI
+Date: Wed, 22 Apr 2020 19:25:46 -0700
+Message-Id: <20200423022550.15113-10-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+References: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Check for an unblocked SMI in vmx_check_nested_events() so that pending
+SMIs are correctly prioritized over IRQs and NMIs when the latter events
+will trigger VM-Exit.  This also fixes an issue where an SMI that was
+marked pending while processing a nested VM-Enter wouldn't trigger an
+immediate exit, i.e. would be incorrectly delayed until L2 happened to
+take a VM-Exit.
+
+Fixes: 64d6067057d96 ("KVM: x86: stubs for SMM support")
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 1fdaca5fd93d..8c16b190816b 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -3750,6 +3750,12 @@ static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
+ 		return 0;
+ 	}
+ 
++	if (vcpu->arch.smi_pending && !is_smm(vcpu)) {
++		if (block_nested_events)
++			return -EBUSY;
++		goto no_vmexit;
++	}
++
+ 	if (vcpu->arch.nmi_pending && !vmx_nmi_blocked(vcpu)) {
+ 		if (block_nested_events)
+ 			return -EBUSY;
+
+From patchwork Thu Apr 23 02:25:47 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11504871
+Return-Path: <SRS0=WUL8=6H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 419D181
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:19 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 325E12080D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726665AbgDWC0P (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Apr 2020 22:26:15 -0400
+Received: from mga06.intel.com ([134.134.136.31]:33067 "EHLO mga06.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726593AbgDWC0A (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Apr 2020 22:26:00 -0400
+IronPort-SDR: 
+ i70pUQgADsbrDYLQ4Bh5sIuKyU04zlTLzoRRYl9Pv/EDnZWNA1La6nFinqFOSVXinSlVqClG/N
+ RUmjbLOUohBw==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga104.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Apr 2020 19:25:55 -0700
+IronPort-SDR: 
+ oB3KKJgN9AQTijfc1cV6lgRQhpSpEjBpSgpDWQYRur6awFonFIcrhzg3jvnBC3QbpqwrR+LD8/
+ iSWA8uflepOw==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,305,1583222400";
+   d="scan'208";a="259273961"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga006.jf.intel.com with ESMTP; 22 Apr 2020 19:25:54 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Oliver Upton <oupton@google.com>,
+        Peter Shier <pshier@google.com>
+Subject: [PATCH 10/13] KVM: x86: WARN on injected+pending exception even in
+ nested case
+Date: Wed, 22 Apr 2020 19:25:47 -0700
+Message-Id: <20200423022550.15113-11-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+References: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+WARN if a pending exception is coincident with an injected exception
+before calling check_nested_events() so that the WARN will fire even if
+inject_pending_event() bails early because check_nested_events() detects
+the conflict.  Bailing early isn't problematic (quite the opposite), but
+suppressing the WARN is undesirable as it could mask a bug elsewhere in
+KVM.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/x86.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 6af873b7e0ae..7c49a7dc601f 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7693,6 +7693,9 @@ static int inject_pending_event(struct kvm_vcpu *vcpu)
+ 			kvm_x86_ops.set_irq(vcpu);
+ 	}
+ 
++	WARN_ON_ONCE(vcpu->arch.exception.injected &&
++		     vcpu->arch.exception.pending);
++
+ 	/*
+ 	 * Call check_nested_events() even if we reinjected a previous event
+ 	 * in order for caller to determine if it should require immediate-exit
+@@ -7711,7 +7714,6 @@ static int inject_pending_event(struct kvm_vcpu *vcpu)
+ 					vcpu->arch.exception.has_error_code,
+ 					vcpu->arch.exception.error_code);
+ 
+-		WARN_ON_ONCE(vcpu->arch.exception.injected);
+ 		vcpu->arch.exception.pending = false;
+ 		vcpu->arch.exception.injected = true;
+ 
+
+From patchwork Thu Apr 23 02:25:48 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11504869
+Return-Path: <SRS0=WUL8=6H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id DD2D31667
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:06 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id CEEA120CC7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:06 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726602AbgDWC0A (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Apr 2020 22:26:00 -0400
+Received: from mga06.intel.com ([134.134.136.31]:33065 "EHLO mga06.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726581AbgDWCZ7 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Apr 2020 22:25:59 -0400
+IronPort-SDR: 
+ REO5yVs0shxwcwZlDnWQB6Bc3qxgbwrXiDpp5iIFTtearGmtFxPBo3fH5I40+cpdQHb7hVyocw
+ vhT8E0xUwH3Q==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga104.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Apr 2020 19:25:55 -0700
+IronPort-SDR: 
+ 2Z/0fy1Rj0mpp5HFgJpPAkSaA7HUQoMV89zmGJqKByl/vjrCA/CzdXYCq+JEjbLy8gSDNGasTb
+ 0NBw3t7FIu0Q==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,305,1583222400";
+   d="scan'208";a="259273964"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga006.jf.intel.com with ESMTP; 22 Apr 2020 19:25:54 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Oliver Upton <oupton@google.com>,
+        Peter Shier <pshier@google.com>
+Subject: [PATCH 11/13] KVM: VMX: Use vmx_interrupt_blocked() directly from
+ vmx_handle_exit()
+Date: Wed, 22 Apr 2020 19:25:48 -0700
+Message-Id: <20200423022550.15113-12-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+References: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Use vmx_interrupt_blocked() instead of bouncing through
+vmx_interrupt_allowed() when handling edge cases in vmx_handle_exit().
+The nested_run_pending check in vmx_interrupt_allowed() should never
+evaluate true in the VM-Exit path.
+
+Hoist the WARN in handle_invalid_guest_state() up to vmx_handle_exit()
+to enforce the above assumption for the !enable_vnmi case, and to detect
+any other potential bugs with nested VM-Enter.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 19 ++++++++++---------
+ 1 file changed, 10 insertions(+), 9 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 50c726a21feb..2f8cacb3aa9b 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -5268,18 +5268,11 @@ static int handle_invalid_guest_state(struct kvm_vcpu *vcpu)
+ 	bool intr_window_requested;
+ 	unsigned count = 130;
+ 
+-	/*
+-	 * We should never reach the point where we are emulating L2
+-	 * due to invalid guest state as that means we incorrectly
+-	 * allowed a nested VMEntry with an invalid vmcs12.
+-	 */
+-	WARN_ON_ONCE(vmx->emulation_required && vmx->nested.nested_run_pending);
+-
+ 	intr_window_requested = exec_controls_get(vmx) &
+ 				CPU_BASED_INTR_WINDOW_EXITING;
+ 
+ 	while (vmx->emulation_required && count-- != 0) {
+-		if (intr_window_requested && vmx_interrupt_allowed(vcpu))
++		if (intr_window_requested && !vmx_interrupt_blocked(vcpu))
+ 			return handle_interrupt_window(&vmx->vcpu);
+ 
+ 		if (kvm_test_request(KVM_REQ_EVENT, vcpu))
+@@ -5896,6 +5889,14 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu,
+ 	if (enable_pml)
+ 		vmx_flush_pml_buffer(vcpu);
+ 
++	/*
++	 * We should never reach this point with a pending nested VM-Enter, and
++	 * more specifically emulation of L2 due to invalid guest state (see
++	 * below) should never happen as that means we incorrectly allowed a
++	 * nested VM-Enter with an invalid vmcs12.
++	 */
++	WARN_ON_ONCE(vmx->nested.nested_run_pending);
++
+ 	/* If guest state is invalid, start emulating */
+ 	if (vmx->emulation_required)
+ 		return handle_invalid_guest_state(vcpu);
+@@ -5962,7 +5963,7 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu,
+ 
+ 	if (unlikely(!enable_vnmi &&
+ 		     vmx->loaded_vmcs->soft_vnmi_blocked)) {
+-		if (vmx_interrupt_allowed(vcpu)) {
++		if (!vmx_interrupt_blocked(vcpu)) {
+ 			vmx->loaded_vmcs->soft_vnmi_blocked = 0;
+ 		} else if (vmx->loaded_vmcs->vnmi_blocked_time > 1000000000LL &&
+ 			   vcpu->arch.nmi_pending) {
+
+From patchwork Thu Apr 23 02:25:49 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11504883
+Return-Path: <SRS0=WUL8=6H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 7605E159A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:55 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 5D63F2077D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:26:55 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726748AbgDWC0y (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Apr 2020 22:26:54 -0400
+Received: from mga06.intel.com ([134.134.136.31]:33065 "EHLO mga06.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726541AbgDWCZ4 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Apr 2020 22:25:56 -0400
+IronPort-SDR: 
+ 4pefOQtHnSjUXkk6rEKj5Z2PuGaHLh0pZSCrCDfVy0pe1ZoS/PsE9iSDVij3lynAdEZ3hiTnmZ
+ 0NGBFI1RvJkw==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga104.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Apr 2020 19:25:55 -0700
+IronPort-SDR: 
+ UjKYGvDlp6USocJXccboeEzgMSiDuFUu03zbK1ScOPedwGhoa2Uc+X5D2L4fy9uMoFKq5Nm4+3
+ rmyc3bUVzv3Q==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,305,1583222400";
+   d="scan'208";a="259273967"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga006.jf.intel.com with ESMTP; 22 Apr 2020 19:25:54 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Oliver Upton <oupton@google.com>,
+        Peter Shier <pshier@google.com>
+Subject: [PATCH 12/13] KVM: x86: Replace late check_nested_events() hack with
+ more precise fix
+Date: Wed, 22 Apr 2020 19:25:49 -0700
+Message-Id: <20200423022550.15113-13-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+References: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Add a separate hook for checking if interrupt injection is blocked and
+use the hook to handle the case where an interrupt arrives between
+check_nested_events() and the injection logic.  Drop the retry of
+check_nested_events() that hack-a-fixed the same condition.
+
+Blocking injection is also a bit of a hack, e.g. KVM should do exiting
+and non-exiting interrupt processing in a single pass, but it's a more
+precise hack.  The old comment is also misleading, e.g. KVM_REQ_EVENT is
+purely an optimization, setting it on every run loop (which KVM doesn't
+do) should not affect functionality, only performance.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  1 +
+ arch/x86/kvm/svm/svm.c          |  1 +
+ arch/x86/kvm/vmx/vmx.c          | 13 +++++++++++++
+ arch/x86/kvm/x86.c              | 22 ++++------------------
+ 4 files changed, 19 insertions(+), 18 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 787636acd648..16fdeddb4a65 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1140,6 +1140,7 @@ struct kvm_x86_ops {
+ 	void (*queue_exception)(struct kvm_vcpu *vcpu);
+ 	void (*cancel_injection)(struct kvm_vcpu *vcpu);
+ 	bool (*interrupt_allowed)(struct kvm_vcpu *vcpu);
++	bool (*interrupt_injection_allowed)(struct kvm_vcpu *vcpu);
+ 	bool (*nmi_allowed)(struct kvm_vcpu *vcpu);
+ 	bool (*get_nmi_mask)(struct kvm_vcpu *vcpu);
+ 	void (*set_nmi_mask)(struct kvm_vcpu *vcpu, bool masked);
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index f21f734861dd..6d3ccbfc9e6a 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -3993,6 +3993,7 @@ static struct kvm_x86_ops svm_x86_ops __initdata = {
+ 	.queue_exception = svm_queue_exception,
+ 	.cancel_injection = svm_cancel_injection,
+ 	.interrupt_allowed = svm_interrupt_allowed,
++	.interrupt_injection_allowed = svm_interrupt_allowed,
+ 	.nmi_allowed = svm_nmi_allowed,
+ 	.get_nmi_mask = svm_get_nmi_mask,
+ 	.set_nmi_mask = svm_set_nmi_mask,
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 2f8cacb3aa9b..68b3748b5383 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -4550,6 +4550,18 @@ static bool vmx_interrupt_allowed(struct kvm_vcpu *vcpu)
+ 	return !vmx_interrupt_blocked(vcpu);
+ }
+ 
++static bool vmx_interrupt_injection_allowed(struct kvm_vcpu *vcpu)
++{
++	/*
++	 * An IRQ must not be injected into L2 if it's supposed to VM-Exit,
++	 * e.g. if the IRQ arrived asynchronously after checking nested events.
++	 */
++	if (is_guest_mode(vcpu) && nested_exit_on_intr(vcpu))
++		return false;
++
++	return vmx_interrupt_allowed(vcpu);
++}
++
+ static int vmx_set_tss_addr(struct kvm *kvm, unsigned int addr)
+ {
+ 	int ret;
+@@ -7823,6 +7835,7 @@ static struct kvm_x86_ops vmx_x86_ops __initdata = {
+ 	.queue_exception = vmx_queue_exception,
+ 	.cancel_injection = vmx_cancel_injection,
+ 	.interrupt_allowed = vmx_interrupt_allowed,
++	.interrupt_injection_allowed = vmx_interrupt_injection_allowed,
+ 	.nmi_allowed = vmx_nmi_allowed,
+ 	.get_nmi_mask = vmx_get_nmi_mask,
+ 	.set_nmi_mask = vmx_set_nmi_mask,
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 7c49a7dc601f..d9d6028a77e0 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7755,24 +7755,10 @@ static int inject_pending_event(struct kvm_vcpu *vcpu)
+ 		--vcpu->arch.nmi_pending;
+ 		vcpu->arch.nmi_injected = true;
+ 		kvm_x86_ops.set_nmi(vcpu);
+-	} else if (kvm_cpu_has_injectable_intr(vcpu)) {
+-		/*
+-		 * Because interrupts can be injected asynchronously, we are
+-		 * calling check_nested_events again here to avoid a race condition.
+-		 * See https://lkml.org/lkml/2014/7/2/60 for discussion about this
+-		 * proposal and current concerns.  Perhaps we should be setting
+-		 * KVM_REQ_EVENT only on certain events and not unconditionally?
+-		 */
+-		if (is_guest_mode(vcpu) && kvm_x86_ops.check_nested_events) {
+-			r = kvm_x86_ops.check_nested_events(vcpu);
+-			if (r != 0)
+-				return r;
+-		}
+-		if (kvm_x86_ops.interrupt_allowed(vcpu)) {
+-			kvm_queue_interrupt(vcpu, kvm_cpu_get_interrupt(vcpu),
+-					    false);
+-			kvm_x86_ops.set_irq(vcpu);
+-		}
++	} else if (kvm_cpu_has_injectable_intr(vcpu) &&
++		   kvm_x86_ops.interrupt_injection_allowed(vcpu)) {
++		kvm_queue_interrupt(vcpu, kvm_cpu_get_interrupt(vcpu), false);
++		kvm_x86_ops.set_irq(vcpu);
+ 	}
+ 
+ 	return 0;
+
+From patchwork Thu Apr 23 02:25:50 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11504867
+Return-Path: <SRS0=WUL8=6H=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E734A159A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:25:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id D07752080D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 23 Apr 2020 02:25:58 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726562AbgDWCZ5 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Apr 2020 22:25:57 -0400
+Received: from mga06.intel.com ([134.134.136.31]:33065 "EHLO mga06.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726531AbgDWCZz (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Apr 2020 22:25:55 -0400
+IronPort-SDR: 
+ s26WKoNGj5W2M59TxkXILsFSB1Je+Uj1rJbxRAskXpvlmonW0liYBYoSenEARcxjoD6lINeAwy
+ dYLGgqx0cdoA==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga006.jf.intel.com ([10.7.209.51])
+  by orsmga104.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Apr 2020 19:25:55 -0700
+IronPort-SDR: 
+ IWz/jX4EuR4wSESpckY98nIQ4T88r/8JDElm83svD7uN6k3ik1kR72U4AaC3BiaZDIM/NW4FKc
+ vU/CnIn3QrSg==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,305,1583222400";
+   d="scan'208";a="259273970"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.202])
+  by orsmga006.jf.intel.com with ESMTP; 22 Apr 2020 19:25:54 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Oliver Upton <oupton@google.com>,
+        Peter Shier <pshier@google.com>
+Subject: [PATCH 13/13] KVM: VMX: Use vmx_get_rflags() to query RFLAGS in
+ vmx_interrupt_blocked()
+Date: Wed, 22 Apr 2020 19:25:50 -0700
+Message-Id: <20200423022550.15113-14-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+References: <20200423022550.15113-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Use vmx_get_rflags() instead of manually reading vmcs.GUEST_RFLAGS when
+querying RFLAGS.IF so that multiple checks against interrupt blocking in
+a single run loop only require a single VMREAD.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 68b3748b5383..9c4dd481b588 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -4537,7 +4537,7 @@ bool vmx_interrupt_blocked(struct kvm_vcpu *vcpu)
+ 	if (is_guest_mode(vcpu) && nested_exit_on_intr(vcpu))
+ 		return false;
+ 
+-	return !(vmcs_readl(GUEST_RFLAGS) & X86_EFLAGS_IF) ||
++	return !(vmx_get_rflags(vcpu) & X86_EFLAGS_IF) ||
+ 	       (vmcs_read32(GUEST_INTERRUPTIBILITY_INFO) &
+ 		(GUEST_INTR_STATE_STI | GUEST_INTR_STATE_MOV_SS));
+ }
