@@ -1,0 +1,1257 @@
+From patchwork Fri Apr 24 17:23:55 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 11508681
+Return-Path: <SRS0=ezuo=6I=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E052481
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:24:38 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C69EA20857
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:24:38 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="h334Ucv4"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728708AbgDXRYg (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 24 Apr 2020 13:24:36 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([205.139.110.120]:37106 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S1726849AbgDXRYf (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 24 Apr 2020 13:24:35 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1587749074;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:in-reply-to:in-reply-to:references:references;
+        bh=urUA8szmOjF8TY/rJiBW3e0Wg6p5Hv2oHLXiGg8Oq0o=;
+        b=h334Ucv46X/K2z4bc0zmZfOJ6U7TUFMM2SuRLQ/HdHo+BrlAvqj4UMesELGwewP0CaoQrW
+        dCY/A+p0XZNdqlumU7i1LixhGGYsRM/Mf8wEhYT1iBrZ8zvKtub0BubzFGO573a4bWMYkq
+        9xAAbS4HsdEe8GJGU73fzUECvzw3hNM=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-300-0mgY1dxVNxO22Tior9hslg-1; Fri, 24 Apr 2020 13:24:33 -0400
+X-MC-Unique: 0mgY1dxVNxO22Tior9hslg-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id AA8371800D42;
+        Fri, 24 Apr 2020 17:24:19 +0000 (UTC)
+Received: from virtlab511.virt.lab.eng.bos.redhat.com
+ (virtlab511.virt.lab.eng.bos.redhat.com [10.19.152.198])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id C1E651FDE1;
+        Fri, 24 Apr 2020 17:24:18 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: wei.huang2@amd.com, cavery@redhat.com, vkuznets@redhat.com,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Oliver Upton <oupton@google.com>,
+        Jim Mattson <jmattson@google.com>
+Subject: [PATCH v2 01/22] KVM: SVM: introduce nested_run_pending
+Date: Fri, 24 Apr 2020 13:23:55 -0400
+Message-Id: <20200424172416.243870-2-pbonzini@redhat.com>
+In-Reply-To: <20200424172416.243870-1-pbonzini@redhat.com>
+References: <20200424172416.243870-1-pbonzini@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+We want to inject vmexits immediately from svm_check_nested_events,
+so that the interrupt/NMI window requests happen in inject_pending_event
+right after it returns.
+
+This however has the same issue as in vmx_check_nested_events, so
+introduce a nested_run_pending flag with the exact same purpose
+of delaying vmexit injection after the vmentry.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/svm/nested.c | 3 ++-
+ arch/x86/kvm/svm/svm.c    | 1 +
+ arch/x86/kvm/svm/svm.h    | 4 ++++
+ 3 files changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/svm/nested.c b/arch/x86/kvm/svm/nested.c
+index a7c3b3030e59..51cfab68428d 100644
+--- a/arch/x86/kvm/svm/nested.c
++++ b/arch/x86/kvm/svm/nested.c
+@@ -413,6 +413,7 @@ int nested_svm_vmrun(struct vcpu_svm *svm)
+ 
+ 	copy_vmcb_control_area(hsave, vmcb);
+ 
++	svm->nested.nested_run_pending = 1;
+ 	enter_svm_guest_mode(svm, vmcb_gpa, nested_vmcb, &map);
+ 
+ 	if (!nested_svm_vmrun_msrpm(svm)) {
+@@ -792,7 +793,8 @@ static int svm_check_nested_events(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_svm *svm = to_svm(vcpu);
+ 	bool block_nested_events =
+-		kvm_event_needs_reinjection(vcpu) || svm->nested.exit_required;
++		kvm_event_needs_reinjection(vcpu) || svm->nested.exit_required ||
++		svm->nested.nested_run_pending;
+ 
+ 	if (kvm_cpu_has_interrupt(vcpu) && nested_exit_on_intr(svm)) {
+ 		if (block_nested_events)
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index c86f7278509b..77440b5953e3 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -3417,6 +3417,7 @@ static enum exit_fastpath_completion svm_vcpu_run(struct kvm_vcpu *vcpu)
+ 	sync_cr8_to_lapic(vcpu);
+ 
+ 	svm->next_rip = 0;
++	svm->nested.nested_run_pending = 0;
+ 
+ 	svm->vmcb->control.tlb_ctl = TLB_CONTROL_DO_NOTHING;
+ 
+diff --git a/arch/x86/kvm/svm/svm.h b/arch/x86/kvm/svm/svm.h
+index 98c2890d561d..435f3328c99c 100644
+--- a/arch/x86/kvm/svm/svm.h
++++ b/arch/x86/kvm/svm/svm.h
+@@ -97,6 +97,10 @@ struct nested_state {
+ 	/* A VMEXIT is required but not yet emulated */
+ 	bool exit_required;
+ 
++	/* A VMRUN has started but has not yet been performed, so
++	 * we cannot inject a nested vmexit yet.  */
++	bool nested_run_pending;
++
+ 	/* cache for intercepts of the guest */
+ 	u32 intercept_cr;
+ 	u32 intercept_dr;
+
+From patchwork Fri Apr 24 17:23:56 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 11508697
+Return-Path: <SRS0=ezuo=6I=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C46C014B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:25:27 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id AC91520704
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:25:27 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="AuKC80ju"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728110AbgDXRYf (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 24 Apr 2020 13:24:35 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([207.211.31.120]:49744 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S1727108AbgDXRYf (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 24 Apr 2020 13:24:35 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1587749074;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:in-reply-to:in-reply-to:references:references;
+        bh=X97kAjQTRE8bXr/jYZHHtAlVVl/dgOHFGA/rfX34Hrg=;
+        b=AuKC80jujjCWoSIgs8rVvQVsANFvUEjYVj8agd+E9XaioG6I8ck9vQsaUYLVCndcpHKx1m
+        M5XDwigbpWB9qeOgU0L9Q8XzFnu9AR49QKCG+GmuzLJhpFGNu6eCjtrsA+qrxJ0viZ02m8
+        uqkHOUjjfFnv5Rxa9Ubz7uQ8oYrif0U=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-63-nv8tM_YhPBWV5WT-sDK--g-1; Fri, 24 Apr 2020 13:24:32 -0400
+X-MC-Unique: nv8tM_YhPBWV5WT-sDK--g-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id B73D353;
+        Fri, 24 Apr 2020 17:24:20 +0000 (UTC)
+Received: from virtlab511.virt.lab.eng.bos.redhat.com
+ (virtlab511.virt.lab.eng.bos.redhat.com [10.19.152.198])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id CEAA525277;
+        Fri, 24 Apr 2020 17:24:19 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: wei.huang2@amd.com, cavery@redhat.com, vkuznets@redhat.com,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Oliver Upton <oupton@google.com>,
+        Jim Mattson <jmattson@google.com>
+Subject: [PATCH v2 02/22] KVM: SVM: leave halted state on vmexit
+Date: Fri, 24 Apr 2020 13:23:56 -0400
+Message-Id: <20200424172416.243870-3-pbonzini@redhat.com>
+In-Reply-To: <20200424172416.243870-1-pbonzini@redhat.com>
+References: <20200424172416.243870-1-pbonzini@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Similar to VMX, we need to leave the halted state when performing a vmexit.
+Failure to do so will cause a hang after vmexit.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Oliver Upton <oupton@google.com>
+---
+ arch/x86/kvm/svm/nested.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/arch/x86/kvm/svm/nested.c b/arch/x86/kvm/svm/nested.c
+index 51cfab68428d..e69e60ac1370 100644
+--- a/arch/x86/kvm/svm/nested.c
++++ b/arch/x86/kvm/svm/nested.c
+@@ -472,6 +472,9 @@ int nested_svm_vmexit(struct vcpu_svm *svm)
+ 	leave_guest_mode(&svm->vcpu);
+ 	svm->nested.vmcb = 0;
+ 
++	/* in case we halted in L2 */
++	svm->vcpu.arch.mp_state = KVM_MP_STATE_RUNNABLE;
++
+ 	/* Give the current vmcb to the guest */
+ 	disable_gif(svm);
+ 
+
+From patchwork Fri Apr 24 17:23:57 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 11508695
+Return-Path: <SRS0=ezuo=6I=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6661A81
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:25:15 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 4E7BC21556
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:25:15 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="jEbFbFoP"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728818AbgDXRZJ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 24 Apr 2020 13:25:09 -0400
+Received: from us-smtp-2.mimecast.com ([205.139.110.61]:41962 "EHLO
+        us-smtp-delivery-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL)
+        by vger.kernel.org with ESMTP id S1728738AbgDXRYi (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Fri, 24 Apr 2020 13:24:38 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1587749077;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:in-reply-to:in-reply-to:references:references;
+        bh=ZeuFZxfdtAVz6owO1R3lYelqzSgqD4fbC4lAl+rqvQU=;
+        b=jEbFbFoPh+oJQ/meM+zR+Rtx+UP879/qLjCwreEGyB+KhKBj0RP5DHwCEoCcYjYaItl35b
+        mbEjM/t1HiFTxS4VhSX1qhqrPh/D0YsF9hl+b7/FF5GKeTRgi2BNVEGjJDIZBxpur9QIma
+        8iklfqs7bb9PK1S2+izwdFV8vPUnvo8=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-316-KJO5IrLDOgupuVnkAwNMkA-1; Fri, 24 Apr 2020 13:24:34 -0400
+X-MC-Unique: KJO5IrLDOgupuVnkAwNMkA-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id C4B1D8BE489;
+        Fri, 24 Apr 2020 17:24:21 +0000 (UTC)
+Received: from virtlab511.virt.lab.eng.bos.redhat.com
+ (virtlab511.virt.lab.eng.bos.redhat.com [10.19.152.198])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id DBCFD1FDE1;
+        Fri, 24 Apr 2020 17:24:20 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: wei.huang2@amd.com, cavery@redhat.com, vkuznets@redhat.com,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Oliver Upton <oupton@google.com>,
+        Jim Mattson <jmattson@google.com>
+Subject: [PATCH v2 03/22] KVM: SVM: immediately inject INTR vmexit
+Date: Fri, 24 Apr 2020 13:23:57 -0400
+Message-Id: <20200424172416.243870-4-pbonzini@redhat.com>
+In-Reply-To: <20200424172416.243870-1-pbonzini@redhat.com>
+References: <20200424172416.243870-1-pbonzini@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+We can immediately leave SVM guest mode in svm_check_nested_events
+now that we have the nested_run_pending mechanism.  This makes
+things easier because we can run the rest of inject_pending_event
+with GIF=0, and KVM will naturally end up requesting the next
+interrupt window.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/svm/nested.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/kvm/svm/nested.c b/arch/x86/kvm/svm/nested.c
+index e69e60ac1370..266fde240493 100644
+--- a/arch/x86/kvm/svm/nested.c
++++ b/arch/x86/kvm/svm/nested.c
+@@ -778,13 +778,13 @@ int nested_svm_check_exception(struct vcpu_svm *svm, unsigned nr,
+ 
+ static void nested_svm_intr(struct vcpu_svm *svm)
+ {
++	trace_kvm_nested_intr_vmexit(svm->vmcb->save.rip);
++
+ 	svm->vmcb->control.exit_code   = SVM_EXIT_INTR;
+ 	svm->vmcb->control.exit_info_1 = 0;
+ 	svm->vmcb->control.exit_info_2 = 0;
+ 
+-	/* nested_svm_vmexit this gets called afterwards from handle_exit */
+-	svm->nested.exit_required = true;
+-	trace_kvm_nested_intr_vmexit(svm->vmcb->save.rip);
++	nested_svm_vmexit(svm);
+ }
+ 
+ static bool nested_exit_on_intr(struct vcpu_svm *svm)
+
+From patchwork Fri Apr 24 17:23:58 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 11508693
+Return-Path: <SRS0=ezuo=6I=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 54E6E14B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:25:08 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 3B3C320736
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:25:08 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="f3Phw2Pj"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729006AbgDXRZH (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 24 Apr 2020 13:25:07 -0400
+Received: from us-smtp-1.mimecast.com ([205.139.110.61]:26526 "EHLO
+        us-smtp-delivery-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL)
+        by vger.kernel.org with ESMTP id S1728818AbgDXRYj (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Fri, 24 Apr 2020 13:24:39 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1587749078;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:in-reply-to:in-reply-to:references:references;
+        bh=sbDmvfNcgt+2bJjYAeYhcGP2QN7WrEsbBIbocEGJVpE=;
+        b=f3Phw2PjBpKje/S7W5FI9eZZLLMmFHe2PPGojSdMOkrECi6k6LxpH7aWitaN4GrRiqyFN7
+        w+xzeSRENUc5vlWzMln9LF4X7VLRWQ8K5S5NTvv/11fdmGnGFpzDxfxAC2smLvl1h5emP1
+        jb21arUdm2MJ2XTWTavy84ExxJBUQ0c=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-348-kUGgYStOOqaGGw-_lhTdTA-1; Fri, 24 Apr 2020 13:24:35 -0400
+X-MC-Unique: kUGgYStOOqaGGw-_lhTdTA-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id D30C38BE4B9;
+        Fri, 24 Apr 2020 17:24:22 +0000 (UTC)
+Received: from virtlab511.virt.lab.eng.bos.redhat.com
+ (virtlab511.virt.lab.eng.bos.redhat.com [10.19.152.198])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id E99851FDE1;
+        Fri, 24 Apr 2020 17:24:21 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: wei.huang2@amd.com, cavery@redhat.com, vkuznets@redhat.com,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Oliver Upton <oupton@google.com>,
+        Jim Mattson <jmattson@google.com>
+Subject: [PATCH v2 04/22] KVM: SVM: Implement check_nested_events for NMI
+Date: Fri, 24 Apr 2020 13:23:58 -0400
+Message-Id: <20200424172416.243870-5-pbonzini@redhat.com>
+In-Reply-To: <20200424172416.243870-1-pbonzini@redhat.com>
+References: <20200424172416.243870-1-pbonzini@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Cathy Avery <cavery@redhat.com>
+
+Migrate nested guest NMI intercept processing
+to new check_nested_events.
+
+Signed-off-by: Cathy Avery <cavery@redhat.com>
+Message-Id: <20200414201107.22952-2-cavery@redhat.com>
+[Reorder clauses as NMIs have higher priority than IRQs; inject
+ immediate vmexit as is now done for IRQ vmexits. - Paolo]
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/svm/nested.c | 21 +++++++++++++++++++++
+ arch/x86/kvm/svm/svm.c    |  6 ++----
+ arch/x86/kvm/svm/svm.h    | 15 ---------------
+ 3 files changed, 23 insertions(+), 19 deletions(-)
+
+diff --git a/arch/x86/kvm/svm/nested.c b/arch/x86/kvm/svm/nested.c
+index 266fde240493..c3650efd2e89 100644
+--- a/arch/x86/kvm/svm/nested.c
++++ b/arch/x86/kvm/svm/nested.c
+@@ -776,6 +776,20 @@ int nested_svm_check_exception(struct vcpu_svm *svm, unsigned nr,
+ 	return vmexit;
+ }
+ 
++static bool nested_exit_on_nmi(struct vcpu_svm *svm)
++{
++	return (svm->nested.intercept & (1ULL << INTERCEPT_NMI));
++}
++
++static void nested_svm_nmi(struct vcpu_svm *svm)
++{
++	svm->vmcb->control.exit_code = SVM_EXIT_NMI;
++	svm->vmcb->control.exit_info_1 = 0;
++	svm->vmcb->control.exit_info_2 = 0;
++
++	nested_svm_vmexit(svm);
++}
++
+ static void nested_svm_intr(struct vcpu_svm *svm)
+ {
+ 	trace_kvm_nested_intr_vmexit(svm->vmcb->save.rip);
+@@ -798,6 +812,13 @@ static int svm_check_nested_events(struct kvm_vcpu *vcpu)
+ 		kvm_event_needs_reinjection(vcpu) || svm->nested.exit_required ||
+ 		svm->nested.nested_run_pending;
+ 
++	if (vcpu->arch.nmi_pending && nested_exit_on_nmi(svm)) {
++		if (block_nested_events)
++			return -EBUSY;
++		nested_svm_nmi(svm);
++		return 0;
++	}
++
+ 	if (kvm_cpu_has_interrupt(vcpu) && nested_exit_on_intr(svm)) {
+ 		if (block_nested_events)
+ 			return -EBUSY;
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index 77440b5953e3..8e732eb0b5c9 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -3067,9 +3067,10 @@ static int svm_nmi_allowed(struct kvm_vcpu *vcpu)
+ 	struct vcpu_svm *svm = to_svm(vcpu);
+ 	struct vmcb *vmcb = svm->vmcb;
+ 	int ret;
++
+ 	ret = !(vmcb->control.int_state & SVM_INTERRUPT_SHADOW_MASK) &&
+ 	      !(svm->vcpu.arch.hflags & HF_NMI_MASK);
+-	ret = ret && gif_set(svm) && nested_svm_nmi(svm);
++	ret = ret && gif_set(svm);
+ 
+ 	return ret;
+ }
+@@ -3147,9 +3148,6 @@ static void enable_nmi_window(struct kvm_vcpu *vcpu)
+ 		return; /* STGI will cause a vm exit */
+ 	}
+ 
+-	if (svm->nested.exit_required)
+-		return; /* we're not going to run the guest yet */
+-
+ 	/*
+ 	 * Something prevents NMI from been injected. Single step over possible
+ 	 * problem (IRET or exception injection or interrupt shadow)
+diff --git a/arch/x86/kvm/svm/svm.h b/arch/x86/kvm/svm/svm.h
+index 435f3328c99c..a2bc33aadb67 100644
+--- a/arch/x86/kvm/svm/svm.h
++++ b/arch/x86/kvm/svm/svm.h
+@@ -373,21 +373,6 @@ void disable_nmi_singlestep(struct vcpu_svm *svm);
+ #define NESTED_EXIT_DONE	1	/* Exit caused nested vmexit  */
+ #define NESTED_EXIT_CONTINUE	2	/* Further checks needed      */
+ 
+-/* This function returns true if it is save to enable the nmi window */
+-static inline bool nested_svm_nmi(struct vcpu_svm *svm)
+-{
+-	if (!is_guest_mode(&svm->vcpu))
+-		return true;
+-
+-	if (!(svm->nested.intercept & (1ULL << INTERCEPT_NMI)))
+-		return true;
+-
+-	svm->vmcb->control.exit_code = SVM_EXIT_NMI;
+-	svm->nested.exit_required = true;
+-
+-	return false;
+-}
+-
+ static inline bool svm_nested_virtualize_tpr(struct kvm_vcpu *vcpu)
+ {
+ 	return is_guest_mode(vcpu) && (vcpu->arch.hflags & HF_VINTR_MASK);
+
+From patchwork Fri Apr 24 17:23:59 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 11508687
+Return-Path: <SRS0=ezuo=6I=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id F408E15AB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:24:53 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id DB12420704
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:24:53 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="dKqGg5xc"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728903AbgDXRYw (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 24 Apr 2020 13:24:52 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([207.211.31.120]:49833 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S1728853AbgDXRYm (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 24 Apr 2020 13:24:42 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1587749080;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:in-reply-to:in-reply-to:references:references;
+        bh=UmAA9/+IHhfnv934e38JcU8oC7FPZN3AvIwnCiympQ4=;
+        b=dKqGg5xc+tzz2xbR6UPfYrB0D1sc/4uT4JvPeM5xJdzdQW9pPvh/6rq2v4xm/RhCaGve+a
+        E7izftbADIfK33sos92KxnSzK5suBYWI/32h6DrMm+v8H0w4fK8G6AaRb/v+cJQWOrtHyQ
+        hsjfonBj8kRA8COPSGWFXnXwxEn5zJM=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-271-4DmxmMS2NQWsZlywIa1Pcg-1; Fri, 24 Apr 2020 13:24:34 -0400
+X-MC-Unique: 4DmxmMS2NQWsZlywIa1Pcg-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 0383F18B641F;
+        Fri, 24 Apr 2020 17:24:24 +0000 (UTC)
+Received: from virtlab511.virt.lab.eng.bos.redhat.com
+ (virtlab511.virt.lab.eng.bos.redhat.com [10.19.152.198])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 0383625277;
+        Fri, 24 Apr 2020 17:24:22 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: wei.huang2@amd.com, cavery@redhat.com, vkuznets@redhat.com,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Oliver Upton <oupton@google.com>,
+        Jim Mattson <jmattson@google.com>,
+        Peter Shier <pshier@google.com>
+Subject: [PATCH v2 05/22] KVM: nVMX: Preserve exception priority irrespective
+ of exiting behavior
+Date: Fri, 24 Apr 2020 13:23:59 -0400
+Message-Id: <20200424172416.243870-6-pbonzini@redhat.com>
+In-Reply-To: <20200424172416.243870-1-pbonzini@redhat.com>
+References: <20200424172416.243870-1-pbonzini@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+
+Short circuit vmx_check_nested_events() if an exception is pending and
+needs to be injected into L2, priority between coincident events is not
+dependent on exiting behavior.  This fixes a bug where a single-step #DB
+that is not intercepted by L1 is incorrectly dropped due to servicing a
+VMX Preemption Timer VM-Exit.
+
+Injected exceptions also need to be blocked if nested VM-Enter is
+pending or an exception was already injected, otherwise injecting the
+exception could overwrite an existing event injection from L1.
+Technically, this scenario should be impossible, i.e. KVM shouldn't
+inject its own exception during nested VM-Enter.  This will be addressed
+in a future patch.
+
+Note, event priority between SMI, NMI and INTR is incorrect for L2, e.g.
+SMI should take priority over VM-Exit on NMI/INTR, and NMI that is
+injected into L2 should take priority over VM-Exit INTR.  This will also
+be addressed in a future patch.
+
+Fixes: b6b8a1451fc4 ("KVM: nVMX: Rework interception of IRQs and NMIs")
+Reported-by: Jim Mattson <jmattson@google.com>
+Cc: Oliver Upton <oupton@google.com>
+Cc: Peter Shier <pshier@google.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Message-Id: <20200423022550.15113-2-sean.j.christopherson@intel.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/vmx/nested.c | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index b516c24494e3..490dba7d0504 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -3716,11 +3716,11 @@ static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
+ 	/*
+ 	 * Process any exceptions that are not debug traps before MTF.
+ 	 */
+-	if (vcpu->arch.exception.pending &&
+-	    !vmx_pending_dbg_trap(vcpu) &&
+-	    nested_vmx_check_exception(vcpu, &exit_qual)) {
++	if (vcpu->arch.exception.pending && !vmx_pending_dbg_trap(vcpu)) {
+ 		if (block_nested_events)
+ 			return -EBUSY;
++		if (!nested_vmx_check_exception(vcpu, &exit_qual))
++			goto no_vmexit;
+ 		nested_vmx_inject_exception_vmexit(vcpu, exit_qual);
+ 		return 0;
+ 	}
+@@ -3733,10 +3733,11 @@ static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
+ 		return 0;
+ 	}
+ 
+-	if (vcpu->arch.exception.pending &&
+-	    nested_vmx_check_exception(vcpu, &exit_qual)) {
++	if (vcpu->arch.exception.pending) {
+ 		if (block_nested_events)
+ 			return -EBUSY;
++		if (!nested_vmx_check_exception(vcpu, &exit_qual))
++			goto no_vmexit;
+ 		nested_vmx_inject_exception_vmexit(vcpu, exit_qual);
+ 		return 0;
+ 	}
+@@ -3771,6 +3772,7 @@ static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
+ 		return 0;
+ 	}
+ 
++no_vmexit:
+ 	vmx_complete_nested_posted_interrupt(vcpu);
+ 	return 0;
+ }
+
+From patchwork Fri Apr 24 17:24:00 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 11508691
+Return-Path: <SRS0=ezuo=6I=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B974F81
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:25:06 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id A174720704
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:25:06 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="TkdLU4+p"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728982AbgDXRZF (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 24 Apr 2020 13:25:05 -0400
+Received: from us-smtp-1.mimecast.com ([207.211.31.81]:22374 "EHLO
+        us-smtp-delivery-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL)
+        by vger.kernel.org with ESMTP id S1728798AbgDXRYj (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Fri, 24 Apr 2020 13:24:39 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1587749077;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:in-reply-to:in-reply-to:references:references;
+        bh=n/v+GecTrEwyyLbsd1WvGrx2OwR9+bmxfRFtapBWds8=;
+        b=TkdLU4+pWni3AIYe4nnWlFnYwYk5janErv3XLIahTJH6T7ssQEw6logsSwGCF5T/w8Qu/R
+        iGlkIP5xI+w9nqScfLhUQjQk2H0yL1B4q9/5IeWJ0R0KdEDqQZQ3oDCgyU7A/HBj22Zrxo
+        8ShxytSTN5wfWfhVGOrNhVIwVTVirLc=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-401-V_LEgpmoPRuvE8EGmhtFdQ-1; Fri, 24 Apr 2020 13:24:33 -0400
+X-MC-Unique: V_LEgpmoPRuvE8EGmhtFdQ-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 28603A73A7;
+        Fri, 24 Apr 2020 17:24:25 +0000 (UTC)
+Received: from virtlab511.virt.lab.eng.bos.redhat.com
+ (virtlab511.virt.lab.eng.bos.redhat.com [10.19.152.198])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 280D91FDE1;
+        Fri, 24 Apr 2020 17:24:24 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: wei.huang2@amd.com, cavery@redhat.com, vkuznets@redhat.com,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Oliver Upton <oupton@google.com>,
+        Jim Mattson <jmattson@google.com>,
+        Peter Shier <pshier@google.com>
+Subject: [PATCH v2 06/22] KVM: nVMX: Open a window for pending nested VMX
+ preemption timer
+Date: Fri, 24 Apr 2020 13:24:00 -0400
+Message-Id: <20200424172416.243870-7-pbonzini@redhat.com>
+In-Reply-To: <20200424172416.243870-1-pbonzini@redhat.com>
+References: <20200424172416.243870-1-pbonzini@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+
+Add a kvm_x86_ops hook to detect a nested pending "hypervisor timer" and
+use it to effectively open a window for servicing the expired timer.
+Like pending SMIs on VMX, opening a window simply means requesting an
+immediate exit.
+
+This fixes a bug where an expired VMX preemption timer (for L2) will be
+delayed and/or lost if a pending exception is injected into L2.  The
+pending exception is rightly prioritized by vmx_check_nested_events()
+and injected into L2, with the preemption timer left pending.  Because
+no window opened, L2 is free to run uninterrupted.
+
+Fixes: f4124500c2c13 ("KVM: nVMX: Fully emulate preemption timer")
+Reported-by: Jim Mattson <jmattson@google.com>
+Cc: Oliver Upton <oupton@google.com>
+Cc: Peter Shier <pshier@google.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Message-Id: <20200423022550.15113-3-sean.j.christopherson@intel.com>
+[Check it in kvm_vcpu_has_events too, to ensure that the preemption
+ timer is serviced promptly even if the vCPU is halted and L1 is not
+ intercepting HLT. - Paolo]
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/include/asm/kvm_host.h |  1 +
+ arch/x86/kvm/vmx/nested.c       | 10 ++++++++--
+ arch/x86/kvm/x86.c              |  9 +++++++++
+ 3 files changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index a239a297be33..372e6ea4af32 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1257,6 +1257,7 @@ struct kvm_x86_ops {
+ 
+ struct kvm_x86_nested_ops {
+ 	int (*check_events)(struct kvm_vcpu *vcpu);
++	bool (*hv_timer_pending)(struct kvm_vcpu *vcpu);
+ 	int (*get_state)(struct kvm_vcpu *vcpu,
+ 			 struct kvm_nested_state __user *user_kvm_nested_state,
+ 			 unsigned user_data_size);
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 490dba7d0504..182e5209a1f6 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -3687,6 +3687,12 @@ static void nested_vmx_update_pending_dbg(struct kvm_vcpu *vcpu)
+ 			    vcpu->arch.exception.payload);
+ }
+ 
++static bool nested_vmx_preemption_timer_pending(struct kvm_vcpu *vcpu)
++{
++	return nested_cpu_has_preemption_timer(get_vmcs12(vcpu)) &&
++	       to_vmx(vcpu)->nested.preemption_timer_expired;
++}
++
+ static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+@@ -3742,8 +3748,7 @@ static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
+ 		return 0;
+ 	}
+ 
+-	if (nested_cpu_has_preemption_timer(get_vmcs12(vcpu)) &&
+-	    vmx->nested.preemption_timer_expired) {
++	if (nested_vmx_preemption_timer_pending(vcpu)) {
+ 		if (block_nested_events)
+ 			return -EBUSY;
+ 		nested_vmx_vmexit(vcpu, EXIT_REASON_PREEMPTION_TIMER, 0, 0);
+@@ -6448,6 +6453,7 @@ __init int nested_vmx_hardware_setup(struct kvm_x86_ops *ops,
+ 
+ struct kvm_x86_nested_ops vmx_nested_ops = {
+ 	.check_events = vmx_check_nested_events,
++	.hv_timer_pending = nested_vmx_preemption_timer_pending,
+ 	.get_state = vmx_get_nested_state,
+ 	.set_state = vmx_set_nested_state,
+ 	.get_vmcs12_pages = nested_get_vmcs12_pages,
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 8c0b77ac8dc6..ee934a88a267 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -8324,6 +8324,10 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+ 				kvm_x86_ops.enable_nmi_window(vcpu);
+ 			if (kvm_cpu_has_injectable_intr(vcpu) || req_int_win)
+ 				kvm_x86_ops.enable_irq_window(vcpu);
++			if (is_guest_mode(vcpu) &&
++			    kvm_x86_ops.nested_ops->hv_timer_pending &&
++			    kvm_x86_ops.nested_ops->hv_timer_pending(vcpu))
++				req_immediate_exit = true;
+ 			WARN_ON(vcpu->arch.exception.pending);
+ 		}
+ 
+@@ -10179,6 +10183,11 @@ static inline bool kvm_vcpu_has_events(struct kvm_vcpu *vcpu)
+ 	if (kvm_hv_has_stimer_pending(vcpu))
+ 		return true;
+ 
++	if (is_guest_mode(vcpu) &&
++	    kvm_x86_ops.nested_ops->hv_timer_pending &&
++	    kvm_x86_ops.nested_ops->hv_timer_pending(vcpu))
++		return true;
++
+ 	return false;
+ }
+ 
+
+From patchwork Fri Apr 24 17:24:01 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 11508689
+Return-Path: <SRS0=ezuo=6I=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8C3F281
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:25:04 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 71A9420704
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:25:04 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="PqA4cpWy"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728962AbgDXRYz (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 24 Apr 2020 13:24:55 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([205.139.110.120]:57477 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S1728878AbgDXRYk (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 24 Apr 2020 13:24:40 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1587749079;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:in-reply-to:in-reply-to:references:references;
+        bh=MucM5opZvyl4Z4L+ZeXePRz2z1atvDYyLaene/+Wtmk=;
+        b=PqA4cpWySJkV44gXlYm+/8842LM0+jmGFCu92ns2hRg2OR/HtSy8SbnCSIPV97+7VzM+kN
+        xPXBvf4yeMthHRu3h4gVd0ed6XS19yk5CihGBkX8W1heztn0QM+WT1ocwWqeOq6u9m1udN
+        DOa6nsmgsQzJXlLzuTM++XMaBbAJEZw=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-244-CbvVGUzRPxGYh4gw5OFHQA-1; Fri, 24 Apr 2020 13:24:35 -0400
+X-MC-Unique: CbvVGUzRPxGYh4gw5OFHQA-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 32AFC8BE49C;
+        Fri, 24 Apr 2020 17:24:26 +0000 (UTC)
+Received: from virtlab511.virt.lab.eng.bos.redhat.com
+ (virtlab511.virt.lab.eng.bos.redhat.com [10.19.152.198])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 4B09C25277;
+        Fri, 24 Apr 2020 17:24:25 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: wei.huang2@amd.com, cavery@redhat.com, vkuznets@redhat.com,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Oliver Upton <oupton@google.com>,
+        Jim Mattson <jmattson@google.com>
+Subject: [PATCH v2 07/22] KVM: x86: Set KVM_REQ_EVENT if run is canceled with
+ req_immediate_exit set
+Date: Fri, 24 Apr 2020 13:24:01 -0400
+Message-Id: <20200424172416.243870-8-pbonzini@redhat.com>
+In-Reply-To: <20200424172416.243870-1-pbonzini@redhat.com>
+References: <20200424172416.243870-1-pbonzini@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+
+Re-request KVM_REQ_EVENT if vcpu_enter_guest() bails after processing
+pending requests and an immediate exit was requested.  This fixes a bug
+where a pending event, e.g. VMX preemption timer, is delayed and/or lost
+if the exit was deferred due to something other than a higher priority
+_injected_ event, e.g. due to a pending nested VM-Enter.  This bug only
+affects the !injected case as kvm_x86_ops.cancel_injection() sets
+KVM_REQ_EVENT to redo the injection, but that's purely serendipitous
+behavior with respect to the deferred event.
+
+Note, emulated preemption timer isn't the only event that can be
+affected, it simply happens to be the only event where not re-requesting
+KVM_REQ_EVENT is blatantly visible to the guest.
+
+Fixes: f4124500c2c13 ("KVM: nVMX: Fully emulate preemption timer")
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Message-Id: <20200423022550.15113-4-sean.j.christopherson@intel.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/x86.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index ee934a88a267..8ebfebc807fd 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -8489,6 +8489,8 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+ 	return r;
+ 
+ cancel_injection:
++	if (req_immediate_exit)
++		kvm_make_request(KVM_REQ_EVENT, vcpu);
+ 	kvm_x86_ops.cancel_injection(vcpu);
+ 	if (unlikely(vcpu->arch.apic_attention))
+ 		kvm_lapic_sync_from_vapic(vcpu);
+
+From patchwork Fri Apr 24 17:24:02 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 11508685
+Return-Path: <SRS0=ezuo=6I=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6D3D514B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:24:53 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 4DA0D20736
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:24:53 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="FLQdpEhk"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728915AbgDXRYw (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 24 Apr 2020 13:24:52 -0400
+Received: from us-smtp-1.mimecast.com ([207.211.31.81]:23086 "EHLO
+        us-smtp-delivery-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL)
+        by vger.kernel.org with ESMTP id S1728879AbgDXRYl (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Fri, 24 Apr 2020 13:24:41 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1587749079;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:in-reply-to:in-reply-to:references:references;
+        bh=M5zmmJBcB8NXxnUPKEdXOI3rlhBgtaPigdqzfMYvM/0=;
+        b=FLQdpEhku4IjLbSXqAcWMQh7wE/+JE2IDtu1DkwgQJmwdin4FPoWUA72WIlKUYfh0LE6J1
+        4PgpyNYgM5ks4Ew5I2l68CxXGYTjVdhXbz5EMlnvN+X7yPjr6IQSVhbwUlAR6vgiesvX//
+        W/Y1BkwCk8J8s8/cc47QJ8VYH4o1b7g=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-475-wvJvkwPlMP-TwkNyySnKEA-1; Fri, 24 Apr 2020 13:24:37 -0400
+X-MC-Unique: wvJvkwPlMP-TwkNyySnKEA-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 3F7B41018856;
+        Fri, 24 Apr 2020 17:24:27 +0000 (UTC)
+Received: from virtlab511.virt.lab.eng.bos.redhat.com
+ (virtlab511.virt.lab.eng.bos.redhat.com [10.19.152.198])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 589F61FDE1;
+        Fri, 24 Apr 2020 17:24:26 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: wei.huang2@amd.com, cavery@redhat.com, vkuznets@redhat.com,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Oliver Upton <oupton@google.com>,
+        Jim Mattson <jmattson@google.com>
+Subject: [PATCH v2 08/22] KVM: x86: Make return for
+ {interrupt_nmi,smi}_allowed() a bool instead of int
+Date: Fri, 24 Apr 2020 13:24:02 -0400
+Message-Id: <20200424172416.243870-9-pbonzini@redhat.com>
+In-Reply-To: <20200424172416.243870-1-pbonzini@redhat.com>
+References: <20200424172416.243870-1-pbonzini@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+
+Return an actual bool for kvm_x86_ops' {interrupt_nmi}_allowed() hook to
+better reflect the return semantics, and to avoid creating an even
+bigger mess when the related VMX code is refactored in upcoming patches.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Message-Id: <20200423022550.15113-5-sean.j.christopherson@intel.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/include/asm/kvm_host.h |  6 +++---
+ arch/x86/kvm/svm/svm.c          | 16 ++++++++--------
+ arch/x86/kvm/vmx/vmx.c          | 14 +++++++-------
+ 3 files changed, 18 insertions(+), 18 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 372e6ea4af32..efaddc68a694 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1139,8 +1139,8 @@ struct kvm_x86_ops {
+ 	void (*set_nmi)(struct kvm_vcpu *vcpu);
+ 	void (*queue_exception)(struct kvm_vcpu *vcpu);
+ 	void (*cancel_injection)(struct kvm_vcpu *vcpu);
+-	int (*interrupt_allowed)(struct kvm_vcpu *vcpu);
+-	int (*nmi_allowed)(struct kvm_vcpu *vcpu);
++	bool (*interrupt_allowed)(struct kvm_vcpu *vcpu);
++	bool (*nmi_allowed)(struct kvm_vcpu *vcpu);
+ 	bool (*get_nmi_mask)(struct kvm_vcpu *vcpu);
+ 	void (*set_nmi_mask)(struct kvm_vcpu *vcpu, bool masked);
+ 	void (*enable_nmi_window)(struct kvm_vcpu *vcpu);
+@@ -1238,7 +1238,7 @@ struct kvm_x86_ops {
+ 
+ 	void (*setup_mce)(struct kvm_vcpu *vcpu);
+ 
+-	int (*smi_allowed)(struct kvm_vcpu *vcpu);
++	bool (*smi_allowed)(struct kvm_vcpu *vcpu);
+ 	int (*pre_enter_smm)(struct kvm_vcpu *vcpu, char *smstate);
+ 	int (*pre_leave_smm)(struct kvm_vcpu *vcpu, const char *smstate);
+ 	int (*enable_smi_window)(struct kvm_vcpu *vcpu);
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index 8e732eb0b5c9..cdee634e961d 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -3062,11 +3062,11 @@ static void update_cr8_intercept(struct kvm_vcpu *vcpu, int tpr, int irr)
+ 		set_cr_intercept(svm, INTERCEPT_CR8_WRITE);
+ }
+ 
+-static int svm_nmi_allowed(struct kvm_vcpu *vcpu)
++static bool svm_nmi_allowed(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_svm *svm = to_svm(vcpu);
+ 	struct vmcb *vmcb = svm->vmcb;
+-	int ret;
++	bool ret;
+ 
+ 	ret = !(vmcb->control.int_state & SVM_INTERRUPT_SHADOW_MASK) &&
+ 	      !(svm->vcpu.arch.hflags & HF_NMI_MASK);
+@@ -3095,14 +3095,14 @@ static void svm_set_nmi_mask(struct kvm_vcpu *vcpu, bool masked)
+ 	}
+ }
+ 
+-static int svm_interrupt_allowed(struct kvm_vcpu *vcpu)
++static bool svm_interrupt_allowed(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_svm *svm = to_svm(vcpu);
+ 	struct vmcb *vmcb = svm->vmcb;
+ 
+ 	if (!gif_set(svm) ||
+ 	     (vmcb->control.int_state & SVM_INTERRUPT_SHADOW_MASK))
+-		return 0;
++		return false;
+ 
+ 	if (is_guest_mode(vcpu) && (svm->vcpu.arch.hflags & HF_VINTR_MASK))
+ 		return !!(svm->vcpu.arch.hflags & HF_HIF_MASK);
+@@ -3755,23 +3755,23 @@ static void svm_setup_mce(struct kvm_vcpu *vcpu)
+ 	vcpu->arch.mcg_cap &= 0x1ff;
+ }
+ 
+-static int svm_smi_allowed(struct kvm_vcpu *vcpu)
++static bool svm_smi_allowed(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_svm *svm = to_svm(vcpu);
+ 
+ 	/* Per APM Vol.2 15.22.2 "Response to SMI" */
+ 	if (!gif_set(svm))
+-		return 0;
++		return false;
+ 
+ 	if (is_guest_mode(&svm->vcpu) &&
+ 	    svm->nested.intercept & (1ULL << INTERCEPT_SMI)) {
+ 		/* TODO: Might need to set exit_info_1 and exit_info_2 here */
+ 		svm->vmcb->control.exit_code = SVM_EXIT_SMI;
+ 		svm->nested.exit_required = true;
+-		return 0;
++		return false;
+ 	}
+ 
+-	return 1;
++	return true;
+ }
+ 
+ static int svm_pre_enter_smm(struct kvm_vcpu *vcpu, char *smstate)
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 455cd2c8dbce..c98194f04b04 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -4511,21 +4511,21 @@ void vmx_set_nmi_mask(struct kvm_vcpu *vcpu, bool masked)
+ 	}
+ }
+ 
+-static int vmx_nmi_allowed(struct kvm_vcpu *vcpu)
++static bool vmx_nmi_allowed(struct kvm_vcpu *vcpu)
+ {
+ 	if (to_vmx(vcpu)->nested.nested_run_pending)
+-		return 0;
++		return false;
+ 
+ 	if (!enable_vnmi &&
+ 	    to_vmx(vcpu)->loaded_vmcs->soft_vnmi_blocked)
+-		return 0;
++		return false;
+ 
+ 	return	!(vmcs_read32(GUEST_INTERRUPTIBILITY_INFO) &
+ 		  (GUEST_INTR_STATE_MOV_SS | GUEST_INTR_STATE_STI
+ 		   | GUEST_INTR_STATE_NMI));
+ }
+ 
+-static int vmx_interrupt_allowed(struct kvm_vcpu *vcpu)
++static bool vmx_interrupt_allowed(struct kvm_vcpu *vcpu)
+ {
+ 	if (to_vmx(vcpu)->nested.nested_run_pending)
+ 		return false;
+@@ -7675,12 +7675,12 @@ static void vmx_setup_mce(struct kvm_vcpu *vcpu)
+ 			~FEAT_CTL_LMCE_ENABLED;
+ }
+ 
+-static int vmx_smi_allowed(struct kvm_vcpu *vcpu)
++static bool vmx_smi_allowed(struct kvm_vcpu *vcpu)
+ {
+ 	/* we need a nested vmexit to enter SMM, postpone if run is pending */
+ 	if (to_vmx(vcpu)->nested.nested_run_pending)
+-		return 0;
+-	return 1;
++		return false;
++	return true;
+ }
+ 
+ static int vmx_pre_enter_smm(struct kvm_vcpu *vcpu, char *smstate)
+
+From patchwork Fri Apr 24 17:24:03 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 11508683
+Return-Path: <SRS0=ezuo=6I=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id EA29781
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:24:41 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id D3FCF20736
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 24 Apr 2020 17:24:41 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="UuWvqR9n"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728908AbgDXRYk (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 24 Apr 2020 13:24:40 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([205.139.110.120]:40012 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S1728775AbgDXRYj (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 24 Apr 2020 13:24:39 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1587749078;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:in-reply-to:in-reply-to:references:references;
+        bh=BKlpMaDDnpf6oM4hQ3cYP2CARvyZyLnX+wypaaAyFF8=;
+        b=UuWvqR9n5jjNK0plWvL1Y00+0+yij6t3SSGYfSB79I4FU5V7SFpFF1+/tzd9dgj+3+1xDH
+        ll9Kb6iXaE9MyJPB0aIUCXPtZlIAdeTZ9uuGYOGdJ/cHDLBtYKOdSWvDKLID1blHKbpwjG
+        i44+x4Uga8aqP7bg0FwoA154LAjrnAY=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-266-DyQikqukM1WYFN0UYu9Agg-1; Fri, 24 Apr 2020 13:24:36 -0400
+X-MC-Unique: DyQikqukM1WYFN0UYu9Agg-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 4DC8B8014D6;
+        Fri, 24 Apr 2020 17:24:28 +0000 (UTC)
+Received: from virtlab511.virt.lab.eng.bos.redhat.com
+ (virtlab511.virt.lab.eng.bos.redhat.com [10.19.152.198])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 650541FDE1;
+        Fri, 24 Apr 2020 17:24:27 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: linux-kernel@vger.kernel.org, kvm@vger.kernel.org
+Cc: wei.huang2@amd.com, cavery@redhat.com, vkuznets@redhat.com,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Oliver Upton <oupton@google.com>,
+        Jim Mattson <jmattson@google.com>
+Subject: [PATCH v2 09/22] KVM: x86: replace is_smm checks with
+ kvm_x86_ops.smi_allowed
+Date: Fri, 24 Apr 2020 13:24:03 -0400
+Message-Id: <20200424172416.243870-10-pbonzini@redhat.com>
+In-Reply-To: <20200424172416.243870-1-pbonzini@redhat.com>
+References: <20200424172416.243870-1-pbonzini@redhat.com>
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Do not hardcode is_smm so that all the architectural conditions for
+blocking SMIs are listed in a single place.  Well, in two places because
+this introduces some code duplication between Intel and AMD.
+
+This ensures that nested SVM obeys GIF in kvm_vcpu_has_events.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/svm/svm.c | 2 +-
+ arch/x86/kvm/vmx/vmx.c | 2 +-
+ arch/x86/kvm/x86.c     | 6 +++---
+ 3 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index cdee634e961d..01ee1c3be25b 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -3771,7 +3771,7 @@ static bool svm_smi_allowed(struct kvm_vcpu *vcpu)
+ 		return false;
+ 	}
+ 
+-	return true;
++	return !is_smm(vcpu);
+ }
+ 
+ static int svm_pre_enter_smm(struct kvm_vcpu *vcpu, char *smstate)
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index c98194f04b04..c33317bfc1cf 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -7680,7 +7680,7 @@ static bool vmx_smi_allowed(struct kvm_vcpu *vcpu)
+ 	/* we need a nested vmexit to enter SMM, postpone if run is pending */
+ 	if (to_vmx(vcpu)->nested.nested_run_pending)
+ 		return false;
+-	return true;
++	return !is_smm(vcpu);
+ }
+ 
+ static int vmx_pre_enter_smm(struct kvm_vcpu *vcpu, char *smstate)
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 8ebfebc807fd..e8469db6ccae 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -7744,8 +7744,7 @@ static int inject_pending_event(struct kvm_vcpu *vcpu)
+ 	if (kvm_event_needs_reinjection(vcpu))
+ 		return 0;
+ 
+-	if (vcpu->arch.smi_pending && !is_smm(vcpu) &&
+-	    kvm_x86_ops.smi_allowed(vcpu)) {
++	if (vcpu->arch.smi_pending && kvm_x86_ops.smi_allowed(vcpu)) {
+ 		vcpu->arch.smi_pending = false;
+ 		++vcpu->arch.smi_count;
+ 		enter_smm(vcpu);
+@@ -10174,7 +10173,8 @@ static inline bool kvm_vcpu_has_events(struct kvm_vcpu *vcpu)
+ 		return true;
+ 
+ 	if (kvm_test_request(KVM_REQ_SMI, vcpu) ||
+-	    (vcpu->arch.smi_pending && !is_smm(vcpu)))
++	    (vcpu->arch.smi_pending &&
++	     kvm_x86_ops.smi_allowed(vcpu)))
+ 		return true;
+ 
+ 	if (kvm_arch_interrupt_allowed(vcpu) &&
