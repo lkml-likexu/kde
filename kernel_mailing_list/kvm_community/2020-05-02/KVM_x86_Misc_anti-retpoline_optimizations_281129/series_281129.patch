@@ -1,0 +1,1546 @@
+From patchwork Sat May  2 04:32:25 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11523633
+Return-Path: <SRS0=JxFu=6Q=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E7218139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:33:10 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id D9B4524957
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:33:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727853AbgEBEcj (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Sat, 2 May 2020 00:32:39 -0400
+Received: from mga09.intel.com ([134.134.136.24]:55783 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726058AbgEBEci (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Sat, 2 May 2020 00:32:38 -0400
+IronPort-SDR: 
+ gc6Godd/p1nzJby0DmhrQQPkI6AlRi2eyZLb1IRDhThfCJFP7sKKHR/c/zFG4B6sD/wtPcrMVx
+ Ufj+NaQC8i4w==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 01 May 2020 21:32:37 -0700
+IronPort-SDR: 
+ s3SItXf8FI90I6c37wagDESUOHL5GVAE2rxu3biDT6VwsjSDLuVtjNGRVeC7Ba+HaUHZii854K
+ OuhDlfk5tXug==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,342,1583222400";
+   d="scan'208";a="433516114"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga005.jf.intel.com with ESMTP; 01 May 2020 21:32:37 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 01/10] KVM: x86: Save L1 TSC offset in 'struct kvm_vcpu_arch'
+Date: Fri,  1 May 2020 21:32:25 -0700
+Message-Id: <20200502043234.12481-2-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+References: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Save L1's TSC offset in 'struct kvm_vcpu_arch' and drop the kvm_x86_ops
+hook read_l1_tsc_offset().  This avoids a retpoline (when configured)
+when reading L1's effective TSC, which is done at least once on every
+VM-Exit.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  2 +-
+ arch/x86/kvm/svm/svm.c          | 11 -----------
+ arch/x86/kvm/vmx/vmx.c          | 12 ------------
+ arch/x86/kvm/x86.c              |  9 ++++-----
+ 4 files changed, 5 insertions(+), 29 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 7cd68d1d0627..d71d1f38b7a0 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -707,6 +707,7 @@ struct kvm_vcpu_arch {
+ 		struct gfn_to_pfn_cache cache;
+ 	} st;
+ 
++	u64 l1_tsc_offset;
+ 	u64 tsc_offset;
+ 	u64 last_guest_tsc;
+ 	u64 last_host_tsc;
+@@ -1166,7 +1167,6 @@ struct kvm_x86_ops {
+ 
+ 	bool (*has_wbinvd_exit)(void);
+ 
+-	u64 (*read_l1_tsc_offset)(struct kvm_vcpu *vcpu);
+ 	/* Returns actual tsc_offset set in active VMCS */
+ 	u64 (*write_l1_tsc_offset)(struct kvm_vcpu *vcpu, u64 offset);
+ 
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index 8f8fc65bfa3e..f40a43a288b9 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -954,16 +954,6 @@ static void init_sys_seg(struct vmcb_seg *seg, uint32_t type)
+ 	seg->base = 0;
+ }
+ 
+-static u64 svm_read_l1_tsc_offset(struct kvm_vcpu *vcpu)
+-{
+-	struct vcpu_svm *svm = to_svm(vcpu);
+-
+-	if (is_guest_mode(vcpu))
+-		return svm->nested.hsave->control.tsc_offset;
+-
+-	return vcpu->arch.tsc_offset;
+-}
+-
+ static u64 svm_write_l1_tsc_offset(struct kvm_vcpu *vcpu, u64 offset)
+ {
+ 	struct vcpu_svm *svm = to_svm(vcpu);
+@@ -4068,7 +4058,6 @@ static struct kvm_x86_ops svm_x86_ops __initdata = {
+ 
+ 	.has_wbinvd_exit = svm_has_wbinvd_exit,
+ 
+-	.read_l1_tsc_offset = svm_read_l1_tsc_offset,
+ 	.write_l1_tsc_offset = svm_write_l1_tsc_offset,
+ 
+ 	.load_mmu_pgd = svm_load_mmu_pgd,
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index d3d57b7a67bd..de18cd386bb1 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -1723,17 +1723,6 @@ static void setup_msrs(struct vcpu_vmx *vmx)
+ 		vmx_update_msr_bitmap(&vmx->vcpu);
+ }
+ 
+-static u64 vmx_read_l1_tsc_offset(struct kvm_vcpu *vcpu)
+-{
+-	struct vmcs12 *vmcs12 = get_vmcs12(vcpu);
+-
+-	if (is_guest_mode(vcpu) &&
+-	    (vmcs12->cpu_based_vm_exec_control & CPU_BASED_USE_TSC_OFFSETTING))
+-		return vcpu->arch.tsc_offset - vmcs12->tsc_offset;
+-
+-	return vcpu->arch.tsc_offset;
+-}
+-
+ static u64 vmx_write_l1_tsc_offset(struct kvm_vcpu *vcpu, u64 offset)
+ {
+ 	struct vmcs12 *vmcs12 = get_vmcs12(vcpu);
+@@ -7865,7 +7854,6 @@ static struct kvm_x86_ops vmx_x86_ops __initdata = {
+ 
+ 	.has_wbinvd_exit = cpu_has_vmx_wbinvd_exit,
+ 
+-	.read_l1_tsc_offset = vmx_read_l1_tsc_offset,
+ 	.write_l1_tsc_offset = vmx_write_l1_tsc_offset,
+ 
+ 	.load_mmu_pgd = vmx_load_mmu_pgd,
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 856b6fc2c2ba..8ec356ac1e6e 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -1918,7 +1918,7 @@ static void kvm_track_tsc_matching(struct kvm_vcpu *vcpu)
+ 
+ static void update_ia32_tsc_adjust_msr(struct kvm_vcpu *vcpu, s64 offset)
+ {
+-	u64 curr_offset = kvm_x86_ops.read_l1_tsc_offset(vcpu);
++	u64 curr_offset = vcpu->arch.l1_tsc_offset;
+ 	vcpu->arch.ia32_tsc_adjust_msr += offset - curr_offset;
+ }
+ 
+@@ -1960,14 +1960,13 @@ static u64 kvm_compute_tsc_offset(struct kvm_vcpu *vcpu, u64 target_tsc)
+ 
+ u64 kvm_read_l1_tsc(struct kvm_vcpu *vcpu, u64 host_tsc)
+ {
+-	u64 tsc_offset = kvm_x86_ops.read_l1_tsc_offset(vcpu);
+-
+-	return tsc_offset + kvm_scale_tsc(vcpu, host_tsc);
++	return vcpu->arch.l1_tsc_offset + kvm_scale_tsc(vcpu, host_tsc);
+ }
+ EXPORT_SYMBOL_GPL(kvm_read_l1_tsc);
+ 
+ static void kvm_vcpu_write_tsc_offset(struct kvm_vcpu *vcpu, u64 offset)
+ {
++	vcpu->arch.l1_tsc_offset = offset;
+ 	vcpu->arch.tsc_offset = kvm_x86_ops.write_l1_tsc_offset(vcpu, offset);
+ }
+ 
+@@ -2092,7 +2091,7 @@ EXPORT_SYMBOL_GPL(kvm_write_tsc);
+ static inline void adjust_tsc_offset_guest(struct kvm_vcpu *vcpu,
+ 					   s64 adjustment)
+ {
+-	u64 tsc_offset = kvm_x86_ops.read_l1_tsc_offset(vcpu);
++	u64 tsc_offset = vcpu->arch.l1_tsc_offset;
+ 	kvm_vcpu_write_tsc_offset(vcpu, tsc_offset + adjustment);
+ }
+ 
+
+From patchwork Sat May  2 04:32:26 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11523635
+Return-Path: <SRS0=JxFu=6Q=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B1ADF14B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:33:12 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 9A5D224957
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:33:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727832AbgEBEcj (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Sat, 2 May 2020 00:32:39 -0400
+Received: from mga09.intel.com ([134.134.136.24]:55787 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727121AbgEBEch (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Sat, 2 May 2020 00:32:37 -0400
+IronPort-SDR: 
+ +sVfs6VTwv1tO/sa1wdOBk6a99rjaplP5E2gXgxE68SqPJ53Qefm17d2kWsLg9IokMH/kYpRyS
+ owf/HSs3feeg==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 01 May 2020 21:32:37 -0700
+IronPort-SDR: 
+ ttUEoi4qvg4UT85uXLGbzQGb6lp6qCUYm1CAP1RECZ8qXBpnHhyd32smMMI5yXsG8BOKLSA2dI
+ pSW8iUL7MPPA==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,342,1583222400";
+   d="scan'208";a="433516117"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga005.jf.intel.com with ESMTP; 01 May 2020 21:32:37 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 02/10] KVM: nVMX: Unconditionally validate CR3 during nested
+ transitions
+Date: Fri,  1 May 2020 21:32:26 -0700
+Message-Id: <20200502043234.12481-3-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+References: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Unconditionally check the validity of the incoming CR3 during nested
+VM-Enter/VM-Exit to avoid invoking kvm_read_cr3() in the common case
+where the guest isn't using PAE paging.  If vmcs.GUEST_CR3 hasn't yet
+been cached (common case), kvm_read_cr3() will trigger a VMREAD.  The
+VMREAD (~30 cycles) alone is likely slower than nested_cr3_valid()
+(~5 cycles if vcpu->arch.maxphyaddr gets a cache hit), and the poor
+exchange only gets worse when retpolines are enabled as the call to
+kvm_x86_ops.cache_reg() will incur a retpoline (60+ cycles).
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 27 +++++++++++++--------------
+ 1 file changed, 13 insertions(+), 14 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index b57420f3dd8f..1f2f41e821f9 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -1120,21 +1120,20 @@ static bool nested_vmx_transition_mmu_sync(struct kvm_vcpu *vcpu)
+ static int nested_vmx_load_cr3(struct kvm_vcpu *vcpu, unsigned long cr3, bool nested_ept,
+ 			       u32 *entry_failure_code)
+ {
+-	if (cr3 != kvm_read_cr3(vcpu) || (!nested_ept && pdptrs_changed(vcpu))) {
+-		if (CC(!nested_cr3_valid(vcpu, cr3))) {
+-			*entry_failure_code = ENTRY_FAIL_DEFAULT;
+-			return -EINVAL;
+-		}
++	if (CC(!nested_cr3_valid(vcpu, cr3))) {
++		*entry_failure_code = ENTRY_FAIL_DEFAULT;
++		return -EINVAL;
++	}
+ 
+-		/*
+-		 * If PAE paging and EPT are both on, CR3 is not used by the CPU and
+-		 * must not be dereferenced.
+-		 */
+-		if (is_pae_paging(vcpu) && !nested_ept) {
+-			if (CC(!load_pdptrs(vcpu, vcpu->arch.walk_mmu, cr3))) {
+-				*entry_failure_code = ENTRY_FAIL_PDPTE;
+-				return -EINVAL;
+-			}
++	/*
++	 * If PAE paging and EPT are both on, CR3 is not used by the CPU and
++	 * must not be dereferenced.
++	 */
++	if (!nested_ept && is_pae_paging(vcpu) &&
++	    (cr3 != kvm_read_cr3(vcpu) || pdptrs_changed(vcpu))) {
++		if (CC(!load_pdptrs(vcpu, vcpu->arch.walk_mmu, cr3))) {
++			*entry_failure_code = ENTRY_FAIL_PDPTE;
++			return -EINVAL;
+ 		}
+ 	}
+ 
+
+From patchwork Sat May  2 04:32:27 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11523623
+Return-Path: <SRS0=JxFu=6Q=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8448A139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:32:41 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 7569324956
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:32:41 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727866AbgEBEck (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Sat, 2 May 2020 00:32:40 -0400
+Received: from mga09.intel.com ([134.134.136.24]:55787 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727788AbgEBEci (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Sat, 2 May 2020 00:32:38 -0400
+IronPort-SDR: 
+ WgN3tQ+UWPlmfD6XevRqz1dS3mSVZM26auH+rO6HZ2beM33ZU/jrUpBA3BWnK+2ZUhwKmvyy84
+ I8CMOPbmsJ8Q==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 01 May 2020 21:32:37 -0700
+IronPort-SDR: 
+ Jq4hYXhJD6UfsEAjZz3DJkieTU+JnDgsrt1soCpK+scxwxCCKRYsGZrpLf7VbJ0vI5Bkr829JX
+ nME8xDpLABUQ==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,342,1583222400";
+   d="scan'208";a="433516120"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga005.jf.intel.com with ESMTP; 01 May 2020 21:32:37 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 03/10] KVM: x86: Make kvm_x86_ops' {g,s}et_dr6() hooks
+ optional
+Date: Fri,  1 May 2020 21:32:27 -0700
+Message-Id: <20200502043234.12481-4-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+References: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Make get_dr6() and set_dr6() optional and drop the VMX implementations,
+which are for all intents and purposes nops.  This avoids a retpoline on
+VMX when reading/writing DR6, at minimal cost (~1 uop) to SVM.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 11 -----------
+ arch/x86/kvm/x86.c     |  6 ++++--
+ 2 files changed, 4 insertions(+), 13 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index de18cd386bb1..e157bdc218ea 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -5008,15 +5008,6 @@ static int handle_dr(struct kvm_vcpu *vcpu)
+ 	return kvm_skip_emulated_instruction(vcpu);
+ }
+ 
+-static u64 vmx_get_dr6(struct kvm_vcpu *vcpu)
+-{
+-	return vcpu->arch.dr6;
+-}
+-
+-static void vmx_set_dr6(struct kvm_vcpu *vcpu, unsigned long val)
+-{
+-}
+-
+ static void vmx_sync_dirty_debug_regs(struct kvm_vcpu *vcpu)
+ {
+ 	get_debugreg(vcpu->arch.db[0], 0);
+@@ -7799,8 +7790,6 @@ static struct kvm_x86_ops vmx_x86_ops __initdata = {
+ 	.set_idt = vmx_set_idt,
+ 	.get_gdt = vmx_get_gdt,
+ 	.set_gdt = vmx_set_gdt,
+-	.get_dr6 = vmx_get_dr6,
+-	.set_dr6 = vmx_set_dr6,
+ 	.set_dr7 = vmx_set_dr7,
+ 	.sync_dirty_debug_regs = vmx_sync_dirty_debug_regs,
+ 	.cache_reg = vmx_cache_reg,
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 8ec356ac1e6e..eccbfcb6a4e5 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -1069,7 +1069,8 @@ static void kvm_update_dr0123(struct kvm_vcpu *vcpu)
+ 
+ static void kvm_update_dr6(struct kvm_vcpu *vcpu)
+ {
+-	if (!(vcpu->guest_debug & KVM_GUESTDBG_USE_HW_BP))
++	if (!(vcpu->guest_debug & KVM_GUESTDBG_USE_HW_BP) &&
++	    kvm_x86_ops.set_dr6)
+ 		kvm_x86_ops.set_dr6(vcpu, vcpu->arch.dr6);
+ }
+ 
+@@ -1148,7 +1149,8 @@ int kvm_get_dr(struct kvm_vcpu *vcpu, int dr, unsigned long *val)
+ 	case 4:
+ 		/* fall through */
+ 	case 6:
+-		if (vcpu->guest_debug & KVM_GUESTDBG_USE_HW_BP)
++		if ((vcpu->guest_debug & KVM_GUESTDBG_USE_HW_BP) ||
++		    !kvm_x86_ops.get_dr6)
+ 			*val = vcpu->arch.dr6;
+ 		else
+ 			*val = kvm_x86_ops.get_dr6(vcpu);
+
+From patchwork Sat May  2 04:32:28 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11523639
+Return-Path: <SRS0=JxFu=6Q=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B3C8E139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:33:17 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 9BE3824957
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:33:17 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728070AbgEBEdR (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Sat, 2 May 2020 00:33:17 -0400
+Received: from mga09.intel.com ([134.134.136.24]:55789 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727791AbgEBEci (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Sat, 2 May 2020 00:32:38 -0400
+IronPort-SDR: 
+ 2dSyjpuev4NHOnYfXYwzlj942eApvlbQMYoWcDH9QJFQ68+VPuK+s00EHWVNawkiUVjHjI1S0x
+ kK2PLW7vSHGQ==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 01 May 2020 21:32:37 -0700
+IronPort-SDR: 
+ lWUA5Fb1CHqS/CzeMRdFFjJat7n8GOmxhUXWKDuJsoql4LOYgSDp2pxIpEeMldZ0Fa0ZV0tqyy
+ vv59G8X1XOHg==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,342,1583222400";
+   d="scan'208";a="433516123"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga005.jf.intel.com with ESMTP; 01 May 2020 21:32:37 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 04/10] KVM: x86: Split guts of kvm_update_dr7() to separate
+ helper
+Date: Fri,  1 May 2020 21:32:28 -0700
+Message-Id: <20200502043234.12481-5-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+References: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Move the calculation of the effective DR7 into a separate helper,
+__kvm_update_dr7(), and make the helper visible to vendor code.  It will
+be used in a future patch to avoid the retpoline associated with
+kvm_x86_ops.set_dr7() when stuffing DR7 during nested VMX transitions.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/x86.c | 11 +----------
+ arch/x86/kvm/x86.h | 14 ++++++++++++++
+ 2 files changed, 15 insertions(+), 10 deletions(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index eccbfcb6a4e5..8893c42eac9e 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -1076,16 +1076,7 @@ static void kvm_update_dr6(struct kvm_vcpu *vcpu)
+ 
+ static void kvm_update_dr7(struct kvm_vcpu *vcpu)
+ {
+-	unsigned long dr7;
+-
+-	if (vcpu->guest_debug & KVM_GUESTDBG_USE_HW_BP)
+-		dr7 = vcpu->arch.guest_debug_dr7;
+-	else
+-		dr7 = vcpu->arch.dr7;
+-	kvm_x86_ops.set_dr7(vcpu, dr7);
+-	vcpu->arch.switch_db_regs &= ~KVM_DEBUGREG_BP_ENABLED;
+-	if (dr7 & DR7_BP_EN_MASK)
+-		vcpu->arch.switch_db_regs |= KVM_DEBUGREG_BP_ENABLED;
++	kvm_x86_ops.set_dr7(vcpu, __kvm_update_dr7(vcpu));
+ }
+ 
+ static u64 kvm_dr6_fixed(struct kvm_vcpu *vcpu)
+diff --git a/arch/x86/kvm/x86.h b/arch/x86/kvm/x86.h
+index 7b5ed8ed628e..75010b22e379 100644
+--- a/arch/x86/kvm/x86.h
++++ b/arch/x86/kvm/x86.h
+@@ -236,6 +236,20 @@ static inline void kvm_register_writel(struct kvm_vcpu *vcpu,
+ 	return kvm_register_write(vcpu, reg, val);
+ }
+ 
++static inline unsigned long __kvm_update_dr7(struct kvm_vcpu *vcpu)
++{
++	unsigned long dr7;
++
++	if (vcpu->guest_debug & KVM_GUESTDBG_USE_HW_BP)
++		dr7 = vcpu->arch.guest_debug_dr7;
++	else
++		dr7 = vcpu->arch.dr7;
++	vcpu->arch.switch_db_regs &= ~KVM_DEBUGREG_BP_ENABLED;
++	if (dr7 & DR7_BP_EN_MASK)
++		vcpu->arch.switch_db_regs |= KVM_DEBUGREG_BP_ENABLED;
++	return dr7;
++}
++
+ static inline bool kvm_check_has_quirk(struct kvm *kvm, u64 quirk)
+ {
+ 	return !(kvm->arch.disabled_quirks & quirk);
+
+From patchwork Sat May  2 04:32:29 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11523637
+Return-Path: <SRS0=JxFu=6Q=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8455F14B4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:33:16 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 759F524957
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:33:16 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728035AbgEBEdP (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Sat, 2 May 2020 00:33:15 -0400
+Received: from mga09.intel.com ([134.134.136.24]:55783 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727798AbgEBEci (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Sat, 2 May 2020 00:32:38 -0400
+IronPort-SDR: 
+ +onDbf2vLzHJynDicW9Y7sNBbS67eiWPeOZoOKIdH/FnervwXu1ezCWQYeQbk4gYf2W++G9w4a
+ 88Tek1BgldCw==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 01 May 2020 21:32:37 -0700
+IronPort-SDR: 
+ QutYqXqyBV1wcl0CDrUf5G3U2HC0G/VXMJtzu05q63l0LFZAagyKaFM1hLTmk0RQzKNo0LhQkb
+ NP8MSz4qGAHw==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,342,1583222400";
+   d="scan'208";a="433516126"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga005.jf.intel.com with ESMTP; 01 May 2020 21:32:37 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 05/10] KVM: nVMX: Avoid retpoline when writing DR7 during
+ nested transitions
+Date: Fri,  1 May 2020 21:32:29 -0700
+Message-Id: <20200502043234.12481-6-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+References: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Add a helper, nested_vmx_set_dr7(), to handle updating DR7 during nested
+transitions to avoid bouncing through kvm_update_dr7() and its
+potentially retpolined kvm_x86_ops.set_dr7() call.  The duplicated code
+to adjust the architectural DR7 is minor, and losing the WARN_ON() when
+refreshing DR7 from vmcs01 is really no loss at all.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c | 16 +++++++++++-----
+ 1 file changed, 11 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 1f2f41e821f9..3b4f1408b4e1 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -2116,6 +2116,12 @@ static void vmx_start_preemption_timer(struct kvm_vcpu *vcpu)
+ 		      ns_to_ktime(preemption_timeout), HRTIMER_MODE_REL);
+ }
+ 
++static void nested_vmx_set_dr7(struct kvm_vcpu *vcpu, unsigned long val)
++{
++	vcpu->arch.dr7 = (val & DR7_VOLATILE) | DR7_FIXED_1;
++	vmcs_writel(GUEST_DR7, __kvm_update_dr7(vcpu));
++}
++
+ static u64 nested_vmx_calc_efer(struct vcpu_vmx *vmx, struct vmcs12 *vmcs12)
+ {
+ 	if (vmx->nested.nested_run_pending &&
+@@ -2487,10 +2493,10 @@ static int prepare_vmcs02(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12,
+ 
+ 	if (vmx->nested.nested_run_pending &&
+ 	    (vmcs12->vm_entry_controls & VM_ENTRY_LOAD_DEBUG_CONTROLS)) {
+-		kvm_set_dr(vcpu, 7, vmcs12->guest_dr7);
++		nested_vmx_set_dr7(vcpu, vmcs12->guest_dr7);
+ 		vmcs_write64(GUEST_IA32_DEBUGCTL, vmcs12->guest_ia32_debugctl);
+ 	} else {
+-		kvm_set_dr(vcpu, 7, vcpu->arch.dr7);
++		nested_vmx_set_dr7(vcpu, vcpu->arch.dr7);
+ 		vmcs_write64(GUEST_IA32_DEBUGCTL, vmx->nested.vmcs01_debugctl);
+ 	}
+ 	if (kvm_mpx_supported() && (!vmx->nested.nested_run_pending ||
+@@ -4176,7 +4182,7 @@ static void load_vmcs12_host_state(struct kvm_vcpu *vcpu,
+ 	};
+ 	vmx_set_segment(vcpu, &seg, VCPU_SREG_TR);
+ 
+-	kvm_set_dr(vcpu, 7, 0x400);
++	nested_vmx_set_dr7(vcpu, 0x400);
+ 	vmcs_write64(GUEST_IA32_DEBUGCTL, 0);
+ 
+ 	if (cpu_has_vmx_msr_bitmap())
+@@ -4228,9 +4234,9 @@ static void nested_vmx_restore_host_state(struct kvm_vcpu *vcpu)
+ 		 * nested VMENTER (not worth adding a variable in nested_vmx).
+ 		 */
+ 		if (vcpu->guest_debug & KVM_GUESTDBG_USE_HW_BP)
+-			kvm_set_dr(vcpu, 7, DR7_FIXED_1);
++			nested_vmx_set_dr7(vcpu, DR7_FIXED_1);
+ 		else
+-			WARN_ON(kvm_set_dr(vcpu, 7, vmcs_readl(GUEST_DR7)));
++			nested_vmx_set_dr7(vcpu, vmcs_readl(GUEST_DR7));
+ 	}
+ 
+ 	/*
+
+From patchwork Sat May  2 04:32:30 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11523629
+Return-Path: <SRS0=JxFu=6Q=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id F18B7139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:33:04 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id DD0F52184D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:33:04 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727963AbgEBEc5 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Sat, 2 May 2020 00:32:57 -0400
+Received: from mga09.intel.com ([134.134.136.24]:55787 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727818AbgEBEcj (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Sat, 2 May 2020 00:32:39 -0400
+IronPort-SDR: 
+ OOfs137t8Hq4U/bUYFLUjR9vZQ9qqbRANxG/IDfbVzCAhhdoOEjUHKsu0ueG/dVdQZhQefy2Ft
+ ndiMz2KUpIOg==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 01 May 2020 21:32:37 -0700
+IronPort-SDR: 
+ orXBMWpAMww+scwUjtZn9GeWpvtZzBizQ0wen0KjdYyh7FGskRKV21xZyhfai+QfAofqFhNsqa
+ 890fbkddcoPg==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,342,1583222400";
+   d="scan'208";a="433516129"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga005.jf.intel.com with ESMTP; 01 May 2020 21:32:37 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 06/10] KVM: VMX: Add proper cache tracking for CR4
+Date: Fri,  1 May 2020 21:32:30 -0700
+Message-Id: <20200502043234.12481-7-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+References: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Move CR4 caching into the standard register caching mechanism in order
+to take advantage of the availability checks provided by regs_avail.
+This avoids multiple VMREADs and retpolines (when configured) during
+nested VMX transitions as kvm_read_cr4_bits() is invoked multiple times
+on each transition, e.g. when stuffing CR0 and CR3.
+
+As an added bonus, this eliminates a kvm_x86_ops hook, saves a retpoline
+on SVM when reading CR4, and squashes the confusing naming discrepancy
+of "cache_reg" vs. "decache_cr4_guest_bits".
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  2 +-
+ arch/x86/kvm/kvm_cache_regs.h   |  5 +++--
+ arch/x86/kvm/svm/svm.c          |  5 -----
+ arch/x86/kvm/vmx/vmx.c          | 18 +++++++++---------
+ arch/x86/kvm/vmx/vmx.h          |  1 +
+ 5 files changed, 14 insertions(+), 17 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index d71d1f38b7a0..dbf7d3f2edbc 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -168,6 +168,7 @@ enum kvm_reg {
+ 
+ 	VCPU_EXREG_PDPTR = NR_VCPU_REGS,
+ 	VCPU_EXREG_CR3,
++	VCPU_EXREG_CR4,
+ 	VCPU_EXREG_RFLAGS,
+ 	VCPU_EXREG_SEGMENTS,
+ 	VCPU_EXREG_EXIT_INFO_1,
+@@ -1091,7 +1092,6 @@ struct kvm_x86_ops {
+ 			    struct kvm_segment *var, int seg);
+ 	void (*get_cs_db_l_bits)(struct kvm_vcpu *vcpu, int *db, int *l);
+ 	void (*decache_cr0_guest_bits)(struct kvm_vcpu *vcpu);
+-	void (*decache_cr4_guest_bits)(struct kvm_vcpu *vcpu);
+ 	void (*set_cr0)(struct kvm_vcpu *vcpu, unsigned long cr0);
+ 	int (*set_cr4)(struct kvm_vcpu *vcpu, unsigned long cr4);
+ 	void (*set_efer)(struct kvm_vcpu *vcpu, u64 efer);
+diff --git a/arch/x86/kvm/kvm_cache_regs.h b/arch/x86/kvm/kvm_cache_regs.h
+index 62558b9bdda7..921a539bcb96 100644
+--- a/arch/x86/kvm/kvm_cache_regs.h
++++ b/arch/x86/kvm/kvm_cache_regs.h
+@@ -129,8 +129,9 @@ static inline ulong kvm_read_cr0(struct kvm_vcpu *vcpu)
+ static inline ulong kvm_read_cr4_bits(struct kvm_vcpu *vcpu, ulong mask)
+ {
+ 	ulong tmask = mask & KVM_POSSIBLE_CR4_GUEST_BITS;
+-	if (tmask & vcpu->arch.cr4_guest_owned_bits)
+-		kvm_x86_ops.decache_cr4_guest_bits(vcpu);
++	if ((tmask & vcpu->arch.cr4_guest_owned_bits) &&
++	    !kvm_register_is_available(vcpu, VCPU_EXREG_CR4))
++		kvm_x86_ops.cache_reg(vcpu, VCPU_EXREG_CR4);
+ 	return vcpu->arch.cr4 & mask;
+ }
+ 
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index f40a43a288b9..e09f7e8b961f 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -1528,10 +1528,6 @@ static void svm_decache_cr0_guest_bits(struct kvm_vcpu *vcpu)
+ {
+ }
+ 
+-static void svm_decache_cr4_guest_bits(struct kvm_vcpu *vcpu)
+-{
+-}
+-
+ static void update_cr0_intercept(struct vcpu_svm *svm)
+ {
+ 	ulong gcr0 = svm->vcpu.arch.cr0;
+@@ -3998,7 +3994,6 @@ static struct kvm_x86_ops svm_x86_ops __initdata = {
+ 	.get_cpl = svm_get_cpl,
+ 	.get_cs_db_l_bits = kvm_get_cs_db_l_bits,
+ 	.decache_cr0_guest_bits = svm_decache_cr0_guest_bits,
+-	.decache_cr4_guest_bits = svm_decache_cr4_guest_bits,
+ 	.set_cr0 = svm_set_cr0,
+ 	.set_cr4 = svm_set_cr4,
+ 	.set_efer = svm_set_efer,
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index e157bdc218ea..31316cffb427 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -2187,6 +2187,8 @@ static int vmx_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 
+ static void vmx_cache_reg(struct kvm_vcpu *vcpu, enum kvm_reg reg)
+ {
++	unsigned long guest_owned_bits;
++
+ 	kvm_register_mark_available(vcpu, reg);
+ 
+ 	switch (reg) {
+@@ -2204,6 +2206,12 @@ static void vmx_cache_reg(struct kvm_vcpu *vcpu, enum kvm_reg reg)
+ 		if (enable_unrestricted_guest || (enable_ept && is_paging(vcpu)))
+ 			vcpu->arch.cr3 = vmcs_readl(GUEST_CR3);
+ 		break;
++	case VCPU_EXREG_CR4:
++		guest_owned_bits = vcpu->arch.cr4_guest_owned_bits;
++
++		vcpu->arch.cr4 &= ~guest_owned_bits;
++		vcpu->arch.cr4 |= vmcs_readl(GUEST_CR4) & guest_owned_bits;
++		break;
+ 	default:
+ 		WARN_ON_ONCE(1);
+ 		break;
+@@ -2905,14 +2913,6 @@ static void vmx_decache_cr0_guest_bits(struct kvm_vcpu *vcpu)
+ 	vcpu->arch.cr0 |= vmcs_readl(GUEST_CR0) & cr0_guest_owned_bits;
+ }
+ 
+-static void vmx_decache_cr4_guest_bits(struct kvm_vcpu *vcpu)
+-{
+-	ulong cr4_guest_owned_bits = vcpu->arch.cr4_guest_owned_bits;
+-
+-	vcpu->arch.cr4 &= ~cr4_guest_owned_bits;
+-	vcpu->arch.cr4 |= vmcs_readl(GUEST_CR4) & cr4_guest_owned_bits;
+-}
+-
+ static void ept_load_pdptrs(struct kvm_vcpu *vcpu)
+ {
+ 	struct kvm_mmu *mmu = vcpu->arch.walk_mmu;
+@@ -3111,6 +3111,7 @@ int vmx_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ 		return 1;
+ 
+ 	vcpu->arch.cr4 = cr4;
++	kvm_register_mark_available(vcpu, VCPU_EXREG_CR4);
+ 
+ 	if (!enable_unrestricted_guest) {
+ 		if (enable_ept) {
+@@ -7782,7 +7783,6 @@ static struct kvm_x86_ops vmx_x86_ops __initdata = {
+ 	.get_cpl = vmx_get_cpl,
+ 	.get_cs_db_l_bits = vmx_get_cs_db_l_bits,
+ 	.decache_cr0_guest_bits = vmx_decache_cr0_guest_bits,
+-	.decache_cr4_guest_bits = vmx_decache_cr4_guest_bits,
+ 	.set_cr0 = vmx_set_cr0,
+ 	.set_cr4 = vmx_set_cr4,
+ 	.set_efer = vmx_set_efer,
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index fa61dc802183..39d0f32372e7 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -453,6 +453,7 @@ static inline void vmx_register_cache_reset(struct kvm_vcpu *vcpu)
+ 				  | (1 << VCPU_EXREG_PDPTR)
+ 				  | (1 << VCPU_EXREG_SEGMENTS)
+ 				  | (1 << VCPU_EXREG_CR3)
++				  | (1 << VCPU_EXREG_CR4)
+ 				  | (1 << VCPU_EXREG_EXIT_INFO_1)
+ 				  | (1 << VCPU_EXREG_EXIT_INFO_2));
+ 	vcpu->arch.regs_dirty = 0;
+
+From patchwork Sat May  2 04:32:31 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11523627
+Return-Path: <SRS0=JxFu=6Q=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id A217B139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:32:57 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 9433E24957
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:32:57 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727945AbgEBEc4 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Sat, 2 May 2020 00:32:56 -0400
+Received: from mga09.intel.com ([134.134.136.24]:55789 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727829AbgEBEcj (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Sat, 2 May 2020 00:32:39 -0400
+IronPort-SDR: 
+ QD7Wq567xtdJYG3UE+jlptshPrLxetb31XxAk6LsjaBi48pLipj6YL1HVKxhiwRTjCuHOsaNzB
+ ZtZAauQwMsfw==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 01 May 2020 21:32:37 -0700
+IronPort-SDR: 
+ cfyH225YbbTDf4gsK8BWgsbuADymwi/uXEsVbWIFVOrSlBaAW0v3UZoJQRFJtrCV8EmK7wghFp
+ 5ncUCfmeMl6w==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,342,1583222400";
+   d="scan'208";a="433516133"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga005.jf.intel.com with ESMTP; 01 May 2020 21:32:37 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 07/10] KVM: VMX: Add proper cache tracking for CR0
+Date: Fri,  1 May 2020 21:32:31 -0700
+Message-Id: <20200502043234.12481-8-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+References: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Move CR0 caching into the standard register caching mechanism in order
+to take advantage of the availability checks provided by regs_avail.
+This avoids multiple VMREADs in the (uncommon) case where kvm_read_cr0()
+is called multiple times in a single VM-Exit, and more importantly
+eliminates a kvm_x86_ops hook, saves a retpoline on SVM when reading
+CR0, and squashes the confusing naming discrepancy of "cache_reg" vs.
+"decache_cr0_guest_bits".
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  2 +-
+ arch/x86/kvm/kvm_cache_regs.h   |  5 +++--
+ arch/x86/kvm/svm/svm.c          |  5 -----
+ arch/x86/kvm/vmx/vmx.c          | 16 +++++++---------
+ arch/x86/kvm/vmx/vmx.h          |  1 +
+ 5 files changed, 12 insertions(+), 17 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index dbf7d3f2edbc..55c8f78bc9e8 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -167,6 +167,7 @@ enum kvm_reg {
+ 	NR_VCPU_REGS,
+ 
+ 	VCPU_EXREG_PDPTR = NR_VCPU_REGS,
++	VCPU_EXREG_CR0,
+ 	VCPU_EXREG_CR3,
+ 	VCPU_EXREG_CR4,
+ 	VCPU_EXREG_RFLAGS,
+@@ -1091,7 +1092,6 @@ struct kvm_x86_ops {
+ 	void (*set_segment)(struct kvm_vcpu *vcpu,
+ 			    struct kvm_segment *var, int seg);
+ 	void (*get_cs_db_l_bits)(struct kvm_vcpu *vcpu, int *db, int *l);
+-	void (*decache_cr0_guest_bits)(struct kvm_vcpu *vcpu);
+ 	void (*set_cr0)(struct kvm_vcpu *vcpu, unsigned long cr0);
+ 	int (*set_cr4)(struct kvm_vcpu *vcpu, unsigned long cr4);
+ 	void (*set_efer)(struct kvm_vcpu *vcpu, u64 efer);
+diff --git a/arch/x86/kvm/kvm_cache_regs.h b/arch/x86/kvm/kvm_cache_regs.h
+index 921a539bcb96..ff2d0e9ca3bc 100644
+--- a/arch/x86/kvm/kvm_cache_regs.h
++++ b/arch/x86/kvm/kvm_cache_regs.h
+@@ -116,8 +116,9 @@ static inline u64 kvm_pdptr_read(struct kvm_vcpu *vcpu, int index)
+ static inline ulong kvm_read_cr0_bits(struct kvm_vcpu *vcpu, ulong mask)
+ {
+ 	ulong tmask = mask & KVM_POSSIBLE_CR0_GUEST_BITS;
+-	if (tmask & vcpu->arch.cr0_guest_owned_bits)
+-		kvm_x86_ops.decache_cr0_guest_bits(vcpu);
++	if ((tmask & vcpu->arch.cr0_guest_owned_bits) &&
++	    !kvm_register_is_available(vcpu, VCPU_EXREG_CR0))
++		kvm_x86_ops.cache_reg(vcpu, VCPU_EXREG_CR0);
+ 	return vcpu->arch.cr0 & mask;
+ }
+ 
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index e09f7e8b961f..e185368a2d32 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -1524,10 +1524,6 @@ static void svm_set_gdt(struct kvm_vcpu *vcpu, struct desc_ptr *dt)
+ 	mark_dirty(svm->vmcb, VMCB_DT);
+ }
+ 
+-static void svm_decache_cr0_guest_bits(struct kvm_vcpu *vcpu)
+-{
+-}
+-
+ static void update_cr0_intercept(struct vcpu_svm *svm)
+ {
+ 	ulong gcr0 = svm->vcpu.arch.cr0;
+@@ -3993,7 +3989,6 @@ static struct kvm_x86_ops svm_x86_ops __initdata = {
+ 	.set_segment = svm_set_segment,
+ 	.get_cpl = svm_get_cpl,
+ 	.get_cs_db_l_bits = kvm_get_cs_db_l_bits,
+-	.decache_cr0_guest_bits = svm_decache_cr0_guest_bits,
+ 	.set_cr0 = svm_set_cr0,
+ 	.set_cr4 = svm_set_cr4,
+ 	.set_efer = svm_set_efer,
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 31316cffb427..0cb0c347de04 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -2202,6 +2202,12 @@ static void vmx_cache_reg(struct kvm_vcpu *vcpu, enum kvm_reg reg)
+ 		if (enable_ept)
+ 			ept_save_pdptrs(vcpu);
+ 		break;
++	case VCPU_EXREG_CR0:
++		guest_owned_bits = vcpu->arch.cr0_guest_owned_bits;
++
++		vcpu->arch.cr0 &= ~guest_owned_bits;
++		vcpu->arch.cr0 |= vmcs_readl(GUEST_CR0) & guest_owned_bits;
++		break;
+ 	case VCPU_EXREG_CR3:
+ 		if (enable_unrestricted_guest || (enable_ept && is_paging(vcpu)))
+ 			vcpu->arch.cr3 = vmcs_readl(GUEST_CR3);
+@@ -2905,14 +2911,6 @@ static void vmx_flush_tlb_guest(struct kvm_vcpu *vcpu)
+ 	vpid_sync_context(to_vmx(vcpu)->vpid);
+ }
+ 
+-static void vmx_decache_cr0_guest_bits(struct kvm_vcpu *vcpu)
+-{
+-	ulong cr0_guest_owned_bits = vcpu->arch.cr0_guest_owned_bits;
+-
+-	vcpu->arch.cr0 &= ~cr0_guest_owned_bits;
+-	vcpu->arch.cr0 |= vmcs_readl(GUEST_CR0) & cr0_guest_owned_bits;
+-}
+-
+ static void ept_load_pdptrs(struct kvm_vcpu *vcpu)
+ {
+ 	struct kvm_mmu *mmu = vcpu->arch.walk_mmu;
+@@ -3002,6 +3000,7 @@ void vmx_set_cr0(struct kvm_vcpu *vcpu, unsigned long cr0)
+ 	vmcs_writel(CR0_READ_SHADOW, cr0);
+ 	vmcs_writel(GUEST_CR0, hw_cr0);
+ 	vcpu->arch.cr0 = cr0;
++	kvm_register_mark_available(vcpu, VCPU_EXREG_CR0);
+ 
+ 	/* depends on vcpu->arch.cr0 to be set to a new value */
+ 	vmx->emulation_required = emulation_required(vcpu);
+@@ -7782,7 +7781,6 @@ static struct kvm_x86_ops vmx_x86_ops __initdata = {
+ 	.set_segment = vmx_set_segment,
+ 	.get_cpl = vmx_get_cpl,
+ 	.get_cs_db_l_bits = vmx_get_cs_db_l_bits,
+-	.decache_cr0_guest_bits = vmx_decache_cr0_guest_bits,
+ 	.set_cr0 = vmx_set_cr0,
+ 	.set_cr4 = vmx_set_cr4,
+ 	.set_efer = vmx_set_efer,
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index 39d0f32372e7..5f3f141d7254 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -452,6 +452,7 @@ static inline void vmx_register_cache_reset(struct kvm_vcpu *vcpu)
+ 				  | (1 << VCPU_EXREG_RFLAGS)
+ 				  | (1 << VCPU_EXREG_PDPTR)
+ 				  | (1 << VCPU_EXREG_SEGMENTS)
++				  | (1 << VCPU_EXREG_CR0)
+ 				  | (1 << VCPU_EXREG_CR3)
+ 				  | (1 << VCPU_EXREG_CR4)
+ 				  | (1 << VCPU_EXREG_EXIT_INFO_1)
+
+From patchwork Sat May  2 04:32:32 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11523631
+Return-Path: <SRS0=JxFu=6Q=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id BFD76139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:33:09 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id B007324957
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:33:09 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727929AbgEBEc4 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Sat, 2 May 2020 00:32:56 -0400
+Received: from mga09.intel.com ([134.134.136.24]:55783 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727844AbgEBEcj (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Sat, 2 May 2020 00:32:39 -0400
+IronPort-SDR: 
+ FkVFJ3Cm8necnXSiqRaMvmVgHhk+WkIWv8ephWIEchWAO4gZv81fpdUYEMCfVybRV4ulbMgIEc
+ 6XnHfRIqQyPQ==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 01 May 2020 21:32:37 -0700
+IronPort-SDR: 
+ WTpWe24HDWYQ1HuZKLyRkPmhyg8pzMf3ZorAJA0YAAFqDMRlNhkxIoDt0xM3ZuHgvz6ARjACqD
+ rgsKR/10Rj5Q==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,342,1583222400";
+   d="scan'208";a="433516138"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga005.jf.intel.com with ESMTP; 01 May 2020 21:32:37 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 08/10] KVM: VMX: Add anti-retpoline accessors for RIP and RSP
+Date: Fri,  1 May 2020 21:32:32 -0700
+Message-Id: <20200502043234.12481-9-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+References: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Add VMX specific accessors for RIP and RSP that are used if and only if
+CONFIG_RETPOLINE=y to avoid bouncing through kvm_x86_ops.cache_reg() and
+taking the associated retpoline hit.  This eliminates a retpoline in the
+vast majority of exits by avoiding the RIP read needed to skip the
+emulated instruction.  This also saves two retpolines on nested VM-Exits
+as both RIP and RSP need to be saved from vmcs02 to vmcs12.
+
+Make the accessors dependent on CONFIG_RETPOLINE so that they can be
+easily ripped out if/when the kernel gains support for static calls.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/nested.c |  6 +++---
+ arch/x86/kvm/vmx/vmx.c    |  6 +++---
+ arch/x86/kvm/vmx/vmx.h    | 28 ++++++++++++++++++++++++++++
+ 3 files changed, 34 insertions(+), 6 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 3b4f1408b4e1..a7639818b814 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -3943,8 +3943,8 @@ static void sync_vmcs02_to_vmcs12(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12)
+ 	vmcs12->guest_cr0 = vmcs12_guest_cr0(vcpu, vmcs12);
+ 	vmcs12->guest_cr4 = vmcs12_guest_cr4(vcpu, vmcs12);
+ 
+-	vmcs12->guest_rsp = kvm_rsp_read(vcpu);
+-	vmcs12->guest_rip = kvm_rip_read(vcpu);
++	vmcs12->guest_rsp = vmx_rsp_read(vcpu);
++	vmcs12->guest_rip = vmx_rip_read(vcpu);
+ 	vmcs12->guest_rflags = vmcs_readl(GUEST_RFLAGS);
+ 
+ 	vmcs12->guest_cs_ar_bytes = vmcs_read32(GUEST_CS_AR_BYTES);
+@@ -5854,7 +5854,7 @@ bool nested_vmx_reflect_vmexit(struct kvm_vcpu *vcpu)
+ 	exit_intr_info = vmx_get_intr_info(vcpu);
+ 	exit_qual = vmx_get_exit_qual(vcpu);
+ 
+-	trace_kvm_nested_vmexit(kvm_rip_read(vcpu), exit_reason, exit_qual,
++	trace_kvm_nested_vmexit(vmx_rip_read(vcpu), exit_reason, exit_qual,
+ 				vmx->idt_vectoring_info, exit_intr_info,
+ 				vmcs_read32(VM_EXIT_INTR_ERROR_CODE),
+ 				KVM_ISA_VMX);
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 0cb0c347de04..d826ac541eed 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -1569,7 +1569,7 @@ static int skip_emulated_instruction(struct kvm_vcpu *vcpu)
+ 	 */
+ 	if (!static_cpu_has(X86_FEATURE_HYPERVISOR) ||
+ 	    to_vmx(vcpu)->exit_reason != EXIT_REASON_EPT_MISCONFIG) {
+-		rip = kvm_rip_read(vcpu);
++		rip = vmx_rip_read(vcpu);
+ 		rip += vmcs_read32(VM_EXIT_INSTRUCTION_LEN);
+ 		kvm_rip_write(vcpu, rip);
+ 	} else {
+@@ -2185,7 +2185,7 @@ static int vmx_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 	return ret;
+ }
+ 
+-static void vmx_cache_reg(struct kvm_vcpu *vcpu, enum kvm_reg reg)
++void vmx_cache_reg(struct kvm_vcpu *vcpu, enum kvm_reg reg)
+ {
+ 	unsigned long guest_owned_bits;
+ 
+@@ -4750,7 +4750,7 @@ static int handle_exception_nmi(struct kvm_vcpu *vcpu)
+ 		vmx->vcpu.arch.event_exit_inst_len =
+ 			vmcs_read32(VM_EXIT_INSTRUCTION_LEN);
+ 		kvm_run->exit_reason = KVM_EXIT_DEBUG;
+-		rip = kvm_rip_read(vcpu);
++		rip = vmx_rip_read(vcpu);
+ 		kvm_run->debug.arch.pc = vmcs_readl(GUEST_CS_BASE) + rip;
+ 		kvm_run->debug.arch.exception = ex_no;
+ 		break;
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index 5f3f141d7254..63baa0d5fe41 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -500,6 +500,34 @@ static inline struct pi_desc *vcpu_to_pi_desc(struct kvm_vcpu *vcpu)
+ 	return &(to_vmx(vcpu)->pi_desc);
+ }
+ 
++#ifdef CONFIG_RETPOLINE
++void vmx_cache_reg(struct kvm_vcpu *vcpu, enum kvm_reg reg);
++static __always_inline unsigned long vmx_register_read(struct kvm_vcpu *vcpu,
++						       enum kvm_reg reg)
++{
++	BUILD_BUG_ON(!__builtin_constant_p(reg));
++	BUILD_BUG_ON(reg != VCPU_REGS_RIP && reg != VCPU_REGS_RSP);
++
++	if (!kvm_register_is_available(vcpu, reg))
++		vmx_cache_reg(vcpu, reg);
++
++	return vcpu->arch.regs[reg];
++}
++
++static inline unsigned long vmx_rip_read(struct kvm_vcpu *vcpu)
++{
++	return vmx_register_read(vcpu, VCPU_REGS_RIP);
++}
++
++static inline unsigned long vmx_rsp_read(struct kvm_vcpu *vcpu)
++{
++	return vmx_register_read(vcpu, VCPU_REGS_RSP);
++}
++#else
++#define vmx_rip_read kvm_rip_read
++#define vmx_rsp_read kvm_rsp_read
++#endif
++
+ static inline unsigned long vmx_get_exit_qual(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+
+From patchwork Sat May  2 04:32:33 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11523625
+Return-Path: <SRS0=JxFu=6Q=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C04D3139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:32:53 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id B2EF124957
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:32:53 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727878AbgEBEcl (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Sat, 2 May 2020 00:32:41 -0400
+Received: from mga09.intel.com ([134.134.136.24]:55787 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727863AbgEBEck (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Sat, 2 May 2020 00:32:40 -0400
+IronPort-SDR: 
+ 2o44l6aK9zr4CnuuiPN3+k+1pDpStJgPVSsh6M7subhMOswIY8sTfgYZUgEzWXI3CKts8X7Ryq
+ 0ndntOEUHsSw==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 01 May 2020 21:32:37 -0700
+IronPort-SDR: 
+ GF0Rn/dAGktGCLIcqPKJ9Dth0ByeL3Jhi775UOTioMUXDOY6AGQdt733UVwrJXzw5bqYXuK2ou
+ mhVY0EuOISsA==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,342,1583222400";
+   d="scan'208";a="433516141"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga005.jf.intel.com with ESMTP; 01 May 2020 21:32:37 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 09/10] KVM: VMX: Move nested EPT out of
+ kvm_x86_ops.get_tdp_level() hook
+Date: Fri,  1 May 2020 21:32:33 -0700
+Message-Id: <20200502043234.12481-10-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+References: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Separate the "core" TDP level handling from the nested EPT path to make
+it clear that kvm_x86_ops.get_tdp_level() is used if and only if nested
+EPT is not in use (kvm_init_shadow_ept_mmu() calculates the level from
+the passed in vmcs12->eptp).  Add a WARN_ON() to enforce that the
+kvm_x86_ops hook is not called for nested EPT.
+
+This sets the stage for snapshotting the non-"nested EPT" TDP page level
+during kvm_cpuid_update() to avoid the retpoline associated with
+kvm_x86_ops.get_tdp_level() when resetting the MMU, a relatively
+frequent operation when running a nested guest.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 16 ++++++++++++----
+ 1 file changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index d826ac541eed..c9c6e72e9660 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -3006,15 +3006,23 @@ void vmx_set_cr0(struct kvm_vcpu *vcpu, unsigned long cr0)
+ 	vmx->emulation_required = emulation_required(vcpu);
+ }
+ 
+-static int get_ept_level(struct kvm_vcpu *vcpu)
++static int vmx_get_tdp_level(struct kvm_vcpu *vcpu)
+ {
+-	if (is_guest_mode(vcpu) && nested_cpu_has_ept(get_vmcs12(vcpu)))
+-		return vmx_eptp_page_walk_level(nested_ept_get_eptp(vcpu));
++	WARN_ON(is_guest_mode(vcpu) && nested_cpu_has_ept(get_vmcs12(vcpu)));
++
+ 	if (cpu_has_vmx_ept_5levels() && (cpuid_maxphyaddr(vcpu) > 48))
+ 		return 5;
+ 	return 4;
+ }
+ 
++static int get_ept_level(struct kvm_vcpu *vcpu)
++{
++	if (is_guest_mode(vcpu) && nested_cpu_has_ept(get_vmcs12(vcpu)))
++		return vmx_eptp_page_walk_level(nested_ept_get_eptp(vcpu));
++
++	return vmx_get_tdp_level(vcpu);
++}
++
+ u64 construct_eptp(struct kvm_vcpu *vcpu, unsigned long root_hpa)
+ {
+ 	u64 eptp = VMX_EPTP_MT_WB;
+@@ -7832,7 +7840,7 @@ static struct kvm_x86_ops vmx_x86_ops __initdata = {
+ 
+ 	.set_tss_addr = vmx_set_tss_addr,
+ 	.set_identity_map_addr = vmx_set_identity_map_addr,
+-	.get_tdp_level = get_ept_level,
++	.get_tdp_level = vmx_get_tdp_level,
+ 	.get_mt_mask = vmx_get_mt_mask,
+ 
+ 	.get_exit_info = vmx_get_exit_info,
+
+From patchwork Sat May  2 04:32:34 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11523641
+Return-Path: <SRS0=JxFu=6Q=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id ECD33139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:33:26 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id DCB6F2192A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Sat,  2 May 2020 04:33:25 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728050AbgEBEdQ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Sat, 2 May 2020 00:33:16 -0400
+Received: from mga02.intel.com ([134.134.136.20]:44408 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727776AbgEBEci (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Sat, 2 May 2020 00:32:38 -0400
+IronPort-SDR: 
+ djKHMF+fgWLvDTYGv/tWDw3ppY0V075L01j4FJ5eBxlihjFY/ZE7JJUdmO35wR5l9k3xu2oiQk
+ 99H9BDZtF7Sg==
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga005.jf.intel.com ([10.7.209.41])
+  by orsmga101.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 01 May 2020 21:32:37 -0700
+IronPort-SDR: 
+ uLieiuDmvkOOa2qIqraIfiqhVDFAZD6YzUXOhw2yVmbeVaedCrtZThNv7hXw7Lg02F6BdYg06+
+ 4NHonDARlKZA==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.73,342,1583222400";
+   d="scan'208";a="433516144"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga005.jf.intel.com with ESMTP; 01 May 2020 21:32:37 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 10/10] KVM: x86/mmu: Capture TDP level when updating CPUID
+Date: Fri,  1 May 2020 21:32:34 -0700
+Message-Id: <20200502043234.12481-11-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+References: <20200502043234.12481-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Snapshot the TDP level now that it's invariant (SVM) or dependent only
+on host capabilities and guest CPUID (VMX).  This avoids having to call
+kvm_x86_ops.get_tdp_level() when initializing a TDP MMU and/or
+calculating the page role, and thus avoids the associated retpoline.
+
+Drop the WARN in vmx_get_tdp_level() as updating CPUID while L2 is
+active is legal, if dodgy.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h | 1 +
+ arch/x86/kvm/cpuid.c            | 3 ++-
+ arch/x86/kvm/mmu/mmu.c          | 6 +++---
+ arch/x86/kvm/svm/nested.c       | 2 +-
+ arch/x86/kvm/vmx/vmx.c          | 2 --
+ 5 files changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 55c8f78bc9e8..90840593cd6c 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -686,6 +686,7 @@ struct kvm_vcpu_arch {
+ 	struct kvm_cpuid_entry2 cpuid_entries[KVM_MAX_CPUID_ENTRIES];
+ 
+ 	int maxphyaddr;
++	int tdp_level;
+ 
+ 	/* emulate context */
+ 
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 6828be99b908..44dfaefdad0e 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -124,8 +124,9 @@ int kvm_update_cpuid(struct kvm_vcpu *vcpu)
+ 					   MSR_IA32_MISC_ENABLE_MWAIT);
+ 	}
+ 
+-	/* Update physical-address width */
++	/* Note, maxphyaddr must be updated before tdp_level. */
+ 	vcpu->arch.maxphyaddr = cpuid_query_maxphyaddr(vcpu);
++	vcpu->arch.tdp_level = kvm_x86_ops.get_tdp_level(vcpu);
+ 	kvm_mmu_reset_context(vcpu);
+ 
+ 	kvm_pmu_refresh(vcpu);
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index e618472c572b..10cb8db54cd0 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -4894,7 +4894,7 @@ kvm_calc_tdp_mmu_root_page_role(struct kvm_vcpu *vcpu, bool base_only)
+ 	union kvm_mmu_role role = kvm_calc_mmu_role_common(vcpu, base_only);
+ 
+ 	role.base.ad_disabled = (shadow_accessed_mask == 0);
+-	role.base.level = kvm_x86_ops.get_tdp_level(vcpu);
++	role.base.level = vcpu->arch.tdp_level;
+ 	role.base.direct = true;
+ 	role.base.gpte_is_8_bytes = true;
+ 
+@@ -4915,7 +4915,7 @@ static void init_kvm_tdp_mmu(struct kvm_vcpu *vcpu)
+ 	context->sync_page = nonpaging_sync_page;
+ 	context->invlpg = NULL;
+ 	context->update_pte = nonpaging_update_pte;
+-	context->shadow_root_level = kvm_x86_ops.get_tdp_level(vcpu);
++	context->shadow_root_level = vcpu->arch.tdp_level;
+ 	context->direct_map = true;
+ 	context->get_guest_pgd = get_cr3;
+ 	context->get_pdptr = kvm_pdptr_read;
+@@ -5680,7 +5680,7 @@ static int alloc_mmu_pages(struct kvm_vcpu *vcpu, struct kvm_mmu *mmu)
+ 	 * SVM's 32-bit NPT support, TDP paging doesn't use PAE paging and can
+ 	 * skip allocating the PDP table.
+ 	 */
+-	if (tdp_enabled && kvm_x86_ops.get_tdp_level(vcpu) > PT32E_ROOT_LEVEL)
++	if (tdp_enabled && vcpu->arch.tdp_level > PT32E_ROOT_LEVEL)
+ 		return 0;
+ 
+ 	page = alloc_page(GFP_KERNEL_ACCOUNT | __GFP_DMA32);
+diff --git a/arch/x86/kvm/svm/nested.c b/arch/x86/kvm/svm/nested.c
+index 7c86ccb0e939..1afff0b6f30e 100644
+--- a/arch/x86/kvm/svm/nested.c
++++ b/arch/x86/kvm/svm/nested.c
+@@ -85,7 +85,7 @@ static void nested_svm_init_mmu_context(struct kvm_vcpu *vcpu)
+ 	vcpu->arch.mmu->get_guest_pgd     = nested_svm_get_tdp_cr3;
+ 	vcpu->arch.mmu->get_pdptr         = nested_svm_get_tdp_pdptr;
+ 	vcpu->arch.mmu->inject_page_fault = nested_svm_inject_npf_exit;
+-	vcpu->arch.mmu->shadow_root_level = kvm_x86_ops.get_tdp_level(vcpu);
++	vcpu->arch.mmu->shadow_root_level = vcpu->arch.tdp_level;
+ 	reset_shadow_zero_bits_mask(vcpu, vcpu->arch.mmu);
+ 	vcpu->arch.walk_mmu              = &vcpu->arch.nested_mmu;
+ }
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index c9c6e72e9660..f1bde5c41eee 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -3008,8 +3008,6 @@ void vmx_set_cr0(struct kvm_vcpu *vcpu, unsigned long cr0)
+ 
+ static int vmx_get_tdp_level(struct kvm_vcpu *vcpu)
+ {
+-	WARN_ON(is_guest_mode(vcpu) && nested_cpu_has_ept(get_vmcs12(vcpu)));
+-
+ 	if (cpu_has_vmx_ept_5levels() && (cpuid_maxphyaddr(vcpu) > 48))
+ 		return 5;
+ 	return 4;
