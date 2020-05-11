@@ -1,6 +1,6 @@
 #!/bin/bash
 
-cd /root/kde/kernel_mailing_list/kvm_community
+cd /root/kde/kernel_mailing_list/target
 find . -name "*.patch" > target.list
 
 while read line
