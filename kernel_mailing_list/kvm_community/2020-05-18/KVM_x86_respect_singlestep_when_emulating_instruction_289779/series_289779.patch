@@ -1,0 +1,93 @@
+From patchwork Mon May 18 21:36:32 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Felipe Franciosi <felipe@nutanix.com>
+X-Patchwork-Id: 11556427
+Return-Path: <SRS0=OZeJ=7A=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id BE993912
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 18 May 2020 21:41:34 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id A68E720835
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon, 18 May 2020 21:41:34 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=sendgrid.net header.i=@sendgrid.net
+ header.b="K36rKQEh"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728115AbgERVld (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 18 May 2020 17:41:33 -0400
+Received: from o1.dev.nutanix.com ([198.21.4.205]:46847 "EHLO
+        o1.dev.nutanix.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1726492AbgERVld (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 18 May 2020 17:41:33 -0400
+X-Greylist: delayed 301 seconds by postgrey-1.27 at vger.kernel.org;
+ Mon, 18 May 2020 17:41:33 EDT
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=sendgrid.net;
+        h=from:to:cc:subject:mime-version:content-transfer-encoding;
+        s=smtpapi; bh=JyhxMm+Y9a7fjPz/PBMgYlMCWgvafYN43d9h18/IJbI=; b=K3
+        6rKQEhR78CJvDghmo3MHIE6s5bH5bs5zAp8nvnnkhgve+Kdbd9XDenKd1LfjSPqe
+        f0o1wsVQDVbFasd6HPA7jqxEoAXTglsrpRQ13/CDKEy0KD6RV9tSzgqxDv3Sg15W
+        xQeeBpDWXG4icd4d5GZ1ggwZ2/QylNf3u084ELG1Q=
+Received: by filter1137p1las1.sendgrid.net with SMTP id
+ filter1137p1las1-22580-5EC2FFE0-18
+        2020-05-18 21:36:32.413492831 +0000 UTC m=+8938.670754625
+Received: from debian.localdomain (unknown)
+        by ismtpd0005p1lon1.sendgrid.net (SG) with ESMTP id
+ GjyWYWl9Q9OZMewhNqAgqw
+        Mon, 18 May 2020 21:36:31.830 +0000 (UTC)
+From: Felipe Franciosi <felipe@nutanix.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: kvm@vger.kernel.org, stable@vger.kernel.org,
+        Felipe Franciosi <felipe@nutanix.com>
+Subject: [PATCH] KVM: x86: respect singlestep when emulating instruction
+Date: Mon, 18 May 2020 21:36:32 +0000 (UTC)
+Message-Id: <20200518213620.2216-1-felipe@nutanix.com>
+X-Mailer: git-send-email 2.20.1
+MIME-Version: 1.0
+content-transfer-encoding: quoted-printable
+X-SG-EID: 
+ lJkaZ7x5+v8tEWA8V7PwHOTpzaP4FLDpHSpMO5CvnfS3TcNsgO+IWDMtZpC31rA+Ml4lqauBq7PuO0
+ Tp/Sco3DrKv08EaUP2dfu4ZD2CRPZ3dcX1C6abQgMQb6rsrIFAbXBsa4BeGOgFPLwkeHBQZNLKuHRF
+ XrxFL6AyKqqeV4xOuMUwvikEMsGSQI2QRmThgFEPRFistpid0VXh/ykGNUDhWfq5JoHCkySmYBNJ6G
+ c=
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+When userspace configures KVM_GUESTDBG_SINGLESTEP, KVM will manage the
+presence of X86_EFLAGS_TF via kvm_set/get_rflags on vcpus. The actual
+rflag bit is therefore hidden from callers.
+
+That includes init_emulate_ctxt() which uses the value returned from
+kvm_get_flags() to set ctxt->tf. As a result, x86_emulate_instruction()
+will skip a single step, leaving singlestep_rip stale and not returning
+to userspace.
+
+This resolves the issue by observing the vcpu guest_debug configuration
+alongside ctxt->tf in x86_emulate_instruction(), performing the single
+step if set.
+
+Signed-off-by: Felipe Franciosi <felipe@nutanix.com>
+---
+ arch/x86/kvm/x86.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index c17e6eb9ad43..78463f01c606 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -6919,7 +6919,7 @@ int x86_emulate_instruction(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa,
+ 		if (!ctxt->have_exception ||
+ 		    exception_type(ctxt->exception.vector) == EXCPT_TRAP) {
+ 			kvm_rip_write(vcpu, ctxt->eip);
+-			if (r && ctxt->tf)
++			if ((r && ctxt->tf) || (vcpu->guest_debug & KVM_GUESTDBG_SINGLESTEP))
+ 				r = kvm_vcpu_do_singlestep(vcpu);
+ 			if (kvm_x86_ops.update_emulated_instruction)
+ 				kvm_x86_ops.update_emulated_instruction(vcpu);
