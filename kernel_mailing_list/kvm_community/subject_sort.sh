@@ -4,10 +4,16 @@ cd /root/kde/kernel_mailing_list
 cp -r kvm_community/ target
 cd target
 
-rm -rf 2018* 2019* 2020-01* 2020-02*
-for i in `seq 1 1 8`
+rm -rf 2018* 2019* 2020-01* 2020-02* 2020-03* 2020-04*
+for i in `seq 1 1 9`
 do
-rm -rf 2020-03-0${i}
+rm -rf 2020-05-0${i}
+done
+
+rm -rf 2018* 2019* 2020-01* 2020-02* 2020-03* 2020-04*
+for i in `seq 10 1 17`
+do
+rm -rf 2020-05-${i}
 done
 
 # for i in `seq 10 1 31`
@@ -118,4 +124,5 @@ echo ""
 
 cat subjects.txt | grep -v kvm-unit-test | grep -v selftests | grep -v hyper-v | grep -vi "x86" | grep -vi arm | grep -v s390 | grep -vi vfio | grep -vi " vmx" | grep -iv vhost | grep -iv RISC | grep -vi iommu | grep -iE "tools|kvmtool"
 
-rm -rf subjects.txt series_letters.txt ../target/
+rm -rf subjects.txt series_letters.txt
+# ../target/
