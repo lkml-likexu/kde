@@ -1,0 +1,1758 @@
+From patchwork Tue Jun 16 09:35:42 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: zhukeqian <zhukeqian1@huawei.com>
+X-Patchwork-Id: 11606987
+Return-Path: <SRS0=jnd6=75=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9695213B6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:37:25 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 8770C20786
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:37:25 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728260AbgFPJgR (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 16 Jun 2020 05:36:17 -0400
+Received: from szxga04-in.huawei.com ([45.249.212.190]:6337 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1728250AbgFPJgP (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 16 Jun 2020 05:36:15 -0400
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.60])
+        by Forcepoint Email with ESMTP id B02EF4A35D21C942F8BC;
+        Tue, 16 Jun 2020 17:36:13 +0800 (CST)
+Received: from DESKTOP-5IS4806.china.huawei.com (10.173.221.230) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.487.0; Tue, 16 Jun 2020 17:36:04 +0800
+From: Keqian Zhu <zhukeqian1@huawei.com>
+To: <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>
+CC: Catalin Marinas <catalin.marinas@arm.com>,
+        Marc Zyngier <maz@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Will Deacon <will@kernel.org>,
+        "Suzuki K Poulose" <suzuki.poulose@arm.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Mark Brown <broonie@kernel.org>,
+        "Thomas Gleixner" <tglx@linutronix.de>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Alexios Zavras <alexios.zavras@intel.com>,
+        <liangpeng10@huawei.com>, <zhengxiang9@huawei.com>,
+        <wanghaibin.wang@huawei.com>, Keqian Zhu <zhukeqian1@huawei.com>
+Subject: [PATCH 01/12] KVM: arm64: Add some basic functions to support hw DBM
+Date: Tue, 16 Jun 2020 17:35:42 +0800
+Message-ID: <20200616093553.27512-2-zhukeqian1@huawei.com>
+X-Mailer: git-send-email 2.8.4.windows.1
+In-Reply-To: <20200616093553.27512-1-zhukeqian1@huawei.com>
+References: <20200616093553.27512-1-zhukeqian1@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.173.221.230]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Prepare some basic functions to support hardware DBM for PTEs.
+
+Signed-off-by: Keqian Zhu <zhukeqian1@huawei.com>
+Signed-off-by: Peng Liang <liangpeng10@huawei.com>
+---
+ arch/arm64/include/asm/kvm_mmu.h | 36 ++++++++++++++++++++++++++++++++
+ 1 file changed, 36 insertions(+)
+
+diff --git a/arch/arm64/include/asm/kvm_mmu.h b/arch/arm64/include/asm/kvm_mmu.h
+index b12bfc1f051a..e0ee6e23d626 100644
+--- a/arch/arm64/include/asm/kvm_mmu.h
++++ b/arch/arm64/include/asm/kvm_mmu.h
+@@ -265,6 +265,42 @@ static inline bool kvm_s2pud_young(pud_t pud)
+ 	return pud_young(pud);
+ }
+ 
++#ifdef CONFIG_ARM64_HW_AFDBM
++static inline bool kvm_hw_dbm_enabled(void)
++{
++	return !!(read_sysreg(vtcr_el2) & VTCR_EL2_HD);
++}
++
++static inline void kvm_set_s2pte_dbm(pte_t *ptep)
++{
++	pteval_t old_pteval, pteval;
++
++	pteval = READ_ONCE(pte_val(*ptep));
++	do {
++		old_pteval = pteval;
++		pteval |= PTE_DBM;
++		pteval = cmpxchg_relaxed(&pte_val(*ptep), old_pteval, pteval);
++	} while (pteval != old_pteval);
++}
++
++static inline void kvm_clear_s2pte_dbm(pte_t *ptep)
++{
++	pteval_t old_pteval, pteval;
++
++	pteval = READ_ONCE(pte_val(*ptep));
++	do {
++		old_pteval = pteval;
++		pteval &= ~PTE_DBM;
++		pteval = cmpxchg_relaxed(&pte_val(*ptep), old_pteval, pteval);
++	} while (pteval != old_pteval);
++}
++
++static inline bool kvm_s2pte_dbm(pte_t *ptep)
++{
++	return !!(READ_ONCE(pte_val(*ptep)) & PTE_DBM);
++}
++#endif /* CONFIG_ARM64_HW_AFDBM */
++
+ #define hyp_pte_table_empty(ptep) kvm_page_empty(ptep)
+ 
+ #ifdef __PAGETABLE_PMD_FOLDED
+
+From patchwork Tue Jun 16 09:35:43 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: zhukeqian <zhukeqian1@huawei.com>
+X-Patchwork-Id: 11606995
+Return-Path: <SRS0=jnd6=75=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 2FD1313B6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:37:40 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 221A220786
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:37:40 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728608AbgFPJhe (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 16 Jun 2020 05:37:34 -0400
+Received: from szxga04-in.huawei.com ([45.249.212.190]:6338 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1728245AbgFPJgQ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 16 Jun 2020 05:36:16 -0400
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.60])
+        by Forcepoint Email with ESMTP id B8F055F8BBC2B2F531C4;
+        Tue, 16 Jun 2020 17:36:13 +0800 (CST)
+Received: from DESKTOP-5IS4806.china.huawei.com (10.173.221.230) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.487.0; Tue, 16 Jun 2020 17:36:05 +0800
+From: Keqian Zhu <zhukeqian1@huawei.com>
+To: <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>
+CC: Catalin Marinas <catalin.marinas@arm.com>,
+        Marc Zyngier <maz@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Will Deacon <will@kernel.org>,
+        "Suzuki K Poulose" <suzuki.poulose@arm.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Mark Brown <broonie@kernel.org>,
+        "Thomas Gleixner" <tglx@linutronix.de>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Alexios Zavras <alexios.zavras@intel.com>,
+        <liangpeng10@huawei.com>, <zhengxiang9@huawei.com>,
+        <wanghaibin.wang@huawei.com>, Keqian Zhu <zhukeqian1@huawei.com>
+Subject: [PATCH 02/12] KVM: arm64: Modify stage2 young mechanism to support hw
+ DBM
+Date: Tue, 16 Jun 2020 17:35:43 +0800
+Message-ID: <20200616093553.27512-3-zhukeqian1@huawei.com>
+X-Mailer: git-send-email 2.8.4.windows.1
+In-Reply-To: <20200616093553.27512-1-zhukeqian1@huawei.com>
+References: <20200616093553.27512-1-zhukeqian1@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.173.221.230]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Marking PTs young (set AF bit) should be atomic to avoid cover
+dirty status set by hardware.
+
+Signed-off-by: Keqian Zhu <zhukeqian1@huawei.com>
+---
+ arch/arm64/include/asm/kvm_mmu.h | 32 ++++++++++++++++++++++----------
+ arch/arm64/kvm/mmu.c             | 15 ++++++++-------
+ 2 files changed, 30 insertions(+), 17 deletions(-)
+
+diff --git a/arch/arm64/include/asm/kvm_mmu.h b/arch/arm64/include/asm/kvm_mmu.h
+index e0ee6e23d626..51af71505fbc 100644
+--- a/arch/arm64/include/asm/kvm_mmu.h
++++ b/arch/arm64/include/asm/kvm_mmu.h
+@@ -215,6 +215,18 @@ static inline void kvm_set_s2pte_readonly(pte_t *ptep)
+ 	} while (pteval != old_pteval);
+ }
+ 
++static inline void kvm_set_s2pte_young(pte_t *ptep)
++{
++	pteval_t old_pteval, pteval;
++
++	pteval = READ_ONCE(pte_val(*ptep));
++	do {
++		old_pteval = pteval;
++		pteval |= PTE_AF;
++		pteval = cmpxchg_relaxed(&pte_val(*ptep), old_pteval, pteval);
++	} while (pteval != old_pteval);
++}
++
+ static inline bool kvm_s2pte_readonly(pte_t *ptep)
+ {
+ 	return (READ_ONCE(pte_val(*ptep)) & PTE_S2_RDWR) == PTE_S2_RDONLY;
+@@ -230,6 +242,11 @@ static inline void kvm_set_s2pmd_readonly(pmd_t *pmdp)
+ 	kvm_set_s2pte_readonly((pte_t *)pmdp);
+ }
+ 
++static inline void kvm_set_s2pmd_young(pmd_t *pmdp)
++{
++	kvm_set_s2pte_young((pte_t *)pmdp);
++}
++
+ static inline bool kvm_s2pmd_readonly(pmd_t *pmdp)
+ {
+ 	return kvm_s2pte_readonly((pte_t *)pmdp);
+@@ -245,6 +262,11 @@ static inline void kvm_set_s2pud_readonly(pud_t *pudp)
+ 	kvm_set_s2pte_readonly((pte_t *)pudp);
+ }
+ 
++static inline void kvm_set_s2pud_young(pud_t *pudp)
++{
++	kvm_set_s2pte_young((pte_t *)pudp);
++}
++
+ static inline bool kvm_s2pud_readonly(pud_t *pudp)
+ {
+ 	return kvm_s2pte_readonly((pte_t *)pudp);
+@@ -255,16 +277,6 @@ static inline bool kvm_s2pud_exec(pud_t *pudp)
+ 	return !(READ_ONCE(pud_val(*pudp)) & PUD_S2_XN);
+ }
+ 
+-static inline pud_t kvm_s2pud_mkyoung(pud_t pud)
+-{
+-	return pud_mkyoung(pud);
+-}
+-
+-static inline bool kvm_s2pud_young(pud_t pud)
+-{
+-	return pud_young(pud);
+-}
+-
+ #ifdef CONFIG_ARM64_HW_AFDBM
+ static inline bool kvm_hw_dbm_enabled(void)
+ {
+diff --git a/arch/arm64/kvm/mmu.c b/arch/arm64/kvm/mmu.c
+index 8c0035cab6b6..5ad87bce23c0 100644
+--- a/arch/arm64/kvm/mmu.c
++++ b/arch/arm64/kvm/mmu.c
+@@ -2008,8 +2008,9 @@ static int user_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
+  * Resolve the access fault by making the page young again.
+  * Note that because the faulting entry is guaranteed not to be
+  * cached in the TLB, we don't need to invalidate anything.
+- * Only the HW Access Flag updates are supported for Stage 2 (no DBM),
+- * so there is no need for atomic (pte|pmd)_mkyoung operations.
++ *
++ * Note: Both DBM and HW AF updates are supported for Stage2, so
++ * young operations should be atomic.
+  */
+ static void handle_access_fault(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa)
+ {
+@@ -2027,15 +2028,15 @@ static void handle_access_fault(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa)
+ 		goto out;
+ 
+ 	if (pud) {		/* HugeTLB */
+-		*pud = kvm_s2pud_mkyoung(*pud);
++		kvm_set_s2pud_young(pud);
+ 		pfn = kvm_pud_pfn(*pud);
+ 		pfn_valid = true;
+ 	} else	if (pmd) {	/* THP, HugeTLB */
+-		*pmd = pmd_mkyoung(*pmd);
++		kvm_set_s2pmd_young(pmd);
+ 		pfn = pmd_pfn(*pmd);
+ 		pfn_valid = true;
+-	} else {
+-		*pte = pte_mkyoung(*pte);	/* Just a page... */
++	} else {		/* Just a page... */
++		kvm_set_s2pte_young(pte);
+ 		pfn = pte_pfn(*pte);
+ 		pfn_valid = true;
+ 	}
+@@ -2280,7 +2281,7 @@ static int kvm_test_age_hva_handler(struct kvm *kvm, gpa_t gpa, u64 size, void *
+ 		return 0;
+ 
+ 	if (pud)
+-		return kvm_s2pud_young(*pud);
++		return pud_young(*pud);
+ 	else if (pmd)
+ 		return pmd_young(*pmd);
+ 	else
+
+From patchwork Tue Jun 16 09:35:44 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: zhukeqian <zhukeqian1@huawei.com>
+X-Patchwork-Id: 11606963
+Return-Path: <SRS0=jnd6=75=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id A8C1914DD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:36:19 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 9A8DB20842
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:36:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728294AbgFPJgR (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 16 Jun 2020 05:36:17 -0400
+Received: from szxga04-in.huawei.com ([45.249.212.190]:6335 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1728243AbgFPJgQ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 16 Jun 2020 05:36:16 -0400
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.60])
+        by Forcepoint Email with ESMTP id 9F912D563F9CEB625A78;
+        Tue, 16 Jun 2020 17:36:13 +0800 (CST)
+Received: from DESKTOP-5IS4806.china.huawei.com (10.173.221.230) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.487.0; Tue, 16 Jun 2020 17:36:06 +0800
+From: Keqian Zhu <zhukeqian1@huawei.com>
+To: <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>
+CC: Catalin Marinas <catalin.marinas@arm.com>,
+        Marc Zyngier <maz@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Will Deacon <will@kernel.org>,
+        "Suzuki K Poulose" <suzuki.poulose@arm.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Mark Brown <broonie@kernel.org>,
+        "Thomas Gleixner" <tglx@linutronix.de>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Alexios Zavras <alexios.zavras@intel.com>,
+        <liangpeng10@huawei.com>, <zhengxiang9@huawei.com>,
+        <wanghaibin.wang@huawei.com>, Keqian Zhu <zhukeqian1@huawei.com>
+Subject: [PATCH 03/12] KVM: arm64: Report hardware dirty status of stage2 PTE
+ if coverred
+Date: Tue, 16 Jun 2020 17:35:44 +0800
+Message-ID: <20200616093553.27512-4-zhukeqian1@huawei.com>
+X-Mailer: git-send-email 2.8.4.windows.1
+In-Reply-To: <20200616093553.27512-1-zhukeqian1@huawei.com>
+References: <20200616093553.27512-1-zhukeqian1@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.173.221.230]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+kvm_set_pte is called to replace a target PTE with a desired one.
+We always do this without changing the desired one, but if dirty
+status set by hardware is coverred, let caller know it.
+
+Signed-off-by: Keqian Zhu <zhukeqian1@huawei.com>
+---
+ arch/arm64/kvm/mmu.c | 36 +++++++++++++++++++++++++++++++++++-
+ 1 file changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/kvm/mmu.c b/arch/arm64/kvm/mmu.c
+index 5ad87bce23c0..27407153121b 100644
+--- a/arch/arm64/kvm/mmu.c
++++ b/arch/arm64/kvm/mmu.c
+@@ -194,11 +194,45 @@ static void clear_stage2_pmd_entry(struct kvm *kvm, pmd_t *pmd, phys_addr_t addr
+ 	put_page(virt_to_page(pmd));
+ }
+ 
+-static inline void kvm_set_pte(pte_t *ptep, pte_t new_pte)
++#ifdef CONFIG_ARM64_HW_AFDBM
++/**
++ * @ret: true if dirty status set by hardware is coverred.
++ */
++static bool kvm_set_pte(pte_t *ptep, pte_t new_pte)
++{
++	pteval_t old_pteval, new_pteval, pteval;
++	bool old_logging, new_no_write;
++
++	old_logging = kvm_hw_dbm_enabled() && !pte_none(*ptep) &&
++		      kvm_s2pte_dbm(ptep);
++	new_no_write = pte_none(new_pte) || kvm_s2pte_readonly(&new_pte);
++
++	if (!old_logging || !new_no_write) {
++		WRITE_ONCE(*ptep, new_pte);
++		dsb(ishst);
++		return false;
++	}
++
++	new_pteval = pte_val(new_pte);
++	pteval = READ_ONCE(pte_val(*ptep));
++	do {
++		old_pteval = pteval;
++		pteval = cmpxchg_relaxed(&pte_val(*ptep), old_pteval, new_pteval);
++	} while (pteval != old_pteval);
++
++	return !kvm_s2pte_readonly(&__pte(pteval));
++}
++#else
++/**
++ * @ret: true if dirty status set by hardware is coverred.
++ */
++static inline bool kvm_set_pte(pte_t *ptep, pte_t new_pte)
+ {
+ 	WRITE_ONCE(*ptep, new_pte);
+ 	dsb(ishst);
++	return false;
+ }
++#endif /* CONFIG_ARM64_HW_AFDBM */
+ 
+ static inline void kvm_set_pmd(pmd_t *pmdp, pmd_t new_pmd)
+ {
+
+From patchwork Tue Jun 16 09:35:45 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: zhukeqian <zhukeqian1@huawei.com>
+X-Patchwork-Id: 11606985
+Return-Path: <SRS0=jnd6=75=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 4E58B13A0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:37:20 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 414C420767
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:37:20 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728322AbgFPJgT (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 16 Jun 2020 05:36:19 -0400
+Received: from szxga04-in.huawei.com ([45.249.212.190]:6339 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1728038AbgFPJgS (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 16 Jun 2020 05:36:18 -0400
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.60])
+        by Forcepoint Email with ESMTP id C14F1D5C778EF500B1DF;
+        Tue, 16 Jun 2020 17:36:13 +0800 (CST)
+Received: from DESKTOP-5IS4806.china.huawei.com (10.173.221.230) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.487.0; Tue, 16 Jun 2020 17:36:07 +0800
+From: Keqian Zhu <zhukeqian1@huawei.com>
+To: <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>
+CC: Catalin Marinas <catalin.marinas@arm.com>,
+        Marc Zyngier <maz@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Will Deacon <will@kernel.org>,
+        "Suzuki K Poulose" <suzuki.poulose@arm.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Mark Brown <broonie@kernel.org>,
+        "Thomas Gleixner" <tglx@linutronix.de>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Alexios Zavras <alexios.zavras@intel.com>,
+        <liangpeng10@huawei.com>, <zhengxiang9@huawei.com>,
+        <wanghaibin.wang@huawei.com>, Keqian Zhu <zhukeqian1@huawei.com>
+Subject: [PATCH 04/12] KVM: arm64: Support clear DBM bit for PTEs
+Date: Tue, 16 Jun 2020 17:35:45 +0800
+Message-ID: <20200616093553.27512-5-zhukeqian1@huawei.com>
+X-Mailer: git-send-email 2.8.4.windows.1
+In-Reply-To: <20200616093553.27512-1-zhukeqian1@huawei.com>
+References: <20200616093553.27512-1-zhukeqian1@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.173.221.230]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This supports clear DBM bit for PTEs, to realize dynamic enable
+of hardware DBM.
+
+Signed-off-by: Keqian Zhu <zhukeqian1@huawei.com>
+---
+ arch/arm64/include/asm/kvm_host.h |   2 +
+ arch/arm64/kvm/mmu.c              | 151 ++++++++++++++++++++++++++++++
+ 2 files changed, 153 insertions(+)
+
+diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
+index c3e6fcc664b1..9ea2dcfd609c 100644
+--- a/arch/arm64/include/asm/kvm_host.h
++++ b/arch/arm64/include/asm/kvm_host.h
+@@ -480,6 +480,8 @@ u64 __kvm_call_hyp(void *hypfn, ...);
+ 
+ void force_vm_exit(const cpumask_t *mask);
+ void kvm_mmu_wp_memory_region(struct kvm *kvm, int slot);
++void kvm_mmu_clear_dbm(struct kvm *kvm, struct kvm_memory_slot *memslot);
++void kvm_mmu_clear_dbm_all(struct kvm *kvm);
+ 
+ int handle_exit(struct kvm_vcpu *vcpu, struct kvm_run *run,
+ 		int exception_index);
+diff --git a/arch/arm64/kvm/mmu.c b/arch/arm64/kvm/mmu.c
+index 27407153121b..f08b0fbca0a0 100644
+--- a/arch/arm64/kvm/mmu.c
++++ b/arch/arm64/kvm/mmu.c
+@@ -2446,6 +2446,157 @@ int kvm_mmu_init(void)
+ 	return err;
+ }
+ 
++#ifdef CONFIG_ARM64_HW_AFDBM
++/**
++ * stage2_clear_dbm_ptes() - clear DBM bit from PMD range
++ * @pmd:	pointer to pmd entry
++ * @addr:	range start address
++ * @end:	range end address
++ */
++static void stage2_clear_dbm_ptes(pmd_t *pmd, phys_addr_t addr,
++				  phys_addr_t end)
++{
++	pte_t *pte;
++
++	pte = pte_offset_kernel(pmd, addr);
++	do {
++		if (!pte_none(*pte) && kvm_s2pte_dbm(pte))
++			kvm_clear_s2pte_dbm(pte);
++	} while (pte++, addr += PAGE_SIZE, addr != end);
++}
++
++/**
++ * stage2_clear_dbm_pmds() - clear DBM bit from PUD range
++ * @kvm:	The KVM pointer
++ * @pud:	pointer to pud entry
++ * @addr:	range start address
++ * @end:	range end address
++ */
++static void stage2_clear_dbm_pmds(struct kvm *kvm, pud_t *pud,
++				  phys_addr_t addr, phys_addr_t end)
++{
++	pmd_t *pmd;
++	phys_addr_t next;
++
++	pmd = stage2_pmd_offset(kvm, pud, addr);
++	do {
++		next = stage2_pmd_addr_end(kvm, addr, end);
++		if (!pmd_none(*pmd) && !pmd_thp_or_huge(*pmd))
++			stage2_clear_dbm_ptes(pmd, addr, next);
++	} while (pmd++, addr = next, addr != end);
++}
++
++/**
++ * stage2_clear_dbm_puds() - clear DBM bit from P4D range
++ * @kvm:	The KVM pointer
++ * @pgd:	pointer to pgd entry
++ * @addr:	range start address
++ * @end:	range end address
++ */
++static void stage2_clear_dbm_puds(struct kvm *kvm, p4d_t *p4d,
++				  phys_addr_t addr, phys_addr_t end)
++{
++	pud_t *pud;
++	phys_addr_t next;
++
++	pud = stage2_pud_offset(kvm, p4d, addr);
++	do {
++		next = stage2_pud_addr_end(kvm, addr, end);
++		if (!stage2_pud_none(kvm, *pud) && !stage2_pud_huge(kvm, *pud))
++			stage2_clear_dbm_pmds(kvm, pud, addr, next);
++	} while (pud++, addr = next, addr != end);
++}
++
++/**
++ * stage2_clear_dbm_p4ds() - clear DBM bit from PGD range
++ * @kvm:	The KVM pointer
++ * @pgd:	pointer to pgd entry
++ * @addr:	range start address
++ * @end:	range end address
++ */
++static void stage2_clear_dbm_p4ds(struct kvm *kvm, pgd_t *pgd,
++				  phys_addr_t addr, phys_addr_t end)
++{
++	p4d_t *p4d;
++	phys_addr_t next;
++
++	p4d = stage2_p4d_offset(kvm, pgd, addr);
++	do {
++		next = stage2_p4d_addr_end(kvm, addr, end);
++		if (!stage2_p4d_none(kvm, *p4d))
++			stage2_clear_dbm_puds(kvm, p4d, addr, next);
++	} while (p4d++, addr = next, addr != end);
++}
++
++/**
++ * stage2_clear_dbm_range() - clear DBM bit from stage2 memory
++ * region range
++ * @kvm:	The KVM pointer
++ * @addr:	Start address of range
++ * @end:	End address of range
++ */
++static void stage2_clear_dbm_range(struct kvm *kvm, phys_addr_t addr,
++				   phys_addr_t end)
++{
++	pgd_t *pgd;
++	phys_addr_t next;
++
++	pgd = kvm->arch.pgd + stage2_pgd_index(kvm, addr);
++	do {
++		cond_resched_lock(&kvm->mmu_lock);
++		if (!READ_ONCE(kvm->arch.pgd))
++			break;
++		next = stage2_pgd_addr_end(kvm, addr, end);
++		if (stage2_pgd_present(kvm, *pgd))
++			stage2_clear_dbm_p4ds(kvm, pgd, addr, next);
++	} while (pgd++, addr = next, addr != end);
++}
++
++/**
++ * kvm_mmu_clear_dbm() - clear DBM bit from stage2 PTEs for memory slot
++ * @kvm:	The KVM pointer
++ * @slot:	The memory slot to clear DBM bit
++ *
++ * After this function returns, DBM bit of all block or page descriptors
++ * is cleared.
++ *
++ * Acquires kvm_mmu_lock. Called with kvm->slots_lock mutex acquired,
++ * serializing operations for VM memory regions.
++ */
++void kvm_mmu_clear_dbm(struct kvm *kvm, struct kvm_memory_slot *memslot)
++{
++	phys_addr_t start = memslot->base_gfn << PAGE_SHIFT;
++	phys_addr_t end = (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
++
++	spin_lock(&kvm->mmu_lock);
++	stage2_clear_dbm_range(kvm, start, end);
++	spin_unlock(&kvm->mmu_lock);
++	kvm_flush_remote_tlbs(kvm);
++}
++
++/**
++ * kvm_mmu_clear_dbm_all() - clear DBM bit from stage2 PTEs for whole VM
++ * @kvm:	The KVM pointer
++ *
++ * Called with kvm->slots_lock mutex acquired.
++ */
++void kvm_mmu_clear_dbm_all(struct kvm *kvm)
++{
++	struct kvm_memslots *slots = kvm_memslots(kvm);
++	struct kvm_memory_slot *memslots = slots->memslots;
++	struct kvm_memory_slot *memslot;
++	int slot;
++
++	if (unlikely(!slots->used_slots))
++		return;
++
++	for (slot = 0; slot < slots->used_slots; slot++) {
++		memslot = &memslots[slot];
++		kvm_mmu_clear_dbm(kvm, memslot);
++	}
++}
++#endif /* CONFIG_ARM64_HW_AFDBM */
++
+ void kvm_arch_commit_memory_region(struct kvm *kvm,
+ 				   const struct kvm_userspace_memory_region *mem,
+ 				   struct kvm_memory_slot *old,
+
+From patchwork Tue Jun 16 09:35:46 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: zhukeqian <zhukeqian1@huawei.com>
+X-Patchwork-Id: 11606991
+Return-Path: <SRS0=jnd6=75=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 5272E13A0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:37:28 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 44B9E207C4
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:37:28 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728589AbgFPJh1 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 16 Jun 2020 05:37:27 -0400
+Received: from szxga04-in.huawei.com ([45.249.212.190]:6336 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1726099AbgFPJgR (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 16 Jun 2020 05:36:17 -0400
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.60])
+        by Forcepoint Email with ESMTP id A7F67EB29739727ABAE9;
+        Tue, 16 Jun 2020 17:36:13 +0800 (CST)
+Received: from DESKTOP-5IS4806.china.huawei.com (10.173.221.230) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.487.0; Tue, 16 Jun 2020 17:36:07 +0800
+From: Keqian Zhu <zhukeqian1@huawei.com>
+To: <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>
+CC: Catalin Marinas <catalin.marinas@arm.com>,
+        Marc Zyngier <maz@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Will Deacon <will@kernel.org>,
+        "Suzuki K Poulose" <suzuki.poulose@arm.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Mark Brown <broonie@kernel.org>,
+        "Thomas Gleixner" <tglx@linutronix.de>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Alexios Zavras <alexios.zavras@intel.com>,
+        <liangpeng10@huawei.com>, <zhengxiang9@huawei.com>,
+        <wanghaibin.wang@huawei.com>, Keqian Zhu <zhukeqian1@huawei.com>
+Subject: [PATCH 05/12] KVM: arm64: Add KVM_CAP_ARM_HW_DIRTY_LOG capability
+Date: Tue, 16 Jun 2020 17:35:46 +0800
+Message-ID: <20200616093553.27512-6-zhukeqian1@huawei.com>
+X-Mailer: git-send-email 2.8.4.windows.1
+In-Reply-To: <20200616093553.27512-1-zhukeqian1@huawei.com>
+References: <20200616093553.27512-1-zhukeqian1@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.173.221.230]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+For that using arm64 DBM to log dirty pages has the side effect
+of long time dirty log sync, we should give userspace opportunity
+to enable or disable this feature, to realize some policy.
+
+Signed-off-by: Keqian Zhu <zhukeqian1@huawei.com>
+---
+ arch/arm64/include/asm/kvm_host.h |  7 +++++++
+ arch/arm64/kvm/arm.c              | 10 ++++++++++
+ arch/arm64/kvm/reset.c            |  5 +++++
+ include/uapi/linux/kvm.h          |  1 +
+ tools/include/uapi/linux/kvm.h    |  1 +
+ 5 files changed, 24 insertions(+)
+
+diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
+index 9ea2dcfd609c..2bc3256759e3 100644
+--- a/arch/arm64/include/asm/kvm_host.h
++++ b/arch/arm64/include/asm/kvm_host.h
+@@ -95,6 +95,13 @@ struct kvm_arch {
+ 	 * supported.
+ 	 */
+ 	bool return_nisv_io_abort_to_user;
++
++	/*
++	 * Use hardware management of dirty status (DBM) to log dirty pages.
++	 * Userspace can enable this feature if KVM_CAP_ARM_HW_DIRTY_LOG is
++	 * supported.
++	 */
++	bool hw_dirty_log;
+ };
+ 
+ #define KVM_NR_MEM_OBJS     40
+diff --git a/arch/arm64/kvm/arm.c b/arch/arm64/kvm/arm.c
+index 90cb90561446..850cc5cbc6f0 100644
+--- a/arch/arm64/kvm/arm.c
++++ b/arch/arm64/kvm/arm.c
+@@ -87,6 +87,16 @@ int kvm_vm_ioctl_enable_cap(struct kvm *kvm,
+ 		r = 0;
+ 		kvm->arch.return_nisv_io_abort_to_user = true;
+ 		break;
++#ifdef CONFIG_ARM64_HW_AFDBM
++	case KVM_CAP_ARM_HW_DIRTY_LOG:
++		if ((cap->args[0] & ~1) || !kvm_hw_dbm_enabled()) {
++			r = -EINVAL;
++		} else {
++			r = 0;
++			kvm->arch.hw_dirty_log = cap->args[0];
++		}
++		break;
++#endif
+ 	default:
+ 		r = -EINVAL;
+ 		break;
+diff --git a/arch/arm64/kvm/reset.c b/arch/arm64/kvm/reset.c
+index d3b209023727..52bb801c9b2c 100644
+--- a/arch/arm64/kvm/reset.c
++++ b/arch/arm64/kvm/reset.c
+@@ -83,6 +83,11 @@ int kvm_arch_vm_ioctl_check_extension(struct kvm *kvm, long ext)
+ 		r = has_vhe() && system_supports_address_auth() &&
+ 				 system_supports_generic_auth();
+ 		break;
++#ifdef CONFIG_ARM64_HW_AFDBM
++	case KVM_CAP_ARM_HW_DIRTY_LOG:
++		r = kvm_hw_dbm_enabled();
++		break;
++#endif /* CONFIG_ARM64_HW_AFDBM */
+ 	default:
+ 		r = 0;
+ 	}
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index 4fdf30316582..e0b12c43397b 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -1031,6 +1031,7 @@ struct kvm_ppc_resize_hpt {
+ #define KVM_CAP_PPC_SECURE_GUEST 181
+ #define KVM_CAP_HALT_POLL 182
+ #define KVM_CAP_ASYNC_PF_INT 183
++#define KVM_CAP_ARM_HW_DIRTY_LOG 184
+ 
+ #ifdef KVM_CAP_IRQ_ROUTING
+ 
+diff --git a/tools/include/uapi/linux/kvm.h b/tools/include/uapi/linux/kvm.h
+index fdd632c833b4..53908a8881a4 100644
+--- a/tools/include/uapi/linux/kvm.h
++++ b/tools/include/uapi/linux/kvm.h
+@@ -1017,6 +1017,7 @@ struct kvm_ppc_resize_hpt {
+ #define KVM_CAP_S390_VCPU_RESETS 179
+ #define KVM_CAP_S390_PROTECTED 180
+ #define KVM_CAP_PPC_SECURE_GUEST 181
++#define KVM_CAP_ARM_HW_DIRTY_LOG 184
+ 
+ #ifdef KVM_CAP_IRQ_ROUTING
+ 
+
+From patchwork Tue Jun 16 09:35:47 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: zhukeqian <zhukeqian1@huawei.com>
+X-Patchwork-Id: 11606979
+Return-Path: <SRS0=jnd6=75=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 7AFF313B6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:36:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 6434B20936
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:36:58 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728526AbgFPJg5 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 16 Jun 2020 05:36:57 -0400
+Received: from szxga07-in.huawei.com ([45.249.212.35]:47332 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1728240AbgFPJgV (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 16 Jun 2020 05:36:21 -0400
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.58])
+        by Forcepoint Email with ESMTP id AD27B10AC27B32B7709B;
+        Tue, 16 Jun 2020 17:36:18 +0800 (CST)
+Received: from DESKTOP-5IS4806.china.huawei.com (10.173.221.230) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.487.0; Tue, 16 Jun 2020 17:36:08 +0800
+From: Keqian Zhu <zhukeqian1@huawei.com>
+To: <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>
+CC: Catalin Marinas <catalin.marinas@arm.com>,
+        Marc Zyngier <maz@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Will Deacon <will@kernel.org>,
+        "Suzuki K Poulose" <suzuki.poulose@arm.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Mark Brown <broonie@kernel.org>,
+        "Thomas Gleixner" <tglx@linutronix.de>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Alexios Zavras <alexios.zavras@intel.com>,
+        <liangpeng10@huawei.com>, <zhengxiang9@huawei.com>,
+        <wanghaibin.wang@huawei.com>, Keqian Zhu <zhukeqian1@huawei.com>
+Subject: [PATCH 06/12] KVM: arm64: Set DBM bit of PTEs during write protecting
+Date: Tue, 16 Jun 2020 17:35:47 +0800
+Message-ID: <20200616093553.27512-7-zhukeqian1@huawei.com>
+X-Mailer: git-send-email 2.8.4.windows.1
+In-Reply-To: <20200616093553.27512-1-zhukeqian1@huawei.com>
+References: <20200616093553.27512-1-zhukeqian1@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.173.221.230]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+During write protecting PTEs, if hardware dirty log is enabled,
+set the DBM bit of PTEs when they are *already writable*. This
+ensures some mechanisms that rely on "write fault", such as CoW,
+are not broken.
+
+Signed-off-by: Keqian Zhu <zhukeqian1@huawei.com>
+Signed-off-by: Peng Liang <liangpeng10@huawei.com>
+---
+ arch/arm64/kvm/mmu.c | 15 ++++++++++-----
+ 1 file changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/arch/arm64/kvm/mmu.c b/arch/arm64/kvm/mmu.c
+index f08b0fbca0a0..742c7943176f 100644
+--- a/arch/arm64/kvm/mmu.c
++++ b/arch/arm64/kvm/mmu.c
+@@ -1536,19 +1536,24 @@ int kvm_phys_addr_ioremap(struct kvm *kvm, phys_addr_t guest_ipa,
+ 
+ /**
+  * stage2_wp_ptes - write protect PMD range
++ * @kvm:	kvm instance for the VM
+  * @pmd:	pointer to pmd entry
+  * @addr:	range start address
+  * @end:	range end address
+  */
+-static void stage2_wp_ptes(pmd_t *pmd, phys_addr_t addr, phys_addr_t end)
++static void stage2_wp_ptes(struct kvm *kvm, pmd_t *pmd,
++			   phys_addr_t addr, phys_addr_t end)
+ {
+ 	pte_t *pte;
+ 
+ 	pte = pte_offset_kernel(pmd, addr);
+ 	do {
+-		if (!pte_none(*pte)) {
+-			if (!kvm_s2pte_readonly(pte))
+-				kvm_set_s2pte_readonly(pte);
++		if (!pte_none(*pte) && !kvm_s2pte_readonly(pte)) {
++#ifdef CONFIG_ARM64_HW_AFDBM
++			if (kvm->arch.hw_dirty_log && !kvm_s2pte_dbm(pte))
++				kvm_set_s2pte_dbm(pte);
++#endif
++			kvm_set_s2pte_readonly(pte);
+ 		}
+ 	} while (pte++, addr += PAGE_SIZE, addr != end);
+ }
+@@ -1575,7 +1580,7 @@ static void stage2_wp_pmds(struct kvm *kvm, pud_t *pud,
+ 				if (!kvm_s2pmd_readonly(pmd))
+ 					kvm_set_s2pmd_readonly(pmd);
+ 			} else {
+-				stage2_wp_ptes(pmd, addr, next);
++				stage2_wp_ptes(kvm, pmd, addr, next);
+ 			}
+ 		}
+ 	} while (pmd++, addr = next, addr != end);
+
+From patchwork Tue Jun 16 09:35:48 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: zhukeqian <zhukeqian1@huawei.com>
+X-Patchwork-Id: 11606975
+Return-Path: <SRS0=jnd6=75=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 5068D13B6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:36:53 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 3BE7E2074D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:36:53 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728243AbgFPJgt (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 16 Jun 2020 05:36:49 -0400
+Received: from szxga07-in.huawei.com ([45.249.212.35]:47346 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1728341AbgFPJgW (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 16 Jun 2020 05:36:22 -0400
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.58])
+        by Forcepoint Email with ESMTP id B60935F1AB9CCB5C0849;
+        Tue, 16 Jun 2020 17:36:18 +0800 (CST)
+Received: from DESKTOP-5IS4806.china.huawei.com (10.173.221.230) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.487.0; Tue, 16 Jun 2020 17:36:09 +0800
+From: Keqian Zhu <zhukeqian1@huawei.com>
+To: <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>
+CC: Catalin Marinas <catalin.marinas@arm.com>,
+        Marc Zyngier <maz@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Will Deacon <will@kernel.org>,
+        "Suzuki K Poulose" <suzuki.poulose@arm.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Mark Brown <broonie@kernel.org>,
+        "Thomas Gleixner" <tglx@linutronix.de>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Alexios Zavras <alexios.zavras@intel.com>,
+        <liangpeng10@huawei.com>, <zhengxiang9@huawei.com>,
+        <wanghaibin.wang@huawei.com>, Keqian Zhu <zhukeqian1@huawei.com>
+Subject: [PATCH 07/12] KVM: arm64: Scan PTEs to sync dirty log
+Date: Tue, 16 Jun 2020 17:35:48 +0800
+Message-ID: <20200616093553.27512-8-zhukeqian1@huawei.com>
+X-Mailer: git-send-email 2.8.4.windows.1
+In-Reply-To: <20200616093553.27512-1-zhukeqian1@huawei.com>
+References: <20200616093553.27512-1-zhukeqian1@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.173.221.230]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+For hardware management of dirty state, dirty state is stored in
+PTEs. We have to scan all PTEs to sync dirty log to memslot dirty
+bitmap.
+
+Signed-off-by: Keqian Zhu <zhukeqian1@huawei.com>
+Signed-off-by: Peng Liang <liangpeng10@huawei.com>
+---
+ arch/arm64/include/asm/kvm_host.h |   2 +
+ arch/arm64/kvm/arm.c              |   6 +-
+ arch/arm64/kvm/mmu.c              | 162 ++++++++++++++++++++++++++++++
+ virt/kvm/kvm_main.c               |   4 +-
+ 4 files changed, 172 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
+index 2bc3256759e3..910ec33afea8 100644
+--- a/arch/arm64/include/asm/kvm_host.h
++++ b/arch/arm64/include/asm/kvm_host.h
+@@ -489,6 +489,8 @@ void force_vm_exit(const cpumask_t *mask);
+ void kvm_mmu_wp_memory_region(struct kvm *kvm, int slot);
+ void kvm_mmu_clear_dbm(struct kvm *kvm, struct kvm_memory_slot *memslot);
+ void kvm_mmu_clear_dbm_all(struct kvm *kvm);
++void kvm_mmu_sync_dirty_log(struct kvm *kvm, struct kvm_memory_slot *memslot);
++void kvm_mmu_sync_dirty_log_all(struct kvm *kvm);
+ 
+ int handle_exit(struct kvm_vcpu *vcpu, struct kvm_run *run,
+ 		int exception_index);
+diff --git a/arch/arm64/kvm/arm.c b/arch/arm64/kvm/arm.c
+index 850cc5cbc6f0..92f0b40a30fa 100644
+--- a/arch/arm64/kvm/arm.c
++++ b/arch/arm64/kvm/arm.c
+@@ -1209,7 +1209,11 @@ long kvm_arch_vcpu_ioctl(struct file *filp,
+ 
+ void kvm_arch_sync_dirty_log(struct kvm *kvm, struct kvm_memory_slot *memslot)
+ {
+-
++#ifdef CONFIG_ARM64_HW_AFDBM
++	if (kvm->arch.hw_dirty_log) {
++		kvm_mmu_sync_dirty_log(kvm, memslot);
++	}
++#endif
+ }
+ 
+ void kvm_arch_flush_remote_tlbs_memslot(struct kvm *kvm,
+diff --git a/arch/arm64/kvm/mmu.c b/arch/arm64/kvm/mmu.c
+index 742c7943176f..3aa0303d83f0 100644
+--- a/arch/arm64/kvm/mmu.c
++++ b/arch/arm64/kvm/mmu.c
+@@ -2600,6 +2600,168 @@ void kvm_mmu_clear_dbm_all(struct kvm *kvm)
+ 		kvm_mmu_clear_dbm(kvm, memslot);
+ 	}
+ }
++
++/**
++ * stage2_sync_dirty_log_ptes() - synchronize dirty log from PMD range
++ * @kvm:	The KVM pointer
++ * @pmd:	pointer to pmd entry
++ * @addr:	range start address
++ * @end:	range end address
++ */
++static void stage2_sync_dirty_log_ptes(struct kvm *kvm, pmd_t *pmd,
++				       phys_addr_t addr, phys_addr_t end)
++{
++	pte_t *pte;
++
++	pte = pte_offset_kernel(pmd, addr);
++	do {
++		if (!pte_none(*pte) && !kvm_s2pte_readonly(pte))
++			mark_page_dirty(kvm, addr >> PAGE_SHIFT);
++	} while (pte++, addr += PAGE_SIZE, addr != end);
++}
++
++/**
++ * stage2_sync_dirty_log_pmds() - synchronize dirty log from PUD range
++ * @kvm:	The KVM pointer
++ * @pud:	pointer to pud entry
++ * @addr:	range start address
++ * @end:	range end address
++ */
++static void stage2_sync_dirty_log_pmds(struct kvm *kvm, pud_t *pud,
++				       phys_addr_t addr, phys_addr_t end)
++{
++	pmd_t *pmd;
++	phys_addr_t next;
++
++	pmd = stage2_pmd_offset(kvm, pud, addr);
++	do {
++		next = stage2_pmd_addr_end(kvm, addr, end);
++		if (!pmd_none(*pmd) && !pmd_thp_or_huge(*pmd))
++			stage2_sync_dirty_log_ptes(kvm, pmd, addr, next);
++	} while (pmd++, addr = next, addr != end);
++}
++
++/**
++ * stage2_sync_dirty_log_puds() - synchronize dirty log from P4D range
++ * @kvm:	The KVM pointer
++ * @pgd:	pointer to pgd entry
++ * @addr:	range start address
++ * @end:	range end address
++ */
++static void stage2_sync_dirty_log_puds(struct kvm *kvm, p4d_t *p4d,
++				       phys_addr_t addr, phys_addr_t end)
++{
++	pud_t *pud;
++	phys_addr_t next;
++
++	pud = stage2_pud_offset(kvm, p4d, addr);
++	do {
++		next = stage2_pud_addr_end(kvm, addr, end);
++		if (!stage2_pud_none(kvm, *pud) && !stage2_pud_huge(kvm, *pud))
++			stage2_sync_dirty_log_pmds(kvm, pud, addr, next);
++	} while (pud++, addr = next, addr != end);
++}
++
++/**
++ * stage2_sync_dirty_log_p4ds() - synchronize dirty log from PGD range
++ * @kvm:	The KVM pointer
++ * @pgd:	pointer to pgd entry
++ * @addr:	range start address
++ * @end:	range end address
++ */
++static void stage2_sync_dirty_log_p4ds(struct kvm *kvm, pgd_t *pgd,
++				       phys_addr_t addr, phys_addr_t end)
++{
++	p4d_t *p4d;
++	phys_addr_t next;
++
++	p4d = stage2_p4d_offset(kvm, pgd, addr);
++	do {
++		next = stage2_p4d_addr_end(kvm, addr, end);
++		if (!stage2_p4d_none(kvm, *p4d))
++			stage2_sync_dirty_log_puds(kvm, p4d, addr, next);
++	} while (p4d++, addr = next, addr != end);
++}
++
++/**
++ * stage2_sync_dirty_log_range() - synchronize dirty log from stage2 memory
++ * region range
++ * @kvm:	The KVM pointer
++ * @addr:	Start address of range
++ * @end:	End address of range
++ */
++static void stage2_sync_dirty_log_range(struct kvm *kvm, phys_addr_t addr,
++					phys_addr_t end)
++{
++	pgd_t *pgd;
++	phys_addr_t next;
++
++	pgd = kvm->arch.pgd + stage2_pgd_index(kvm, addr);
++	do {
++		cond_resched_lock(&kvm->mmu_lock);
++		if (!READ_ONCE(kvm->arch.pgd))
++			break;
++		next = stage2_pgd_addr_end(kvm, addr, end);
++		if (stage2_pgd_present(kvm, *pgd))
++			stage2_sync_dirty_log_p4ds(kvm, pgd, addr, next);
++	} while (pgd++, addr = next, addr != end);
++}
++
++/**
++ * kvm_mmu_sync_dirty_log() - synchronize dirty log from stage2 PTEs for
++ * memory slot
++ * @kvm:	The KVM pointer
++ * @slot:	The memory slot to synchronize dirty log
++ *
++ * Called to synchronize dirty log (marked by hw) after memory region
++ * KVM_GET_DIRTY_LOG operation is called. After this function returns
++ * all dirty log information (for that hw will modify page tables during
++ * this routine, it is true only when guest is stopped, but it is OK
++ * because we won't miss dirty log finally.) are collected into memslot
++ * dirty_bitmap. Afterwards dirty_bitmap can be copied to userspace.
++ *
++ * Acquires kvm_mmu_lock. Called with kvm->slots_lock mutex acquired,
++ * serializing operations for VM memory regions.
++ */
++void kvm_mmu_sync_dirty_log(struct kvm *kvm, struct kvm_memory_slot *memslot)
++{
++	phys_addr_t start = memslot->base_gfn << PAGE_SHIFT;
++	phys_addr_t end = (memslot->base_gfn + memslot->npages) << PAGE_SHIFT;
++	int idx;
++
++	if (WARN_ON_ONCE(!memslot->dirty_bitmap))
++                return;
++
++	idx = srcu_read_lock(&kvm->srcu);
++	spin_lock(&kvm->mmu_lock);
++
++	stage2_sync_dirty_log_range(kvm, start, end);
++
++	spin_unlock(&kvm->mmu_lock);
++	srcu_read_unlock(&kvm->srcu, idx);
++}
++
++/**
++ * kvm_mmu_sync_dirty_log_all() - synchronize dirty log from PTEs for whole VM
++ * @kvm:	The KVM pointer
++ *
++ * Called with kvm->slots_lock mutex acquired
++ */
++void kvm_mmu_sync_dirty_log_all(struct kvm *kvm)
++{
++	struct kvm_memslots *slots = kvm_memslots(kvm);
++	struct kvm_memory_slot *memslots = slots->memslots;
++	struct kvm_memory_slot *memslot;
++	int slot;
++
++	if (unlikely(!slots->used_slots))
++		return;
++
++	for (slot = 0; slot < slots->used_slots; slot++) {
++		memslot = &memslots[slot];
++		kvm_mmu_sync_dirty_log(kvm, memslot);
++	}
++}
+ #endif /* CONFIG_ARM64_HW_AFDBM */
+ 
+ void kvm_arch_commit_memory_region(struct kvm *kvm,
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index a852af5c3214..3722343fd460 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -2581,7 +2581,9 @@ static void mark_page_dirty_in_slot(struct kvm_memory_slot *memslot,
+ 	if (memslot && memslot->dirty_bitmap) {
+ 		unsigned long rel_gfn = gfn - memslot->base_gfn;
+ 
+-		set_bit_le(rel_gfn, memslot->dirty_bitmap);
++		/* Speed up if this bit has already been set */
++		if (!test_bit_le(rel_gfn, memslot->dirty_bitmap))
++			set_bit_le(rel_gfn, memslot->dirty_bitmap);
+ 	}
+ }
+ 
+
+From patchwork Tue Jun 16 09:35:49 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: zhukeqian <zhukeqian1@huawei.com>
+X-Patchwork-Id: 11606981
+Return-Path: <SRS0=jnd6=75=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 7338C13B6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:36:59 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 5B34920857
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:36:59 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728538AbgFPJg6 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 16 Jun 2020 05:36:58 -0400
+Received: from szxga05-in.huawei.com ([45.249.212.191]:6266 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1728335AbgFPJgV (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 16 Jun 2020 05:36:21 -0400
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.60])
+        by Forcepoint Email with ESMTP id DC5347673396AED17823;
+        Tue, 16 Jun 2020 17:36:18 +0800 (CST)
+Received: from DESKTOP-5IS4806.china.huawei.com (10.173.221.230) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.487.0; Tue, 16 Jun 2020 17:36:10 +0800
+From: Keqian Zhu <zhukeqian1@huawei.com>
+To: <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>
+CC: Catalin Marinas <catalin.marinas@arm.com>,
+        Marc Zyngier <maz@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Will Deacon <will@kernel.org>,
+        "Suzuki K Poulose" <suzuki.poulose@arm.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Mark Brown <broonie@kernel.org>,
+        "Thomas Gleixner" <tglx@linutronix.de>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Alexios Zavras <alexios.zavras@intel.com>,
+        <liangpeng10@huawei.com>, <zhengxiang9@huawei.com>,
+        <wanghaibin.wang@huawei.com>, Keqian Zhu <zhukeqian1@huawei.com>
+Subject: [PATCH 08/12] KVM: Omit dirty log sync in log clear if initially all
+ set
+Date: Tue, 16 Jun 2020 17:35:49 +0800
+Message-ID: <20200616093553.27512-9-zhukeqian1@huawei.com>
+X-Mailer: git-send-email 2.8.4.windows.1
+In-Reply-To: <20200616093553.27512-1-zhukeqian1@huawei.com>
+References: <20200616093553.27512-1-zhukeqian1@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.173.221.230]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Synchronizing dirty log during log clear is useful only when the dirty
+bitmap of userspace contains dirty bits that memslot dirty bitmap does
+not contain, because we can sync new dirty bits to memslot dirty bitmap,
+then we can clear them by the way and avoid reporting them to userspace
+later.
+
+With dirty bitmap "initially all set" feature, the above situation will
+not appear if userspace logic is normal, so we can omit dirty log sync in
+log clear. This is valuable when dirty log sync is a high-cost operation,
+such as arm64 DBM.
+
+Signed-off-by: Keqian Zhu <zhukeqian1@huawei.com>
+---
+ virt/kvm/kvm_main.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index 3722343fd460..6c147d6f9da6 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -1554,7 +1554,8 @@ static int kvm_clear_dirty_log_protect(struct kvm *kvm,
+ 	    (log->num_pages < memslot->npages - log->first_page && (log->num_pages & 63)))
+ 	    return -EINVAL;
+ 
+-	kvm_arch_sync_dirty_log(kvm, memslot);
++	if (!kvm_dirty_log_manual_protect_and_init_set(kvm))
++		kvm_arch_sync_dirty_log(kvm, memslot);
+ 
+ 	flush = false;
+ 	dirty_bitmap_buffer = kvm_second_dirty_bitmap(memslot);
+
+From patchwork Tue Jun 16 09:35:50 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: zhukeqian <zhukeqian1@huawei.com>
+X-Patchwork-Id: 11606983
+Return-Path: <SRS0=jnd6=75=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E5E0D13A0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:37:17 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id D84E520767
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:37:17 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728515AbgFPJg5 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 16 Jun 2020 05:36:57 -0400
+Received: from szxga05-in.huawei.com ([45.249.212.191]:6265 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1728332AbgFPJgV (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 16 Jun 2020 05:36:21 -0400
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.60])
+        by Forcepoint Email with ESMTP id CB61C6A3FCE268A0B19E;
+        Tue, 16 Jun 2020 17:36:18 +0800 (CST)
+Received: from DESKTOP-5IS4806.china.huawei.com (10.173.221.230) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.487.0; Tue, 16 Jun 2020 17:36:11 +0800
+From: Keqian Zhu <zhukeqian1@huawei.com>
+To: <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>
+CC: Catalin Marinas <catalin.marinas@arm.com>,
+        Marc Zyngier <maz@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Will Deacon <will@kernel.org>,
+        "Suzuki K Poulose" <suzuki.poulose@arm.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Mark Brown <broonie@kernel.org>,
+        "Thomas Gleixner" <tglx@linutronix.de>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Alexios Zavras <alexios.zavras@intel.com>,
+        <liangpeng10@huawei.com>, <zhengxiang9@huawei.com>,
+        <wanghaibin.wang@huawei.com>, Keqian Zhu <zhukeqian1@huawei.com>
+Subject: [PATCH 09/12] KVM: arm64: Steply write protect page table by mask bit
+Date: Tue, 16 Jun 2020 17:35:50 +0800
+Message-ID: <20200616093553.27512-10-zhukeqian1@huawei.com>
+X-Mailer: git-send-email 2.8.4.windows.1
+In-Reply-To: <20200616093553.27512-1-zhukeqian1@huawei.com>
+References: <20200616093553.27512-1-zhukeqian1@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.173.221.230]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+During dirty log clear, page table entries are write protected
+according to a mask. In the past we write protect all entries
+corresponding to the mask from ffs to fls. Though there may be
+zero bits between this range, we are holding the kvm mmu lock
+so we won't write protect entries that we don't want to.
+
+We are about to add support for hardware management of dirty state
+to arm64, holding kvm mmu lock will be not enough. We should write
+protect entries steply by mask bit.
+
+Signed-off-by: Keqian Zhu <zhukeqian1@huawei.com>
+---
+ arch/arm64/kvm/mmu.c | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm64/kvm/mmu.c b/arch/arm64/kvm/mmu.c
+index 3aa0303d83f0..898e272a2c07 100644
+--- a/arch/arm64/kvm/mmu.c
++++ b/arch/arm64/kvm/mmu.c
+@@ -1710,10 +1710,16 @@ static void kvm_mmu_write_protect_pt_masked(struct kvm *kvm,
+ 		gfn_t gfn_offset, unsigned long mask)
+ {
+ 	phys_addr_t base_gfn = slot->base_gfn + gfn_offset;
+-	phys_addr_t start = (base_gfn +  __ffs(mask)) << PAGE_SHIFT;
+-	phys_addr_t end = (base_gfn + __fls(mask) + 1) << PAGE_SHIFT;
++	phys_addr_t start, end;
++	u32 i;
+ 
+-	stage2_wp_range(kvm, start, end);
++	for (i = __ffs(mask); i <= __fls(mask); i++) {
++		if (test_bit_le(i, &mask)) {
++			start = (base_gfn + i) << PAGE_SHIFT;
++			end = (base_gfn + i + 1) << PAGE_SHIFT;
++			stage2_wp_range(kvm, start, end);
++		}
++	}
+ }
+ 
+ /*
+
+From patchwork Tue Jun 16 09:35:51 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: zhukeqian <zhukeqian1@huawei.com>
+X-Patchwork-Id: 11606977
+Return-Path: <SRS0=jnd6=75=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 2FA5913A0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:36:56 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 221002080D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:36:56 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728367AbgFPJgW (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 16 Jun 2020 05:36:22 -0400
+Received: from szxga05-in.huawei.com ([45.249.212.191]:6264 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1728333AbgFPJgU (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 16 Jun 2020 05:36:20 -0400
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.60])
+        by Forcepoint Email with ESMTP id D41EBD40471D8FD3AFBD;
+        Tue, 16 Jun 2020 17:36:18 +0800 (CST)
+Received: from DESKTOP-5IS4806.china.huawei.com (10.173.221.230) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.487.0; Tue, 16 Jun 2020 17:36:12 +0800
+From: Keqian Zhu <zhukeqian1@huawei.com>
+To: <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>
+CC: Catalin Marinas <catalin.marinas@arm.com>,
+        Marc Zyngier <maz@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Will Deacon <will@kernel.org>,
+        "Suzuki K Poulose" <suzuki.poulose@arm.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Mark Brown <broonie@kernel.org>,
+        "Thomas Gleixner" <tglx@linutronix.de>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Alexios Zavras <alexios.zavras@intel.com>,
+        <liangpeng10@huawei.com>, <zhengxiang9@huawei.com>,
+        <wanghaibin.wang@huawei.com>, Keqian Zhu <zhukeqian1@huawei.com>
+Subject: [PATCH 10/12] KVM: arm64: Save stage2 PTE dirty status if it is
+ coverred
+Date: Tue, 16 Jun 2020 17:35:51 +0800
+Message-ID: <20200616093553.27512-11-zhukeqian1@huawei.com>
+X-Mailer: git-send-email 2.8.4.windows.1
+In-Reply-To: <20200616093553.27512-1-zhukeqian1@huawei.com>
+References: <20200616093553.27512-1-zhukeqian1@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.173.221.230]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+There are two types of operations will change PTE and may cover
+dirty status set by hardware.
+
+1. Stage2 PTE unmapping: Page table merging (revert of huge page
+table dissolving), kvm_unmap_hva_range() and so on.
+
+2. Stage2 PTE changing: including user_mem_abort(), kvm_mmu_notifier
+_change_pte() and so on.
+
+All operations above will invoke kvm_set_pte() finally. We should
+save the dirty status into memslot bitmap.
+
+Question: Should we acquire kvm_slots_lock when invoke mark_page_dirty?
+It seems that user_mem_abort does not acquire this lock when invoke it.
+
+Signed-off-by: Keqian Zhu <zhukeqian1@huawei.com>
+---
+ arch/arm64/kvm/mmu.c | 20 ++++++++++++++++++--
+ 1 file changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm64/kvm/mmu.c b/arch/arm64/kvm/mmu.c
+index 898e272a2c07..a230fbcf3889 100644
+--- a/arch/arm64/kvm/mmu.c
++++ b/arch/arm64/kvm/mmu.c
+@@ -294,15 +294,23 @@ static void unmap_stage2_ptes(struct kvm *kvm, pmd_t *pmd,
+ {
+ 	phys_addr_t start_addr = addr;
+ 	pte_t *pte, *start_pte;
++	bool dirty_coverred;
++	int idx;
+ 
+ 	start_pte = pte = pte_offset_kernel(pmd, addr);
+ 	do {
+ 		if (!pte_none(*pte)) {
+ 			pte_t old_pte = *pte;
+ 
+-			kvm_set_pte(pte, __pte(0));
++			dirty_coverred = kvm_set_pte(pte, __pte(0));
+ 			kvm_tlb_flush_vmid_ipa(kvm, addr);
+ 
++			if (dirty_coverred) {
++				idx = srcu_read_lock(&kvm->srcu);
++				mark_page_dirty(kvm, addr >> PAGE_SHIFT);
++				srcu_read_unlock(&kvm->srcu, idx);
++			}
++
+ 			/* No need to invalidate the cache for device mappings */
+ 			if (!kvm_is_device_pfn(pte_pfn(old_pte)))
+ 				kvm_flush_dcache_pte(old_pte);
+@@ -1388,6 +1396,8 @@ static int stage2_set_pte(struct kvm *kvm, struct kvm_mmu_memory_cache *cache,
+ 	pte_t *pte, old_pte;
+ 	bool iomap = flags & KVM_S2PTE_FLAG_IS_IOMAP;
+ 	bool logging_active = flags & KVM_S2_FLAG_LOGGING_ACTIVE;
++	bool dirty_coverred;
++	int idx;
+ 
+ 	VM_BUG_ON(logging_active && !cache);
+ 
+@@ -1453,8 +1463,14 @@ static int stage2_set_pte(struct kvm *kvm, struct kvm_mmu_memory_cache *cache,
+ 		if (pte_val(old_pte) == pte_val(*new_pte))
+ 			return 0;
+ 
+-		kvm_set_pte(pte, __pte(0));
++		dirty_coverred = kvm_set_pte(pte, __pte(0));
+ 		kvm_tlb_flush_vmid_ipa(kvm, addr);
++
++		if (dirty_coverred) {
++			idx = srcu_read_lock(&kvm->srcu);
++			mark_page_dirty(kvm, addr >> PAGE_SHIFT);
++			srcu_read_unlock(&kvm->srcu, idx);
++		}
+ 	} else {
+ 		get_page(virt_to_page(pte));
+ 	}
+
+From patchwork Tue Jun 16 09:35:52 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: zhukeqian <zhukeqian1@huawei.com>
+X-Patchwork-Id: 11606969
+Return-Path: <SRS0=jnd6=75=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 4C4B113B6
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:36:48 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 3DE75207BC
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:36:48 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728405AbgFPJg2 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 16 Jun 2020 05:36:28 -0400
+Received: from szxga05-in.huawei.com ([45.249.212.191]:6268 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1728384AbgFPJgZ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 16 Jun 2020 05:36:25 -0400
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.58])
+        by Forcepoint Email with ESMTP id B9B15896D93109BC2DD5;
+        Tue, 16 Jun 2020 17:36:23 +0800 (CST)
+Received: from DESKTOP-5IS4806.china.huawei.com (10.173.221.230) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.487.0; Tue, 16 Jun 2020 17:36:13 +0800
+From: Keqian Zhu <zhukeqian1@huawei.com>
+To: <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>
+CC: Catalin Marinas <catalin.marinas@arm.com>,
+        Marc Zyngier <maz@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Will Deacon <will@kernel.org>,
+        "Suzuki K Poulose" <suzuki.poulose@arm.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Mark Brown <broonie@kernel.org>,
+        "Thomas Gleixner" <tglx@linutronix.de>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Alexios Zavras <alexios.zavras@intel.com>,
+        <liangpeng10@huawei.com>, <zhengxiang9@huawei.com>,
+        <wanghaibin.wang@huawei.com>, Keqian Zhu <zhukeqian1@huawei.com>
+Subject: [PATCH 11/12] KVM: arm64: Support disable hw dirty log after enable
+Date: Tue, 16 Jun 2020 17:35:52 +0800
+Message-ID: <20200616093553.27512-12-zhukeqian1@huawei.com>
+X-Mailer: git-send-email 2.8.4.windows.1
+In-Reply-To: <20200616093553.27512-1-zhukeqian1@huawei.com>
+References: <20200616093553.27512-1-zhukeqian1@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.173.221.230]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+We should clear DBM bit of all PTEs and flush TLB, then sync dirty log,
+which promise we won't miss any dirty status set by hardware.
+
+Signed-off-by: Keqian Zhu <zhukeqian1@huawei.com>
+---
+ arch/arm64/kvm/arm.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/arch/arm64/kvm/arm.c b/arch/arm64/kvm/arm.c
+index 92f0b40a30fa..76cab4c0b5a6 100644
+--- a/arch/arm64/kvm/arm.c
++++ b/arch/arm64/kvm/arm.c
+@@ -93,6 +93,12 @@ int kvm_vm_ioctl_enable_cap(struct kvm *kvm,
+ 			r = -EINVAL;
+ 		} else {
+ 			r = 0;
++			if (kvm->arch.hw_dirty_log && !cap->args[0]) {
++				mutex_lock(&kvm->slots_lock);
++				kvm_mmu_clear_dbm_all(kvm);
++				kvm_mmu_sync_dirty_log_all(kvm);
++				mutex_unlock(&kvm->slots_lock);
++			}
+ 			kvm->arch.hw_dirty_log = cap->args[0];
+ 		}
+ 		break;
+
+From patchwork Tue Jun 16 09:35:53 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: zhukeqian <zhukeqian1@huawei.com>
+X-Patchwork-Id: 11606965
+Return-Path: <SRS0=jnd6=75=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C57B792A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:36:29 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id B76F42078E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Tue, 16 Jun 2020 09:36:29 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728038AbgFPJg2 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 16 Jun 2020 05:36:28 -0400
+Received: from szxga05-in.huawei.com ([45.249.212.191]:6267 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1728131AbgFPJg0 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 16 Jun 2020 05:36:26 -0400
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.58])
+        by Forcepoint Email with ESMTP id B1B0AEC54AB3263F89AF;
+        Tue, 16 Jun 2020 17:36:23 +0800 (CST)
+Received: from DESKTOP-5IS4806.china.huawei.com (10.173.221.230) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.487.0; Tue, 16 Jun 2020 17:36:14 +0800
+From: Keqian Zhu <zhukeqian1@huawei.com>
+To: <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>
+CC: Catalin Marinas <catalin.marinas@arm.com>,
+        Marc Zyngier <maz@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Will Deacon <will@kernel.org>,
+        "Suzuki K Poulose" <suzuki.poulose@arm.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Mark Brown <broonie@kernel.org>,
+        "Thomas Gleixner" <tglx@linutronix.de>,
+        Andrew Morton <akpm@linux-foundation.org>,
+        Alexios Zavras <alexios.zavras@intel.com>,
+        <liangpeng10@huawei.com>, <zhengxiang9@huawei.com>,
+        <wanghaibin.wang@huawei.com>, Keqian Zhu <zhukeqian1@huawei.com>
+Subject: [PATCH 12/12] KVM: arm64: Enable stage2 hardware DBM
+Date: Tue, 16 Jun 2020 17:35:53 +0800
+Message-ID: <20200616093553.27512-13-zhukeqian1@huawei.com>
+X-Mailer: git-send-email 2.8.4.windows.1
+In-Reply-To: <20200616093553.27512-1-zhukeqian1@huawei.com>
+References: <20200616093553.27512-1-zhukeqian1@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.173.221.230]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+We are ready to support hw management of dirty state, enable it if
+hardware support it.
+
+Signed-off-by: Keqian Zhu <zhukeqian1@huawei.com>
+Signed-off-by: Peng Liang <liangpeng10@huawei.com>
+---
+ arch/arm64/include/asm/sysreg.h | 2 ++
+ arch/arm64/kvm/reset.c          | 9 ++++++++-
+ 2 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/include/asm/sysreg.h b/arch/arm64/include/asm/sysreg.h
+index 463175f80341..b22bd903284d 100644
+--- a/arch/arm64/include/asm/sysreg.h
++++ b/arch/arm64/include/asm/sysreg.h
+@@ -744,6 +744,8 @@
+ #define ID_AA64MMFR1_VMIDBITS_8		0
+ #define ID_AA64MMFR1_VMIDBITS_16	2
+ 
++#define ID_AA64MMFR1_HADBS_DBS		2
++
+ /* id_aa64mmfr2 */
+ #define ID_AA64MMFR2_E0PD_SHIFT		60
+ #define ID_AA64MMFR2_FWB_SHIFT		40
+diff --git a/arch/arm64/kvm/reset.c b/arch/arm64/kvm/reset.c
+index 52bb801c9b2c..c1215b13bdd5 100644
+--- a/arch/arm64/kvm/reset.c
++++ b/arch/arm64/kvm/reset.c
+@@ -427,7 +427,7 @@ int kvm_arm_setup_stage2(struct kvm *kvm, unsigned long type)
+ {
+ 	u64 vtcr = VTCR_EL2_FLAGS, mmfr0;
+ 	u32 parange, phys_shift;
+-	u8 lvls;
++	u8 lvls, hadbs;
+ 
+ 	if (type & ~KVM_VM_TYPE_ARM_IPA_SIZE_MASK)
+ 		return -EINVAL;
+@@ -465,6 +465,13 @@ int kvm_arm_setup_stage2(struct kvm *kvm, unsigned long type)
+ 	 */
+ 	vtcr |= VTCR_EL2_HA;
+ 
++#ifdef CONFIG_ARM64_HW_AFDBM
++	hadbs = (read_sysreg(id_aa64mmfr1_el1) >>
++			ID_AA64MMFR1_HADBS_SHIFT) & 0xf;
++	if (hadbs == ID_AA64MMFR1_HADBS_DBS)
++		vtcr |= VTCR_EL2_HD;
++#endif
++
+ 	/* Set the vmid bits */
+ 	vtcr |= (kvm_get_vmid_bits() == 16) ?
+ 		VTCR_EL2_VS_16BIT :
