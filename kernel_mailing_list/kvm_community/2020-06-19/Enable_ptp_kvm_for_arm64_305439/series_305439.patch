@@ -1,0 +1,1585 @@
+From patchwork Fri Jun 19 09:30:25 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Jianyong Wu <jianyong.wu@arm.com>
+X-Patchwork-Id: 11613571
+Return-Path: <SRS0=UAw1=AA=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6B8F414DD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:31:10 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 58B902073E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:31:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731398AbgFSJbA (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 19 Jun 2020 05:31:00 -0400
+Received: from foss.arm.com ([217.140.110.172]:49116 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731364AbgFSJa4 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 19 Jun 2020 05:30:56 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 6C2B8101E;
+        Fri, 19 Jun 2020 02:30:55 -0700 (PDT)
+Received: from entos-d05.shanghai.arm.com (entos-d05.shanghai.arm.com
+ [10.169.40.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 3F26F3F71F;
+        Fri, 19 Jun 2020 02:30:49 -0700 (PDT)
+From: Jianyong Wu <jianyong.wu@arm.com>
+To: netdev@vger.kernel.org, yangbo.lu@nxp.com, john.stultz@linaro.org,
+        tglx@linutronix.de, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, maz@kernel.org,
+        richardcochran@gmail.com, Mark.Rutland@arm.com, will@kernel.org,
+        suzuki.poulose@arm.com, steven.price@arm.com
+Cc: linux-kernel@vger.kernel.org, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org,
+        Steve.Capper@arm.com, Kaly.Xin@arm.com, justin.he@arm.com,
+        Wei.Chen@arm.com, jianyong.wu@arm.com, nd@arm.com
+Subject: [RFC PATCH v13 1/9] arm64: Probe for the presence of KVM hypervisor
+ services during boot
+Date: Fri, 19 Jun 2020 17:30:25 +0800
+Message-Id: <20200619093033.58344-2-jianyong.wu@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200619093033.58344-1-jianyong.wu@arm.com>
+References: <20200619093033.58344-1-jianyong.wu@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Will Deacon <will@kernel.org>
+
+Although the SMCCC specification provides some limited functionality for
+describing the presence of hypervisor and firmware services, this is
+generally applicable only to functions designated as "Arm Architecture
+Service Functions" and no portable discovery mechanism is provided for
+standard hypervisor services, despite having a designated range of
+function identifiers reserved by the specification.
+
+In an attempt to avoid the need for additional firmware changes every
+time a new function is added, introduce a UID to identify the service
+provider as being compatible with KVM. Once this has been established,
+additional services can be discovered via a feature bitmap.
+
+Cc: Marc Zyngier <maz@kernel.org>
+Signed-off-by: Will Deacon <will@kernel.org>
+Signed-off-by: Jianyong Wu <jianyong.wu@arm.com>
+---
+ arch/arm64/include/asm/hypervisor.h | 11 +++++++++
+ arch/arm64/kernel/setup.c           | 36 +++++++++++++++++++++++++++++
+ include/linux/arm-smccc.h           | 26 +++++++++++++++++++++
+ 3 files changed, 73 insertions(+)
+
+diff --git a/arch/arm64/include/asm/hypervisor.h b/arch/arm64/include/asm/hypervisor.h
+index f9cc1d021791..91e4bd890819 100644
+--- a/arch/arm64/include/asm/hypervisor.h
++++ b/arch/arm64/include/asm/hypervisor.h
+@@ -2,6 +2,17 @@
+ #ifndef _ASM_ARM64_HYPERVISOR_H
+ #define _ASM_ARM64_HYPERVISOR_H
+ 
++#include <linux/arm-smccc.h>
+ #include <asm/xen/hypervisor.h>
+ 
++static inline bool kvm_arm_hyp_service_available(u32 func_id)
++{
++	extern DECLARE_BITMAP(__kvm_arm_hyp_services, ARM_SMCCC_KVM_NUM_FUNCS);
++
++	if (func_id >= ARM_SMCCC_KVM_NUM_FUNCS)
++		return -EINVAL;
++
++	return test_bit(func_id, __kvm_arm_hyp_services);
++}
++
+ #endif
+diff --git a/arch/arm64/kernel/setup.c b/arch/arm64/kernel/setup.c
+index 93b3844cf442..92f8762a7b80 100644
+--- a/arch/arm64/kernel/setup.c
++++ b/arch/arm64/kernel/setup.c
+@@ -7,6 +7,7 @@
+  */
+ 
+ #include <linux/acpi.h>
++#include <linux/arm-smccc.h>
+ #include <linux/export.h>
+ #include <linux/kernel.h>
+ #include <linux/stddef.h>
+@@ -276,6 +277,40 @@ arch_initcall(reserve_memblock_reserved_regions);
+ 
+ u64 __cpu_logical_map[NR_CPUS] = { [0 ... NR_CPUS-1] = INVALID_HWID };
+ 
++DECLARE_BITMAP(__kvm_arm_hyp_services, ARM_SMCCC_KVM_NUM_FUNCS) = { };
++
++static void __init kvm_init_hyp_services(void)
++{
++	int i;
++	struct arm_smccc_res res;
++
++	if (arm_smccc_get_version() == ARM_SMCCC_VERSION_1_0)
++		return;
++
++	arm_smccc_1_1_invoke(ARM_SMCCC_VENDOR_HYP_CALL_UID_FUNC_ID, &res);
++	if (res.a0 != ARM_SMCCC_VENDOR_HYP_UID_KVM_REG_0 ||
++	    res.a1 != ARM_SMCCC_VENDOR_HYP_UID_KVM_REG_1 ||
++	    res.a2 != ARM_SMCCC_VENDOR_HYP_UID_KVM_REG_2 ||
++	    res.a3 != ARM_SMCCC_VENDOR_HYP_UID_KVM_REG_3)
++		return;
++
++	memset(&res, 0, sizeof(res));
++	arm_smccc_1_1_invoke(ARM_SMCCC_VENDOR_HYP_KVM_FEATURES_FUNC_ID, &res);
++	for (i = 0; i < 32; ++i) {
++		if (res.a0 & (i))
++			set_bit(i + (32 * 0), __kvm_arm_hyp_services);
++		if (res.a1 & (i))
++			set_bit(i + (32 * 1), __kvm_arm_hyp_services);
++		if (res.a2 & (i))
++			set_bit(i + (32 * 2), __kvm_arm_hyp_services);
++		if (res.a3 & (i))
++			set_bit(i + (32 * 3), __kvm_arm_hyp_services);
++	}
++
++	pr_info("KVM hypervisor services detected (0x%08lx 0x%08lx 0x%08lx 0x%08lx)\n",
++		res.a3, res.a2, res.a1, res.a0);
++}
++
+ void __init setup_arch(char **cmdline_p)
+ {
+ 	init_mm.start_code = (unsigned long) _text;
+@@ -348,6 +383,7 @@ void __init setup_arch(char **cmdline_p)
+ 	else
+ 		psci_acpi_init();
+ 
++	kvm_init_hyp_services();
+ 	init_bootcpu_ops();
+ 	smp_init_cpus();
+ 	smp_build_mpidr_hash();
+diff --git a/include/linux/arm-smccc.h b/include/linux/arm-smccc.h
+index 56d6a5c6e353..86ff30131e7b 100644
+--- a/include/linux/arm-smccc.h
++++ b/include/linux/arm-smccc.h
+@@ -49,11 +49,14 @@
+ #define ARM_SMCCC_OWNER_OEM		3
+ #define ARM_SMCCC_OWNER_STANDARD	4
+ #define ARM_SMCCC_OWNER_STANDARD_HYP	5
++#define ARM_SMCCC_OWNER_VENDOR_HYP	6
+ #define ARM_SMCCC_OWNER_TRUSTED_APP	48
+ #define ARM_SMCCC_OWNER_TRUSTED_APP_END	49
+ #define ARM_SMCCC_OWNER_TRUSTED_OS	50
+ #define ARM_SMCCC_OWNER_TRUSTED_OS_END	63
+ 
++#define ARM_SMCCC_FUNC_QUERY_CALL_UID	0xff01
++
+ #define ARM_SMCCC_QUIRK_NONE		0
+ #define ARM_SMCCC_QUIRK_QCOM_A6		1 /* Save/restore register a6 */
+ 
+@@ -81,6 +84,29 @@
+ 			   ARM_SMCCC_SMC_32,				\
+ 			   0, 0x7fff)
+ 
++#define ARM_SMCCC_VENDOR_HYP_CALL_UID_FUNC_ID				\
++	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL,				\
++			   ARM_SMCCC_SMC_32,				\
++			   ARM_SMCCC_OWNER_VENDOR_HYP,			\
++			   ARM_SMCCC_FUNC_QUERY_CALL_UID)
++
++/* KVM UID value: 28b46fb6-2ec5-11e9-a9ca-4b564d003a74 */
++#define ARM_SMCCC_VENDOR_HYP_UID_KVM_REG_0	0xb66fb428U
++#define ARM_SMCCC_VENDOR_HYP_UID_KVM_REG_1	0xe911c52eU
++#define ARM_SMCCC_VENDOR_HYP_UID_KVM_REG_2	0x564bcaa9U
++#define ARM_SMCCC_VENDOR_HYP_UID_KVM_REG_3	0x743a004dU
++
++/* KVM "vendor specific" services */
++#define ARM_SMCCC_KVM_FUNC_FEATURES		0
++#define ARM_SMCCC_KVM_FUNC_FEATURES_2		127
++#define ARM_SMCCC_KVM_NUM_FUNCS			128
++
++#define ARM_SMCCC_VENDOR_HYP_KVM_FEATURES_FUNC_ID			\
++	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL,				\
++			   ARM_SMCCC_SMC_32,				\
++			   ARM_SMCCC_OWNER_VENDOR_HYP,			\
++			   ARM_SMCCC_KVM_FUNC_FEATURES)
++
+ #ifndef __ASSEMBLY__
+ 
+ #include <linux/linkage.h>
+
+From patchwork Fri Jun 19 09:30:26 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Jianyong Wu <jianyong.wu@arm.com>
+X-Patchwork-Id: 11613575
+Return-Path: <SRS0=UAw1=AA=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id AD68C14DD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:31:21 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id A01CB2080C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:31:21 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731501AbgFSJbL (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 19 Jun 2020 05:31:11 -0400
+Received: from foss.arm.com ([217.140.110.172]:49152 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731474AbgFSJbC (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 19 Jun 2020 05:31:02 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 2279D11B3;
+        Fri, 19 Jun 2020 02:31:02 -0700 (PDT)
+Received: from entos-d05.shanghai.arm.com (entos-d05.shanghai.arm.com
+ [10.169.40.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ E99253F71F;
+        Fri, 19 Jun 2020 02:30:55 -0700 (PDT)
+From: Jianyong Wu <jianyong.wu@arm.com>
+To: netdev@vger.kernel.org, yangbo.lu@nxp.com, john.stultz@linaro.org,
+        tglx@linutronix.de, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, maz@kernel.org,
+        richardcochran@gmail.com, Mark.Rutland@arm.com, will@kernel.org,
+        suzuki.poulose@arm.com, steven.price@arm.com
+Cc: linux-kernel@vger.kernel.org, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org,
+        Steve.Capper@arm.com, Kaly.Xin@arm.com, justin.he@arm.com,
+        Wei.Chen@arm.com, jianyong.wu@arm.com, nd@arm.com
+Subject: [RFC PATCH v13 2/9] arm/arm64: KVM: Advertise KVM UID to guests via
+ SMCCC
+Date: Fri, 19 Jun 2020 17:30:26 +0800
+Message-Id: <20200619093033.58344-3-jianyong.wu@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200619093033.58344-1-jianyong.wu@arm.com>
+References: <20200619093033.58344-1-jianyong.wu@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Will Deacon <will@kernel.org>
+
+We can advertise ourselves to guests as KVM and provide a basic features
+bitmap for discoverability of future hypervisor services.
+
+Cc: Marc Zyngier <maz@kernel.org>
+Signed-off-by: Will Deacon <will@kernel.org>
+Signed-off-by: Jianyong Wu <jianyong.wu@arm.com>
+---
+ arch/arm64/kvm/hypercalls.c | 29 +++++++++++++++++++----------
+ 1 file changed, 19 insertions(+), 10 deletions(-)
+
+diff --git a/arch/arm64/kvm/hypercalls.c b/arch/arm64/kvm/hypercalls.c
+index 550dfa3e53cd..db6dce3d0e23 100644
+--- a/arch/arm64/kvm/hypercalls.c
++++ b/arch/arm64/kvm/hypercalls.c
+@@ -12,13 +12,13 @@
+ int kvm_hvc_call_handler(struct kvm_vcpu *vcpu)
+ {
+ 	u32 func_id = smccc_get_function(vcpu);
+-	long val = SMCCC_RET_NOT_SUPPORTED;
++	u32 val[4] = {SMCCC_RET_NOT_SUPPORTED};
+ 	u32 feature;
+ 	gpa_t gpa;
+ 
+ 	switch (func_id) {
+ 	case ARM_SMCCC_VERSION_FUNC_ID:
+-		val = ARM_SMCCC_VERSION_1_1;
++		val[0] = ARM_SMCCC_VERSION_1_1;
+ 		break;
+ 	case ARM_SMCCC_ARCH_FEATURES_FUNC_ID:
+ 		feature = smccc_get_arg1(vcpu);
+@@ -28,10 +28,10 @@ int kvm_hvc_call_handler(struct kvm_vcpu *vcpu)
+ 			case KVM_BP_HARDEN_UNKNOWN:
+ 				break;
+ 			case KVM_BP_HARDEN_WA_NEEDED:
+-				val = SMCCC_RET_SUCCESS;
++				val[0] = SMCCC_RET_SUCCESS;
+ 				break;
+ 			case KVM_BP_HARDEN_NOT_REQUIRED:
+-				val = SMCCC_RET_NOT_REQUIRED;
++				val[0] = SMCCC_RET_NOT_REQUIRED;
+ 				break;
+ 			}
+ 			break;
+@@ -41,31 +41,40 @@ int kvm_hvc_call_handler(struct kvm_vcpu *vcpu)
+ 			case KVM_SSBD_UNKNOWN:
+ 				break;
+ 			case KVM_SSBD_KERNEL:
+-				val = SMCCC_RET_SUCCESS;
++				val[0] = SMCCC_RET_SUCCESS;
+ 				break;
+ 			case KVM_SSBD_FORCE_ENABLE:
+ 			case KVM_SSBD_MITIGATED:
+-				val = SMCCC_RET_NOT_REQUIRED;
++				val[0] = SMCCC_RET_NOT_REQUIRED;
+ 				break;
+ 			}
+ 			break;
+ 		case ARM_SMCCC_HV_PV_TIME_FEATURES:
+-			val = SMCCC_RET_SUCCESS;
++			val[0] = SMCCC_RET_SUCCESS;
+ 			break;
+ 		}
+ 		break;
+ 	case ARM_SMCCC_HV_PV_TIME_FEATURES:
+-		val = kvm_hypercall_pv_features(vcpu);
++		val[0] = kvm_hypercall_pv_features(vcpu);
+ 		break;
+ 	case ARM_SMCCC_HV_PV_TIME_ST:
+ 		gpa = kvm_init_stolen_time(vcpu);
+ 		if (gpa != GPA_INVALID)
+-			val = gpa;
++			val[0] = gpa;
++		break;
++	case ARM_SMCCC_VENDOR_HYP_CALL_UID_FUNC_ID:
++		val[0] = ARM_SMCCC_VENDOR_HYP_UID_KVM_REG_0;
++		val[1] = ARM_SMCCC_VENDOR_HYP_UID_KVM_REG_1;
++		val[2] = ARM_SMCCC_VENDOR_HYP_UID_KVM_REG_2;
++		val[3] = ARM_SMCCC_VENDOR_HYP_UID_KVM_REG_3;
++		break;
++	case ARM_SMCCC_VENDOR_HYP_KVM_FEATURES_FUNC_ID:
++		val[0] = BIT(ARM_SMCCC_KVM_FUNC_FEATURES);
+ 		break;
+ 	default:
+ 		return kvm_psci_call(vcpu);
+ 	}
+ 
+-	smccc_set_retval(vcpu, val, 0, 0, 0);
++	smccc_set_retval(vcpu, val[0], val[1], val[2], val[3]);
+ 	return 1;
+ }
+
+From patchwork Fri Jun 19 09:30:27 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Jianyong Wu <jianyong.wu@arm.com>
+X-Patchwork-Id: 11613579
+Return-Path: <SRS0=UAw1=AA=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D0C7714B7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:31:40 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C13B92073E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:31:40 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731783AbgFSJba (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 19 Jun 2020 05:31:30 -0400
+Received: from foss.arm.com ([217.140.110.172]:49186 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729718AbgFSJbJ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 19 Jun 2020 05:31:09 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id D55551396;
+        Fri, 19 Jun 2020 02:31:08 -0700 (PDT)
+Received: from entos-d05.shanghai.arm.com (entos-d05.shanghai.arm.com
+ [10.169.40.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 9F8623F71F;
+        Fri, 19 Jun 2020 02:31:02 -0700 (PDT)
+From: Jianyong Wu <jianyong.wu@arm.com>
+To: netdev@vger.kernel.org, yangbo.lu@nxp.com, john.stultz@linaro.org,
+        tglx@linutronix.de, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, maz@kernel.org,
+        richardcochran@gmail.com, Mark.Rutland@arm.com, will@kernel.org,
+        suzuki.poulose@arm.com, steven.price@arm.com
+Cc: linux-kernel@vger.kernel.org, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org,
+        Steve.Capper@arm.com, Kaly.Xin@arm.com, justin.he@arm.com,
+        Wei.Chen@arm.com, jianyong.wu@arm.com, nd@arm.com
+Subject: [PATCH v13 3/9] smccc: Export smccc conduit get helper.
+Date: Fri, 19 Jun 2020 17:30:27 +0800
+Message-Id: <20200619093033.58344-4-jianyong.wu@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200619093033.58344-1-jianyong.wu@arm.com>
+References: <20200619093033.58344-1-jianyong.wu@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Export arm_smccc_1_1_get_conduit then modules can use smccc helper which
+adopts it.
+
+Acked-by: Mark Rutland <mark.rutland@arm.com>
+Signed-off-by: Jianyong Wu <jianyong.wu@arm.com>
+---
+ drivers/firmware/smccc/smccc.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/firmware/smccc/smccc.c b/drivers/firmware/smccc/smccc.c
+index 4e80921ee212..b855fe7b5c90 100644
+--- a/drivers/firmware/smccc/smccc.c
++++ b/drivers/firmware/smccc/smccc.c
+@@ -24,6 +24,7 @@ enum arm_smccc_conduit arm_smccc_1_1_get_conduit(void)
+ 
+ 	return smccc_conduit;
+ }
++EXPORT_SYMBOL(arm_smccc_1_1_get_conduit);
+ 
+ u32 arm_smccc_get_version(void)
+ {
+
+From patchwork Fri Jun 19 09:30:28 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Jianyong Wu <jianyong.wu@arm.com>
+X-Patchwork-Id: 11613609
+Return-Path: <SRS0=UAw1=AA=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D2BDA14B7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:34:30 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C0D1420890
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:34:30 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731463AbgFSJe3 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 19 Jun 2020 05:34:29 -0400
+Received: from foss.arm.com ([217.140.110.172]:49216 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731651AbgFSJbQ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 19 Jun 2020 05:31:16 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 8BD6913A1;
+        Fri, 19 Jun 2020 02:31:15 -0700 (PDT)
+Received: from entos-d05.shanghai.arm.com (entos-d05.shanghai.arm.com
+ [10.169.40.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 5EEF03F71F;
+        Fri, 19 Jun 2020 02:31:09 -0700 (PDT)
+From: Jianyong Wu <jianyong.wu@arm.com>
+To: netdev@vger.kernel.org, yangbo.lu@nxp.com, john.stultz@linaro.org,
+        tglx@linutronix.de, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, maz@kernel.org,
+        richardcochran@gmail.com, Mark.Rutland@arm.com, will@kernel.org,
+        suzuki.poulose@arm.com, steven.price@arm.com
+Cc: linux-kernel@vger.kernel.org, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org,
+        Steve.Capper@arm.com, Kaly.Xin@arm.com, justin.he@arm.com,
+        Wei.Chen@arm.com, jianyong.wu@arm.com, nd@arm.com
+Subject: [RFC PATCH v13 4/9] ptp: Reorganize ptp_kvm module to make it
+ arch-independent.
+Date: Fri, 19 Jun 2020 17:30:28 +0800
+Message-Id: <20200619093033.58344-5-jianyong.wu@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200619093033.58344-1-jianyong.wu@arm.com>
+References: <20200619093033.58344-1-jianyong.wu@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Currently, ptp_kvm modules implementation is only for x86 which includs
+large part of arch-specific code.  This patch move all of those code
+into new arch related file in the same directory.
+
+Signed-off-by: Jianyong Wu <jianyong.wu@arm.com>
+---
+ drivers/ptp/Makefile                        |  1 +
+ drivers/ptp/ptp_kvm.h                       | 11 +++
+ drivers/ptp/{ptp_kvm.c => ptp_kvm_common.c} | 80 +++++-------------
+ drivers/ptp/ptp_kvm_x86.c                   | 89 +++++++++++++++++++++
+ 4 files changed, 122 insertions(+), 59 deletions(-)
+ create mode 100644 drivers/ptp/ptp_kvm.h
+ rename drivers/ptp/{ptp_kvm.c => ptp_kvm_common.c} (63%)
+ create mode 100644 drivers/ptp/ptp_kvm_x86.c
+
+diff --git a/drivers/ptp/Makefile b/drivers/ptp/Makefile
+index 7aff75f745dc..baac6f5b243b 100644
+--- a/drivers/ptp/Makefile
++++ b/drivers/ptp/Makefile
+@@ -4,6 +4,7 @@
+ #
+ 
+ ptp-y					:= ptp_clock.o ptp_chardev.o ptp_sysfs.o
++ptp_kvm-y				:= ptp_kvm_$(ARCH).o ptp_kvm_common.o
+ obj-$(CONFIG_PTP_1588_CLOCK)		+= ptp.o
+ obj-$(CONFIG_PTP_1588_CLOCK_DTE)	+= ptp_dte.o
+ obj-$(CONFIG_PTP_1588_CLOCK_INES)	+= ptp_ines.o
+diff --git a/drivers/ptp/ptp_kvm.h b/drivers/ptp/ptp_kvm.h
+new file mode 100644
+index 000000000000..4bf1802bbeb8
+--- /dev/null
++++ b/drivers/ptp/ptp_kvm.h
+@@ -0,0 +1,11 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Virtual PTP 1588 clock for use with KVM guests
++ *
++ * Copyright (C) 2017 Red Hat Inc.
++ */
++
++int kvm_arch_ptp_init(void);
++int kvm_arch_ptp_get_clock(struct timespec64 *ts);
++int kvm_arch_ptp_get_crosststamp(unsigned long *cycle,
++		struct timespec64 *tspec, void *cs);
+diff --git a/drivers/ptp/ptp_kvm.c b/drivers/ptp/ptp_kvm_common.c
+similarity index 63%
+rename from drivers/ptp/ptp_kvm.c
+rename to drivers/ptp/ptp_kvm_common.c
+index 658d33fc3195..8d8a9bcd1d22 100644
+--- a/drivers/ptp/ptp_kvm.c
++++ b/drivers/ptp/ptp_kvm_common.c
+@@ -8,15 +8,16 @@
+ #include <linux/err.h>
+ #include <linux/init.h>
+ #include <linux/kernel.h>
++#include <linux/slab.h>
+ #include <linux/module.h>
+ #include <uapi/linux/kvm_para.h>
+ #include <asm/kvm_para.h>
+-#include <asm/pvclock.h>
+-#include <asm/kvmclock.h>
+ #include <uapi/asm/kvm_para.h>
+ 
+ #include <linux/ptp_clock_kernel.h>
+ 
++#include "ptp_kvm.h"
++
+ struct kvm_ptp_clock {
+ 	struct ptp_clock *ptp_clock;
+ 	struct ptp_clock_info caps;
+@@ -24,56 +25,29 @@ struct kvm_ptp_clock {
+ 
+ static DEFINE_SPINLOCK(kvm_ptp_lock);
+ 
+-static struct pvclock_vsyscall_time_info *hv_clock;
+-
+-static struct kvm_clock_pairing clock_pair;
+-static phys_addr_t clock_pair_gpa;
+-
+ static int ptp_kvm_get_time_fn(ktime_t *device_time,
+ 			       struct system_counterval_t *system_counter,
+ 			       void *ctx)
+ {
+-	unsigned long ret;
++	unsigned long ret, cycle;
+ 	struct timespec64 tspec;
+-	unsigned version;
+-	int cpu;
+-	struct pvclock_vcpu_time_info *src;
++	struct clocksource *cs;
+ 
+ 	spin_lock(&kvm_ptp_lock);
+ 
+ 	preempt_disable_notrace();
+-	cpu = smp_processor_id();
+-	src = &hv_clock[cpu].pvti;
+-
+-	do {
+-		/*
+-		 * We are using a TSC value read in the hosts
+-		 * kvm_hc_clock_pairing handling.
+-		 * So any changes to tsc_to_system_mul
+-		 * and tsc_shift or any other pvclock
+-		 * data invalidate that measurement.
+-		 */
+-		version = pvclock_read_begin(src);
+-
+-		ret = kvm_hypercall2(KVM_HC_CLOCK_PAIRING,
+-				     clock_pair_gpa,
+-				     KVM_CLOCK_PAIRING_WALLCLOCK);
+-		if (ret != 0) {
+-			pr_err_ratelimited("clock pairing hypercall ret %lu\n", ret);
+-			spin_unlock(&kvm_ptp_lock);
+-			preempt_enable_notrace();
+-			return -EOPNOTSUPP;
+-		}
+-
+-		tspec.tv_sec = clock_pair.sec;
+-		tspec.tv_nsec = clock_pair.nsec;
+-		ret = __pvclock_read_cycles(src, clock_pair.tsc);
+-	} while (pvclock_read_retry(src, version));
++	ret = kvm_arch_ptp_get_crosststamp(&cycle, &tspec, &cs);
++	if (ret != 0) {
++		pr_err_ratelimited("clock pairing hypercall ret %lu\n", ret);
++		spin_unlock(&kvm_ptp_lock);
++		preempt_enable_notrace();
++		return -EOPNOTSUPP;
++	}
+ 
+ 	preempt_enable_notrace();
+ 
+-	system_counter->cycles = ret;
+-	system_counter->cs = &kvm_clock;
++	system_counter->cycles = cycle;
++	system_counter->cs = cs;
+ 
+ 	*device_time = timespec64_to_ktime(tspec);
+ 
+@@ -116,17 +90,13 @@ static int ptp_kvm_gettime(struct ptp_clock_info *ptp, struct timespec64 *ts)
+ 
+ 	spin_lock(&kvm_ptp_lock);
+ 
+-	ret = kvm_hypercall2(KVM_HC_CLOCK_PAIRING,
+-			     clock_pair_gpa,
+-			     KVM_CLOCK_PAIRING_WALLCLOCK);
++	ret = kvm_arch_ptp_get_clock(&tspec);
+ 	if (ret != 0) {
+ 		pr_err_ratelimited("clock offset hypercall ret %lu\n", ret);
+ 		spin_unlock(&kvm_ptp_lock);
+ 		return -EOPNOTSUPP;
+ 	}
+ 
+-	tspec.tv_sec = clock_pair.sec;
+-	tspec.tv_nsec = clock_pair.nsec;
+ 	spin_unlock(&kvm_ptp_lock);
+ 
+ 	memcpy(ts, &tspec, sizeof(struct timespec64));
+@@ -166,21 +136,13 @@ static void __exit ptp_kvm_exit(void)
+ 
+ static int __init ptp_kvm_init(void)
+ {
+-	long ret;
+-
+-	if (!kvm_para_available())
+-		return -ENODEV;
+-
+-	clock_pair_gpa = slow_virt_to_phys(&clock_pair);
+-	hv_clock = pvclock_get_pvti_cpu0_va();
++	int ret;
+ 
+-	if (!hv_clock)
+-		return -ENODEV;
+-
+-	ret = kvm_hypercall2(KVM_HC_CLOCK_PAIRING, clock_pair_gpa,
+-			KVM_CLOCK_PAIRING_WALLCLOCK);
+-	if (ret == -KVM_ENOSYS || ret == -KVM_EOPNOTSUPP)
+-		return -ENODEV;
++	ret = kvm_arch_ptp_init();
++	if (ret) {
++		pr_err("fail to initialize ptp_kvm");
++		return -EOPNOTSUPP;
++	}
+ 
+ 	kvm_ptp_clock.caps = ptp_kvm_caps;
+ 
+diff --git a/drivers/ptp/ptp_kvm_x86.c b/drivers/ptp/ptp_kvm_x86.c
+new file mode 100644
+index 000000000000..aabed1b08a0d
+--- /dev/null
++++ b/drivers/ptp/ptp_kvm_x86.c
+@@ -0,0 +1,89 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * Virtual PTP 1588 clock for use with KVM guests
++ *
++ * Copyright (C) 2017 Red Hat Inc.
++ */
++
++#include <linux/device.h>
++#include <linux/kernel.h>
++#include <asm/pvclock.h>
++#include <asm/kvmclock.h>
++#include <linux/module.h>
++#include <uapi/asm/kvm_para.h>
++#include <uapi/linux/kvm_para.h>
++#include <linux/ptp_clock_kernel.h>
++
++phys_addr_t clock_pair_gpa;
++struct kvm_clock_pairing clock_pair;
++struct pvclock_vsyscall_time_info *hv_clock;
++
++int kvm_arch_ptp_init(void)
++{
++	int ret;
++
++	if (!kvm_para_available())
++		return -ENODEV;
++
++	clock_pair_gpa = slow_virt_to_phys(&clock_pair);
++	hv_clock = pvclock_get_pvti_cpu0_va();
++	if (!hv_clock)
++		return -ENODEV;
++
++	ret = kvm_hypercall2(KVM_HC_CLOCK_PAIRING, clock_pair_gpa,
++			     KVM_CLOCK_PAIRING_WALLCLOCK);
++	if (ret == -KVM_ENOSYS || ret == -KVM_EOPNOTSUPP)
++		return -ENODEV;
++
++	return 0;
++}
++
++int kvm_arch_ptp_get_clock(struct timespec64 *ts)
++{
++	long ret;
++
++	ret = kvm_hypercall2(KVM_HC_CLOCK_PAIRING,
++			     clock_pair_gpa,
++			     KVM_CLOCK_PAIRING_WALLCLOCK);
++	if (ret != 0)
++		return -EOPNOTSUPP;
++
++	ts->tv_sec = clock_pair.sec;
++	ts->tv_nsec = clock_pair.nsec;
++
++	return 0;
++}
++
++int kvm_arch_ptp_get_crosststamp(unsigned long *cycle, struct timespec64 *tspec,
++			      struct clocksource **cs)
++{
++	unsigned long ret;
++	unsigned int version;
++	int cpu;
++	struct pvclock_vcpu_time_info *src;
++
++	cpu = smp_processor_id();
++	src = &hv_clock[cpu].pvti;
++
++	do {
++		/*
++		 * We are using a TSC value read in the hosts
++		 * kvm_hc_clock_pairing handling.
++		 * So any changes to tsc_to_system_mul
++		 * and tsc_shift or any other pvclock
++		 * data invalidate that measurement.
++		 */
++		version = pvclock_read_begin(src);
++
++		ret = kvm_hypercall2(KVM_HC_CLOCK_PAIRING,
++				     clock_pair_gpa,
++				     KVM_CLOCK_PAIRING_WALLCLOCK);
++		tspec->tv_sec = clock_pair.sec;
++		tspec->tv_nsec = clock_pair.nsec;
++		*cycle = __pvclock_read_cycles(src, clock_pair.tsc);
++	} while (pvclock_read_retry(src, version));
++
++	*cs = &kvm_clock;
++
++	return 0;
++}
+
+From patchwork Fri Jun 19 09:30:29 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Jianyong Wu <jianyong.wu@arm.com>
+X-Patchwork-Id: 11613583
+Return-Path: <SRS0=UAw1=AA=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 55FFE14B7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:32:05 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 482DA20890
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:32:05 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731989AbgFSJbz (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 19 Jun 2020 05:31:55 -0400
+Received: from foss.arm.com ([217.140.110.172]:49242 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731559AbgFSJbX (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 19 Jun 2020 05:31:23 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 4178613D5;
+        Fri, 19 Jun 2020 02:31:22 -0700 (PDT)
+Received: from entos-d05.shanghai.arm.com (entos-d05.shanghai.arm.com
+ [10.169.40.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 14BFD3F71F;
+        Fri, 19 Jun 2020 02:31:15 -0700 (PDT)
+From: Jianyong Wu <jianyong.wu@arm.com>
+To: netdev@vger.kernel.org, yangbo.lu@nxp.com, john.stultz@linaro.org,
+        tglx@linutronix.de, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, maz@kernel.org,
+        richardcochran@gmail.com, Mark.Rutland@arm.com, will@kernel.org,
+        suzuki.poulose@arm.com, steven.price@arm.com
+Cc: linux-kernel@vger.kernel.org, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org,
+        Steve.Capper@arm.com, Kaly.Xin@arm.com, justin.he@arm.com,
+        Wei.Chen@arm.com, jianyong.wu@arm.com, nd@arm.com
+Subject: [RFC PATCH v13 5/9] time: Add mechanism to recognize clocksource in
+ time_get_snapshot
+Date: Fri, 19 Jun 2020 17:30:29 +0800
+Message-Id: <20200619093033.58344-6-jianyong.wu@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200619093033.58344-1-jianyong.wu@arm.com>
+References: <20200619093033.58344-1-jianyong.wu@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Thomas Gleixner <tglx@linutronix.de>
+
+System time snapshots are not conveying information about the current
+clocksource which was used, but callers like the PTP KVM guest
+implementation have the requirement to evaluate the clocksource type to
+select the appropriate mechanism.
+
+Introduce a clocksource id field in struct clocksource which is by default
+set to CSID_GENERIC (0). Clocksource implementations can set that field to
+a value which allows to identify the clocksource.
+
+Store the clocksource id of the current clocksource in the
+system_time_snapshot so callers can evaluate which clocksource was used to
+take the snapshot and act accordingly.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Signed-off-by: Jianyong Wu <jianyong.wu@arm.com>
+---
+ include/linux/clocksource.h     |  6 ++++++
+ include/linux/clocksource_ids.h | 11 +++++++++++
+ include/linux/timekeeping.h     | 12 +++++++-----
+ kernel/time/clocksource.c       |  3 +++
+ kernel/time/timekeeping.c       |  1 +
+ 5 files changed, 28 insertions(+), 5 deletions(-)
+ create mode 100644 include/linux/clocksource_ids.h
+
+diff --git a/include/linux/clocksource.h b/include/linux/clocksource.h
+index 86d143db6523..1290d0dce840 100644
+--- a/include/linux/clocksource.h
++++ b/include/linux/clocksource.h
+@@ -17,6 +17,7 @@
+ #include <linux/timer.h>
+ #include <linux/init.h>
+ #include <linux/of.h>
++#include <linux/clocksource_ids.h>
+ #include <asm/div64.h>
+ #include <asm/io.h>
+ 
+@@ -62,6 +63,10 @@ struct module;
+  *			400-499: Perfect
+  *				The ideal clocksource. A must-use where
+  *				available.
++ * @id:			Defaults to CSID_GENERIC. The id value is captured
++ *			in certain snapshot functions to allow callers to
++ *			validate the clocksource from which the snapshot was
++ *			taken.
+  * @flags:		Flags describing special properties
+  * @enable:		Optional function to enable the clocksource
+  * @disable:		Optional function to disable the clocksource
+@@ -100,6 +105,7 @@ struct clocksource {
+ 	const char		*name;
+ 	struct list_head	list;
+ 	int			rating;
++	enum clocksource_ids	id;
+ 	enum vdso_clock_mode	vdso_clock_mode;
+ 	unsigned long		flags;
+ 
+diff --git a/include/linux/clocksource_ids.h b/include/linux/clocksource_ids.h
+new file mode 100644
+index 000000000000..4d8e19e05328
+--- /dev/null
++++ b/include/linux/clocksource_ids.h
+@@ -0,0 +1,11 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef _LINUX_CLOCKSOURCE_IDS_H
++#define _LINUX_CLOCKSOURCE_IDS_H
++
++/* Enum to give clocksources a unique identifier */
++enum clocksource_ids {
++	CSID_GENERIC		= 0,
++	CSID_MAX,
++};
++
++#endif
+diff --git a/include/linux/timekeeping.h b/include/linux/timekeeping.h
+index b27e2ffa96c1..70e771862d20 100644
+--- a/include/linux/timekeeping.h
++++ b/include/linux/timekeeping.h
+@@ -3,6 +3,7 @@
+ #define _LINUX_TIMEKEEPING_H
+ 
+ #include <linux/errno.h>
++#include <linux/clocksource_ids.h>
+ 
+ /* Included from linux/ktime.h */
+ 
+@@ -232,11 +233,12 @@ extern void timekeeping_inject_sleeptime64(const struct timespec64 *delta);
+  * @cs_was_changed_seq:	The sequence number of clocksource change events
+  */
+ struct system_time_snapshot {
+-	u64		cycles;
+-	ktime_t		real;
+-	ktime_t		raw;
+-	unsigned int	clock_was_set_seq;
+-	u8		cs_was_changed_seq;
++	u64			cycles;
++	ktime_t			real;
++	ktime_t			raw;
++	enum clocksource_ids	cs_id;
++	unsigned int		clock_was_set_seq;
++	u8			cs_was_changed_seq;
+ };
+ 
+ /*
+diff --git a/kernel/time/clocksource.c b/kernel/time/clocksource.c
+index 02441ead3c3b..9fe148734fb3 100644
+--- a/kernel/time/clocksource.c
++++ b/kernel/time/clocksource.c
+@@ -928,6 +928,9 @@ int __clocksource_register_scale(struct clocksource *cs, u32 scale, u32 freq)
+ 
+ 	clocksource_arch_init(cs);
+ 
++	if (WARN_ON_ONCE((unsigned int)cs->id >= CSID_MAX))
++		cs->id = CSID_GENERIC;
++
+ 	if (cs->vdso_clock_mode < 0 ||
+ 	    cs->vdso_clock_mode >= VDSO_CLOCKMODE_MAX) {
+ 		pr_warn("clocksource %s registered with invalid VDSO mode %d. Disabling VDSO support.\n",
+diff --git a/kernel/time/timekeeping.c b/kernel/time/timekeeping.c
+index d20d489841c8..2cf85d81e4ed 100644
+--- a/kernel/time/timekeeping.c
++++ b/kernel/time/timekeeping.c
+@@ -979,6 +979,7 @@ void ktime_get_snapshot(struct system_time_snapshot *systime_snapshot)
+ 	do {
+ 		seq = read_seqcount_begin(&tk_core.seq);
+ 		now = tk_clock_read(&tk->tkr_mono);
++		systime_snapshot->cs_id = tk->tkr_mono.clock->id;
+ 		systime_snapshot->cs_was_changed_seq = tk->cs_was_changed_seq;
+ 		systime_snapshot->clock_was_set_seq = tk->clock_was_set_seq;
+ 		base_real = ktime_add(tk->tkr_mono.base,
+
+From patchwork Fri Jun 19 09:30:30 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Jianyong Wu <jianyong.wu@arm.com>
+X-Patchwork-Id: 11613607
+Return-Path: <SRS0=UAw1=AA=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id A8C0014B7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:34:15 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 92FF520890
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:34:15 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731742AbgFSJeK (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 19 Jun 2020 05:34:10 -0400
+Received: from foss.arm.com ([217.140.110.172]:49278 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731780AbgFSJba (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 19 Jun 2020 05:31:30 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id EAF8013FD;
+        Fri, 19 Jun 2020 02:31:28 -0700 (PDT)
+Received: from entos-d05.shanghai.arm.com (entos-d05.shanghai.arm.com
+ [10.169.40.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ BE7D73F71F;
+        Fri, 19 Jun 2020 02:31:22 -0700 (PDT)
+From: Jianyong Wu <jianyong.wu@arm.com>
+To: netdev@vger.kernel.org, yangbo.lu@nxp.com, john.stultz@linaro.org,
+        tglx@linutronix.de, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, maz@kernel.org,
+        richardcochran@gmail.com, Mark.Rutland@arm.com, will@kernel.org,
+        suzuki.poulose@arm.com, steven.price@arm.com
+Cc: linux-kernel@vger.kernel.org, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org,
+        Steve.Capper@arm.com, Kaly.Xin@arm.com, justin.he@arm.com,
+        Wei.Chen@arm.com, jianyong.wu@arm.com, nd@arm.com
+Subject: [RFC PATCH v13 6/9] clocksource: Add clocksource id for arm arch
+ counter
+Date: Fri, 19 Jun 2020 17:30:30 +0800
+Message-Id: <20200619093033.58344-7-jianyong.wu@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200619093033.58344-1-jianyong.wu@arm.com>
+References: <20200619093033.58344-1-jianyong.wu@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Add clocksource id for arm arch counter to let it be identified easily and
+elegantly in ptp_kvm implementation for arm.
+
+Signed-off-by: Jianyong Wu <jianyong.wu@arm.com>
+---
+ drivers/clocksource/arm_arch_timer.c | 2 ++
+ include/linux/clocksource_ids.h      | 1 +
+ 2 files changed, 3 insertions(+)
+
+diff --git a/drivers/clocksource/arm_arch_timer.c b/drivers/clocksource/arm_arch_timer.c
+index ecf7b7db2d05..edc5be0ae324 100644
+--- a/drivers/clocksource/arm_arch_timer.c
++++ b/drivers/clocksource/arm_arch_timer.c
+@@ -16,6 +16,7 @@
+ #include <linux/cpu_pm.h>
+ #include <linux/clockchips.h>
+ #include <linux/clocksource.h>
++#include <linux/clocksource_ids.h>
+ #include <linux/interrupt.h>
+ #include <linux/of_irq.h>
+ #include <linux/of_address.h>
+@@ -191,6 +192,7 @@ static u64 arch_counter_read_cc(const struct cyclecounter *cc)
+ 
+ static struct clocksource clocksource_counter = {
+ 	.name	= "arch_sys_counter",
++	.id	= CSID_ARM_ARCH_COUNTER,
+ 	.rating	= 400,
+ 	.read	= arch_counter_read,
+ 	.mask	= CLOCKSOURCE_MASK(56),
+diff --git a/include/linux/clocksource_ids.h b/include/linux/clocksource_ids.h
+index 4d8e19e05328..16775d7d8f8d 100644
+--- a/include/linux/clocksource_ids.h
++++ b/include/linux/clocksource_ids.h
+@@ -5,6 +5,7 @@
+ /* Enum to give clocksources a unique identifier */
+ enum clocksource_ids {
+ 	CSID_GENERIC		= 0,
++	CSID_ARM_ARCH_COUNTER,
+ 	CSID_MAX,
+ };
+ 
+
+From patchwork Fri Jun 19 09:30:31 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Jianyong Wu <jianyong.wu@arm.com>
+X-Patchwork-Id: 11613605
+Return-Path: <SRS0=UAw1=AA=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 5952914B7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:33:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 4BC3F214DB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:33:58 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731602AbgFSJdv (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 19 Jun 2020 05:33:51 -0400
+Received: from foss.arm.com ([217.140.110.172]:49316 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731822AbgFSJbg (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 19 Jun 2020 05:31:36 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id A1CDD1435;
+        Fri, 19 Jun 2020 02:31:35 -0700 (PDT)
+Received: from entos-d05.shanghai.arm.com (entos-d05.shanghai.arm.com
+ [10.169.40.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 73F663F71F;
+        Fri, 19 Jun 2020 02:31:29 -0700 (PDT)
+From: Jianyong Wu <jianyong.wu@arm.com>
+To: netdev@vger.kernel.org, yangbo.lu@nxp.com, john.stultz@linaro.org,
+        tglx@linutronix.de, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, maz@kernel.org,
+        richardcochran@gmail.com, Mark.Rutland@arm.com, will@kernel.org,
+        suzuki.poulose@arm.com, steven.price@arm.com
+Cc: linux-kernel@vger.kernel.org, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org,
+        Steve.Capper@arm.com, Kaly.Xin@arm.com, justin.he@arm.com,
+        Wei.Chen@arm.com, jianyong.wu@arm.com, nd@arm.com
+Subject: [RFC PATCH v13 7/9] arm64/kvm: Add hypercall service for kvm ptp.
+Date: Fri, 19 Jun 2020 17:30:31 +0800
+Message-Id: <20200619093033.58344-8-jianyong.wu@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200619093033.58344-1-jianyong.wu@arm.com>
+References: <20200619093033.58344-1-jianyong.wu@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+ptp_kvm will get this service through smccc call.
+The service offers wall time and counter cycle of host for guest.
+caller must explicitly determines which cycle of virtual counter or
+physical counter to return if it needs counter cycle.
+
+Signed-off-by: Jianyong Wu <jianyong.wu@arm.com>
+---
+ arch/arm64/kvm/Kconfig      |  6 +++++
+ arch/arm64/kvm/hypercalls.c | 50 +++++++++++++++++++++++++++++++++++++
+ include/linux/arm-smccc.h   | 30 ++++++++++++++++++++++
+ 3 files changed, 86 insertions(+)
+
+diff --git a/arch/arm64/kvm/Kconfig b/arch/arm64/kvm/Kconfig
+index 13489aff4440..79091f6e5e7a 100644
+--- a/arch/arm64/kvm/Kconfig
++++ b/arch/arm64/kvm/Kconfig
+@@ -60,6 +60,12 @@ config KVM_ARM_PMU
+ config KVM_INDIRECT_VECTORS
+ 	def_bool HARDEN_BRANCH_PREDICTOR || HARDEN_EL2_VECTORS
+ 
++config ARM64_KVM_PTP_HOST
++	bool "KVM PTP host service for arm64"
++	default y
++	help
++	  virtual kvm ptp clock hypercall service for arm64
++
+ endif # KVM
+ 
+ endif # VIRTUALIZATION
+diff --git a/arch/arm64/kvm/hypercalls.c b/arch/arm64/kvm/hypercalls.c
+index db6dce3d0e23..366b0646c360 100644
+--- a/arch/arm64/kvm/hypercalls.c
++++ b/arch/arm64/kvm/hypercalls.c
+@@ -3,6 +3,7 @@
+ 
+ #include <linux/arm-smccc.h>
+ #include <linux/kvm_host.h>
++#include <linux/clocksource_ids.h>
+ 
+ #include <asm/kvm_emulate.h>
+ 
+@@ -11,6 +12,10 @@
+ 
+ int kvm_hvc_call_handler(struct kvm_vcpu *vcpu)
+ {
++#ifdef CONFIG_ARM64_KVM_PTP_HOST
++	struct system_time_snapshot systime_snapshot;
++	u64 cycles = 0;
++#endif
+ 	u32 func_id = smccc_get_function(vcpu);
+ 	u32 val[4] = {SMCCC_RET_NOT_SUPPORTED};
+ 	u32 feature;
+@@ -70,7 +75,52 @@ int kvm_hvc_call_handler(struct kvm_vcpu *vcpu)
+ 		break;
+ 	case ARM_SMCCC_VENDOR_HYP_KVM_FEATURES_FUNC_ID:
+ 		val[0] = BIT(ARM_SMCCC_KVM_FUNC_FEATURES);
++
++#ifdef CONFIG_ARM64_KVM_PTP_HOST
++		val[0] |= BIT(ARM_SMCCC_KVM_FUNC_KVM_PTP);
++#endif
++		break;
++
++#ifdef CONFIG_ARM64_KVM_PTP_HOST
++	/*
++	 * This serves virtual kvm_ptp.
++	 * Four values will be passed back.
++	 * reg0 stores high 32-bit host ktime;
++	 * reg1 stores low 32-bit host ktime;
++	 * reg2 stores high 32-bit difference of host cycles and cntvoff;
++	 * reg3 stores low 32-bit difference of host cycles and cntvoff.
++	 */
++	case ARM_SMCCC_VENDOR_HYP_KVM_PTP_FUNC_ID:
++		/*
++		 * system time and counter value must captured in the same
++		 * time to keep consistency and precision.
++		 */
++		ktime_get_snapshot(&systime_snapshot);
++		if (systime_snapshot.cs_id != CSID_ARM_ARCH_COUNTER)
++			break;
++		val[0] = upper_32_bits(systime_snapshot.real);
++		val[1] = lower_32_bits(systime_snapshot.real);
++		/*
++		 * which of virtual counter or physical counter being
++		 * asked for is decided by the first argument of smccc
++		 * call. If no first argument or invalid argument, zero
++		 * counter value will return;
++		 */
++		feature = smccc_get_arg1(vcpu);
++		switch (feature) {
++		case ARM_PTP_VIRT_COUNTER:
++			cycles = systime_snapshot.cycles -
++			vcpu_vtimer(vcpu)->cntvoff;
++			break;
++		case ARM_PTP_PHY_COUNTER:
++			cycles = systime_snapshot.cycles;
++			break;
++		}
++		val[2] = upper_32_bits(cycles);
++		val[3] = lower_32_bits(cycles);
+ 		break;
++#endif
++
+ 	default:
+ 		return kvm_psci_call(vcpu);
+ 	}
+diff --git a/include/linux/arm-smccc.h b/include/linux/arm-smccc.h
+index 86ff30131e7b..e593ec515f82 100644
+--- a/include/linux/arm-smccc.h
++++ b/include/linux/arm-smccc.h
+@@ -98,6 +98,9 @@
+ 
+ /* KVM "vendor specific" services */
+ #define ARM_SMCCC_KVM_FUNC_FEATURES		0
++#define ARM_SMCCC_KVM_FUNC_KVM_PTP		1
++#define ARM_SMCCC_KVM_FUNC_KVM_PTP_PHY		2
++#define ARM_SMCCC_KVM_FUNC_KVM_PTP_VIRT		3
+ #define ARM_SMCCC_KVM_FUNC_FEATURES_2		127
+ #define ARM_SMCCC_KVM_NUM_FUNCS			128
+ 
+@@ -107,6 +110,33 @@
+ 			   ARM_SMCCC_OWNER_VENDOR_HYP,			\
+ 			   ARM_SMCCC_KVM_FUNC_FEATURES)
+ 
++/*
++ * kvm_ptp is a feature used for time sync between vm and host.
++ * kvm_ptp module in guest kernel will get service from host using
++ * this hypercall ID.
++ */
++#define ARM_SMCCC_VENDOR_HYP_KVM_PTP_FUNC_ID				\
++	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL,				\
++			   ARM_SMCCC_SMC_32,				\
++			   ARM_SMCCC_OWNER_VENDOR_HYP,			\
++			   ARM_SMCCC_KVM_FUNC_KVM_PTP)
++
++/*
++ * kvm_ptp may get counter cycle from host and should ask for which of
++ * physical counter or virtual counter by using ARM_PTP_PHY_COUNTER and
++ * ARM_PTP_VIRT_COUNTER explicitly.
++ */
++#define ARM_PTP_PHY_COUNTER						\
++	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL,				\
++			   ARM_SMCCC_SMC_32,				\
++			   ARM_SMCCC_OWNER_VENDOR_HYP,			\
++			   ARM_SMCCC_KVM_FUNC_KVM_PTP_PHY)
++
++#define ARM_PTP_VIRT_COUNTER						\
++	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL,				\
++			   ARM_SMCCC_SMC_32,				\
++			   ARM_SMCCC_OWNER_VENDOR_HYP,			\
++			   ARM_SMCCC_KVM_FUNC_KVM_PTP_VIRT)
+ #ifndef __ASSEMBLY__
+ 
+ #include <linux/linkage.h>
+
+From patchwork Fri Jun 19 09:30:32 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Jianyong Wu <jianyong.wu@arm.com>
+X-Patchwork-Id: 11613599
+Return-Path: <SRS0=UAw1=AA=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C99C214B7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:33:23 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id B32902073E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:33:23 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731907AbgFSJdJ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 19 Jun 2020 05:33:09 -0400
+Received: from foss.arm.com ([217.140.110.172]:49344 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729938AbgFSJbn (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 19 Jun 2020 05:31:43 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 58B3D143D;
+        Fri, 19 Jun 2020 02:31:42 -0700 (PDT)
+Received: from entos-d05.shanghai.arm.com (entos-d05.shanghai.arm.com
+ [10.169.40.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ 2ACBB3F71F;
+        Fri, 19 Jun 2020 02:31:35 -0700 (PDT)
+From: Jianyong Wu <jianyong.wu@arm.com>
+To: netdev@vger.kernel.org, yangbo.lu@nxp.com, john.stultz@linaro.org,
+        tglx@linutronix.de, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, maz@kernel.org,
+        richardcochran@gmail.com, Mark.Rutland@arm.com, will@kernel.org,
+        suzuki.poulose@arm.com, steven.price@arm.com
+Cc: linux-kernel@vger.kernel.org, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org,
+        Steve.Capper@arm.com, Kaly.Xin@arm.com, justin.he@arm.com,
+        Wei.Chen@arm.com, jianyong.wu@arm.com, nd@arm.com
+Subject: [RFC PATCH v13 8/9] ptp: arm64: Enable ptp_kvm for arm64
+Date: Fri, 19 Jun 2020 17:30:32 +0800
+Message-Id: <20200619093033.58344-9-jianyong.wu@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200619093033.58344-1-jianyong.wu@arm.com>
+References: <20200619093033.58344-1-jianyong.wu@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Currently, there is no mechanism to keep time sync between guest and host
+in arm64 virtualization environment. Time in guest will drift compared
+with host after boot up as they may both use third party time sources
+to correct their time respectively. The time deviation will be in order
+of milliseconds. But in some scenarios,like in cloud envirenment, we ask
+for higher time precision.
+
+kvm ptp clock, which choose the host clock source as a reference
+clock to sync time between guest and host, has been adopted by x86
+which makes the time sync order from milliseconds to nanoseconds.
+
+This patch enables kvm ptp clock for arm64 and improve clock sync precison
+significantly.
+
+Test result comparisons between with kvm ptp clock and without it in arm64
+are as follows. This test derived from the result of command 'chronyc
+sources'. we should take more care of the last sample column which shows
+the offset between the local clock and the source at the last measurement.
+
+no kvm ptp in guest:
+MS Name/IP address   Stratum Poll Reach LastRx Last sample
+========================================================================
+^* dns1.synet.edu.cn      2   6   377    13  +1040us[+1581us] +/-   21ms
+^* dns1.synet.edu.cn      2   6   377    21  +1040us[+1581us] +/-   21ms
+^* dns1.synet.edu.cn      2   6   377    29  +1040us[+1581us] +/-   21ms
+^* dns1.synet.edu.cn      2   6   377    37  +1040us[+1581us] +/-   21ms
+^* dns1.synet.edu.cn      2   6   377    45  +1040us[+1581us] +/-   21ms
+^* dns1.synet.edu.cn      2   6   377    53  +1040us[+1581us] +/-   21ms
+^* dns1.synet.edu.cn      2   6   377    61  +1040us[+1581us] +/-   21ms
+^* dns1.synet.edu.cn      2   6   377     4   -130us[ +796us] +/-   21ms
+^* dns1.synet.edu.cn      2   6   377    12   -130us[ +796us] +/-   21ms
+^* dns1.synet.edu.cn      2   6   377    20   -130us[ +796us] +/-   21ms
+
+in host:
+MS Name/IP address   Stratum Poll Reach LastRx Last sample
+========================================================================
+^* 120.25.115.20          2   7   377    72   -470us[ -603us] +/-   18ms
+^* 120.25.115.20          2   7   377    92   -470us[ -603us] +/-   18ms
+^* 120.25.115.20          2   7   377   112   -470us[ -603us] +/-   18ms
+^* 120.25.115.20          2   7   377     2   +872ns[-6808ns] +/-   17ms
+^* 120.25.115.20          2   7   377    22   +872ns[-6808ns] +/-   17ms
+^* 120.25.115.20          2   7   377    43   +872ns[-6808ns] +/-   17ms
+^* 120.25.115.20          2   7   377    63   +872ns[-6808ns] +/-   17ms
+^* 120.25.115.20          2   7   377    83   +872ns[-6808ns] +/-   17ms
+^* 120.25.115.20          2   7   377   103   +872ns[-6808ns] +/-   17ms
+^* 120.25.115.20          2   7   377   123   +872ns[-6808ns] +/-   17ms
+
+The dns1.synet.edu.cn is the network reference clock for guest and
+120.25.115.20 is the network reference clock for host. we can't get the
+clock error between guest and host directly, but a roughly estimated value
+will be in order of hundreds of us to ms.
+
+with kvm ptp in guest:
+chrony has been disabled in host to remove the disturb by network clock.
+
+MS Name/IP address         Stratum Poll Reach LastRx Last sample
+========================================================================
+* PHC0                    0   3   377     8     -7ns[   +1ns] +/-    3ns
+* PHC0                    0   3   377     8     +1ns[  +16ns] +/-    3ns
+* PHC0                    0   3   377     6     -4ns[   -0ns] +/-    6ns
+* PHC0                    0   3   377     6     -8ns[  -12ns] +/-    5ns
+* PHC0                    0   3   377     5     +2ns[   +4ns] +/-    4ns
+* PHC0                    0   3   377    13     +2ns[   +4ns] +/-    4ns
+* PHC0                    0   3   377    12     -4ns[   -6ns] +/-    4ns
+* PHC0                    0   3   377    11     -8ns[  -11ns] +/-    6ns
+* PHC0                    0   3   377    10    -14ns[  -20ns] +/-    4ns
+* PHC0                    0   3   377     8     +4ns[   +5ns] +/-    4ns
+
+The PHC0 is the ptp clock which choose the host clock as its source
+clock. So we can see that the clock difference between host and guest
+is in order of ns.
+
+Signed-off-by: Jianyong Wu <jianyong.wu@arm.com>
+---
+ drivers/clocksource/arm_arch_timer.c | 24 +++++++++++++
+ drivers/ptp/Kconfig                  |  2 +-
+ drivers/ptp/ptp_kvm_arm64.c          | 53 ++++++++++++++++++++++++++++
+ 3 files changed, 78 insertions(+), 1 deletion(-)
+ create mode 100644 drivers/ptp/ptp_kvm_arm64.c
+
+diff --git a/drivers/clocksource/arm_arch_timer.c b/drivers/clocksource/arm_arch_timer.c
+index edc5be0ae324..69d30b407cd9 100644
+--- a/drivers/clocksource/arm_arch_timer.c
++++ b/drivers/clocksource/arm_arch_timer.c
+@@ -1639,3 +1639,27 @@ static int __init arch_timer_acpi_init(struct acpi_table_header *table)
+ }
+ TIMER_ACPI_DECLARE(arch_timer, ACPI_SIG_GTDT, arch_timer_acpi_init);
+ #endif
++
++#if IS_ENABLED(CONFIG_PTP_1588_CLOCK_KVM)
++#include <linux/arm-smccc.h>
++int kvm_arch_ptp_get_crosststamp(unsigned long *cycle, struct timespec64 *ts,
++			      struct clocksource **cs)
++{
++	struct arm_smccc_res hvc_res;
++	ktime_t ktime_overall;
++
++	/* Currently, our guest will always use the virtual counter */
++	arm_smccc_1_1_invoke(ARM_SMCCC_VENDOR_HYP_KVM_PTP_FUNC_ID,
++			     ARM_PTP_VIRT_COUNTER, &hvc_res);
++	if ((int)(hvc_res.a0) < 0)
++		return -EOPNOTSUPP;
++
++	ktime_overall = (long long)hvc_res.a0 << 32 | hvc_res.a1;
++	*ts = ktime_to_timespec64(ktime_overall);
++	*cycle = (long long)hvc_res.a2 << 32 | hvc_res.a3;
++	*cs = &clocksource_counter;
++
++	return 0;
++}
++EXPORT_SYMBOL_GPL(kvm_arch_ptp_get_crosststamp);
++#endif
+diff --git a/drivers/ptp/Kconfig b/drivers/ptp/Kconfig
+index 942f72d8151d..127e96f14f89 100644
+--- a/drivers/ptp/Kconfig
++++ b/drivers/ptp/Kconfig
+@@ -106,7 +106,7 @@ config PTP_1588_CLOCK_PCH
+ config PTP_1588_CLOCK_KVM
+ 	tristate "KVM virtual PTP clock"
+ 	depends on PTP_1588_CLOCK
+-	depends on KVM_GUEST && X86
++	depends on KVM_GUEST && X86 || ARM64 && ARM_ARCH_TIMER && ARM_PSCI_FW
+ 	default y
+ 	help
+ 	  This driver adds support for using kvm infrastructure as a PTP
+diff --git a/drivers/ptp/ptp_kvm_arm64.c b/drivers/ptp/ptp_kvm_arm64.c
+new file mode 100644
+index 000000000000..704a7252b119
+--- /dev/null
++++ b/drivers/ptp/ptp_kvm_arm64.c
+@@ -0,0 +1,53 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ *  Virtual PTP 1588 clock for use with KVM guests
++ *  Copyright (C) 2019 ARM Ltd.
++ *  All Rights Reserved
++ */
++
++#include <linux/kernel.h>
++#include <linux/err.h>
++#include <asm/hypervisor.h>
++#include <linux/module.h>
++#include <linux/psci.h>
++#include <linux/arm-smccc.h>
++#include <linux/timecounter.h>
++#include <linux/sched/clock.h>
++#include <asm/arch_timer.h>
++
++int kvm_arch_ptp_init(void)
++{
++	struct arm_smccc_res hvc_res;
++
++	arm_smccc_1_1_invoke(ARM_SMCCC_VENDOR_HYP_KVM_FEATURES_FUNC_ID,
++			     &hvc_res);
++	if (!(hvc_res.a0 | BIT(ARM_SMCCC_KVM_FUNC_KVM_PTP)))
++		return -EOPNOTSUPP;
++
++	return 0;
++}
++
++int kvm_arch_ptp_get_clock_generic(struct timespec64 *ts,
++				   struct arm_smccc_res *hvc_res)
++{
++	ktime_t ktime_overall;
++
++	arm_smccc_1_1_invoke(ARM_SMCCC_VENDOR_HYP_KVM_PTP_FUNC_ID,
++			     hvc_res);
++	if ((int)(hvc_res->a0) < 0)
++		return -EOPNOTSUPP;
++
++	ktime_overall = (long long)hvc_res->a0 << 32 | hvc_res->a1;
++	*ts = ktime_to_timespec64(ktime_overall);
++
++	return 0;
++}
++
++int kvm_arch_ptp_get_clock(struct timespec64 *ts)
++{
++	struct arm_smccc_res hvc_res;
++
++	kvm_arch_ptp_get_clock_generic(ts, &hvc_res);
++
++	return 0;
++}
+
+From patchwork Fri Jun 19 09:30:33 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Jianyong Wu <jianyong.wu@arm.com>
+X-Patchwork-Id: 11613591
+Return-Path: <SRS0=UAw1=AA=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 46BAE14B7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:32:56 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 3948720890
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 19 Jun 2020 09:32:56 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732112AbgFSJck (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 19 Jun 2020 05:32:40 -0400
+Received: from foss.arm.com ([217.140.110.172]:49376 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731953AbgFSJbu (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 19 Jun 2020 05:31:50 -0400
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 1A0F81477;
+        Fri, 19 Jun 2020 02:31:49 -0700 (PDT)
+Received: from entos-d05.shanghai.arm.com (entos-d05.shanghai.arm.com
+ [10.169.40.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPA id
+ D5DBB3F71F;
+        Fri, 19 Jun 2020 02:31:42 -0700 (PDT)
+From: Jianyong Wu <jianyong.wu@arm.com>
+To: netdev@vger.kernel.org, yangbo.lu@nxp.com, john.stultz@linaro.org,
+        tglx@linutronix.de, pbonzini@redhat.com,
+        sean.j.christopherson@intel.com, maz@kernel.org,
+        richardcochran@gmail.com, Mark.Rutland@arm.com, will@kernel.org,
+        suzuki.poulose@arm.com, steven.price@arm.com
+Cc: linux-kernel@vger.kernel.org, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org,
+        Steve.Capper@arm.com, Kaly.Xin@arm.com, justin.he@arm.com,
+        Wei.Chen@arm.com, jianyong.wu@arm.com, nd@arm.com
+Subject: [RFC PATCH v13 9/9] arm64: Add kvm capability check extension for
+ ptp_kvm
+Date: Fri, 19 Jun 2020 17:30:33 +0800
+Message-Id: <20200619093033.58344-10-jianyong.wu@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200619093033.58344-1-jianyong.wu@arm.com>
+References: <20200619093033.58344-1-jianyong.wu@arm.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Let userspace check if there is kvm ptp service in host.
+Before VMs migrate to another host, VMM may check if this
+cap is available to determine the next behavior.
+
+Signed-off-by: Jianyong Wu <jianyong.wu@arm.com>
+Suggested-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/kvm/arm.c     | 4 ++++
+ include/uapi/linux/kvm.h | 1 +
+ 2 files changed, 5 insertions(+)
+
+diff --git a/arch/arm64/kvm/arm.c b/arch/arm64/kvm/arm.c
+index 90cb90561446..f41e84346468 100644
+--- a/arch/arm64/kvm/arm.c
++++ b/arch/arm64/kvm/arm.c
+@@ -194,6 +194,10 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
+ 	case KVM_CAP_ARM_IRQ_LINE_LAYOUT_2:
+ 	case KVM_CAP_ARM_NISV_TO_USER:
+ 	case KVM_CAP_ARM_INJECT_EXT_DABT:
++
++#ifdef CONFIG_ARM64_KVM_PTP_HOST
++	case KVM_CAP_ARM_KVM_PTP:
++#endif
+ 		r = 1;
+ 		break;
+ 	case KVM_CAP_ARM_SET_DEVICE_ADDR:
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index 4fdf30316582..f3d4b00dac57 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -1031,6 +1031,7 @@ struct kvm_ppc_resize_hpt {
+ #define KVM_CAP_PPC_SECURE_GUEST 181
+ #define KVM_CAP_HALT_POLL 182
+ #define KVM_CAP_ASYNC_PF_INT 183
++#define KVM_CAP_ARM_KVM_PTP 184
+ 
+ #ifdef KVM_CAP_IRQ_ROUTING
+ 
