@@ -1,0 +1,1209 @@
+From patchwork Wed Jul  8 19:51:54 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11652401
+Return-Path: <SRS0=kMba=AT=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1127814DD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  8 Jul 2020 19:53:45 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id F00542082E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  8 Jul 2020 19:53:44 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=linutronix.de header.i=@linutronix.de
+ header.b="ZWD4T0pP";
+	dkim=permerror (0-bit key) header.d=linutronix.de header.i=@linutronix.de
+ header.b="L2TJL1vZ"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726444AbgGHTxo (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 8 Jul 2020 15:53:44 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:43984 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1726338AbgGHTxk (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 8 Jul 2020 15:53:40 -0400
+Received: from galois.linutronix.de (Galois.linutronix.de
+ [IPv6:2a0a:51c0:0:12e:550::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 821D9C061A0B;
+        Wed,  8 Jul 2020 12:53:40 -0700 (PDT)
+Message-Id: <20200708195321.724574345@linutronix.de>
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=linutronix.de;
+        s=2020; t=1594238018;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+  references:references;
+        bh=cW72dPqtZuMh9vmtb+qgVOPPO4Xy97uOj4LUQgr9ay8=;
+        b=ZWD4T0pPums1mWXn/Y1A2+KqF94bKL9jeD+LHsCT4ub01yuZQDDT25AFDF7i28Uig4bwV+
+        bGaehYaMcAyDu7Jz6T3ANHfylRF86QlDFvzzr+OaiqbARirhAxvn2L60UJALnIhKPLzTK3
+        dFSQryKIEQfKHLfUiYzphiHPFKZRa/+gj0RwkvUqykcAotS4XXiAFOjO+OpZdW5IMwVFlt
+        KjaRQBu8gRdWqRBJMcb+ORAUyAq+T4PFcJ06qYKZ/wuAgESiKIGrCl/6NDqcC+gnSkHFO7
+        sxL8DRWYvy7yKapZd09lg6CEOukrKFtzQkNN6OU4Ep298dWm+xeL9++cpXp5oQ==
+DKIM-Signature: v=1; a=ed25519-sha256; c=relaxed/relaxed; d=linutronix.de;
+        s=2020e; t=1594238018;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+  references:references;
+        bh=cW72dPqtZuMh9vmtb+qgVOPPO4Xy97uOj4LUQgr9ay8=;
+        b=L2TJL1vZnF4cYPM/JhiZopc7KpQpgFxAUZlosxop8UxF8/nKKyUwDsR1A4ahInKiSsOj1C
+        lyWDtQufAablizBw==
+Date: Wed, 08 Jul 2020 21:51:54 +0200
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paolo Bonzini <pbonzini@redhat.com>,
+        kvm@vger.kernel.org,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Juergen Gross <jgross@suse.com>
+Subject: [patch V2 1/7] x86/kvm: Move context tracking where it belongs
+References: <20200708195153.746357686@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Thomas Gleixner <tglx@linutronix.de>
+
+Context tracking for KVM happens way too early in the vcpu_run()
+code. Anything after guest_enter_irqoff() and before guest_exit_irqoff()
+cannot use RCU and should also be not instrumented.
+
+The current way of doing this covers way too much code. Move it closer to
+the actual vmenter/exit code.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Reviewed-by: Alexandre Chartre <alexandre.chartre@oracle.com>
+Acked-by: Peter Zijlstra <peterz@infradead.org>
+Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/svm/svm.c |   16 ++++++++++++++++
+ arch/x86/kvm/vmx/vmx.c |   10 ++++++++++
+ arch/x86/kvm/x86.c     |    2 --
+ 3 files changed, 26 insertions(+), 2 deletions(-)
+
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -3399,6 +3399,14 @@ static __no_kcsan fastpath_t svm_vcpu_ru
+ 	 */
+ 	x86_spec_ctrl_set_guest(svm->spec_ctrl, svm->virt_spec_ctrl);
+ 
++	/*
++	 * Tell context tracking that this CPU is about to enter guest
++	 * mode. This has to be after x86_spec_ctrl_set_guest() because
++	 * that can take locks (lockdep needs RCU) and calls into world and
++	 * some more.
++	 */
++	guest_enter_irqoff();
++
+ 	__svm_vcpu_run(svm->vmcb_pa, (unsigned long *)&svm->vcpu.arch.regs);
+ 
+ #ifdef CONFIG_X86_64
+@@ -3409,6 +3417,14 @@ static __no_kcsan fastpath_t svm_vcpu_ru
+ 	loadsegment(gs, svm->host.gs);
+ #endif
+ #endif
++	/*
++	 * Tell context tracking that this CPU is back.
++	 *
++	 * This needs to be done before the below as native_read_msr()
++	 * contains a tracepoint and x86_spec_ctrl_restore_host() calls
++	 * into world and some more.
++	 */
++	guest_exit_irqoff();
+ 
+ 	/*
+ 	 * We do not use IBRS in the kernel. If this vCPU has used the
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6728,6 +6728,11 @@ static fastpath_t vmx_vcpu_run(struct kv
+ 	 */
+ 	x86_spec_ctrl_set_guest(vmx->spec_ctrl, 0);
+ 
++	/*
++	 * Tell context tracking that this CPU is about to enter guest mode.
++	 */
++	guest_enter_irqoff();
++
+ 	/* L1D Flush includes CPU buffer clear to mitigate MDS */
+ 	if (static_branch_unlikely(&vmx_l1d_should_flush))
+ 		vmx_l1d_flush(vcpu);
+@@ -6743,6 +6748,11 @@ static fastpath_t vmx_vcpu_run(struct kv
+ 	vcpu->arch.cr2 = read_cr2();
+ 
+ 	/*
++	 * Tell context tracking that this CPU is back.
++	 */
++	guest_exit_irqoff();
++
++	/*
+ 	 * We do not use IBRS in the kernel. If this vCPU has used the
+ 	 * SPEC_CTRL MSR it may have left it on; save the value and
+ 	 * turn it off. This is much more efficient than blindly adding
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -8501,7 +8501,6 @@ static int vcpu_enter_guest(struct kvm_v
+ 	}
+ 
+ 	trace_kvm_entry(vcpu->vcpu_id);
+-	guest_enter_irqoff();
+ 
+ 	fpregs_assert_state_consistent();
+ 	if (test_thread_flag(TIF_NEED_FPU_LOAD))
+@@ -8563,7 +8562,6 @@ static int vcpu_enter_guest(struct kvm_v
+ 	local_irq_disable();
+ 	kvm_after_interrupt(vcpu);
+ 
+-	guest_exit_irqoff();
+ 	if (lapic_in_kernel(vcpu)) {
+ 		s64 delta = vcpu->arch.apic->lapic_timer.advance_expire_delta;
+ 		if (delta != S64_MIN) {
+
+From patchwork Wed Jul  8 19:51:55 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11652411
+Return-Path: <SRS0=kMba=AT=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 91B3160D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  8 Jul 2020 19:54:18 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 791092078C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  8 Jul 2020 19:54:18 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=linutronix.de header.i=@linutronix.de
+ header.b="spuQzcY+";
+	dkim=permerror (0-bit key) header.d=linutronix.de header.i=@linutronix.de
+ header.b="SawKJOaJ"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726356AbgGHTxn (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 8 Jul 2020 15:53:43 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:53434 "EHLO
+        galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1725446AbgGHTxm (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 8 Jul 2020 15:53:42 -0400
+Message-Id: <20200708195321.822002354@linutronix.de>
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=linutronix.de;
+        s=2020; t=1594238019;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+  references:references;
+        bh=O37pX8HCMturL+rhqBaE0iWzy5y3hehqvpiNhW/ZQz0=;
+        b=spuQzcY+mFKo78t/CNljjZWO5/ivf9wUU/Lav18NYybvdo1ZlU1x74CJhp0Z9stGohgc9M
+        rBK4Et5MlndlRoHO8o4o66Y0alJgqJjvbCAsMkEGLcMlRkxKqL7HrlBcgOuhBVvVeguR3+
+        13oHqGkIsFyxHCa1tM62mzj3x4NLisLVfv8ZD9GTCBvdo0Lz4xVBp93ZlkFYJCYo9y/EO+
+        BYZB12YSjiwx5pp/AZfX2snSzDGZFQSVCi54vcabFeuBBaRdudlH7S6CMS6imDbdSXU8eF
+        MTp6lcP6JHpq1VIBHaQZPqgrvMyUZudXDaud0zji0JsomwEcB3JZTuFxQMv8GQ==
+DKIM-Signature: v=1; a=ed25519-sha256; c=relaxed/relaxed; d=linutronix.de;
+        s=2020e; t=1594238019;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+  references:references;
+        bh=O37pX8HCMturL+rhqBaE0iWzy5y3hehqvpiNhW/ZQz0=;
+        b=SawKJOaJBHxztqPVVNApI0Gorktq1IGQCGry/58TZQK/L5PprosVYw6t6YjgBlG/3eVGJb
+        M/8yr3e0XhW4MKBA==
+Date: Wed, 08 Jul 2020 21:51:55 +0200
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paolo Bonzini <pbonzini@redhat.com>,
+        kvm@vger.kernel.org,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Juergen Gross <jgross@suse.com>
+Subject: [patch V2 2/7] x86/kvm/vmx: Add hardirq tracing to guest enter/exit
+References: <20200708195153.746357686@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Thomas Gleixner <tglx@linutronix.de>
+
+Entering guest mode is more or less the same as returning to user
+space. From an instrumentation point of view both leave kernel mode and the
+transition to guest or user mode reenables interrupts on the host. In user
+mode an interrupt is served directly and in guest mode it causes a VM exit
+which then handles or reinjects the interrupt.
+
+The transition from guest mode or user mode to kernel mode disables
+interrupts, which needs to be recorded in instrumentation to set the
+correct state again.
+
+This is important for e.g. latency analysis because otherwise the execution
+time in guest or user mode would be wrongly accounted as interrupt disabled
+and could trigger false positives.
+
+Add hardirq tracing to guest enter/exit functions in the same way as it
+is done in the user mode enter/exit code, respecting the RCU requirements.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Reviewed-by: Alexandre Chartre <alexandre.chartre@oracle.com>
+Acked-by: Peter Zijlstra <peterz@infradead.org>
+Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/vmx/vmx.c |   27 +++++++++++++++++++++++++--
+ 1 file changed, 25 insertions(+), 2 deletions(-)
+
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6729,9 +6729,21 @@ static fastpath_t vmx_vcpu_run(struct kv
+ 	x86_spec_ctrl_set_guest(vmx->spec_ctrl, 0);
+ 
+ 	/*
+-	 * Tell context tracking that this CPU is about to enter guest mode.
++	 * VMENTER enables interrupts (host state), but the kernel state is
++	 * interrupts disabled when this is invoked. Also tell RCU about
++	 * it. This is the same logic as for exit_to_user_mode().
++	 *
++	 * This ensures that e.g. latency analysis on the host observes
++	 * guest mode as interrupt enabled.
++	 *
++	 * guest_enter_irqoff() informs context tracking about the
++	 * transition to guest mode and if enabled adjusts RCU state
++	 * accordingly.
+ 	 */
++	trace_hardirqs_on_prepare();
++	lockdep_hardirqs_on_prepare(CALLER_ADDR0);
+ 	guest_enter_irqoff();
++	lockdep_hardirqs_on(CALLER_ADDR0);
+ 
+ 	/* L1D Flush includes CPU buffer clear to mitigate MDS */
+ 	if (static_branch_unlikely(&vmx_l1d_should_flush))
+@@ -6748,9 +6760,20 @@ static fastpath_t vmx_vcpu_run(struct kv
+ 	vcpu->arch.cr2 = read_cr2();
+ 
+ 	/*
+-	 * Tell context tracking that this CPU is back.
++	 * VMEXIT disables interrupts (host state), but tracing and lockdep
++	 * have them in state 'on' as recorded before entering guest mode.
++	 * Same as enter_from_user_mode().
++	 *
++	 * guest_exit_irqoff() restores host context and reinstates RCU if
++	 * enabled and required.
++	 *
++	 * This needs to be done before the below as native_read_msr()
++	 * contains a tracepoint and x86_spec_ctrl_restore_host() calls
++	 * into world and some more.
+ 	 */
++	lockdep_hardirqs_off(CALLER_ADDR0);
+ 	guest_exit_irqoff();
++	trace_hardirqs_off_finish();
+ 
+ 	/*
+ 	 * We do not use IBRS in the kernel. If this vCPU has used the
+
+From patchwork Wed Jul  8 19:51:56 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11652399
+Return-Path: <SRS0=kMba=AT=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 89457913
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  8 Jul 2020 19:53:44 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 7199D207BB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  8 Jul 2020 19:53:44 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=linutronix.de header.i=@linutronix.de
+ header.b="BUEasXMH";
+	dkim=permerror (0-bit key) header.d=linutronix.de header.i=@linutronix.de
+ header.b="Dwo6IQCn"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726410AbgGHTxn (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 8 Jul 2020 15:53:43 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:43990 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1726340AbgGHTxm (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 8 Jul 2020 15:53:42 -0400
+Received: from galois.linutronix.de (Galois.linutronix.de
+ [IPv6:2a0a:51c0:0:12e:550::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 70798C08C5C1;
+        Wed,  8 Jul 2020 12:53:42 -0700 (PDT)
+Message-Id: <20200708195321.934715094@linutronix.de>
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=linutronix.de;
+        s=2020; t=1594238021;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+  references:references;
+        bh=Q/0rxpdoDSIfJysNnP2MHVMd9KS2WUtgcO1VSsks6s0=;
+        b=BUEasXMHi1inxAAg7UdnSdkB+/oZxDC4PTmqfPEP5LXAP39tqZM2OT0iQiDS37YEF95xe4
+        8eXy5vpXI3rDWY9mVhohf5y0lUn4SNATtzfcLcfCNDRcTwvzIp7hKcCEyg/U1iaaZd5j9t
+        PSDu4mQ1pXp6fVYplPR+g+uE/DMpWO0JcWyKYu2CYT+vIGf8VZNzv+wtVpKHy54RZMIaHh
+        3B0CE2ouuFfR6veh8KWoEj/AoDl561E6rgoiJkKY/L++qsJdGY2Ie0wy072rMHoyMEAFQU
+        0R7c00DzFP+zTIKvF75CFai3x19q3QpLOluEytyGWOqqItirENI0oRaa7Nb+4Q==
+DKIM-Signature: v=1; a=ed25519-sha256; c=relaxed/relaxed; d=linutronix.de;
+        s=2020e; t=1594238021;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+  references:references;
+        bh=Q/0rxpdoDSIfJysNnP2MHVMd9KS2WUtgcO1VSsks6s0=;
+        b=Dwo6IQCn5b8l/Ds8gc0rN7tVH3Vg2GJjbNAMjiJajjRyc+KgR5SIvXF+VZE30izfjoX+8A
+        /mMEkm0JwV0M7LBA==
+Date: Wed, 08 Jul 2020 21:51:56 +0200
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paolo Bonzini <pbonzini@redhat.com>,
+        kvm@vger.kernel.org,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Juergen Gross <jgross@suse.com>
+Subject: [patch V2 3/7] x86/kvm/svm: Add hardirq tracing on guest enter/exit
+References: <20200708195153.746357686@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Thomas Gleixner <tglx@linutronix.de>
+
+Entering guest mode is more or less the same as returning to user
+space. From an instrumentation point of view both leave kernel mode and the
+transition to guest or user mode reenables interrupts on the host. In user
+mode an interrupt is served directly and in guest mode it causes a VM exit
+which then handles or reinjects the interrupt.
+
+The transition from guest mode or user mode to kernel mode disables
+interrupts, which needs to be recorded in instrumentation to set the
+correct state again.
+
+This is important for e.g. latency analysis because otherwise the execution
+time in guest or user mode would be wrongly accounted as interrupt disabled
+and could trigger false positives.
+
+Add hardirq tracing to guest enter/exit functions in the same way as it
+is done in the user mode enter/exit code, respecting the RCU requirements.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Reviewed-by: Alexandre Chartre <alexandre.chartre@oracle.com>
+Acked-by: Peter Zijlstra <peterz@infradead.org>
+Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/svm/svm.c |   27 ++++++++++++++++++++++-----
+ 1 file changed, 22 insertions(+), 5 deletions(-)
+
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -3400,12 +3400,21 @@ static __no_kcsan fastpath_t svm_vcpu_ru
+ 	x86_spec_ctrl_set_guest(svm->spec_ctrl, svm->virt_spec_ctrl);
+ 
+ 	/*
+-	 * Tell context tracking that this CPU is about to enter guest
+-	 * mode. This has to be after x86_spec_ctrl_set_guest() because
+-	 * that can take locks (lockdep needs RCU) and calls into world and
+-	 * some more.
++	 * VMENTER enables interrupts (host state), but the kernel state is
++	 * interrupts disabled when this is invoked. Also tell RCU about
++	 * it. This is the same logic as for exit_to_user_mode().
++	 *
++	 * This ensures that e.g. latency analysis on the host observes
++	 * guest mode as interrupt enabled.
++	 *
++	 * guest_enter_irqoff() informs context tracking about the
++	 * transition to guest mode and if enabled adjusts RCU state
++	 * accordingly.
+ 	 */
++	trace_hardirqs_on_prepare();
++	lockdep_hardirqs_on_prepare(CALLER_ADDR0);
+ 	guest_enter_irqoff();
++	lockdep_hardirqs_on(CALLER_ADDR0);
+ 
+ 	__svm_vcpu_run(svm->vmcb_pa, (unsigned long *)&svm->vcpu.arch.regs);
+ 
+@@ -3417,14 +3426,22 @@ static __no_kcsan fastpath_t svm_vcpu_ru
+ 	loadsegment(gs, svm->host.gs);
+ #endif
+ #endif
++
+ 	/*
+-	 * Tell context tracking that this CPU is back.
++	 * VMEXIT disables interrupts (host state), but tracing and lockdep
++	 * have them in state 'on' as recorded before entering guest mode.
++	 * Same as enter_from_user_mode().
++	 *
++	 * guest_exit_irqoff() restores host context and reinstates RCU if
++	 * enabled and required.
+ 	 *
+ 	 * This needs to be done before the below as native_read_msr()
+ 	 * contains a tracepoint and x86_spec_ctrl_restore_host() calls
+ 	 * into world and some more.
+ 	 */
++	lockdep_hardirqs_off(CALLER_ADDR0);
+ 	guest_exit_irqoff();
++	trace_hardirqs_off_finish();
+ 
+ 	/*
+ 	 * We do not use IBRS in the kernel. If this vCPU has used the
+
+From patchwork Wed Jul  8 19:51:57 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11652409
+Return-Path: <SRS0=kMba=AT=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 37BFF913
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  8 Jul 2020 19:54:12 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 1C2A6207BB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  8 Jul 2020 19:54:12 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=linutronix.de header.i=@linutronix.de
+ header.b="XfStOCYT";
+	dkim=permerror (0-bit key) header.d=linutronix.de header.i=@linutronix.de
+ header.b="BUkiJ1yY"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726763AbgGHTyI (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 8 Jul 2020 15:54:08 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:43998 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1725446AbgGHTxo (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 8 Jul 2020 15:53:44 -0400
+Received: from galois.linutronix.de (Galois.linutronix.de
+ [IPv6:2a0a:51c0:0:12e:550::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id A99B4C061A0B;
+        Wed,  8 Jul 2020 12:53:43 -0700 (PDT)
+Message-Id: <20200708195322.037311579@linutronix.de>
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=linutronix.de;
+        s=2020; t=1594238022;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+  references:references;
+        bh=L8WFl/qe3bcU20FmleRqAp3Ck6NxoIyNeaRZ5GSxwe4=;
+        b=XfStOCYTMjEEcEia8QQfb1042hqloaB38lQS7WlsinhyyhUFIWoiZ9VhiLnLrdbeQte/7O
+        hMu5HJ8mDj60YbebjR28RGJqvxFv/8tHs6RmLD5m09BmjfwjOJysLReSlEXIPSG7dQ1+/l
+        WrCkyANpnrB0sdnDc/KRLYNrJrDMCzhjL1Oh7PVVIA9x+leep0JQvFH6ppkc7/YQxSCC3I
+        LYOSdCqbgNC2SNmaPlMhlw57uy7En5896yGzyEDdwFrefcm77bfXMDMYHmzk6RtS1Z65/A
+        weabWqpMFEfUFXDJI1yHQLNb3XwEfQUA/25C8quJtCPRzN6j59PFgRGU0DByMQ==
+DKIM-Signature: v=1; a=ed25519-sha256; c=relaxed/relaxed; d=linutronix.de;
+        s=2020e; t=1594238022;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+  references:references;
+        bh=L8WFl/qe3bcU20FmleRqAp3Ck6NxoIyNeaRZ5GSxwe4=;
+        b=BUkiJ1yYbCQkbC6EL40F2W8tcrxzg/88DJ8ZzOcJVRulQtEThm4BpQs9vw+eNiqtivIsGA
+        y+n9Q9q+BIjdoTCw==
+Date: Wed, 08 Jul 2020 21:51:57 +0200
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paolo Bonzini <pbonzini@redhat.com>,
+        kvm@vger.kernel.org,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Juergen Gross <jgross@suse.com>
+Subject: [patch V2 4/7] x86/kvm/vmx: Move guest enter/exit into .noinstr.text
+References: <20200708195153.746357686@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Thomas Gleixner <tglx@linutronix.de>
+
+Move the functions which are inside the RCU off region into the
+non-instrumentable text section.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Reviewed-by: Alexandre Chartre <alexandre.chartre@oracle.com>
+Acked-by: Peter Zijlstra <peterz@infradead.org>
+Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/include/asm/hardirq.h  |    4 -
+ arch/x86/include/asm/kvm_host.h |    8 ++
+ arch/x86/kvm/vmx/ops.h          |    4 +
+ arch/x86/kvm/vmx/vmenter.S      |    5 +
+ arch/x86/kvm/vmx/vmx.c          |  111 ++++++++++++++++++++++------------------
+ arch/x86/kvm/x86.c              |    2 
+ 6 files changed, 81 insertions(+), 53 deletions(-)
+
+--- a/arch/x86/include/asm/hardirq.h
++++ b/arch/x86/include/asm/hardirq.h
+@@ -67,12 +67,12 @@ static inline void kvm_set_cpu_l1tf_flus
+ 	__this_cpu_write(irq_stat.kvm_cpu_l1tf_flush_l1d, 1);
+ }
+ 
+-static inline void kvm_clear_cpu_l1tf_flush_l1d(void)
++static __always_inline void kvm_clear_cpu_l1tf_flush_l1d(void)
+ {
+ 	__this_cpu_write(irq_stat.kvm_cpu_l1tf_flush_l1d, 0);
+ }
+ 
+-static inline bool kvm_get_cpu_l1tf_flush_l1d(void)
++static __always_inline bool kvm_get_cpu_l1tf_flush_l1d(void)
+ {
+ 	return __this_cpu_read(irq_stat.kvm_cpu_l1tf_flush_l1d);
+ }
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1636,7 +1636,15 @@ asmlinkage void kvm_spurious_fault(void)
+ 	insn "\n\t"							\
+ 	"jmp	668f \n\t"						\
+ 	"667: \n\t"							\
++	"1: \n\t"							\
++	".pushsection .discard.instr_begin \n\t"			\
++	".long 1b - . \n\t"						\
++	".popsection \n\t"						\
+ 	"call	kvm_spurious_fault \n\t"				\
++	"1: \n\t"							\
++	".pushsection .discard.instr_end \n\t"				\
++	".long 1b - . \n\t"						\
++	".popsection \n\t"						\
+ 	"668: \n\t"							\
+ 	_ASM_EXTABLE(666b, 667b)
+ 
+--- a/arch/x86/kvm/vmx/ops.h
++++ b/arch/x86/kvm/vmx/ops.h
+@@ -146,7 +146,9 @@ do {									\
+ 			  : : op1 : "cc" : error, fault);		\
+ 	return;								\
+ error:									\
++	instrumentation_begin();					\
+ 	insn##_error(error_args);					\
++	instrumentation_end();						\
+ 	return;								\
+ fault:									\
+ 	kvm_spurious_fault();						\
+@@ -161,7 +163,9 @@ do {									\
+ 			  : : op1, op2 : "cc" : error, fault);		\
+ 	return;								\
+ error:									\
++	instrumentation_begin();					\
+ 	insn##_error(error_args);					\
++	instrumentation_end();						\
+ 	return;								\
+ fault:									\
+ 	kvm_spurious_fault();						\
+--- a/arch/x86/kvm/vmx/vmenter.S
++++ b/arch/x86/kvm/vmx/vmenter.S
+@@ -27,7 +27,7 @@
+ #define VCPU_R15	__VCPU_REGS_R15 * WORD_SIZE
+ #endif
+ 
+-	.text
++.section .noinstr.text, "ax"
+ 
+ /**
+  * vmx_vmenter - VM-Enter the current loaded VMCS
+@@ -234,6 +234,9 @@ SYM_FUNC_START(__vmx_vcpu_run)
+ 	jmp 1b
+ SYM_FUNC_END(__vmx_vcpu_run)
+ 
++
++.section .text, "ax"
++
+ /**
+  * vmread_error_trampoline - Trampoline from inline asm to vmread_error()
+  * @field:	VMCS field encoding that failed
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6113,7 +6113,7 @@ static int vmx_handle_exit(struct kvm_vc
+  * information but as all relevant affected CPUs have 32KiB L1D cache size
+  * there is no point in doing so.
+  */
+-static void vmx_l1d_flush(struct kvm_vcpu *vcpu)
++static noinstr void vmx_l1d_flush(struct kvm_vcpu *vcpu)
+ {
+ 	int size = PAGE_SIZE << L1D_CACHE_ORDER;
+ 
+@@ -6146,7 +6146,7 @@ static void vmx_l1d_flush(struct kvm_vcp
+ 	vcpu->stat.l1d_flush++;
+ 
+ 	if (static_cpu_has(X86_FEATURE_FLUSH_L1D)) {
+-		wrmsrl(MSR_IA32_FLUSH_CMD, L1D_FLUSH);
++		native_wrmsrl(MSR_IA32_FLUSH_CMD, L1D_FLUSH);
+ 		return;
+ 	}
+ 
+@@ -6632,7 +6632,7 @@ static void vmx_update_hv_timer(struct k
+ 	}
+ }
+ 
+-void vmx_update_host_rsp(struct vcpu_vmx *vmx, unsigned long host_rsp)
++void noinstr vmx_update_host_rsp(struct vcpu_vmx *vmx, unsigned long host_rsp)
+ {
+ 	if (unlikely(host_rsp != vmx->loaded_vmcs->host_state.rsp)) {
+ 		vmx->loaded_vmcs->host_state.rsp = host_rsp;
+@@ -6654,6 +6654,63 @@ static fastpath_t vmx_exit_handlers_fast
+ 
+ bool __vmx_vcpu_run(struct vcpu_vmx *vmx, unsigned long *regs, bool launched);
+ 
++static noinstr void vmx_vcpu_enter_exit(struct kvm_vcpu *vcpu,
++					struct vcpu_vmx *vmx)
++{
++	/*
++	 * VMENTER enables interrupts (host state), but the kernel state is
++	 * interrupts disabled when this is invoked. Also tell RCU about
++	 * it. This is the same logic as for exit_to_user_mode().
++	 *
++	 * This ensures that e.g. latency analysis on the host observes
++	 * guest mode as interrupt enabled.
++	 *
++	 * guest_enter_irqoff() informs context tracking about the
++	 * transition to guest mode and if enabled adjusts RCU state
++	 * accordingly.
++	 */
++	instrumentation_begin();
++	trace_hardirqs_on_prepare();
++	lockdep_hardirqs_on_prepare(CALLER_ADDR0);
++	instrumentation_end();
++
++	guest_enter_irqoff();
++	lockdep_hardirqs_on(CALLER_ADDR0);
++
++	/* L1D Flush includes CPU buffer clear to mitigate MDS */
++	if (static_branch_unlikely(&vmx_l1d_should_flush))
++		vmx_l1d_flush(vcpu);
++	else if (static_branch_unlikely(&mds_user_clear))
++		mds_clear_cpu_buffers();
++
++	if (vcpu->arch.cr2 != read_cr2())
++		write_cr2(vcpu->arch.cr2);
++
++	vmx->fail = __vmx_vcpu_run(vmx, (unsigned long *)&vcpu->arch.regs,
++				   vmx->loaded_vmcs->launched);
++
++	vcpu->arch.cr2 = read_cr2();
++
++	/*
++	 * VMEXIT disables interrupts (host state), but tracing and lockdep
++	 * have them in state 'on' as recorded before entering guest mode.
++	 * Same as enter_from_user_mode().
++	 *
++	 * guest_exit_irqoff() restores host context and reinstates RCU if
++	 * enabled and required.
++	 *
++	 * This needs to be done before the below as native_read_msr()
++	 * contains a tracepoint and x86_spec_ctrl_restore_host() calls
++	 * into world and some more.
++	 */
++	lockdep_hardirqs_off(CALLER_ADDR0);
++	guest_exit_irqoff();
++
++	instrumentation_begin();
++	trace_hardirqs_off_finish();
++	instrumentation_end();
++}
++
+ static fastpath_t vmx_vcpu_run(struct kvm_vcpu *vcpu)
+ {
+ 	fastpath_t exit_fastpath;
+@@ -6728,52 +6785,8 @@ static fastpath_t vmx_vcpu_run(struct kv
+ 	 */
+ 	x86_spec_ctrl_set_guest(vmx->spec_ctrl, 0);
+ 
+-	/*
+-	 * VMENTER enables interrupts (host state), but the kernel state is
+-	 * interrupts disabled when this is invoked. Also tell RCU about
+-	 * it. This is the same logic as for exit_to_user_mode().
+-	 *
+-	 * This ensures that e.g. latency analysis on the host observes
+-	 * guest mode as interrupt enabled.
+-	 *
+-	 * guest_enter_irqoff() informs context tracking about the
+-	 * transition to guest mode and if enabled adjusts RCU state
+-	 * accordingly.
+-	 */
+-	trace_hardirqs_on_prepare();
+-	lockdep_hardirqs_on_prepare(CALLER_ADDR0);
+-	guest_enter_irqoff();
+-	lockdep_hardirqs_on(CALLER_ADDR0);
+-
+-	/* L1D Flush includes CPU buffer clear to mitigate MDS */
+-	if (static_branch_unlikely(&vmx_l1d_should_flush))
+-		vmx_l1d_flush(vcpu);
+-	else if (static_branch_unlikely(&mds_user_clear))
+-		mds_clear_cpu_buffers();
+-
+-	if (vcpu->arch.cr2 != read_cr2())
+-		write_cr2(vcpu->arch.cr2);
+-
+-	vmx->fail = __vmx_vcpu_run(vmx, (unsigned long *)&vcpu->arch.regs,
+-				   vmx->loaded_vmcs->launched);
+-
+-	vcpu->arch.cr2 = read_cr2();
+-
+-	/*
+-	 * VMEXIT disables interrupts (host state), but tracing and lockdep
+-	 * have them in state 'on' as recorded before entering guest mode.
+-	 * Same as enter_from_user_mode().
+-	 *
+-	 * guest_exit_irqoff() restores host context and reinstates RCU if
+-	 * enabled and required.
+-	 *
+-	 * This needs to be done before the below as native_read_msr()
+-	 * contains a tracepoint and x86_spec_ctrl_restore_host() calls
+-	 * into world and some more.
+-	 */
+-	lockdep_hardirqs_off(CALLER_ADDR0);
+-	guest_exit_irqoff();
+-	trace_hardirqs_off_finish();
++	/* The actual VMENTER/EXIT is in the .noinstr.text section. */
++	vmx_vcpu_enter_exit(vcpu, vmx);
+ 
+ 	/*
+ 	 * We do not use IBRS in the kernel. If this vCPU has used the
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -379,7 +379,7 @@ int kvm_set_apic_base(struct kvm_vcpu *v
+ }
+ EXPORT_SYMBOL_GPL(kvm_set_apic_base);
+ 
+-asmlinkage __visible void kvm_spurious_fault(void)
++asmlinkage __visible noinstr void kvm_spurious_fault(void)
+ {
+ 	/* Fault while not rebooting.  We want the trace. */
+ 	BUG_ON(!kvm_rebooting);
+
+From patchwork Wed Jul  8 19:51:58 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11652407
+Return-Path: <SRS0=kMba=AT=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id BAF3260D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  8 Jul 2020 19:54:05 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id A43CD2078C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  8 Jul 2020 19:54:05 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=linutronix.de header.i=@linutronix.de
+ header.b="cpqWCgTM";
+	dkim=permerror (0-bit key) header.d=linutronix.de header.i=@linutronix.de
+ header.b="wevcbg9J"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726724AbgGHTyC (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 8 Jul 2020 15:54:02 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:53434 "EHLO
+        galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1726371AbgGHTxp (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 8 Jul 2020 15:53:45 -0400
+Message-Id: <20200708195322.144607767@linutronix.de>
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=linutronix.de;
+        s=2020; t=1594238023;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+  references:references;
+        bh=4r8tutqjl6w8J75q+Hjv1+S3tRKSERjhTclsLZCy0sw=;
+        b=cpqWCgTMofZ6udiA4LRNbZ3VbhOt5plHIcDLLwBzrm/+KEBjdVfT+4oOHEuOVetIJfzkX7
+        vKxJjA6Mq0780PydLkh8rdXXdMFz/dkhCT1xlT/FhX504DOXGWVWd4463/+TXVQQZPrQV5
+        kUAeHHHAL2GfUGFu2i4nl2Eo91fo1N6LI2UBB11y2Kdq1PWrspqka6O0rVctXWN8SJlwOd
+        YVBD7VDMVTae2TOMPbM6ZSyZOoRIFNKHVLzVLPuLrEKCm7dMK9TR8PHqlzpggrAfSGA/eX
+        B5wB9U9xekhztFonUTOi3IISoz0xlXz0GSdKtFksgznahyYZ/hwUJ16OC3P6Cw==
+DKIM-Signature: v=1; a=ed25519-sha256; c=relaxed/relaxed; d=linutronix.de;
+        s=2020e; t=1594238023;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+  references:references;
+        bh=4r8tutqjl6w8J75q+Hjv1+S3tRKSERjhTclsLZCy0sw=;
+        b=wevcbg9JkI2Sr6SA9i1E8X37rATyR35DdmbyIw6ELkvyrq1Ctxve/r+YSMhl39qa1cRTk0
+        cILqi4070u9d+EDg==
+Date: Wed, 08 Jul 2020 21:51:58 +0200
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paolo Bonzini <pbonzini@redhat.com>,
+        kvm@vger.kernel.org,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Juergen Gross <jgross@suse.com>
+Subject: [patch V2 5/7] x86/kvm/svm: Move guest enter/exit into .noinstr.text
+References: <20200708195153.746357686@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Thomas Gleixner <tglx@linutronix.de>
+
+Move the functions which are inside the RCU off region into the
+non-instrumentable text section.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Reviewed-by: Alexandre Chartre <alexandre.chartre@oracle.com>
+Acked-by: Peter Zijlstra <peterz@infradead.org>
+Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/svm/svm.c     |   98 +++++++++++++++++++++++++--------------------
+ arch/x86/kvm/svm/vmenter.S |    2 
+ 2 files changed, 56 insertions(+), 44 deletions(-)
+
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -3344,6 +3344,60 @@ static fastpath_t svm_exit_handlers_fast
+ 
+ void __svm_vcpu_run(unsigned long vmcb_pa, unsigned long *regs);
+ 
++static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu,
++					struct vcpu_svm *svm)
++{
++	/*
++	 * VMENTER enables interrupts (host state), but the kernel state is
++	 * interrupts disabled when this is invoked. Also tell RCU about
++	 * it. This is the same logic as for exit_to_user_mode().
++	 *
++	 * This ensures that e.g. latency analysis on the host observes
++	 * guest mode as interrupt enabled.
++	 *
++	 * guest_enter_irqoff() informs context tracking about the
++	 * transition to guest mode and if enabled adjusts RCU state
++	 * accordingly.
++	 */
++	instrumentation_begin();
++	trace_hardirqs_on_prepare();
++	lockdep_hardirqs_on_prepare(CALLER_ADDR0);
++	instrumentation_end();
++
++	guest_enter_irqoff();
++	lockdep_hardirqs_on(CALLER_ADDR0);
++
++	__svm_vcpu_run(svm->vmcb_pa, (unsigned long *)&svm->vcpu.arch.regs);
++
++#ifdef CONFIG_X86_64
++	wrmsrl(MSR_GS_BASE, svm->host.gs_base);
++#else
++	loadsegment(fs, svm->host.fs);
++#ifndef CONFIG_X86_32_LAZY_GS
++	loadsegment(gs, svm->host.gs);
++#endif
++#endif
++
++	/*
++	 * VMEXIT disables interrupts (host state), but tracing and lockdep
++	 * have them in state 'on' as recorded before entering guest mode.
++	 * Same as enter_from_user_mode().
++	 *
++	 * guest_exit_irqoff() restores host context and reinstates RCU if
++	 * enabled and required.
++	 *
++	 * This needs to be done before the below as native_read_msr()
++	 * contains a tracepoint and x86_spec_ctrl_restore_host() calls
++	 * into world and some more.
++	 */
++	lockdep_hardirqs_off(CALLER_ADDR0);
++	guest_exit_irqoff();
++
++	instrumentation_begin();
++	trace_hardirqs_off_finish();
++	instrumentation_end();
++}
++
+ static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu)
+ {
+ 	fastpath_t exit_fastpath;
+@@ -3399,49 +3453,7 @@ static __no_kcsan fastpath_t svm_vcpu_ru
+ 	 */
+ 	x86_spec_ctrl_set_guest(svm->spec_ctrl, svm->virt_spec_ctrl);
+ 
+-	/*
+-	 * VMENTER enables interrupts (host state), but the kernel state is
+-	 * interrupts disabled when this is invoked. Also tell RCU about
+-	 * it. This is the same logic as for exit_to_user_mode().
+-	 *
+-	 * This ensures that e.g. latency analysis on the host observes
+-	 * guest mode as interrupt enabled.
+-	 *
+-	 * guest_enter_irqoff() informs context tracking about the
+-	 * transition to guest mode and if enabled adjusts RCU state
+-	 * accordingly.
+-	 */
+-	trace_hardirqs_on_prepare();
+-	lockdep_hardirqs_on_prepare(CALLER_ADDR0);
+-	guest_enter_irqoff();
+-	lockdep_hardirqs_on(CALLER_ADDR0);
+-
+-	__svm_vcpu_run(svm->vmcb_pa, (unsigned long *)&svm->vcpu.arch.regs);
+-
+-#ifdef CONFIG_X86_64
+-	wrmsrl(MSR_GS_BASE, svm->host.gs_base);
+-#else
+-	loadsegment(fs, svm->host.fs);
+-#ifndef CONFIG_X86_32_LAZY_GS
+-	loadsegment(gs, svm->host.gs);
+-#endif
+-#endif
+-
+-	/*
+-	 * VMEXIT disables interrupts (host state), but tracing and lockdep
+-	 * have them in state 'on' as recorded before entering guest mode.
+-	 * Same as enter_from_user_mode().
+-	 *
+-	 * guest_exit_irqoff() restores host context and reinstates RCU if
+-	 * enabled and required.
+-	 *
+-	 * This needs to be done before the below as native_read_msr()
+-	 * contains a tracepoint and x86_spec_ctrl_restore_host() calls
+-	 * into world and some more.
+-	 */
+-	lockdep_hardirqs_off(CALLER_ADDR0);
+-	guest_exit_irqoff();
+-	trace_hardirqs_off_finish();
++	svm_vcpu_enter_exit(vcpu, svm);
+ 
+ 	/*
+ 	 * We do not use IBRS in the kernel. If this vCPU has used the
+--- a/arch/x86/kvm/svm/vmenter.S
++++ b/arch/x86/kvm/svm/vmenter.S
+@@ -27,7 +27,7 @@
+ #define VCPU_R15	__VCPU_REGS_R15 * WORD_SIZE
+ #endif
+ 
+-	.text
++.section .noinstr.text, "ax"
+ 
+ /**
+  * __svm_vcpu_run - Run a vCPU via a transition to SVM guest mode
+
+From patchwork Wed Jul  8 19:51:59 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11652403
+Return-Path: <SRS0=kMba=AT=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6F74B60D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  8 Jul 2020 19:53:52 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 55F4020772
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  8 Jul 2020 19:53:52 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=linutronix.de header.i=@linutronix.de
+ header.b="P9dTaoz7";
+	dkim=permerror (0-bit key) header.d=linutronix.de header.i=@linutronix.de
+ header.b="iV0bcOZZ"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726675AbgGHTxv (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 8 Jul 2020 15:53:51 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:53516 "EHLO
+        galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1726496AbgGHTxq (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 8 Jul 2020 15:53:46 -0400
+Message-Id: <20200708195322.244847377@linutronix.de>
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=linutronix.de;
+        s=2020; t=1594238024;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+  references:references;
+        bh=9PxuBq1MQRrVP8ij2gLQ9dAHF/Xo4jlxR3pn9ag8/Fg=;
+        b=P9dTaoz7MtH8Mf9BlPEA/Np2F5RDHYXNLJeN902rXk8e2DzlHIqMkxZXfpL1rHXu3J/YAr
+        YvLZRl2TrwYsEsy7+npviOOVpl4+U6Hi7Xyp5o4Mnm+qnWu/jmkteJEtbIFyOVyHrC6PCP
+        H43sxNqnDBknmTOBFs6KBQrK62IVpuGRf/s4TP/1blWX/+cTXmX35VVJITHOhdcA3//5CM
+        +ggUBJrhgW/hKniVLq6wOz3xSx5qfz0ITNamEbRD3EKg6AfLsZ++jxqUTSOofVe6AtN01d
+        Fs7vEvcYN8ndmdvdIUb/zELpd+xgZcNQE2hnig76+kzNnygHfySR08jI8IxPJA==
+DKIM-Signature: v=1; a=ed25519-sha256; c=relaxed/relaxed; d=linutronix.de;
+        s=2020e; t=1594238024;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+  references:references;
+        bh=9PxuBq1MQRrVP8ij2gLQ9dAHF/Xo4jlxR3pn9ag8/Fg=;
+        b=iV0bcOZZ1ZslFnmqAldHOI5+5Hwb6lyylV7vGvWnMFPyBcqMehG8mfluBCxSTIVDzJBNtU
+        EMXkEhA2Mv8mkfDQ==
+Date: Wed, 08 Jul 2020 21:51:59 +0200
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paolo Bonzini <pbonzini@redhat.com>,
+        kvm@vger.kernel.org, Juergen Gross <jgross@suse.com>,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>
+Subject: [patch V2 6/7] x86/kvm/svm: Use uninstrumented wrmsrl() to restore GS
+References: <20200708195153.746357686@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Thomas Gleixner <tglx@linutronix.de>
+
+On guest exit MSR_GS_BASE contains whatever the guest wrote to it and the
+first action after returning from the ASM code is to set it to the host
+kernel value. This uses wrmsrl() which is interesting at least.
+
+wrmsrl() is either using native_write_msr() or the paravirt variant. The
+XEN_PV code is uninteresting as nested SVM in a XEN_PV guest does not work.
+
+But native_write_msr() can be placed out of line by the compiler especially
+when paravirtualization is enabled in the kernel configuration. The
+function is marked notrace, but still can be probed if
+CONFIG_KPROBE_EVENTS_ON_NOTRACE is enabled.
+
+That would be a fatal problem as kprobe events use per-CPU variables which
+are GS based and would be accessed with the guest GS. Depending on the GS
+value this would either explode in colorful ways or lead to completely
+undebugable data corruption.
+
+Aside of that native_write_msr() contains a tracepoint which objtool
+complains about as it is invoked from the noinstr section.
+
+As this cannot run inside a XEN_PV guest there is no point in using
+wrmsrl(). Use native_wrmsrl() instead which is just a plain native WRMSR
+without tracing or anything else attached.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Acked-by: Juergen Gross <jgross@suse.com>
+---
+ arch/x86/kvm/svm/svm.c |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -3370,7 +3370,7 @@ static noinstr void svm_vcpu_enter_exit(
+ 	__svm_vcpu_run(svm->vmcb_pa, (unsigned long *)&svm->vcpu.arch.regs);
+ 
+ #ifdef CONFIG_X86_64
+-	wrmsrl(MSR_GS_BASE, svm->host.gs_base);
++	native_wrmsrl(MSR_GS_BASE, svm->host.gs_base);
+ #else
+ 	loadsegment(fs, svm->host.fs);
+ #ifndef CONFIG_X86_32_LAZY_GS
+
+From patchwork Wed Jul  8 19:52:00 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Thomas Gleixner <tglx@linutronix.de>
+X-Patchwork-Id: 11652405
+Return-Path: <SRS0=kMba=AT=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 630C3913
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  8 Jul 2020 19:54:00 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 4A1AC20708
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  8 Jul 2020 19:54:00 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=linutronix.de header.i=@linutronix.de
+ header.b="gc0fAMPb";
+	dkim=permerror (0-bit key) header.d=linutronix.de header.i=@linutronix.de
+ header.b="/OSTOmhI"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726523AbgGHTxu (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 8 Jul 2020 15:53:50 -0400
+Received: from Galois.linutronix.de ([193.142.43.55]:53434 "EHLO
+        galois.linutronix.de" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1726513AbgGHTxr (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 8 Jul 2020 15:53:47 -0400
+Message-Id: <20200708195322.344731916@linutronix.de>
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=linutronix.de;
+        s=2020; t=1594238025;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+  references:references;
+        bh=qENerA8I1NYDNTLbmvsdZ/rAWI2IBukjDbybqGSssqQ=;
+        b=gc0fAMPbSU3zL9Bs/acFj+hz9yYiBq0d3OOqc5MRGE8WxPXGuiuMQaBuxUq45JYmAuoICR
+        /kv4Z9EN+/wkOA85iN1BHLDyE63rzZZ6i7HslVzjuSAxvBeRjs1FBc/0ktTl1Adpw891pg
+        YqRJ7tFPKuf0w53mgty57JXY4FO5dKT7cTvFRfB4CC2c0ZUmPHeE/WV1hkoku1ssGTqD00
+        OtqHu2lzrH+mCM4TlfSrjgaOrAe2HHsUnwplm15H5WVrry1oLo6W6mp2vt9BQPEoLXLmHg
+        wqlUS8g8/7N6L5EfytZ4HgL7R8z8fUnAlT2G1U+buy1kR1QtjH8I8XRZjaBvmg==
+DKIM-Signature: v=1; a=ed25519-sha256; c=relaxed/relaxed; d=linutronix.de;
+        s=2020e; t=1594238025;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+  references:references;
+        bh=qENerA8I1NYDNTLbmvsdZ/rAWI2IBukjDbybqGSssqQ=;
+        b=/OSTOmhI0F9Ns2LuLU4M9LGunENk/fmZBEGTUExRHYK/1UcyLAi1/OFQ+StCGVSzUKvQPj
+        rRqNH4Gcucm6qmDg==
+Date: Wed, 08 Jul 2020 21:52:00 +0200
+From: Thomas Gleixner <tglx@linutronix.de>
+To: LKML <linux-kernel@vger.kernel.org>
+Cc: x86@kernel.org, Paolo Bonzini <pbonzini@redhat.com>,
+        kvm@vger.kernel.org,
+        Alexandre Chartre <alexandre.chartre@oracle.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Juergen Gross <jgross@suse.com>
+Subject: [patch V2 7/7] x86/kvm/vmx: Use native read/write_cr2()
+References: <20200708195153.746357686@linutronix.de>
+MIME-Version: 1.0
+Content-transfer-encoding: 8-bit
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Thomas Gleixner <tglx@linutronix.de>
+
+read/write_cr2() go throuh the paravirt XXL indirection, but nested VMX in
+a XEN_PV guest is not supported.
+
+Use the native variants.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+---
+ arch/x86/kvm/vmx/vmx.c |    6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -6683,13 +6683,13 @@ static noinstr void vmx_vcpu_enter_exit(
+ 	else if (static_branch_unlikely(&mds_user_clear))
+ 		mds_clear_cpu_buffers();
+ 
+-	if (vcpu->arch.cr2 != read_cr2())
+-		write_cr2(vcpu->arch.cr2);
++	if (vcpu->arch.cr2 != native_read_cr2())
++		native_write_cr2(vcpu->arch.cr2);
+ 
+ 	vmx->fail = __vmx_vcpu_run(vmx, (unsigned long *)&vcpu->arch.regs,
+ 				   vmx->loaded_vmcs->launched);
+ 
+-	vcpu->arch.cr2 = read_cr2();
++	vcpu->arch.cr2 = native_read_cr2();
+ 
+ 	/*
+ 	 * VMEXIT disables interrupts (host state), but tracing and lockdep
