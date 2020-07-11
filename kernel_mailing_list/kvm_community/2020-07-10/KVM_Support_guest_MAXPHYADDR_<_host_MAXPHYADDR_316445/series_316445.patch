@@ -1,0 +1,1246 @@
+From patchwork Fri Jul 10 15:48:03 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Mohammed Gamal <mgamal@redhat.com>
+X-Patchwork-Id: 11656887
+Return-Path: <SRS0=WjKu=AV=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 905826C1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:48:31 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 7726120748
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:48:31 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="RCHrNlSM"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728097AbgGJPs1 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 10 Jul 2020 11:48:27 -0400
+Received: from us-smtp-2.mimecast.com ([207.211.31.81]:50247 "EHLO
+        us-smtp-delivery-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL)
+        by vger.kernel.org with ESMTP id S1728067AbgGJPs0 (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Fri, 10 Jul 2020 11:48:26 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1594396104;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=wqDUf4G2rfZBuLfI9I+dpuh0XkyA1XBdq/H6K7aU6xQ=;
+        b=RCHrNlSMv4HDtwFwYrKLC8ACEfUrQIFiDvFrUIx+5pnUQMN/0OLB4+Yd6P1m+OEKiPWr+2
+        /cuLOdb7b+5MHldXFe1GL7n/LmKGZAwDF+u5CatxW1YWUbWbFjoaodrPVi4oOFNXYf70wd
+        hwTcjtdwx6uoJH0aiyhYlfKZlZKFvdU=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-51-kVY0tH_8MauYwOmatmaAkA-1; Fri, 10 Jul 2020 11:48:23 -0400
+X-MC-Unique: kVY0tH_8MauYwOmatmaAkA-1
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id A8BC9106B24C;
+        Fri, 10 Jul 2020 15:48:21 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-114-235.ams2.redhat.com
+ [10.36.114.235])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id B0A787EFA3;
+        Fri, 10 Jul 2020 15:48:19 +0000 (UTC)
+From: Mohammed Gamal <mgamal@redhat.com>
+To: kvm@vger.kernel.org, pbonzini@redhat.com
+Cc: linux-kernel@vger.kernel.org, vkuznets@redhat.com,
+        sean.j.christopherson@intel.com, wanpengli@tencent.com,
+        jmattson@google.com, joro@8bytes.org,
+        Mohammed Gamal <mgamal@redhat.com>
+Subject: [PATCH v3 1/9] KVM: x86: Add helper functions for illegal GPA
+ checking and page fault injection
+Date: Fri, 10 Jul 2020 17:48:03 +0200
+Message-Id: <20200710154811.418214-2-mgamal@redhat.com>
+In-Reply-To: <20200710154811.418214-1-mgamal@redhat.com>
+References: <20200710154811.418214-1-mgamal@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This patch adds two helper functions that will be used to support virtualizing
+MAXPHYADDR in both kvm-intel.ko and kvm.ko.
+
+kvm_fixup_and_inject_pf_error() injects a page fault for a user-specified GVA,
+while kvm_mmu_is_illegal_gpa() checks whether a GPA exceeds vCPU address limits.
+
+Signed-off-by: Mohammed Gamal <mgamal@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/mmu.h |  6 ++++++
+ arch/x86/kvm/x86.c | 21 +++++++++++++++++++++
+ arch/x86/kvm/x86.h |  1 +
+ 3 files changed, 28 insertions(+)
+
+diff --git a/arch/x86/kvm/mmu.h b/arch/x86/kvm/mmu.h
+index 444bb9c54548..59930231d5d5 100644
+--- a/arch/x86/kvm/mmu.h
++++ b/arch/x86/kvm/mmu.h
+@@ -4,6 +4,7 @@
+ 
+ #include <linux/kvm_host.h>
+ #include "kvm_cache_regs.h"
++#include "cpuid.h"
+ 
+ #define PT64_PT_BITS 9
+ #define PT64_ENT_PER_PAGE (1 << PT64_PT_BITS)
+@@ -158,6 +159,11 @@ static inline bool is_write_protection(struct kvm_vcpu *vcpu)
+ 	return kvm_read_cr0_bits(vcpu, X86_CR0_WP);
+ }
+ 
++static inline bool kvm_mmu_is_illegal_gpa(struct kvm_vcpu *vcpu, gpa_t gpa)
++{
++        return (gpa >= BIT_ULL(cpuid_maxphyaddr(vcpu)));
++}
++
+ /*
+  * Check if a given access (described through the I/D, W/R and U/S bits of a
+  * page fault error code pfec) causes a permission fault with the given PTE
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 88c593f83b28..1f5f4074fc59 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -10699,6 +10699,27 @@ u64 kvm_spec_ctrl_valid_bits(struct kvm_vcpu *vcpu)
+ }
+ EXPORT_SYMBOL_GPL(kvm_spec_ctrl_valid_bits);
+ 
++void kvm_fixup_and_inject_pf_error(struct kvm_vcpu *vcpu, gva_t gva, u16 error_code)
++{
++	struct x86_exception fault;
++
++	if (!(error_code & PFERR_PRESENT_MASK) ||
++	    vcpu->arch.walk_mmu->gva_to_gpa(vcpu, gva, error_code, &fault) != UNMAPPED_GVA) {
++		/*
++		 * If vcpu->arch.walk_mmu->gva_to_gpa succeeded, the page
++		 * tables probably do not match the TLB.  Just proceed
++		 * with the error code that the processor gave.
++		 */
++		fault.vector = PF_VECTOR;
++		fault.error_code_valid = true;
++		fault.error_code = error_code;
++		fault.nested_page_fault = false;
++		fault.address = gva;
++	}
++	vcpu->arch.walk_mmu->inject_page_fault(vcpu, &fault);
++}
++EXPORT_SYMBOL_GPL(kvm_fixup_and_inject_pf_error);
++
+ EXPORT_TRACEPOINT_SYMBOL_GPL(kvm_exit);
+ EXPORT_TRACEPOINT_SYMBOL_GPL(kvm_fast_mmio);
+ EXPORT_TRACEPOINT_SYMBOL_GPL(kvm_inj_virq);
+diff --git a/arch/x86/kvm/x86.h b/arch/x86/kvm/x86.h
+index 6eb62e97e59f..239ae0f3e40b 100644
+--- a/arch/x86/kvm/x86.h
++++ b/arch/x86/kvm/x86.h
+@@ -272,6 +272,7 @@ int kvm_mtrr_get_msr(struct kvm_vcpu *vcpu, u32 msr, u64 *pdata);
+ bool kvm_mtrr_check_gfn_range_consistency(struct kvm_vcpu *vcpu, gfn_t gfn,
+ 					  int page_num);
+ bool kvm_vector_hashing_enabled(void);
++void kvm_fixup_and_inject_pf_error(struct kvm_vcpu *vcpu, gva_t gva, u16 error_code);
+ int x86_emulate_instruction(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa,
+ 			    int emulation_type, void *insn, int insn_len);
+ fastpath_t handle_fastpath_set_msr_irqoff(struct kvm_vcpu *vcpu);
+
+From patchwork Fri Jul 10 15:48:04 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Mohammed Gamal <mgamal@redhat.com>
+X-Patchwork-Id: 11656907
+Return-Path: <SRS0=WjKu=AV=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C702B6C1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:49:27 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id A211D2078B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:49:27 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="i8QYPoMh"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728112AbgGJPsc (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 10 Jul 2020 11:48:32 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([207.211.31.120]:45609 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S1728043AbgGJPsb (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 10 Jul 2020 11:48:31 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1594396110;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=J/AGTBlK1o+2IPa7406J2i89Guvy+o/b2HYyWuhUdeA=;
+        b=i8QYPoMhUBCuAMYrHjnP+fjXnCT9xp6LCjHx73fGnY6oNjzmbiYnNzGUaimp/tBkUxTp6B
+        imYhRGvI5+BQhfNqlHVTd/hY22X4is4BlzsSbTUI8FHjuEuvPaDX8qec/FNn4I987CiXx/
+        PRTZNgDtGOFQLiuJCHRd5/aaesCF/OI=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-31-ksIrcMFqNT2GewDMu9iY4w-1; Fri, 10 Jul 2020 11:48:26 -0400
+X-MC-Unique: ksIrcMFqNT2GewDMu9iY4w-1
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 5CDC5106B247;
+        Fri, 10 Jul 2020 15:48:25 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-114-235.ams2.redhat.com
+ [10.36.114.235])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 1416F7EFA3;
+        Fri, 10 Jul 2020 15:48:21 +0000 (UTC)
+From: Mohammed Gamal <mgamal@redhat.com>
+To: kvm@vger.kernel.org, pbonzini@redhat.com
+Cc: linux-kernel@vger.kernel.org, vkuznets@redhat.com,
+        sean.j.christopherson@intel.com, wanpengli@tencent.com,
+        jmattson@google.com, joro@8bytes.org,
+        Mohammed Gamal <mgamal@redhat.com>
+Subject: [PATCH v3 2/9] KVM: x86: mmu: Move translate_gpa() to mmu.c
+Date: Fri, 10 Jul 2020 17:48:04 +0200
+Message-Id: <20200710154811.418214-3-mgamal@redhat.com>
+In-Reply-To: <20200710154811.418214-1-mgamal@redhat.com>
+References: <20200710154811.418214-1-mgamal@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Also no point of it being inline since it's always called through
+function pointers. So remove that.
+
+Signed-off-by: Mohammed Gamal <mgamal@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/include/asm/kvm_host.h | 6 ------
+ arch/x86/kvm/mmu/mmu.c          | 6 ++++++
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index be5363b21540..62373cc06c72 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1551,12 +1551,6 @@ void kvm_mmu_new_pgd(struct kvm_vcpu *vcpu, gpa_t new_pgd, bool skip_tlb_flush,
+ 
+ void kvm_configure_mmu(bool enable_tdp, int tdp_page_level);
+ 
+-static inline gpa_t translate_gpa(struct kvm_vcpu *vcpu, gpa_t gpa, u32 access,
+-				  struct x86_exception *exception)
+-{
+-	return gpa;
+-}
+-
+ static inline struct kvm_mmu_page *page_header(hpa_t shadow_page)
+ {
+ 	struct page *page = pfn_to_page(shadow_page >> PAGE_SHIFT);
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index 6d6a0ae7800c..f8b3c5181466 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -515,6 +515,12 @@ static bool check_mmio_spte(struct kvm_vcpu *vcpu, u64 spte)
+ 	return likely(kvm_gen == spte_gen);
+ }
+ 
++static gpa_t translate_gpa(struct kvm_vcpu *vcpu, gpa_t gpa, u32 access,
++                                  struct x86_exception *exception)
++{
++        return gpa;
++}
++
+ /*
+  * Sets the shadow PTE masks used by the MMU.
+  *
+
+From patchwork Fri Jul 10 15:48:05 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Mohammed Gamal <mgamal@redhat.com>
+X-Patchwork-Id: 11656889
+Return-Path: <SRS0=WjKu=AV=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E14DE913
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:48:35 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id BC212207D0
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:48:35 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="iyzHRZfz"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728149AbgGJPse (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 10 Jul 2020 11:48:34 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([205.139.110.120]:27161 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S1728116AbgGJPsc (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 10 Jul 2020 11:48:32 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1594396110;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=ysp4pgGf28/Rv6t1JVehGYmHl2LaKg10kElk18AGj/A=;
+        b=iyzHRZfzrgSIYkzF6zV+yzAVszehIXSwqPSg1Ud37epfLiIm7XS0lajNDhXyl7aREOK0VH
+        p5JsECOfRdoLQlLMORaO2Qw3xRkjkziLAw1+F+bN05Q9U+KZd9pIfDcrUAinH0eSQXjgwu
+        t6HE4aJCTIDq9VWGVISTSQkNo4BPWFs=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-270-Q3lgybjmN6-wDuq7YU7rBg-1; Fri, 10 Jul 2020 11:48:29 -0400
+X-MC-Unique: Q3lgybjmN6-wDuq7YU7rBg-1
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id F40ED1083;
+        Fri, 10 Jul 2020 15:48:27 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-114-235.ams2.redhat.com
+ [10.36.114.235])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id BBDD27EFA1;
+        Fri, 10 Jul 2020 15:48:25 +0000 (UTC)
+From: Mohammed Gamal <mgamal@redhat.com>
+To: kvm@vger.kernel.org, pbonzini@redhat.com
+Cc: linux-kernel@vger.kernel.org, vkuznets@redhat.com,
+        sean.j.christopherson@intel.com, wanpengli@tencent.com,
+        jmattson@google.com, joro@8bytes.org,
+        Mohammed Gamal <mgamal@redhat.com>
+Subject: [PATCH v3 3/9] KVM: x86: mmu: Add guest physical address check in
+ translate_gpa()
+Date: Fri, 10 Jul 2020 17:48:05 +0200
+Message-Id: <20200710154811.418214-4-mgamal@redhat.com>
+In-Reply-To: <20200710154811.418214-1-mgamal@redhat.com>
+References: <20200710154811.418214-1-mgamal@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+In case of running a guest with 4-level page tables on a 5-level page
+table host, it might happen that a guest might have a physical address
+with reserved bits set, but the host won't see that and trap it.
+
+Hence, we need to check page faults' physical addresses against the guest's
+maximum physical memory and if it's exceeded, we need to add
+the PFERR_RSVD_MASK bits to the PF's error code.
+
+Also make sure the error code isn't overwritten by the page table walker.
+
+Signed-off-by: Mohammed Gamal <mgamal@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/mmu/mmu.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index f8b3c5181466..e03e85b21cda 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -518,6 +518,12 @@ static bool check_mmio_spte(struct kvm_vcpu *vcpu, u64 spte)
+ static gpa_t translate_gpa(struct kvm_vcpu *vcpu, gpa_t gpa, u32 access,
+                                   struct x86_exception *exception)
+ {
++	/* Check if guest physical address doesn't exceed guest maximum */
++	if (kvm_mmu_is_illegal_gpa(vcpu, gpa)) {
++		exception->error_code |= PFERR_RSVD_MASK;
++		return UNMAPPED_GVA;
++	}
++
+         return gpa;
+ }
+ 
+
+From patchwork Fri Jul 10 15:48:06 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Mohammed Gamal <mgamal@redhat.com>
+X-Patchwork-Id: 11656895
+Return-Path: <SRS0=WjKu=AV=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 2F69F6C1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:49:03 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 15AC420725
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:49:03 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="bhhDxm7F"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728304AbgGJPtB (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 10 Jul 2020 11:49:01 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([205.139.110.120]:36888 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S1728300AbgGJPsz (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 10 Jul 2020 11:48:55 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1594396134;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=Ph4T4YDVII3jrJWIHOD3/5mI3kXc9Jt7+WbkEloGPMo=;
+        b=bhhDxm7F6wU95AN/HhyU+xKixTz3GOxcnZSpN2PydeB3x3opY5racwdi7YAi0sdwy0iBn3
+        Tql7NIXkVXxvNlWeErIp/6i1UM8wslRHM09PJuBR88B893S+YnYMYmjWVhz3CTzOdGQUsW
+        pEOfBxkFL++1P1gY3igkI0fUxPzEo1k=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-376-yoUJBosHOyqKK9LKAMCJsw-1; Fri, 10 Jul 2020 11:48:32 -0400
+X-MC-Unique: yoUJBosHOyqKK9LKAMCJsw-1
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 39A6F800FEB;
+        Fri, 10 Jul 2020 15:48:30 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-114-235.ams2.redhat.com
+ [10.36.114.235])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 4902E7EF9B;
+        Fri, 10 Jul 2020 15:48:28 +0000 (UTC)
+From: Mohammed Gamal <mgamal@redhat.com>
+To: kvm@vger.kernel.org, pbonzini@redhat.com
+Cc: linux-kernel@vger.kernel.org, vkuznets@redhat.com,
+        sean.j.christopherson@intel.com, wanpengli@tencent.com,
+        jmattson@google.com, joro@8bytes.org
+Subject: [PATCH v3 4/9] KVM: x86: rename update_bp_intercept to
+ update_exception_bitmap
+Date: Fri, 10 Jul 2020 17:48:06 +0200
+Message-Id: <20200710154811.418214-5-mgamal@redhat.com>
+In-Reply-To: <20200710154811.418214-1-mgamal@redhat.com>
+References: <20200710154811.418214-1-mgamal@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+We would like to introduce a callback to update the #PF intercept
+when CPUID changes.  Just reuse update_bp_intercept since VMX is
+already using update_exception_bitmap instead of a bespoke function.
+
+While at it, remove an unnecessary assignment in the SVM version,
+which is already done in the caller (kvm_arch_vcpu_ioctl_set_guest_debug)
+and has nothing to do with the exception bitmap.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Jim Mattson <jmattson@google.com>
+---
+ arch/x86/include/asm/kvm_host.h | 2 +-
+ arch/x86/kvm/svm/svm.c          | 7 +++----
+ arch/x86/kvm/vmx/vmx.c          | 2 +-
+ arch/x86/kvm/x86.c              | 2 +-
+ 4 files changed, 6 insertions(+), 7 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 62373cc06c72..bb4044ffb7b7 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1098,7 +1098,7 @@ struct kvm_x86_ops {
+ 	void (*vcpu_load)(struct kvm_vcpu *vcpu, int cpu);
+ 	void (*vcpu_put)(struct kvm_vcpu *vcpu);
+ 
+-	void (*update_bp_intercept)(struct kvm_vcpu *vcpu);
++	void (*update_exception_bitmap)(struct kvm_vcpu *vcpu);
+ 	int (*get_msr)(struct kvm_vcpu *vcpu, struct msr_data *msr);
+ 	int (*set_msr)(struct kvm_vcpu *vcpu, struct msr_data *msr);
+ 	u64 (*get_segment_base)(struct kvm_vcpu *vcpu, int seg);
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index c0da4dd78ac5..79c33b3539f0 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -1627,7 +1627,7 @@ static void svm_set_segment(struct kvm_vcpu *vcpu,
+ 	mark_dirty(svm->vmcb, VMCB_SEG);
+ }
+ 
+-static void update_bp_intercept(struct kvm_vcpu *vcpu)
++static void update_exception_bitmap(struct kvm_vcpu *vcpu)
+ {
+ 	struct vcpu_svm *svm = to_svm(vcpu);
+ 
+@@ -1636,8 +1636,7 @@ static void update_bp_intercept(struct kvm_vcpu *vcpu)
+ 	if (vcpu->guest_debug & KVM_GUESTDBG_ENABLE) {
+ 		if (vcpu->guest_debug & KVM_GUESTDBG_USE_SW_BP)
+ 			set_exception_intercept(svm, BP_VECTOR);
+-	} else
+-		vcpu->guest_debug = 0;
++	}
+ }
+ 
+ static void new_asid(struct vcpu_svm *svm, struct svm_cpu_data *sd)
+@@ -3989,7 +3988,7 @@ static struct kvm_x86_ops svm_x86_ops __initdata = {
+ 	.vcpu_blocking = svm_vcpu_blocking,
+ 	.vcpu_unblocking = svm_vcpu_unblocking,
+ 
+-	.update_bp_intercept = update_bp_intercept,
++	.update_exception_bitmap = update_exception_bitmap,
+ 	.get_msr_feature = svm_get_msr_feature,
+ 	.get_msr = svm_get_msr,
+ 	.set_msr = svm_set_msr,
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 13745f2a5ecd..178ee92551a9 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -7859,7 +7859,7 @@ static struct kvm_x86_ops vmx_x86_ops __initdata = {
+ 	.vcpu_load = vmx_vcpu_load,
+ 	.vcpu_put = vmx_vcpu_put,
+ 
+-	.update_bp_intercept = update_exception_bitmap,
++	.update_exception_bitmap = update_exception_bitmap,
+ 	.get_msr_feature = vmx_get_msr_feature,
+ 	.get_msr = vmx_get_msr,
+ 	.set_msr = vmx_set_msr,
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 1f5f4074fc59..03c401963062 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -9281,7 +9281,7 @@ int kvm_arch_vcpu_ioctl_set_guest_debug(struct kvm_vcpu *vcpu,
+ 	 */
+ 	kvm_set_rflags(vcpu, rflags);
+ 
+-	kvm_x86_ops.update_bp_intercept(vcpu);
++	kvm_x86_ops.update_exception_bitmap(vcpu);
+ 
+ 	r = 0;
+ 
+
+From patchwork Fri Jul 10 15:48:07 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Mohammed Gamal <mgamal@redhat.com>
+X-Patchwork-Id: 11656903
+Return-Path: <SRS0=WjKu=AV=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 0B7CF913
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:49:19 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id DC6862078B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:49:18 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="hpA+e9fl"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728224AbgGJPsn (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 10 Jul 2020 11:48:43 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([205.139.110.120]:50242 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S1728178AbgGJPsh (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 10 Jul 2020 11:48:37 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1594396116;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=We5wJ84o/aljkxoB41joXofmlMWZ48vbTILISgRltrw=;
+        b=hpA+e9fld7MUKyQJwX3Yv9T0CO97KMCb9RP9iJh6elZY6Dp23AR834NwWln6fNmqKu/UMW
+        2HEhU5w5robCrot3tcpE9s1JCwLiJuCEX1vvX/MB9jXGPVWNldhr8TbJfcM9+FTm3jTog4
+        YCtu+aZM6gFS0c45Z+l39G/dO/vGx98=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-148-SmA5nucdOz2_qG-395OCUw-1; Fri, 10 Jul 2020 11:48:34 -0400
+X-MC-Unique: SmA5nucdOz2_qG-395OCUw-1
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 5D6A1800C64;
+        Fri, 10 Jul 2020 15:48:33 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-114-235.ams2.redhat.com
+ [10.36.114.235])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id A66447EF8E;
+        Fri, 10 Jul 2020 15:48:30 +0000 (UTC)
+From: Mohammed Gamal <mgamal@redhat.com>
+To: kvm@vger.kernel.org, pbonzini@redhat.com
+Cc: linux-kernel@vger.kernel.org, vkuznets@redhat.com,
+        sean.j.christopherson@intel.com, wanpengli@tencent.com,
+        jmattson@google.com, joro@8bytes.org
+Subject: [PATCH v3 5/9] KVM: x86: update exception bitmap on CPUID changes
+Date: Fri, 10 Jul 2020 17:48:07 +0200
+Message-Id: <20200710154811.418214-6-mgamal@redhat.com>
+In-Reply-To: <20200710154811.418214-1-mgamal@redhat.com>
+References: <20200710154811.418214-1-mgamal@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Allow vendor code to observe changes to MAXPHYADDR and start/stop
+intercepting page faults.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Reviewed-by: Jim Mattson <jmattson@google.com>
+---
+ arch/x86/kvm/cpuid.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 8a294f9747aa..ea5bbf2153bb 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -128,6 +128,8 @@ int kvm_update_cpuid(struct kvm_vcpu *vcpu)
+ 	kvm_mmu_reset_context(vcpu);
+ 
+ 	kvm_pmu_refresh(vcpu);
++	kvm_x86_ops.update_exception_bitmap(vcpu);
++
+ 	return 0;
+ }
+ 
+
+From patchwork Fri Jul 10 15:48:08 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Mohammed Gamal <mgamal@redhat.com>
+X-Patchwork-Id: 11656901
+Return-Path: <SRS0=WjKu=AV=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 48A6F6C1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:49:15 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 2F381207DD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:49:15 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="Bc7Jv71U"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728239AbgGJPso (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 10 Jul 2020 11:48:44 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([205.139.110.120]:42243 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S1728133AbgGJPso (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 10 Jul 2020 11:48:44 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1594396122;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=FpqSvw1KbghxVfbY79oQ4mBwCCU5KJ0+qcfULEWjODc=;
+        b=Bc7Jv71UizwQK2gyZfimlLPkJwAAdMspgbh1ogytTMF9YWkjzu//EWpIB7qf2rc1L79GvR
+        SyX/Wzyn5+u+J6ipRgIqrxuvPiNf0W5zqqd0Mwwu6uHbtgD7PR9fDWnGX7Bfa42GsTBSSS
+        Un84cGWgwdTXFU3B3qQwMesrGo8ISEg=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-400-uUU84V-WMWmFTxr7vM3gcg-1; Fri, 10 Jul 2020 11:48:37 -0400
+X-MC-Unique: uUU84V-WMWmFTxr7vM3gcg-1
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 8509C1083E8E;
+        Fri, 10 Jul 2020 15:48:36 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-114-235.ams2.redhat.com
+ [10.36.114.235])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id A67D47EF9E;
+        Fri, 10 Jul 2020 15:48:33 +0000 (UTC)
+From: Mohammed Gamal <mgamal@redhat.com>
+To: kvm@vger.kernel.org, pbonzini@redhat.com
+Cc: linux-kernel@vger.kernel.org, vkuznets@redhat.com,
+        sean.j.christopherson@intel.com, wanpengli@tencent.com,
+        jmattson@google.com, joro@8bytes.org
+Subject: [PATCH v3 6/9] KVM: VMX: introduce vmx_need_pf_intercept
+Date: Fri, 10 Jul 2020 17:48:08 +0200
+Message-Id: <20200710154811.418214-7-mgamal@redhat.com>
+In-Reply-To: <20200710154811.418214-1-mgamal@redhat.com>
+References: <20200710154811.418214-1-mgamal@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/vmx/nested.c | 28 +++++++++++++++++-----------
+ arch/x86/kvm/vmx/vmx.c    |  2 +-
+ arch/x86/kvm/vmx/vmx.h    |  5 +++++
+ 3 files changed, 23 insertions(+), 12 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index b26655104d4a..1aea9e3b8c43 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -2433,22 +2433,28 @@ static void prepare_vmcs02_rare(struct vcpu_vmx *vmx, struct vmcs12 *vmcs12)
+ 
+ 	/*
+ 	 * Whether page-faults are trapped is determined by a combination of
+-	 * 3 settings: PFEC_MASK, PFEC_MATCH and EXCEPTION_BITMAP.PF.
+-	 * If enable_ept, L0 doesn't care about page faults and we should
+-	 * set all of these to L1's desires. However, if !enable_ept, L0 does
+-	 * care about (at least some) page faults, and because it is not easy
+-	 * (if at all possible?) to merge L0 and L1's desires, we simply ask
+-	 * to exit on each and every L2 page fault. This is done by setting
+-	 * MASK=MATCH=0 and (see below) EB.PF=1.
++	 * 3 settings: PFEC_MASK, PFEC_MATCH and EXCEPTION_BITMAP.PF.  If L0
++	 * doesn't care about page faults then we should set all of these to
++	 * L1's desires. However, if L0 does care about (some) page faults, it
++	 * is not easy (if at all possible?) to merge L0 and L1's desires, we
++	 * simply ask to exit on each and every L2 page fault. This is done by
++	 * setting MASK=MATCH=0 and (see below) EB.PF=1.
+ 	 * Note that below we don't need special code to set EB.PF beyond the
+ 	 * "or"ing of the EB of vmcs01 and vmcs12, because when enable_ept,
+ 	 * vmcs01's EB.PF is 0 so the "or" will take vmcs12's value, and when
+ 	 * !enable_ept, EB.PF is 1, so the "or" will always be 1.
+ 	 */
+-	vmcs_write32(PAGE_FAULT_ERROR_CODE_MASK,
+-		enable_ept ? vmcs12->page_fault_error_code_mask : 0);
+-	vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH,
+-		enable_ept ? vmcs12->page_fault_error_code_match : 0);
++	if (vmx_need_pf_intercept(&vmx->vcpu)) {
++		/*
++		 * TODO: if both L0 and L1 need the same MASK and MATCH,
++		 * go ahead and use it?
++		 */
++		vmcs_write32(PAGE_FAULT_ERROR_CODE_MASK, 0);
++		vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH, 0);
++	} else {
++		vmcs_write32(PAGE_FAULT_ERROR_CODE_MASK, vmcs12->page_fault_error_code_mask);
++		vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH, vmcs12->page_fault_error_code_match);
++	}
+ 
+ 	if (cpu_has_vmx_apicv()) {
+ 		vmcs_write64(EOI_EXIT_BITMAP0, vmcs12->eoi_exit_bitmap0);
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 178ee92551a9..770b090969fb 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -780,7 +780,7 @@ void update_exception_bitmap(struct kvm_vcpu *vcpu)
+ 		eb |= 1u << BP_VECTOR;
+ 	if (to_vmx(vcpu)->rmode.vm86_active)
+ 		eb = ~0;
+-	if (enable_ept)
++	if (!vmx_need_pf_intercept(vcpu))
+ 		eb &= ~(1u << PF_VECTOR);
+ 
+ 	/* When we are running a nested L2 guest and L1 specified for it a
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index 639798e4a6ca..b0e5e210f1c1 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -550,6 +550,11 @@ static inline bool vmx_has_waitpkg(struct vcpu_vmx *vmx)
+ 		SECONDARY_EXEC_ENABLE_USR_WAIT_PAUSE;
+ }
+ 
++static inline bool vmx_need_pf_intercept(struct kvm_vcpu *vcpu)
++{
++	return !enable_ept;
++}
++
+ void dump_vmcs(void);
+ 
+ #endif /* __KVM_X86_VMX_H */
+
+From patchwork Fri Jul 10 15:48:09 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Mohammed Gamal <mgamal@redhat.com>
+X-Patchwork-Id: 11656897
+Return-Path: <SRS0=WjKu=AV=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8FFB16C1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:49:07 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 736B3207BB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:49:07 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="bWliAGI5"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728267AbgGJPss (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 10 Jul 2020 11:48:48 -0400
+Received: from us-smtp-2.mimecast.com ([207.211.31.81]:56687 "EHLO
+        us-smtp-delivery-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL)
+        by vger.kernel.org with ESMTP id S1728188AbgGJPsq (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Fri, 10 Jul 2020 11:48:46 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1594396124;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=N0rffyJd31ccusntTysy3wmiDQXTPQoxGgMle8w2Tcs=;
+        b=bWliAGI5zNMVKW2awoDIlgnACsMwLTaluG6b8EsPsrLhRaOFWJ/RgpSVCO4d4WbwrNG3oH
+        StNIV0W5UoSzUEem4lfQ6HwH9SHRuaLLEWUYKP9aC2QdGD1F/MN+rPdihECvcZIL7CsHRG
+        Yru17aR4XbSetwxaKWsxhxs3Hk/TpUU=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-325-6UElIXvtOq-tcNBt4903wA-1; Fri, 10 Jul 2020 11:48:43 -0400
+X-MC-Unique: 6UElIXvtOq-tcNBt4903wA-1
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id C70A21083;
+        Fri, 10 Jul 2020 15:48:41 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-114-235.ams2.redhat.com
+ [10.36.114.235])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id CD3995BAC3;
+        Fri, 10 Jul 2020 15:48:36 +0000 (UTC)
+From: Mohammed Gamal <mgamal@redhat.com>
+To: kvm@vger.kernel.org, pbonzini@redhat.com
+Cc: linux-kernel@vger.kernel.org, vkuznets@redhat.com,
+        sean.j.christopherson@intel.com, wanpengli@tencent.com,
+        jmattson@google.com, joro@8bytes.org,
+        Mohammed Gamal <mgamal@redhat.com>
+Subject: [PATCH v3 7/9] KVM: VMX: Add guest physical address check in EPT
+ violation and misconfig
+Date: Fri, 10 Jul 2020 17:48:09 +0200
+Message-Id: <20200710154811.418214-8-mgamal@redhat.com>
+In-Reply-To: <20200710154811.418214-1-mgamal@redhat.com>
+References: <20200710154811.418214-1-mgamal@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Check guest physical address against it's maximum physical memory. If
+the guest's physical address exceeds the maximum (i.e. has reserved bits
+set), inject a guest page fault with PFERR_RSVD_MASK set.
+
+This has to be done both in the EPT violation and page fault paths, as
+there are complications in both cases with respect to the computation
+of the correct error code.
+
+For EPT violations, unfortunately the only possibility is to emulate,
+because the access type in the exit qualification might refer to an
+access to a paging structure, rather than to the access performed by
+the program.
+
+Trapping page faults instead is needed in order to correct the error code,
+but the access type can be obtained from the original error code and
+passed to gva_to_gpa.  The corrections required in the error code are
+subtle. For example, imagine that a PTE for a supervisor page has a reserved
+bit set.  On a supervisor-mode access, the EPT violation path would trigger.
+However, on a user-mode access, the processor will not notice the reserved
+bit and not include PFERR_RSVD_MASK in the error code.
+
+Co-developed-by: Mohammed Gamal <mgamal@redhat.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 24 +++++++++++++++++++++---
+ arch/x86/kvm/vmx/vmx.h |  3 ++-
+ 2 files changed, 23 insertions(+), 4 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 770b090969fb..de3f436b2d32 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -4790,9 +4790,15 @@ static int handle_exception_nmi(struct kvm_vcpu *vcpu)
+ 
+ 	if (is_page_fault(intr_info)) {
+ 		cr2 = vmx_get_exit_qual(vcpu);
+-		/* EPT won't cause page fault directly */
+-		WARN_ON_ONCE(!vcpu->arch.apf.host_apf_flags && enable_ept);
+-		return kvm_handle_page_fault(vcpu, error_code, cr2, NULL, 0);
++		if (enable_ept && !vcpu->arch.apf.host_apf_flags) {
++			/*
++			 * EPT will cause page fault only if we need to
++			 * detect illegal GPAs.
++			 */
++			kvm_fixup_and_inject_pf_error(vcpu, cr2, error_code);
++			return 1;
++		} else
++			return kvm_handle_page_fault(vcpu, error_code, cr2, NULL, 0);
+ 	}
+ 
+ 	ex_no = intr_info & INTR_INFO_VECTOR_MASK;
+@@ -5308,6 +5314,18 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
+ 	       PFERR_GUEST_FINAL_MASK : PFERR_GUEST_PAGE_MASK;
+ 
+ 	vcpu->arch.exit_qualification = exit_qualification;
++
++	/*
++	 * Check that the GPA doesn't exceed physical memory limits, as that is
++	 * a guest page fault.  We have to emulate the instruction here, because
++	 * if the illegal address is that of a paging structure, then
++	 * EPT_VIOLATION_ACC_WRITE bit is set.  Alternatively, if supported we
++	 * would also use advanced VM-exit information for EPT violations to
++	 * reconstruct the page fault error code.
++	 */
++	if (unlikely(kvm_mmu_is_illegal_gpa(vcpu, gpa)))
++		return kvm_emulate_instruction(vcpu, 0);
++
+ 	return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
+ }
+ 
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index b0e5e210f1c1..0d06951e607c 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -11,6 +11,7 @@
+ #include "kvm_cache_regs.h"
+ #include "ops.h"
+ #include "vmcs.h"
++#include "cpuid.h"
+ 
+ extern const u32 vmx_msr_index[];
+ 
+@@ -552,7 +553,7 @@ static inline bool vmx_has_waitpkg(struct vcpu_vmx *vmx)
+ 
+ static inline bool vmx_need_pf_intercept(struct kvm_vcpu *vcpu)
+ {
+-	return !enable_ept;
++	return !enable_ept || cpuid_maxphyaddr(vcpu) < boot_cpu_data.x86_phys_bits;
+ }
+ 
+ void dump_vmcs(void);
+
+From patchwork Fri Jul 10 15:48:10 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Mohammed Gamal <mgamal@redhat.com>
+X-Patchwork-Id: 11656899
+Return-Path: <SRS0=WjKu=AV=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3452F913
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:49:09 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 1221A207DD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:49:09 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="ZAiG0LAq"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728328AbgGJPtI (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 10 Jul 2020 11:49:08 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([207.211.31.120]:37694 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S1728186AbgGJPss (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 10 Jul 2020 11:48:48 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1594396126;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=s55KbT4R57P+BEAchl+rWHLC1vvToduMPconk2T3z5s=;
+        b=ZAiG0LAqewl8cssq1N0P1WJ35J1rmXlJPnniLNKKVg2Ru8kYS0/79WI+mNoJhLPc1PO15l
+        jph+EAFT4MHq2T1Av3hu6vL3wULbqxRZT7Z1K2tU5EwjQTCKfyAwBtbgVlelfn4V8IsV+e
+        RJD0efTk73Duk/Bhsou0s9FDJJQh21A=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-25-lzwJa4KCN9OgiEYWiLyzSw-1; Fri, 10 Jul 2020 11:48:45 -0400
+X-MC-Unique: lzwJa4KCN9OgiEYWiLyzSw-1
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id DEC5B193F560;
+        Fri, 10 Jul 2020 15:48:43 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-114-235.ams2.redhat.com
+ [10.36.114.235])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 324055BAC3;
+        Fri, 10 Jul 2020 15:48:42 +0000 (UTC)
+From: Mohammed Gamal <mgamal@redhat.com>
+To: kvm@vger.kernel.org, pbonzini@redhat.com
+Cc: linux-kernel@vger.kernel.org, vkuznets@redhat.com,
+        sean.j.christopherson@intel.com, wanpengli@tencent.com,
+        jmattson@google.com, joro@8bytes.org
+Subject: [PATCH v3 8/9] KVM: VMX: optimize #PF injection when MAXPHYADDR does
+ not match
+Date: Fri, 10 Jul 2020 17:48:10 +0200
+Message-Id: <20200710154811.418214-9-mgamal@redhat.com>
+In-Reply-To: <20200710154811.418214-1-mgamal@redhat.com>
+References: <20200710154811.418214-1-mgamal@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Paolo Bonzini <pbonzini@redhat.com>
+
+Ignore non-present page faults, since those cannot have reserved
+bits set.
+
+When running access.flat with "-cpu Haswell,phys-bits=36", the
+number of trapped page faults goes down from 8872644 to 3978948.
+
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index de3f436b2d32..0cebc4832805 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -4355,6 +4355,16 @@ static void init_vmcs(struct vcpu_vmx *vmx)
+ 		vmx->pt_desc.guest.output_mask = 0x7F;
+ 		vmcs_write64(GUEST_IA32_RTIT_CTL, 0);
+ 	}
++
++	/*
++	 * If EPT is enabled, #PF is only trapped if MAXPHYADDR is mismatched
++	 * between guest and host.  In that case we only care about present
++	 * faults.
++	 */
++	if (enable_ept) {
++		vmcs_write32(PAGE_FAULT_ERROR_CODE_MASK, PFERR_PRESENT_MASK);
++		vmcs_write32(PAGE_FAULT_ERROR_CODE_MATCH, PFERR_PRESENT_MASK);
++	}
+ }
+ 
+ static void vmx_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
+
+From patchwork Fri Jul 10 15:48:11 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Mohammed Gamal <mgamal@redhat.com>
+X-Patchwork-Id: 11656893
+Return-Path: <SRS0=WjKu=AV=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id EFE216C1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:48:55 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id CFEA6207DD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 10 Jul 2020 15:48:55 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="PoCI2Bro"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728301AbgGJPsy (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 10 Jul 2020 11:48:54 -0400
+Received: from us-smtp-delivery-1.mimecast.com ([205.139.110.120]:49972 "EHLO
+        us-smtp-1.mimecast.com" rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org
+        with ESMTP id S1728276AbgGJPsv (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 10 Jul 2020 11:48:51 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1594396130;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=FfpxmN5laAl/y/N2q1Y7cTgVN6qGZtCHt/1dR+y0tY8=;
+        b=PoCI2Bro5qGPMhLR5fchEupLQvAiLcochmcn59nTnBO/SiOtZqRzk/bfptPdPe6PLfGLaW
+        WLGtb7OQArhZuNUqkktyqh6Hfo0MUaXs4dIVAyCZlS+MAwolVXRal1v2n6CPL5UQiDPBPg
+        +5dSJ6u0QknSqkOymxo3bskfoph2Snc=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-148-l2N29321O0ieKsqQhVWYWQ-1; Fri, 10 Jul 2020 11:48:48 -0400
+X-MC-Unique: l2N29321O0ieKsqQhVWYWQ-1
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 67BBF1083;
+        Fri, 10 Jul 2020 15:48:46 +0000 (UTC)
+Received: from localhost.localdomain.com (ovpn-114-235.ams2.redhat.com
+ [10.36.114.235])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 33A265BAC3;
+        Fri, 10 Jul 2020 15:48:44 +0000 (UTC)
+From: Mohammed Gamal <mgamal@redhat.com>
+To: kvm@vger.kernel.org, pbonzini@redhat.com
+Cc: linux-kernel@vger.kernel.org, vkuznets@redhat.com,
+        sean.j.christopherson@intel.com, wanpengli@tencent.com,
+        jmattson@google.com, joro@8bytes.org,
+        Mohammed Gamal <mgamal@redhat.com>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Babu Moger <babu.moger@amd.com>
+Subject: [PATCH v3 9/9] KVM: x86: SVM: VMX: Make GUEST_MAXPHYADDR <
+ HOST_MAXPHYADDR support configurable
+Date: Fri, 10 Jul 2020 17:48:11 +0200
+Message-Id: <20200710154811.418214-10-mgamal@redhat.com>
+In-Reply-To: <20200710154811.418214-1-mgamal@redhat.com>
+References: <20200710154811.418214-1-mgamal@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The reason behind including this patch is unexpected behaviour we see
+with NPT vmexit handling in AMD processor.
+
+With previous patch ("KVM: SVM: Add guest physical address check in
+NPF/PF interception") we see the followning error multiple times in
+the 'access' test in kvm-unit-tests:
+
+            test pte.p pte.36 pde.p: FAIL: pte 2000021 expected 2000001
+            Dump mapping: address: 0x123400000000
+            ------L4: 24c3027
+            ------L3: 24c4027
+            ------L2: 24c5021
+            ------L1: 1002000021
+
+This shows that the PTE's accessed bit is apparently being set by
+the CPU hardware before the NPF vmexit. This completely handled by
+hardware and can not be fixed in software.
+
+This patch introduces a workaround. We add a boolean variable:
+'allow_smaller_maxphyaddr'
+Which is set individually by VMX and SVM init routines. On VMX it's
+always set to true, on SVM it's only set to true when NPT is not
+enabled.
+
+We also add a new capability KVM_CAP_SMALLER_MAXPHYADDR which
+allows userspace to query if the underlying architecture would
+support GUEST_MAXPHYADDR < HOST_MAXPHYADDR and hence act accordingly
+(e.g. qemu can decide if it would ignore the -cpu ..,phys-bits=X)
+
+CC: Tom Lendacky <thomas.lendacky@amd.com>
+CC: Babu Moger <babu.moger@amd.com>
+Signed-off-by: Mohammed Gamal <mgamal@redhat.com>
+---
+ arch/x86/include/asm/kvm_host.h |  2 +-
+ arch/x86/kvm/svm/svm.c          | 15 +++++++++++++++
+ arch/x86/kvm/vmx/vmx.c          |  7 +++++++
+ arch/x86/kvm/x86.c              |  6 ++++++
+ include/uapi/linux/kvm.h        |  1 +
+ 5 files changed, 30 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index bb4044ffb7b7..26002e1b47f7 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1304,7 +1304,7 @@ struct kvm_arch_async_pf {
+ };
+ 
+ extern u64 __read_mostly host_efer;
+-
++extern bool __read_mostly allow_smaller_maxphyaddr;
+ extern struct kvm_x86_ops kvm_x86_ops;
+ 
+ #define __KVM_HAVE_ARCH_VM_ALLOC
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index 79c33b3539f0..f3d7ae26875c 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -924,6 +924,21 @@ static __init int svm_hardware_setup(void)
+ 
+ 	svm_set_cpu_caps();
+ 
++	/*
++	 * It seems that on AMD processors PTE's accessed bit is
++	 * being set by the CPU hardware before the NPF vmexit.
++	 * This is not expected behaviour and our tests fail because
++	 * of it.
++	 * A workaround here is to disable support for
++	 * GUEST_MAXPHYADDR < HOST_MAXPHYADDR if NPT is enabled.
++	 * In this case userspace can know if there is support using
++	 * KVM_CAP_SMALLER_MAXPHYADDR extension and decide how to handle
++	 * it
++	 * If future AMD CPU models change the behaviour described above,
++	 * this variable can be changed accordingly
++	 */
++	allow_smaller_maxphyaddr = !npt_enabled;
++
+ 	return 0;
+ 
+ err:
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 0cebc4832805..8a8e85e6c529 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -8294,6 +8294,13 @@ static int __init vmx_init(void)
+ #endif
+ 	vmx_check_vmcs12_offsets();
+ 
++	/*
++	 * Intel processors don't have problems with
++	 * GUEST_MAXPHYADDR < HOST_MAXPHYADDR so enable
++	 * it for VMX by default
++	 */
++	allow_smaller_maxphyaddr = true;
++
+ 	return 0;
+ }
+ module_init(vmx_init);
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 03c401963062..167becd6a634 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -187,6 +187,9 @@ static struct kvm_shared_msrs __percpu *shared_msrs;
+ u64 __read_mostly host_efer;
+ EXPORT_SYMBOL_GPL(host_efer);
+ 
++bool __read_mostly allow_smaller_maxphyaddr;
++EXPORT_SYMBOL_GPL(allow_smaller_maxphyaddr);
++
+ static u64 __read_mostly host_xss;
+ u64 __read_mostly supported_xss;
+ EXPORT_SYMBOL_GPL(supported_xss);
+@@ -3538,6 +3541,9 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
+ 	case KVM_CAP_HYPERV_ENLIGHTENED_VMCS:
+ 		r = kvm_x86_ops.nested_ops->enable_evmcs != NULL;
+ 		break;
++	case KVM_CAP_SMALLER_MAXPHYADDR:
++		r = (int) allow_smaller_maxphyaddr;
++		break;
+ 	default:
+ 		break;
+ 	}
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index 4fdf30316582..68cd3a0af9bb 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -1031,6 +1031,7 @@ struct kvm_ppc_resize_hpt {
+ #define KVM_CAP_PPC_SECURE_GUEST 181
+ #define KVM_CAP_HALT_POLL 182
+ #define KVM_CAP_ASYNC_PF_INT 183
++#define KVM_CAP_SMALLER_MAXPHYADDR 184
+ 
+ #ifdef KVM_CAP_IRQ_ROUTING
+ 
