@@ -1,0 +1,1298 @@
+From patchwork Thu Jul 16 03:41:14 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11666599
+Return-Path: <SRS0=rfeS=A3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8C01760D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:41:33 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 6E3362076C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:41:33 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728232AbgGPDl1 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 15 Jul 2020 23:41:27 -0400
+Received: from mga11.intel.com ([192.55.52.93]:49384 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727825AbgGPDlZ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 15 Jul 2020 23:41:25 -0400
+IronPort-SDR: 
+ o2z56twEMc573M5VCWIdM1T/z81SYz8Ecfgs6kfhJG/X/2qow+B9CJEftnvYhJk7L052vOilyQ
+ d+BlHOes5PZQ==
+X-IronPort-AV: E=McAfee;i="6000,8403,9683"; a="147310948"
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="147310948"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 15 Jul 2020 20:41:25 -0700
+IronPort-SDR: 
+ Eq7vSGi50vAzlkVRA/w3Ky5hkrfcwwmwP61S/b/Y2Flz4ni732GYXOvuFaspE6EaL/8OTdMPMP
+ 9v9oo4ejb76Q==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="316905470"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga008.jf.intel.com with ESMTP; 15 Jul 2020 20:41:24 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 1/9] KVM: nSVM: Correctly set the shadow NPT root level in its
+ MMU role
+Date: Wed, 15 Jul 2020 20:41:14 -0700
+Message-Id: <20200716034122.5998-2-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+References: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Move the initialization of shadow NPT MMU's shadow_root_level into
+kvm_init_shadow_npt_mmu() and explicitly set the level in the shadow NPT
+MMU's role to be the TDP level.  This ensures the role and MMU levels
+are synchronized and also initialized before __kvm_mmu_new_pgd(), which
+consumes the level when attempting a fast PGD switch.
+
+Cc: Vitaly Kuznetsov <vkuznets@redhat.com>
+Fixes: 9fa72119b24db ("kvm: x86: Introduce kvm_mmu_calc_root_page_role()")
+Fixes: a506fdd223426 ("KVM: nSVM: implement nested_svm_load_cr3() and use it for host->guest switch")
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/mmu/mmu.c    | 3 +++
+ arch/x86/kvm/svm/nested.c | 1 -
+ 2 files changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index 77810ce66bdb4..678b6209dad50 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -4963,6 +4963,9 @@ void kvm_init_shadow_npt_mmu(struct kvm_vcpu *vcpu, u32 cr0, u32 cr4, u32 efer,
+ 	union kvm_mmu_role new_role =
+ 		kvm_calc_shadow_mmu_root_page_role(vcpu, false);
+ 
++	new_role.base.level = vcpu->arch.tdp_level;
++	context->shadow_root_level = new_role.base.level;
++
+ 	__kvm_mmu_new_pgd(vcpu, nested_cr3, new_role.base, false, false);
+ 
+ 	if (new_role.as_u64 != context->mmu_role.as_u64)
+diff --git a/arch/x86/kvm/svm/nested.c b/arch/x86/kvm/svm/nested.c
+index 61378a3c2ce44..fb68467e60496 100644
+--- a/arch/x86/kvm/svm/nested.c
++++ b/arch/x86/kvm/svm/nested.c
+@@ -85,7 +85,6 @@ static void nested_svm_init_mmu_context(struct kvm_vcpu *vcpu)
+ 	vcpu->arch.mmu->get_guest_pgd     = nested_svm_get_tdp_cr3;
+ 	vcpu->arch.mmu->get_pdptr         = nested_svm_get_tdp_pdptr;
+ 	vcpu->arch.mmu->inject_page_fault = nested_svm_inject_npf_exit;
+-	vcpu->arch.mmu->shadow_root_level = vcpu->arch.tdp_level;
+ 	reset_shadow_zero_bits_mask(vcpu, vcpu->arch.mmu);
+ 	vcpu->arch.walk_mmu              = &vcpu->arch.nested_mmu;
+ }
+
+From patchwork Thu Jul 16 03:41:15 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11666617
+Return-Path: <SRS0=rfeS=A3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D6610618
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:42:14 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C5C6420791
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:42:14 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728196AbgGPDl0 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 15 Jul 2020 23:41:26 -0400
+Received: from mga11.intel.com ([192.55.52.93]:49384 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726905AbgGPDlZ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 15 Jul 2020 23:41:25 -0400
+IronPort-SDR: 
+ p6tTeAIB66487vYL/c2gZtKT35KJRJiDZ76M9ltXX52YVj7FWbf6xyg5XGqw+vXyjxQHjDnbkJ
+ TrEfv+xAFYNQ==
+X-IronPort-AV: E=McAfee;i="6000,8403,9683"; a="147310949"
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="147310949"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 15 Jul 2020 20:41:25 -0700
+IronPort-SDR: 
+ DR3TEtVdjfqxbJL2HGPnu+ac5DYClBHXt7BesmxtEopHKQW9vPCliDNnOCfKw4ME8gG9JydNMR
+ WSakA7ipG0vQ==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="316905473"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga008.jf.intel.com with ESMTP; 15 Jul 2020 20:41:24 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 2/9] KVM: x86/mmu: Add separate helper for shadow NPT root
+ page role calc
+Date: Wed, 15 Jul 2020 20:41:15 -0700
+Message-Id: <20200716034122.5998-3-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+References: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Refactor the shadow NPT role calculation into a separate helper to
+better differentiate it from the non-nested shadow MMU, e.g. the NPT
+variant is never direct and derives its root level from the TDP level.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/mmu/mmu.c | 30 +++++++++++++++++++++++++-----
+ 1 file changed, 25 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index 678b6209dad50..0fb033ce6cc57 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -4908,7 +4908,7 @@ static void init_kvm_tdp_mmu(struct kvm_vcpu *vcpu)
+ }
+ 
+ static union kvm_mmu_role
+-kvm_calc_shadow_mmu_root_page_role(struct kvm_vcpu *vcpu, bool base_only)
++kvm_calc_shadow_root_page_role_common(struct kvm_vcpu *vcpu, bool base_only)
+ {
+ 	union kvm_mmu_role role = kvm_calc_mmu_role_common(vcpu, base_only);
+ 
+@@ -4916,9 +4916,19 @@ kvm_calc_shadow_mmu_root_page_role(struct kvm_vcpu *vcpu, bool base_only)
+ 		!is_write_protection(vcpu);
+ 	role.base.smap_andnot_wp = role.ext.cr4_smap &&
+ 		!is_write_protection(vcpu);
+-	role.base.direct = !is_paging(vcpu);
+ 	role.base.gpte_is_8_bytes = !!is_pae(vcpu);
+ 
++	return role;
++}
++
++static union kvm_mmu_role
++kvm_calc_shadow_mmu_root_page_role(struct kvm_vcpu *vcpu, bool base_only)
++{
++	union kvm_mmu_role role =
++		kvm_calc_shadow_root_page_role_common(vcpu, base_only);
++
++	role.base.direct = !is_paging(vcpu);
++
+ 	if (!is_long_mode(vcpu))
+ 		role.base.level = PT32E_ROOT_LEVEL;
+ 	else if (is_la57_mode(vcpu))
+@@ -4956,14 +4966,24 @@ static void kvm_init_shadow_mmu(struct kvm_vcpu *vcpu, u32 cr0, u32 cr4, u32 efe
+ 		shadow_mmu_init_context(vcpu, context, cr0, cr4, efer, new_role);
+ }
+ 
++static union kvm_mmu_role
++kvm_calc_shadow_npt_root_page_role(struct kvm_vcpu *vcpu)
++{
++	union kvm_mmu_role role =
++		kvm_calc_shadow_root_page_role_common(vcpu, false);
++
++	role.base.direct = false;
++	role.base.level = vcpu->arch.tdp_level;
++
++	return role;
++}
++
+ void kvm_init_shadow_npt_mmu(struct kvm_vcpu *vcpu, u32 cr0, u32 cr4, u32 efer,
+ 			     gpa_t nested_cr3)
+ {
+ 	struct kvm_mmu *context = &vcpu->arch.guest_mmu;
+-	union kvm_mmu_role new_role =
+-		kvm_calc_shadow_mmu_root_page_role(vcpu, false);
++	union kvm_mmu_role new_role = kvm_calc_shadow_npt_root_page_role(vcpu);
+ 
+-	new_role.base.level = vcpu->arch.tdp_level;
+ 	context->shadow_root_level = new_role.base.level;
+ 
+ 	__kvm_mmu_new_pgd(vcpu, nested_cr3, new_role.base, false, false);
+
+From patchwork Thu Jul 16 03:41:16 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11666621
+Return-Path: <SRS0=rfeS=A3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 7E6D6618
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:42:24 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 6FCD52076C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:42:24 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728410AbgGPDmU (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 15 Jul 2020 23:42:20 -0400
+Received: from mga11.intel.com ([192.55.52.93]:49384 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728179AbgGPDl0 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 15 Jul 2020 23:41:26 -0400
+IronPort-SDR: 
+ 3iX113N3H6Me0LbnssD9g66JGrWTWTFBo43sLwoh1UFXHhRcd4yx9qvqU0Zkr0my3nLWFbZk0f
+ BWY4zk5+whBg==
+X-IronPort-AV: E=McAfee;i="6000,8403,9683"; a="147310950"
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="147310950"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 15 Jul 2020 20:41:25 -0700
+IronPort-SDR: 
+ dyIPluwdjUihW4NjmNs4yVCrg5clrsBoUVmx7zjj4dtwnk5xyA9yUtxnKdgeLkQsYMgm0rXE3N
+ nXiJpKe2cT/g==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="316905477"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga008.jf.intel.com with ESMTP; 15 Jul 2020 20:41:24 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 3/9] KVM: VMX: Drop a duplicate declaration of
+ construct_eptp()
+Date: Wed, 15 Jul 2020 20:41:16 -0700
+Message-Id: <20200716034122.5998-4-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+References: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Remove an extra declaration of construct_eptp() from vmx.h.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.h | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index 0d06951e607ce..0e8d25b0cec35 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -537,8 +537,6 @@ static inline struct vmcs *alloc_vmcs(bool shadow)
+ 			      GFP_KERNEL_ACCOUNT);
+ }
+ 
+-u64 construct_eptp(struct kvm_vcpu *vcpu, unsigned long root_hpa);
+-
+ static inline void decache_tsc_multiplier(struct vcpu_vmx *vmx)
+ {
+ 	vmx->current_tsc_ratio = vmx->vcpu.arch.tsc_scaling_ratio;
+
+From patchwork Thu Jul 16 03:41:17 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11666615
+Return-Path: <SRS0=rfeS=A3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 29435618
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:42:13 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 1A6292076C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:42:13 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728397AbgGPDmK (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 15 Jul 2020 23:42:10 -0400
+Received: from mga11.intel.com ([192.55.52.93]:49384 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728202AbgGPDl0 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 15 Jul 2020 23:41:26 -0400
+IronPort-SDR: 
+ fLzG9b6lmKg2YBCoJM/45TDACijhxLzDreKEy6Mlsc2Zwcwyc21WYlMv1dwwSljKReG1iBF1T1
+ tNkqmiILV9tA==
+X-IronPort-AV: E=McAfee;i="6000,8403,9683"; a="147310951"
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="147310951"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 15 Jul 2020 20:41:25 -0700
+IronPort-SDR: 
+ fa9qogkE5TPLIpNxA3ic3sDUw9W8G5Z6UWTIwe8yvaXMqX5/jJcK9Dvdq6PSitV7rFoEEYFtCA
+ Y2MlNDXb7odA==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="316905480"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga008.jf.intel.com with ESMTP; 15 Jul 2020 20:41:24 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 4/9] KVM: VMX: Make vmx_load_mmu_pgd() static
+Date: Wed, 15 Jul 2020 20:41:17 -0700
+Message-Id: <20200716034122.5998-5-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+References: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Make vmx_load_mmu_pgd() static as it is no longer invoked directly by
+nested VMX (or any code for that matter).
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 2 +-
+ arch/x86/kvm/vmx/vmx.h | 1 -
+ 2 files changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 1bb59ae5016dc..791baa73e5786 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -3092,7 +3092,7 @@ u64 construct_eptp(struct kvm_vcpu *vcpu, unsigned long root_hpa)
+ 	return eptp;
+ }
+ 
+-void vmx_load_mmu_pgd(struct kvm_vcpu *vcpu, unsigned long pgd)
++static void vmx_load_mmu_pgd(struct kvm_vcpu *vcpu, unsigned long pgd)
+ {
+ 	struct kvm *kvm = vcpu->kvm;
+ 	bool update_guest_cr3 = true;
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index 0e8d25b0cec35..3c55433ac1b21 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -338,7 +338,6 @@ void vmx_set_efer(struct kvm_vcpu *vcpu, u64 efer);
+ void vmx_set_cr0(struct kvm_vcpu *vcpu, unsigned long cr0);
+ int vmx_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4);
+ void set_cr4_guest_host_mask(struct vcpu_vmx *vmx);
+-void vmx_load_mmu_pgd(struct kvm_vcpu *vcpu, unsigned long cr3);
+ void ept_save_pdptrs(struct kvm_vcpu *vcpu);
+ void vmx_get_segment(struct kvm_vcpu *vcpu, struct kvm_segment *var, int seg);
+ void vmx_set_segment(struct kvm_vcpu *vcpu, struct kvm_segment *var, int seg);
+
+From patchwork Thu Jul 16 03:41:18 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11666611
+Return-Path: <SRS0=rfeS=A3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id EC57160D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:42:01 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id DDF8D20791
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:42:01 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728336AbgGPDl5 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 15 Jul 2020 23:41:57 -0400
+Received: from mga11.intel.com ([192.55.52.93]:49386 "EHLO mga11.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728208AbgGPDl0 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 15 Jul 2020 23:41:26 -0400
+IronPort-SDR: 
+ 77bqFB4BGshg5YXW3qchecegsBXnu0aolORJGOSOWkdFs9mx+rRfJuOYkXUIR7i84QS0uoFtXn
+ zM4UrJJluLUw==
+X-IronPort-AV: E=McAfee;i="6000,8403,9683"; a="147310952"
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="147310952"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by fmsmga102.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 15 Jul 2020 20:41:25 -0700
+IronPort-SDR: 
+ aZCijIGkvwVIPk2MhnU+YCP/3Ea2nkUkHTODCAJ/zRnTwiGOXOuvyDsnttws60pK8gR5ndDggj
+ lAiC77zcbkEQ==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="316905484"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga008.jf.intel.com with ESMTP; 15 Jul 2020 20:41:24 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 5/9] KVM: x86: Pull the PGD's level from the MMU instead of
+ recalculating it
+Date: Wed, 15 Jul 2020 20:41:18 -0700
+Message-Id: <20200716034122.5998-6-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+References: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Use the shadow_root_level from the current MMU as the root level for the
+PGD, i.e. for VMX's EPTP.  This eliminates the weird dependency between
+VMX and the MMU where both must independently calculate the same root
+level for things to work correctly.  Temporarily keep VMX's calculation
+of the level and use it to WARN if the incoming level diverges.
+
+Opportunistically refactor kvm_mmu_load_pgd() to avoid indentation hell,
+and rename a 'cr3' param in the load_mmu_pgd prototype that managed to
+survive the cr3 purge.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  3 ++-
+ arch/x86/kvm/mmu.h              | 10 +++++++---
+ arch/x86/kvm/svm/svm.c          |  3 ++-
+ arch/x86/kvm/vmx/nested.c       |  2 +-
+ arch/x86/kvm/vmx/vmx.c          | 18 ++++++++++++------
+ arch/x86/kvm/vmx/vmx.h          |  3 ++-
+ 6 files changed, 26 insertions(+), 13 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 1bab87a444d78..ce60f4c38843f 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1136,7 +1136,8 @@ struct kvm_x86_ops {
+ 	int (*get_tdp_level)(struct kvm_vcpu *vcpu);
+ 	u64 (*get_mt_mask)(struct kvm_vcpu *vcpu, gfn_t gfn, bool is_mmio);
+ 
+-	void (*load_mmu_pgd)(struct kvm_vcpu *vcpu, unsigned long cr3);
++	void (*load_mmu_pgd)(struct kvm_vcpu *vcpu, unsigned long pgd,
++			     int pgd_level);
+ 
+ 	bool (*has_wbinvd_exit)(void);
+ 
+diff --git a/arch/x86/kvm/mmu.h b/arch/x86/kvm/mmu.h
+index 9f6554613babc..5efc6081ca138 100644
+--- a/arch/x86/kvm/mmu.h
++++ b/arch/x86/kvm/mmu.h
+@@ -90,9 +90,13 @@ static inline unsigned long kvm_get_active_pcid(struct kvm_vcpu *vcpu)
+ 
+ static inline void kvm_mmu_load_pgd(struct kvm_vcpu *vcpu)
+ {
+-	if (VALID_PAGE(vcpu->arch.mmu->root_hpa))
+-		kvm_x86_ops.load_mmu_pgd(vcpu, vcpu->arch.mmu->root_hpa |
+-					       kvm_get_active_pcid(vcpu));
++	u64 root_hpa = vcpu->arch.mmu->root_hpa;
++
++	if (!VALID_PAGE(root_hpa))
++		return;
++
++	kvm_x86_ops.load_mmu_pgd(vcpu, root_hpa | kvm_get_active_pcid(vcpu),
++				 vcpu->arch.mmu->shadow_root_level);
+ }
+ 
+ int kvm_tdp_page_fault(struct kvm_vcpu *vcpu, gpa_t gpa, u32 error_code,
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index 783330d0e7b88..c70d7dd333061 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -3541,7 +3541,8 @@ static __no_kcsan fastpath_t svm_vcpu_run(struct kvm_vcpu *vcpu)
+ 	return exit_fastpath;
+ }
+ 
+-static void svm_load_mmu_pgd(struct kvm_vcpu *vcpu, unsigned long root)
++static void svm_load_mmu_pgd(struct kvm_vcpu *vcpu, unsigned long root,
++			     int root_level)
+ {
+ 	struct vcpu_svm *svm = to_svm(vcpu);
+ 	unsigned long cr3;
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 4d561edf6f9ca..50b56622e16a6 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -2162,7 +2162,7 @@ static void prepare_vmcs02_constant_state(struct vcpu_vmx *vmx)
+ 	 * consistency checks.
+ 	 */
+ 	if (enable_ept && nested_early_check)
+-		vmcs_write64(EPT_POINTER, construct_eptp(&vmx->vcpu, 0));
++		vmcs_write64(EPT_POINTER, construct_eptp(&vmx->vcpu, 0, 4));
+ 
+ 	/* All VMFUNCs are currently emulated through L0 vmexits.  */
+ 	if (cpu_has_vmx_vmfunc())
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 791baa73e5786..244053cff0a3a 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -2933,14 +2933,16 @@ static void vmx_flush_tlb_all(struct kvm_vcpu *vcpu)
+ 
+ static void vmx_flush_tlb_current(struct kvm_vcpu *vcpu)
+ {
+-	u64 root_hpa = vcpu->arch.mmu->root_hpa;
++	struct kvm_mmu *mmu = vcpu->arch.mmu;
++	u64 root_hpa = mmu->root_hpa;
+ 
+ 	/* No flush required if the current context is invalid. */
+ 	if (!VALID_PAGE(root_hpa))
+ 		return;
+ 
+ 	if (enable_ept)
+-		ept_sync_context(construct_eptp(vcpu, root_hpa));
++		ept_sync_context(construct_eptp(vcpu, root_hpa,
++						mmu->shadow_root_level));
+ 	else if (!is_guest_mode(vcpu))
+ 		vpid_sync_context(to_vmx(vcpu)->vpid);
+ 	else
+@@ -3078,11 +3080,12 @@ static int get_ept_level(struct kvm_vcpu *vcpu)
+ 	return vmx_get_tdp_level(vcpu);
+ }
+ 
+-u64 construct_eptp(struct kvm_vcpu *vcpu, unsigned long root_hpa)
++u64 construct_eptp(struct kvm_vcpu *vcpu, unsigned long root_hpa,
++		   int root_level)
+ {
+ 	u64 eptp = VMX_EPTP_MT_WB;
+ 
+-	eptp |= (get_ept_level(vcpu) == 5) ? VMX_EPTP_PWL_5 : VMX_EPTP_PWL_4;
++	eptp |= (root_level == 5) ? VMX_EPTP_PWL_5 : VMX_EPTP_PWL_4;
+ 
+ 	if (enable_ept_ad_bits &&
+ 	    (!is_guest_mode(vcpu) || nested_ept_ad_enabled(vcpu)))
+@@ -3092,7 +3095,8 @@ u64 construct_eptp(struct kvm_vcpu *vcpu, unsigned long root_hpa)
+ 	return eptp;
+ }
+ 
+-static void vmx_load_mmu_pgd(struct kvm_vcpu *vcpu, unsigned long pgd)
++static void vmx_load_mmu_pgd(struct kvm_vcpu *vcpu, unsigned long pgd,
++			     int pgd_level)
+ {
+ 	struct kvm *kvm = vcpu->kvm;
+ 	bool update_guest_cr3 = true;
+@@ -3100,7 +3104,9 @@ static void vmx_load_mmu_pgd(struct kvm_vcpu *vcpu, unsigned long pgd)
+ 	u64 eptp;
+ 
+ 	if (enable_ept) {
+-		eptp = construct_eptp(vcpu, pgd);
++		WARN_ON(pgd_level != get_ept_level(vcpu));
++
++		eptp = construct_eptp(vcpu, pgd, pgd_level);
+ 		vmcs_write64(EPT_POINTER, eptp);
+ 
+ 		if (kvm_x86_ops.tlb_remote_flush) {
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index 3c55433ac1b21..26175a4759fa5 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -341,7 +341,8 @@ void set_cr4_guest_host_mask(struct vcpu_vmx *vmx);
+ void ept_save_pdptrs(struct kvm_vcpu *vcpu);
+ void vmx_get_segment(struct kvm_vcpu *vcpu, struct kvm_segment *var, int seg);
+ void vmx_set_segment(struct kvm_vcpu *vcpu, struct kvm_segment *var, int seg);
+-u64 construct_eptp(struct kvm_vcpu *vcpu, unsigned long root_hpa);
++u64 construct_eptp(struct kvm_vcpu *vcpu, unsigned long root_hpa,
++		   int root_level);
+ void update_exception_bitmap(struct kvm_vcpu *vcpu);
+ void vmx_update_msr_bitmap(struct kvm_vcpu *vcpu);
+ bool vmx_nmi_blocked(struct kvm_vcpu *vcpu);
+
+From patchwork Thu Jul 16 03:41:19 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11666619
+Return-Path: <SRS0=rfeS=A3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B482B618
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:42:16 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 9C5C220791
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:42:16 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728436AbgGPDmP (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 15 Jul 2020 23:42:15 -0400
+Received: from mga02.intel.com ([134.134.136.20]:4816 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728186AbgGPDl0 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 15 Jul 2020 23:41:26 -0400
+IronPort-SDR: 
+ HYc92FVHkzdoU3kZkvURreaT/1L/oNnK78BOs+9CabgthWF7fYqS+Jl9Z7EXENygevI1Rea7Kz
+ CDXxhPeizmSQ==
+X-IronPort-AV: E=McAfee;i="6000,8403,9683"; a="137442916"
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="137442916"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga101.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 15 Jul 2020 20:41:25 -0700
+IronPort-SDR: 
+ Hhg21qXorTqd7pdCJjQNZprUA6QK5YopRJWCrDf/myOsck9/q0ocyse/gMhkLgaQHewOfk63z7
+ whqcIhKCuYxg==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="316905487"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga008.jf.intel.com with ESMTP; 15 Jul 2020 20:41:24 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 6/9] KVM: VXM: Remove temporary WARN on expected vs. actual
+ EPTP level mismatch
+Date: Wed, 15 Jul 2020 20:41:19 -0700
+Message-Id: <20200716034122.5998-7-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+References: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Remove the WARN in vmx_load_mmu_pgd() that was temporarily added to aid
+bisection/debug in the event the current MMU's shadow root level didn't
+match VMX's computed EPTP level.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 10 ----------
+ 1 file changed, 10 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 244053cff0a3a..da75878171cea 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -3072,14 +3072,6 @@ static int vmx_get_tdp_level(struct kvm_vcpu *vcpu)
+ 	return 4;
+ }
+ 
+-static int get_ept_level(struct kvm_vcpu *vcpu)
+-{
+-	if (is_guest_mode(vcpu) && nested_cpu_has_ept(get_vmcs12(vcpu)))
+-		return vmx_eptp_page_walk_level(nested_ept_get_eptp(vcpu));
+-
+-	return vmx_get_tdp_level(vcpu);
+-}
+-
+ u64 construct_eptp(struct kvm_vcpu *vcpu, unsigned long root_hpa,
+ 		   int root_level)
+ {
+@@ -3104,8 +3096,6 @@ static void vmx_load_mmu_pgd(struct kvm_vcpu *vcpu, unsigned long pgd,
+ 	u64 eptp;
+ 
+ 	if (enable_ept) {
+-		WARN_ON(pgd_level != get_ept_level(vcpu));
+-
+ 		eptp = construct_eptp(vcpu, pgd, pgd_level);
+ 		vmcs_write64(EPT_POINTER, eptp);
+ 
+
+From patchwork Thu Jul 16 03:41:20 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11666609
+Return-Path: <SRS0=rfeS=A3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 56C9860D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:41:56 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 45EA42076C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:41:56 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728252AbgGPDld (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 15 Jul 2020 23:41:33 -0400
+Received: from mga02.intel.com ([134.134.136.20]:4818 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728226AbgGPDl1 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 15 Jul 2020 23:41:27 -0400
+IronPort-SDR: 
+ xLzV4NPm6/C2rbfrJ9ErdouWwJqhNtRzG2jtmtvnoRDuGSoOhGnoP4hH/Mar88wI4vipjyetrJ
+ b0o34kQ0LDCw==
+X-IronPort-AV: E=McAfee;i="6000,8403,9683"; a="137442917"
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="137442917"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga101.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 15 Jul 2020 20:41:25 -0700
+IronPort-SDR: 
+ nFWoIpOy0jlxWE8XqOBWtYhLjQm/ASOqwhRyEwLP8OQNE487N64iQ/41NF6mjcarQP5yaWZxfX
+ plYGn4eIk2nA==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="316905490"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga008.jf.intel.com with ESMTP; 15 Jul 2020 20:41:24 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 7/9] KVM: x86: Dynamically calculate TDP level from max level
+ and MAXPHYADDR
+Date: Wed, 15 Jul 2020 20:41:20 -0700
+Message-Id: <20200716034122.5998-8-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+References: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Calculate the desired TDP level on the fly using the max TDP level and
+MAXPHYADDR instead of doing the same when CPUID is updated.  This avoids
+the hidden dependency on cpuid_maxphyaddr() in vmx_get_tdp_level() and
+also standardizes the "use 5-level paging iff MAXPHYADDR > 48" behavior
+across x86.
+
+Suggested-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  4 ++--
+ arch/x86/kvm/cpuid.c            |  2 --
+ arch/x86/kvm/mmu/mmu.c          | 17 +++++++++++++----
+ arch/x86/kvm/svm/svm.c          |  4 ++--
+ arch/x86/kvm/vmx/vmx.c          |  6 +++---
+ arch/x86/kvm/x86.c              |  2 +-
+ 6 files changed, 21 insertions(+), 14 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index ce60f4c38843f..ffd45b68e1d46 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -639,7 +639,7 @@ struct kvm_vcpu_arch {
+ 	struct kvm_cpuid_entry2 cpuid_entries[KVM_MAX_CPUID_ENTRIES];
+ 
+ 	int maxphyaddr;
+-	int tdp_level;
++	int max_tdp_level;
+ 
+ 	/* emulate context */
+ 
+@@ -1133,7 +1133,7 @@ struct kvm_x86_ops {
+ 	int (*sync_pir_to_irr)(struct kvm_vcpu *vcpu);
+ 	int (*set_tss_addr)(struct kvm *kvm, unsigned int addr);
+ 	int (*set_identity_map_addr)(struct kvm *kvm, u64 ident_addr);
+-	int (*get_tdp_level)(struct kvm_vcpu *vcpu);
++	int (*get_max_tdp_level)(void);
+ 	u64 (*get_mt_mask)(struct kvm_vcpu *vcpu, gfn_t gfn, bool is_mmio);
+ 
+ 	void (*load_mmu_pgd)(struct kvm_vcpu *vcpu, unsigned long pgd,
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 7d92854082a14..fa873e3e6e90e 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -140,9 +140,7 @@ static void kvm_vcpu_after_set_cpuid(struct kvm_vcpu *vcpu)
+ 		vcpu->arch.guest_supported_xcr0 =
+ 			(best->eax | ((u64)best->edx << 32)) & supported_xcr0;
+ 
+-	/* Note, maxphyaddr must be updated before tdp_level. */
+ 	vcpu->arch.maxphyaddr = cpuid_query_maxphyaddr(vcpu);
+-	vcpu->arch.tdp_level = kvm_x86_ops.get_tdp_level(vcpu);
+ 	kvm_mmu_reset_context(vcpu);
+ 
+ 	kvm_pmu_refresh(vcpu);
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index 0fb033ce6cc57..559b4b92b5e27 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -4846,13 +4846,22 @@ static union kvm_mmu_role kvm_calc_mmu_role_common(struct kvm_vcpu *vcpu,
+ 	return role;
+ }
+ 
++static inline int kvm_mmu_get_tdp_level(struct kvm_vcpu *vcpu)
++{
++	/* Use 5-level TDP if and only if it's useful/necessary. */
++	if (vcpu->arch.max_tdp_level == 5 && cpuid_maxphyaddr(vcpu) <= 48)
++		return 4;
++
++	return vcpu->arch.max_tdp_level;
++}
++
+ static union kvm_mmu_role
+ kvm_calc_tdp_mmu_root_page_role(struct kvm_vcpu *vcpu, bool base_only)
+ {
+ 	union kvm_mmu_role role = kvm_calc_mmu_role_common(vcpu, base_only);
+ 
+ 	role.base.ad_disabled = (shadow_accessed_mask == 0);
+-	role.base.level = vcpu->arch.tdp_level;
++	role.base.level = kvm_mmu_get_tdp_level(vcpu);
+ 	role.base.direct = true;
+ 	role.base.gpte_is_8_bytes = true;
+ 
+@@ -4873,7 +4882,7 @@ static void init_kvm_tdp_mmu(struct kvm_vcpu *vcpu)
+ 	context->sync_page = nonpaging_sync_page;
+ 	context->invlpg = NULL;
+ 	context->update_pte = nonpaging_update_pte;
+-	context->shadow_root_level = vcpu->arch.tdp_level;
++	context->shadow_root_level = kvm_mmu_get_tdp_level(vcpu);
+ 	context->direct_map = true;
+ 	context->get_guest_pgd = get_cr3;
+ 	context->get_pdptr = kvm_pdptr_read;
+@@ -4973,7 +4982,7 @@ kvm_calc_shadow_npt_root_page_role(struct kvm_vcpu *vcpu)
+ 		kvm_calc_shadow_root_page_role_common(vcpu, false);
+ 
+ 	role.base.direct = false;
+-	role.base.level = vcpu->arch.tdp_level;
++	role.base.level = kvm_mmu_get_tdp_level(vcpu);
+ 
+ 	return role;
+ }
+@@ -5683,7 +5692,7 @@ static int alloc_mmu_pages(struct kvm_vcpu *vcpu, struct kvm_mmu *mmu)
+ 	 * SVM's 32-bit NPT support, TDP paging doesn't use PAE paging and can
+ 	 * skip allocating the PDP table.
+ 	 */
+-	if (tdp_enabled && vcpu->arch.tdp_level > PT32E_ROOT_LEVEL)
++	if (tdp_enabled && kvm_mmu_get_tdp_level(vcpu) > PT32E_ROOT_LEVEL)
+ 		return 0;
+ 
+ 	page = alloc_page(GFP_KERNEL_ACCOUNT | __GFP_DMA32);
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index c70d7dd333061..c94faca46e760 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -254,7 +254,7 @@ static inline void invlpga(unsigned long addr, u32 asid)
+ 	asm volatile (__ex("invlpga %1, %0") : : "c"(asid), "a"(addr));
+ }
+ 
+-static int get_npt_level(struct kvm_vcpu *vcpu)
++static int get_max_npt_level(void)
+ {
+ #ifdef CONFIG_X86_64
+ 	return PT64_ROOT_4LEVEL;
+@@ -4109,7 +4109,7 @@ static struct kvm_x86_ops svm_x86_ops __initdata = {
+ 
+ 	.set_tss_addr = svm_set_tss_addr,
+ 	.set_identity_map_addr = svm_set_identity_map_addr,
+-	.get_tdp_level = get_npt_level,
++	.get_max_tdp_level = get_max_npt_level,
+ 	.get_mt_mask = svm_get_mt_mask,
+ 
+ 	.get_exit_info = svm_get_exit_info,
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index da75878171cea..c0b1c7bd1248a 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -3065,9 +3065,9 @@ void vmx_set_cr0(struct kvm_vcpu *vcpu, unsigned long cr0)
+ 	vmx->emulation_required = emulation_required(vcpu);
+ }
+ 
+-static int vmx_get_tdp_level(struct kvm_vcpu *vcpu)
++static int vmx_get_max_tdp_level(void)
+ {
+-	if (cpu_has_vmx_ept_5levels() && (cpuid_maxphyaddr(vcpu) > 48))
++	if (cpu_has_vmx_ept_5levels())
+ 		return 5;
+ 	return 4;
+ }
+@@ -7959,7 +7959,7 @@ static struct kvm_x86_ops vmx_x86_ops __initdata = {
+ 
+ 	.set_tss_addr = vmx_set_tss_addr,
+ 	.set_identity_map_addr = vmx_set_identity_map_addr,
+-	.get_tdp_level = vmx_get_tdp_level,
++	.get_max_tdp_level = vmx_get_max_tdp_level,
+ 	.get_mt_mask = vmx_get_mt_mask,
+ 
+ 	.get_exit_info = vmx_get_exit_info,
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 5f526d94c33f3..6b8347d703430 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -9520,7 +9520,7 @@ int kvm_arch_vcpu_create(struct kvm_vcpu *vcpu)
+ 	fx_init(vcpu);
+ 
+ 	vcpu->arch.maxphyaddr = cpuid_query_maxphyaddr(vcpu);
+-	vcpu->arch.tdp_level = kvm_x86_ops.get_tdp_level(vcpu);
++	vcpu->arch.max_tdp_level = kvm_x86_ops.get_max_tdp_level();
+ 
+ 	vcpu->arch.pat = MSR_IA32_CR_PAT_DEFAULT;
+ 
+
+From patchwork Thu Jul 16 03:41:21 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11666613
+Return-Path: <SRS0=rfeS=A3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 44A14618
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:42:08 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 35C2920775
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:42:08 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728386AbgGPDmD (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 15 Jul 2020 23:42:03 -0400
+Received: from mga02.intel.com ([134.134.136.20]:4816 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728214AbgGPDl0 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 15 Jul 2020 23:41:26 -0400
+IronPort-SDR: 
+ KBzR0Y0lEgz1aiCquMKEMqdMRbMJJR67MX0HwtgL1a9YNIcvu3EkDGlsVxE6Sw2+KeTda2ZdtL
+ 5J4/EDHCwcTA==
+X-IronPort-AV: E=McAfee;i="6000,8403,9683"; a="137442918"
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="137442918"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga101.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 15 Jul 2020 20:41:25 -0700
+IronPort-SDR: 
+ CbvKX32DWYuILUC4AMNPiYJervepMLVCWi+vLMdAyidnQvm8N3s1mSrZjMGzSCETd9E+eLo/OP
+ wYnsjHvvFR2w==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="316905493"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga008.jf.intel.com with ESMTP; 15 Jul 2020 20:41:24 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 8/9] KVM: x86/mmu: Rename max_page_level to
+ max_huge_page_level
+Date: Wed, 15 Jul 2020 20:41:21 -0700
+Message-Id: <20200716034122.5998-9-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+References: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Rename max_page_level to explicitly call out that it tracks the max huge
+page level so as to avoid confusion when a future patch moves the max
+TDP level, i.e. max root level, into the MMU and kvm_configure_mmu().
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/mmu/mmu.c | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index 559b4b92b5e27..c867b35759ab5 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -92,7 +92,7 @@ module_param_named(flush_on_reuse, force_flush_and_sync_on_reuse, bool, 0644);
+  */
+ bool tdp_enabled = false;
+ 
+-static int max_page_level __read_mostly;
++static int max_huge_page_level __read_mostly;
+ 
+ enum {
+ 	AUDIT_PRE_PAGE_FAULT,
+@@ -3256,7 +3256,7 @@ static int kvm_mmu_hugepage_adjust(struct kvm_vcpu *vcpu, gfn_t gfn,
+ 	if (!slot)
+ 		return PG_LEVEL_4K;
+ 
+-	max_level = min(max_level, max_page_level);
++	max_level = min(max_level, max_huge_page_level);
+ 	for ( ; max_level > PG_LEVEL_4K; max_level--) {
+ 		linfo = lpage_info_slot(gfn, slot, max_level);
+ 		if (!linfo->disallow_lpage)
+@@ -5580,23 +5580,23 @@ void kvm_mmu_invpcid_gva(struct kvm_vcpu *vcpu, gva_t gva, unsigned long pcid)
+ }
+ EXPORT_SYMBOL_GPL(kvm_mmu_invpcid_gva);
+ 
+-void kvm_configure_mmu(bool enable_tdp, int tdp_page_level)
++void kvm_configure_mmu(bool enable_tdp, int tdp_huge_page_level)
+ {
+ 	tdp_enabled = enable_tdp;
+ 
+ 	/*
+-	 * max_page_level reflects the capabilities of KVM's MMU irrespective
++	 * max_huge_page_level reflects KVM's MMU capabilities irrespective
+ 	 * of kernel support, e.g. KVM may be capable of using 1GB pages when
+ 	 * the kernel is not.  But, KVM never creates a page size greater than
+ 	 * what is used by the kernel for any given HVA, i.e. the kernel's
+ 	 * capabilities are ultimately consulted by kvm_mmu_hugepage_adjust().
+ 	 */
+ 	if (tdp_enabled)
+-		max_page_level = tdp_page_level;
++		max_huge_page_level = tdp_huge_page_level;
+ 	else if (boot_cpu_has(X86_FEATURE_GBPAGES))
+-		max_page_level = PG_LEVEL_1G;
++		max_huge_page_level = PG_LEVEL_1G;
+ 	else
+-		max_page_level = PG_LEVEL_2M;
++		max_huge_page_level = PG_LEVEL_2M;
+ }
+ EXPORT_SYMBOL_GPL(kvm_configure_mmu);
+ 
+
+From patchwork Thu Jul 16 03:41:22 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11666601
+Return-Path: <SRS0=rfeS=A3=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 01C7660D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:41:35 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id E442220787
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 16 Jul 2020 03:41:34 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728259AbgGPDle (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 15 Jul 2020 23:41:34 -0400
+Received: from mga02.intel.com ([134.134.136.20]:4816 "EHLO mga02.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728225AbgGPDl1 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 15 Jul 2020 23:41:27 -0400
+IronPort-SDR: 
+ pc6P02SkZTYxULKjhVjsL1kioXRhBsap74Av0BbOvNc+HISx2Pn1OQXRsHP2XOfVKjyx+vLOw8
+ fEAqBQyFXMqA==
+X-IronPort-AV: E=McAfee;i="6000,8403,9683"; a="137442919"
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="137442919"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from orsmga008.jf.intel.com ([10.7.209.65])
+  by orsmga101.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 15 Jul 2020 20:41:25 -0700
+IronPort-SDR: 
+ JIh1Iw7mvK1AXZSu+Bj6d/C3EOwGZWaVQoQIJ5m7p1vKzGKBUscdwdHNpSE6a0Eb/fzcovHJ1t
+ Xo/hMmLFdutg==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.75,357,1589266800";
+   d="scan'208";a="316905496"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.152])
+  by orsmga008.jf.intel.com with ESMTP; 15 Jul 2020 20:41:24 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH 9/9] KVM: x86: Specify max TDP level via kvm_configure_mmu()
+Date: Wed, 15 Jul 2020 20:41:22 -0700
+Message-Id: <20200716034122.5998-10-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.26.0
+In-Reply-To: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+References: <20200716034122.5998-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Capture the max TDP level during kvm_configure_mmu() instead of using a
+kvm_x86_ops hook to do it at every vCPU creation.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h | 4 ++--
+ arch/x86/kvm/mmu/mmu.c          | 9 ++++++---
+ arch/x86/kvm/svm/svm.c          | 3 +--
+ arch/x86/kvm/vmx/vmx.c          | 3 +--
+ arch/x86/kvm/x86.c              | 1 -
+ 5 files changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index ffd45b68e1d46..5ab3af7275d81 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1133,7 +1133,6 @@ struct kvm_x86_ops {
+ 	int (*sync_pir_to_irr)(struct kvm_vcpu *vcpu);
+ 	int (*set_tss_addr)(struct kvm *kvm, unsigned int addr);
+ 	int (*set_identity_map_addr)(struct kvm *kvm, u64 ident_addr);
+-	int (*get_max_tdp_level)(void);
+ 	u64 (*get_mt_mask)(struct kvm_vcpu *vcpu, gfn_t gfn, bool is_mmio);
+ 
+ 	void (*load_mmu_pgd)(struct kvm_vcpu *vcpu, unsigned long pgd,
+@@ -1509,7 +1508,8 @@ void kvm_mmu_invpcid_gva(struct kvm_vcpu *vcpu, gva_t gva, unsigned long pcid);
+ void kvm_mmu_new_pgd(struct kvm_vcpu *vcpu, gpa_t new_pgd, bool skip_tlb_flush,
+ 		     bool skip_mmu_sync);
+ 
+-void kvm_configure_mmu(bool enable_tdp, int tdp_page_level);
++void kvm_configure_mmu(bool enable_tdp, int tdp_max_root_level,
++		       int tdp_huge_page_level);
+ 
+ static inline u16 kvm_read_ldt(void)
+ {
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index c867b35759ab5..862bf418214e2 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -93,6 +93,7 @@ module_param_named(flush_on_reuse, force_flush_and_sync_on_reuse, bool, 0644);
+ bool tdp_enabled = false;
+ 
+ static int max_huge_page_level __read_mostly;
++static int max_tdp_level __read_mostly;
+ 
+ enum {
+ 	AUDIT_PRE_PAGE_FAULT,
+@@ -4849,10 +4850,10 @@ static union kvm_mmu_role kvm_calc_mmu_role_common(struct kvm_vcpu *vcpu,
+ static inline int kvm_mmu_get_tdp_level(struct kvm_vcpu *vcpu)
+ {
+ 	/* Use 5-level TDP if and only if it's useful/necessary. */
+-	if (vcpu->arch.max_tdp_level == 5 && cpuid_maxphyaddr(vcpu) <= 48)
++	if (max_tdp_level == 5 && cpuid_maxphyaddr(vcpu) <= 48)
+ 		return 4;
+ 
+-	return vcpu->arch.max_tdp_level;
++	return max_tdp_level;
+ }
+ 
+ static union kvm_mmu_role
+@@ -5580,9 +5581,11 @@ void kvm_mmu_invpcid_gva(struct kvm_vcpu *vcpu, gva_t gva, unsigned long pcid)
+ }
+ EXPORT_SYMBOL_GPL(kvm_mmu_invpcid_gva);
+ 
+-void kvm_configure_mmu(bool enable_tdp, int tdp_huge_page_level)
++void kvm_configure_mmu(bool enable_tdp, int tdp_max_root_level,
++		       int tdp_huge_page_level)
+ {
+ 	tdp_enabled = enable_tdp;
++	max_tdp_level = tdp_max_root_level;
+ 
+ 	/*
+ 	 * max_huge_page_level reflects KVM's MMU capabilities irrespective
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index c94faca46e760..5f47b44c5c324 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -885,7 +885,7 @@ static __init int svm_hardware_setup(void)
+ 	if (npt_enabled && !npt)
+ 		npt_enabled = false;
+ 
+-	kvm_configure_mmu(npt_enabled, PG_LEVEL_1G);
++	kvm_configure_mmu(npt_enabled, get_max_npt_level(), PG_LEVEL_1G);
+ 	pr_info("kvm: Nested Paging %sabled\n", npt_enabled ? "en" : "dis");
+ 
+ 	if (nrips) {
+@@ -4109,7 +4109,6 @@ static struct kvm_x86_ops svm_x86_ops __initdata = {
+ 
+ 	.set_tss_addr = svm_set_tss_addr,
+ 	.set_identity_map_addr = svm_set_identity_map_addr,
+-	.get_max_tdp_level = get_max_npt_level,
+ 	.get_mt_mask = svm_get_mt_mask,
+ 
+ 	.get_exit_info = svm_get_exit_info,
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index c0b1c7bd1248a..a70d8f6d8aba7 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -7959,7 +7959,6 @@ static struct kvm_x86_ops vmx_x86_ops __initdata = {
+ 
+ 	.set_tss_addr = vmx_set_tss_addr,
+ 	.set_identity_map_addr = vmx_set_identity_map_addr,
+-	.get_max_tdp_level = vmx_get_max_tdp_level,
+ 	.get_mt_mask = vmx_get_mt_mask,
+ 
+ 	.get_exit_info = vmx_get_exit_info,
+@@ -8110,7 +8109,7 @@ static __init int hardware_setup(void)
+ 		ept_lpage_level = PG_LEVEL_2M;
+ 	else
+ 		ept_lpage_level = PG_LEVEL_4K;
+-	kvm_configure_mmu(enable_ept, ept_lpage_level);
++	kvm_configure_mmu(enable_ept, vmx_get_max_tdp_level(), ept_lpage_level);
+ 
+ 	/*
+ 	 * Only enable PML when hardware supports PML feature, and both EPT
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 6b8347d703430..831179adedaa9 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -9520,7 +9520,6 @@ int kvm_arch_vcpu_create(struct kvm_vcpu *vcpu)
+ 	fx_init(vcpu);
+ 
+ 	vcpu->arch.maxphyaddr = cpuid_query_maxphyaddr(vcpu);
+-	vcpu->arch.max_tdp_level = kvm_x86_ops.get_max_tdp_level();
+ 
+ 	vcpu->arch.pat = MSR_IA32_CR_PAT_DEFAULT;
+ 
