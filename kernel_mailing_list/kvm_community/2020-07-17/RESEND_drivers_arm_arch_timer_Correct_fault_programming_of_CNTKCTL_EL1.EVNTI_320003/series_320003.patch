@@ -1,0 +1,104 @@
+From patchwork Fri Jul 17 09:21:04 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Keqian Zhu <zhukeqian1@huawei.com>
+X-Patchwork-Id: 11669651
+Return-Path: <SRS0=oLpl=A4=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 4EF7313B1
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 17 Jul 2020 09:21:28 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 3264C20775
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Fri, 17 Jul 2020 09:21:28 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726201AbgGQJVX (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Fri, 17 Jul 2020 05:21:23 -0400
+Received: from szxga05-in.huawei.com ([45.249.212.191]:7780 "EHLO huawei.com"
+        rhost-flags-OK-OK-OK-FAIL) by vger.kernel.org with ESMTP
+        id S1725864AbgGQJVX (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 17 Jul 2020 05:21:23 -0400
+Received: from DGGEMS409-HUB.china.huawei.com (unknown [172.30.72.59])
+        by Forcepoint Email with ESMTP id 73228D0B5AF77BBC20AC;
+        Fri, 17 Jul 2020 17:21:21 +0800 (CST)
+Received: from DESKTOP-5IS4806.china.huawei.com (10.174.187.22) by
+ DGGEMS409-HUB.china.huawei.com (10.3.19.209) with Microsoft SMTP Server id
+ 14.3.487.0; Fri, 17 Jul 2020 17:21:12 +0800
+From: Keqian Zhu <zhukeqian1@huawei.com>
+To: <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>
+CC: Marc Zyngier <maz@kernel.org>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Will Deacon <will@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        "Suzuki K Poulose" <suzuki.poulose@arm.com>,
+        <wanghaibin.wang@huawei.com>, Keqian Zhu <zhukeqian1@huawei.com>
+Subject: [RESEND PATCH] drivers: arm arch timer: Correct fault programming of
+ CNTKCTL_EL1.EVNTI
+Date: Fri, 17 Jul 2020 17:21:04 +0800
+Message-ID: <20200717092104.15428-1-zhukeqian1@huawei.com>
+X-Mailer: git-send-email 2.8.4.windows.1
+MIME-Version: 1.0
+X-Originating-IP: [10.174.187.22]
+X-CFilter-Loop: Reflected
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+ARM virtual counter supports event stream. It can only trigger an event
+when the trigger bit of CNTVCT_EL0 changes from 0 to 1 (or from 1 to 0),
+so the actual period of event stream is 2 ^ (cntkctl_evnti + 1). For
+example, when the trigger bit is 0, then it triggers an event for every
+two cycles.
+
+Signed-off-by: Keqian Zhu <zhukeqian1@huawei.com>
+---
+ drivers/clocksource/arm_arch_timer.c | 17 ++++++++++++++---
+ 1 file changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/clocksource/arm_arch_timer.c b/drivers/clocksource/arm_arch_timer.c
+index ecf7b7db2d05..06d99a4b1b9b 100644
+--- a/drivers/clocksource/arm_arch_timer.c
++++ b/drivers/clocksource/arm_arch_timer.c
+@@ -799,10 +799,20 @@ static void __arch_timer_setup(unsigned type,
+ static void arch_timer_evtstrm_enable(int divider)
+ {
+ 	u32 cntkctl = arch_timer_get_cntkctl();
++	int cntkctl_evnti;
++
++	/*
++	 * Note that it can only trigger an event when the trigger bit
++	 * of CNTVCT_EL0 changes from 1 to 0 (or from 0 to 1), so the
++	 * actual period of event stream is 2 ^ (cntkctl_evnti + 1).
++	 */
++	cntkctl_evnti = divider - 1;
++	cntkctl_evnti = min(cntkctl_evnti, 15);
++	cntkctl_evnti = max(cntkctl_evnti, 0);
+ 
+ 	cntkctl &= ~ARCH_TIMER_EVT_TRIGGER_MASK;
+ 	/* Set the divider and enable virtual event stream */
+-	cntkctl |= (divider << ARCH_TIMER_EVT_TRIGGER_SHIFT)
++	cntkctl |= (cntkctl_evnti << ARCH_TIMER_EVT_TRIGGER_SHIFT)
+ 			| ARCH_TIMER_VIRT_EVT_EN;
+ 	arch_timer_set_cntkctl(cntkctl);
+ 	arch_timer_set_evtstrm_feature();
+@@ -816,10 +826,11 @@ static void arch_timer_configure_evtstream(void)
+ 	/* Find the closest power of two to the divisor */
+ 	evt_stream_div = arch_timer_rate / ARCH_TIMER_EVT_STREAM_FREQ;
+ 	pos = fls(evt_stream_div);
+-	if (pos > 1 && !(evt_stream_div & (1 << (pos - 2))))
++	if ((pos == 1) || (pos > 1 && !(evt_stream_div & (1 << (pos - 2)))))
+ 		pos--;
++
+ 	/* enable event stream */
+-	arch_timer_evtstrm_enable(min(pos, 15));
++	arch_timer_evtstrm_enable(pos);
+ }
+ 
+ static void arch_counter_set_user_access(void)
