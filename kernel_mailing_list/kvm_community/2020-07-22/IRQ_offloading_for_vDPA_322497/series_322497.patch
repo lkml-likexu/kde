@@ -1,0 +1,910 @@
+From patchwork Wed Jul 22 10:08:54 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Zhu Lingshan <lingshan.zhu@intel.com>
+X-Patchwork-Id: 11678089
+Return-Path: <SRS0=byMP=BB=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 79AFF618
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 Jul 2020 10:13:09 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 69EF5206F5
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 Jul 2020 10:13:09 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731809AbgGVKNI (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Jul 2020 06:13:08 -0400
+Received: from mga07.intel.com ([134.134.136.100]:37342 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731561AbgGVKNH (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Jul 2020 06:13:07 -0400
+IronPort-SDR: 
+ KPvT9Nqc8fba1HVTp7V5Ig2I05gzalsbp9USUyexNLsDFHIhRRnOE9X4kfGGxjCuVYFE2KdaUL
+ WdgL/vDdpXSA==
+X-IronPort-AV: E=McAfee;i="6000,8403,9689"; a="214940289"
+X-IronPort-AV: E=Sophos;i="5.75,381,1589266800";
+   d="scan'208";a="214940289"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Jul 2020 03:13:06 -0700
+IronPort-SDR: 
+ mlagXOH02rsRhyQAftlp0y5/ECqDBls1Rh20zk5X4cSZ7d3iTm7ipj28vhB2CPs51oUdhQ49iu
+ 1t2LWo1cDFeg==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.75,381,1589266800";
+   d="scan'208";a="392634878"
+Received: from unknown (HELO localhost.localdomain.bj.intel.com)
+ ([10.240.192.131])
+  by fmsmga001.fm.intel.com with ESMTP; 22 Jul 2020 03:13:03 -0700
+From: Zhu Lingshan <lingshan.zhu@intel.com>
+To: jasowang@redhat.com, alex.williamson@redhat.com, mst@redhat.com,
+        pbonzini@redhat.com, sean.j.christopherson@intel.com,
+        wanpengli@tencent.com
+Cc: virtualization@lists.linux-foundation.org, netdev@vger.kernel.org,
+        kvm@vger.kernel.org, Zhu Lingshan <lingshan.zhu@intel.com>
+Subject: [PATCH V3 1/6] vhost: introduce vhost_vring_call
+Date: Wed, 22 Jul 2020 18:08:54 +0800
+Message-Id: <20200722100859.221669-2-lingshan.zhu@intel.com>
+X-Mailer: git-send-email 2.18.4
+In-Reply-To: <20200722100859.221669-1-lingshan.zhu@intel.com>
+References: <20200722100859.221669-1-lingshan.zhu@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This commit introduces struct vhost_vring_call which replaced
+raw struct eventfd_ctx *call_ctx in struct vhost_virtqueue.
+Besides eventfd_ctx, it contains a spin lock and an
+irq_bypass_producer in its structure.
+
+Signed-off-by: Zhu Lingshan <lingshan.zhu@intel.com>
+---
+ drivers/vhost/vdpa.c  |  4 ++--
+ drivers/vhost/vhost.c | 22 ++++++++++++++++------
+ drivers/vhost/vhost.h |  9 ++++++++-
+ 3 files changed, 26 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/vhost/vdpa.c b/drivers/vhost/vdpa.c
+index a54b60d6623f..df3cf386b0cd 100644
+--- a/drivers/vhost/vdpa.c
++++ b/drivers/vhost/vdpa.c
+@@ -96,7 +96,7 @@ static void handle_vq_kick(struct vhost_work *work)
+ static irqreturn_t vhost_vdpa_virtqueue_cb(void *private)
+ {
+ 	struct vhost_virtqueue *vq = private;
+-	struct eventfd_ctx *call_ctx = vq->call_ctx;
++	struct eventfd_ctx *call_ctx = vq->call_ctx.ctx;
+ 
+ 	if (call_ctx)
+ 		eventfd_signal(call_ctx, 1);
+@@ -382,7 +382,7 @@ static long vhost_vdpa_vring_ioctl(struct vhost_vdpa *v, unsigned int cmd,
+ 		break;
+ 
+ 	case VHOST_SET_VRING_CALL:
+-		if (vq->call_ctx) {
++		if (vq->call_ctx.ctx) {
+ 			cb.callback = vhost_vdpa_virtqueue_cb;
+ 			cb.private = vq;
+ 		} else {
+diff --git a/drivers/vhost/vhost.c b/drivers/vhost/vhost.c
+index d7b8df3edffc..9f1a845a9302 100644
+--- a/drivers/vhost/vhost.c
++++ b/drivers/vhost/vhost.c
+@@ -298,6 +298,13 @@ static void vhost_vq_meta_reset(struct vhost_dev *d)
+ 		__vhost_vq_meta_reset(d->vqs[i]);
+ }
+ 
++static void vhost_vring_call_reset(struct vhost_vring_call *call_ctx)
++{
++	call_ctx->ctx = NULL;
++	memset(&call_ctx->producer, 0x0, sizeof(struct irq_bypass_producer));
++	spin_lock_init(&call_ctx->ctx_lock);
++}
++
+ static void vhost_vq_reset(struct vhost_dev *dev,
+ 			   struct vhost_virtqueue *vq)
+ {
+@@ -319,13 +326,13 @@ static void vhost_vq_reset(struct vhost_dev *dev,
+ 	vq->log_base = NULL;
+ 	vq->error_ctx = NULL;
+ 	vq->kick = NULL;
+-	vq->call_ctx = NULL;
+ 	vq->log_ctx = NULL;
+ 	vhost_reset_is_le(vq);
+ 	vhost_disable_cross_endian(vq);
+ 	vq->busyloop_timeout = 0;
+ 	vq->umem = NULL;
+ 	vq->iotlb = NULL;
++	vhost_vring_call_reset(&vq->call_ctx);
+ 	__vhost_vq_meta_reset(vq);
+ }
+ 
+@@ -685,8 +692,8 @@ void vhost_dev_cleanup(struct vhost_dev *dev)
+ 			eventfd_ctx_put(dev->vqs[i]->error_ctx);
+ 		if (dev->vqs[i]->kick)
+ 			fput(dev->vqs[i]->kick);
+-		if (dev->vqs[i]->call_ctx)
+-			eventfd_ctx_put(dev->vqs[i]->call_ctx);
++		if (dev->vqs[i]->call_ctx.ctx)
++			eventfd_ctx_put(dev->vqs[i]->call_ctx.ctx);
+ 		vhost_vq_reset(dev, dev->vqs[i]);
+ 	}
+ 	vhost_dev_free_iovecs(dev);
+@@ -1629,7 +1636,10 @@ long vhost_vring_ioctl(struct vhost_dev *d, unsigned int ioctl, void __user *arg
+ 			r = PTR_ERR(ctx);
+ 			break;
+ 		}
+-		swap(ctx, vq->call_ctx);
++
++		spin_lock(&vq->call_ctx.ctx_lock);
++		swap(ctx, vq->call_ctx.ctx);
++		spin_unlock(&vq->call_ctx.ctx_lock);
+ 		break;
+ 	case VHOST_SET_VRING_ERR:
+ 		if (copy_from_user(&f, argp, sizeof f)) {
+@@ -2440,8 +2450,8 @@ static bool vhost_notify(struct vhost_dev *dev, struct vhost_virtqueue *vq)
+ void vhost_signal(struct vhost_dev *dev, struct vhost_virtqueue *vq)
+ {
+ 	/* Signal the Guest tell them we used something up. */
+-	if (vq->call_ctx && vhost_notify(dev, vq))
+-		eventfd_signal(vq->call_ctx, 1);
++	if (vq->call_ctx.ctx && vhost_notify(dev, vq))
++		eventfd_signal(vq->call_ctx.ctx, 1);
+ }
+ EXPORT_SYMBOL_GPL(vhost_signal);
+ 
+diff --git a/drivers/vhost/vhost.h b/drivers/vhost/vhost.h
+index c8e96a095d3b..38eb1aa3b68d 100644
+--- a/drivers/vhost/vhost.h
++++ b/drivers/vhost/vhost.h
+@@ -13,6 +13,7 @@
+ #include <linux/virtio_ring.h>
+ #include <linux/atomic.h>
+ #include <linux/vhost_iotlb.h>
++#include <linux/irqbypass.h>
+ 
+ struct vhost_work;
+ typedef void (*vhost_work_fn_t)(struct vhost_work *work);
+@@ -60,6 +61,12 @@ enum vhost_uaddr_type {
+ 	VHOST_NUM_ADDRS = 3,
+ };
+ 
++struct vhost_vring_call {
++	struct eventfd_ctx *ctx;
++	struct irq_bypass_producer producer;
++	spinlock_t ctx_lock;
++};
++
+ /* The virtqueue structure describes a queue attached to a device. */
+ struct vhost_virtqueue {
+ 	struct vhost_dev *dev;
+@@ -72,7 +79,7 @@ struct vhost_virtqueue {
+ 	vring_used_t __user *used;
+ 	const struct vhost_iotlb_map *meta_iotlb[VHOST_NUM_ADDRS];
+ 	struct file *kick;
+-	struct eventfd_ctx *call_ctx;
++	struct vhost_vring_call call_ctx;
+ 	struct eventfd_ctx *error_ctx;
+ 	struct eventfd_ctx *log_ctx;
+ 
+
+From patchwork Wed Jul 22 10:08:55 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Zhu Lingshan <lingshan.zhu@intel.com>
+X-Patchwork-Id: 11678091
+Return-Path: <SRS0=byMP=BB=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id AE118618
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 Jul 2020 10:13:12 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 91E0D207BB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 Jul 2020 10:13:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731871AbgGVKNL (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Jul 2020 06:13:11 -0400
+Received: from mga07.intel.com ([134.134.136.100]:37342 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731827AbgGVKNK (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Jul 2020 06:13:10 -0400
+IronPort-SDR: 
+ siGN98EBQO7qh5OOoios/fAEDlt3S4FhteJYhfyRmZq/K6tT4U48MUNXzqsheK8JEhDuUKr0h4
+ AmFgCdmdXXyg==
+X-IronPort-AV: E=McAfee;i="6000,8403,9689"; a="214940295"
+X-IronPort-AV: E=Sophos;i="5.75,381,1589266800";
+   d="scan'208";a="214940295"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Jul 2020 03:13:09 -0700
+IronPort-SDR: 
+ DwUFaR6sthvR4qQnaafZVxwPjvmqT2EfMZGJrh3GHXIIOMOiglisTi+GmX+5NEMDBHd4Hqop3J
+ ENlildmq8bfw==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.75,381,1589266800";
+   d="scan'208";a="392634904"
+Received: from unknown (HELO localhost.localdomain.bj.intel.com)
+ ([10.240.192.131])
+  by fmsmga001.fm.intel.com with ESMTP; 22 Jul 2020 03:13:07 -0700
+From: Zhu Lingshan <lingshan.zhu@intel.com>
+To: jasowang@redhat.com, alex.williamson@redhat.com, mst@redhat.com,
+        pbonzini@redhat.com, sean.j.christopherson@intel.com,
+        wanpengli@tencent.com
+Cc: virtualization@lists.linux-foundation.org, netdev@vger.kernel.org,
+        kvm@vger.kernel.org, Zhu Lingshan <lingshan.zhu@intel.com>
+Subject: [PATCH V3 2/6] kvm: detect assigned device via irqbypass manager
+Date: Wed, 22 Jul 2020 18:08:55 +0800
+Message-Id: <20200722100859.221669-3-lingshan.zhu@intel.com>
+X-Mailer: git-send-email 2.18.4
+In-Reply-To: <20200722100859.221669-1-lingshan.zhu@intel.com>
+References: <20200722100859.221669-1-lingshan.zhu@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+vDPA devices has dedicated backed hardware like
+passthrough-ed devices. Then it is possible to setup irq
+offloading to vCPU for vDPA devices. Thus this patch tries to
+manipulated assigned device counters by
+kvm_arch_start/end_assignment() in irqbypass manager, so that
+assigned devices could be detected in update_pi_irte()
+
+We will increase/decrease the assigned device counter in kvm/x86.
+Both vDPA and VFIO would go through this code path.
+
+Only X86 uses these counters and kvm_arch_start/end_assignment(),
+so this code path only affect x86 for now.
+
+Signed-off-by: Zhu Lingshan <lingshan.zhu@intel.com>
+---
+ arch/x86/kvm/x86.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 88c593f83b28..b2bf17f808b6 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -10630,11 +10630,17 @@ int kvm_arch_irq_bypass_add_producer(struct irq_bypass_consumer *cons,
+ {
+ 	struct kvm_kernel_irqfd *irqfd =
+ 		container_of(cons, struct kvm_kernel_irqfd, consumer);
++	int ret;
+ 
+ 	irqfd->producer = prod;
++	kvm_arch_start_assignment(irqfd->kvm);
++	ret = kvm_x86_ops.update_pi_irte(irqfd->kvm,
++					 prod->irq, irqfd->gsi, 1);
++
++	if (ret)
++		kvm_arch_end_assignment(irqfd->kvm);
+ 
+-	return kvm_x86_ops.update_pi_irte(irqfd->kvm,
+-					   prod->irq, irqfd->gsi, 1);
++	return ret;
+ }
+ 
+ void kvm_arch_irq_bypass_del_producer(struct irq_bypass_consumer *cons,
+@@ -10645,6 +10651,7 @@ void kvm_arch_irq_bypass_del_producer(struct irq_bypass_consumer *cons,
+ 		container_of(cons, struct kvm_kernel_irqfd, consumer);
+ 
+ 	WARN_ON(irqfd->producer != prod);
++	kvm_arch_end_assignment(irqfd->kvm);
+ 	irqfd->producer = NULL;
+ 
+ 	/*
+
+From patchwork Wed Jul 22 10:08:56 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Zhu Lingshan <lingshan.zhu@intel.com>
+X-Patchwork-Id: 11678093
+Return-Path: <SRS0=byMP=BB=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 45F6C618
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 Jul 2020 10:13:16 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 36586207BB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 Jul 2020 10:13:16 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731906AbgGVKNO (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Jul 2020 06:13:14 -0400
+Received: from mga07.intel.com ([134.134.136.100]:37342 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728599AbgGVKNN (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Jul 2020 06:13:13 -0400
+IronPort-SDR: 
+ c9wrcmQbiHWbhU8Mwcob8y+Y4YmEIGkzaky7BXCZp8WMC/xWxqBnwyzVX4zI3no3ggwJv8qtv3
+ 3d2KcxG8tGoQ==
+X-IronPort-AV: E=McAfee;i="6000,8403,9689"; a="214940302"
+X-IronPort-AV: E=Sophos;i="5.75,381,1589266800";
+   d="scan'208";a="214940302"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Jul 2020 03:13:13 -0700
+IronPort-SDR: 
+ 0xQ8tLpPI6HEsgnLmW6Z6YgzwTdmrmEV3r4lla0CpbB/dI8fklPZA3DeDk5YR41wX5+zHVbmxF
+ eCKh0bhQbB4A==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.75,381,1589266800";
+   d="scan'208";a="392634916"
+Received: from unknown (HELO localhost.localdomain.bj.intel.com)
+ ([10.240.192.131])
+  by fmsmga001.fm.intel.com with ESMTP; 22 Jul 2020 03:13:10 -0700
+From: Zhu Lingshan <lingshan.zhu@intel.com>
+To: jasowang@redhat.com, alex.williamson@redhat.com, mst@redhat.com,
+        pbonzini@redhat.com, sean.j.christopherson@intel.com,
+        wanpengli@tencent.com
+Cc: virtualization@lists.linux-foundation.org, netdev@vger.kernel.org,
+        kvm@vger.kernel.org, Zhu Lingshan <lingshan.zhu@intel.com>
+Subject: [PATCH V3 3/6] vDPA: implement vq IRQ allocate/free helpers in vDPA
+ core
+Date: Wed, 22 Jul 2020 18:08:56 +0800
+Message-Id: <20200722100859.221669-4-lingshan.zhu@intel.com>
+X-Mailer: git-send-email 2.18.4
+In-Reply-To: <20200722100859.221669-1-lingshan.zhu@intel.com>
+References: <20200722100859.221669-1-lingshan.zhu@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This commit implements vq IRQ allocate/free helpers in vDPA
+core by introducing two couple of functions:
+
+vdpa_devm_request_Irq() and vdpa_devm_free_irq(): request irq and free
+irq, and setup irq offloading.
+
+vdpa_setup_irq() and vdpa_unsetup_irq(): supportive functions,
+will call vhost_vdpa helpers.
+
+Signed-off-by: Zhu Lingshan <lingshan.zhu@intel.com>
+---
+ drivers/vdpa/vdpa.c  | 49 ++++++++++++++++++++++++++++++++++++++++++++
+ include/linux/vdpa.h | 13 ++++++++++++
+ 2 files changed, 62 insertions(+)
+
+diff --git a/drivers/vdpa/vdpa.c b/drivers/vdpa/vdpa.c
+index de211ef3738c..4dfc86eba0f6 100644
+--- a/drivers/vdpa/vdpa.c
++++ b/drivers/vdpa/vdpa.c
+@@ -163,6 +163,55 @@ void vdpa_unregister_driver(struct vdpa_driver *drv)
+ }
+ EXPORT_SYMBOL_GPL(vdpa_unregister_driver);
+ 
++static void vdpa_setup_irq(struct vdpa_device *vdev, int qid, int irq)
++{
++	struct vdpa_driver *drv = drv_to_vdpa(vdev->dev.driver);
++
++	if (drv->setup_vq_irq)
++		drv->setup_vq_irq(vdev, qid, irq);
++}
++
++static void vdpa_unsetup_irq(struct vdpa_device *vdev, int qid)
++{
++	struct vdpa_driver *drv = drv_to_vdpa(vdev->dev.driver);
++
++	if (drv && drv->unsetup_vq_irq)
++		drv->unsetup_vq_irq(vdev, qid);
++}
++
++/*
++ * Request irq for a vq, setup irq offloading if its a vhost_vdpa vq.
++ * This function should be only called through setting virtio DRIVER_OK.
++ * If you want to request irq during probe, you should use raw APIs
++ * like request_irq() or devm_request_irq().
++ */
++int vdpa_devm_request_irq(struct device *dev, struct vdpa_device *vdev,
++			  unsigned int irq, irq_handler_t handler,
++			  unsigned long irqflags, const char *devname, void *dev_id,
++			  int qid)
++{
++	int ret;
++
++	ret = devm_request_irq(dev, irq, handler, irqflags, devname, dev_id);
++	if (ret)
++		dev_err(dev, "Failed to request irq for vq %d\n", qid);
++	else
++		vdpa_setup_irq(vdev, qid, irq);
++
++	return ret;
++
++}
++EXPORT_SYMBOL_GPL(vdpa_devm_request_irq);
++
++/* free irq for a vq, unsetup irq offloading if its a vhost_vdpa vq */
++void vdpa_devm_free_irq(struct device *dev, struct vdpa_device *vdev, int irq,
++			int qid, void *dev_id)
++{
++	devm_free_irq(dev, irq, dev_id);
++	vdpa_unsetup_irq(vdev, qid);
++}
++EXPORT_SYMBOL_GPL(vdpa_devm_free_irq);
++
+ static int vdpa_init(void)
+ {
+ 	return bus_register(&vdpa_bus);
+diff --git a/include/linux/vdpa.h b/include/linux/vdpa.h
+index 239db794357c..9412e3b56589 100644
+--- a/include/linux/vdpa.h
++++ b/include/linux/vdpa.h
+@@ -220,17 +220,30 @@ struct vdpa_device *__vdpa_alloc_device(struct device *parent,
+ 
+ int vdpa_register_device(struct vdpa_device *vdev);
+ void vdpa_unregister_device(struct vdpa_device *vdev);
++int vdpa_devm_request_irq(struct device *dev, struct vdpa_device *vdev,
++			  unsigned int irq, irq_handler_t handler,
++			  unsigned long irqflags, const char *devname, void *dev_id,
++			  int qid);
++void vdpa_devm_free_irq(struct device *dev, struct vdpa_device *vdev, int irq,
++			int qid, void *dev_id);
++
+ 
+ /**
+  * vdpa_driver - operations for a vDPA driver
+  * @driver: underlying device driver
+  * @probe: the function to call when a device is found.  Returns 0 or -errno.
+  * @remove: the function to call when a device is removed.
++ * @setup_vq_irq: the function to call after request irq for a vhost_vdpa vq,
++ * do setup works e.g irq offloading.
++ * @unsetup_vq_irq: the function to call after free irq for a vhost_vdpa vq,
++ * do unsetup works e.g relieve irq offloading.
+  */
+ struct vdpa_driver {
+ 	struct device_driver driver;
+ 	int (*probe)(struct vdpa_device *vdev);
+ 	void (*remove)(struct vdpa_device *vdev);
++	void (*setup_vq_irq)(struct vdpa_device *vdev, int qid, int irq);
++	void (*unsetup_vq_irq)(struct vdpa_device *vdev, int qid);
+ };
+ 
+ #define vdpa_register_driver(drv) \
+
+From patchwork Wed Jul 22 10:08:57 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Zhu Lingshan <lingshan.zhu@intel.com>
+X-Patchwork-Id: 11678095
+Return-Path: <SRS0=byMP=BB=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 56F44618
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 Jul 2020 10:13:20 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 48310207BB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 Jul 2020 10:13:20 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732022AbgGVKNT (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Jul 2020 06:13:19 -0400
+Received: from mga07.intel.com ([134.134.136.100]:37373 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731984AbgGVKNS (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Jul 2020 06:13:18 -0400
+IronPort-SDR: 
+ 0Slf7fJO93+SUbTRTEC1chO0KDwPjik5GNcjPm+CwQhpOH2bECV4zsinFtL5+DC3Wm4UMtvU1i
+ oLNUEz/IUWJQ==
+X-IronPort-AV: E=McAfee;i="6000,8403,9689"; a="214940309"
+X-IronPort-AV: E=Sophos;i="5.75,381,1589266800";
+   d="scan'208";a="214940309"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Jul 2020 03:13:17 -0700
+IronPort-SDR: 
+ KZqrhpzUpf1PwftpmqbDsanRhVQG9CPgTI91BoRSX5JZOLCu1+OVNtJOLS+nF0qRjn0jH2j+/O
+ azmf6FEIizgQ==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.75,381,1589266800";
+   d="scan'208";a="392634935"
+Received: from unknown (HELO localhost.localdomain.bj.intel.com)
+ ([10.240.192.131])
+  by fmsmga001.fm.intel.com with ESMTP; 22 Jul 2020 03:13:14 -0700
+From: Zhu Lingshan <lingshan.zhu@intel.com>
+To: jasowang@redhat.com, alex.williamson@redhat.com, mst@redhat.com,
+        pbonzini@redhat.com, sean.j.christopherson@intel.com,
+        wanpengli@tencent.com
+Cc: virtualization@lists.linux-foundation.org, netdev@vger.kernel.org,
+        kvm@vger.kernel.org, Zhu Lingshan <lingshan.zhu@intel.com>
+Subject: [PATCH V3 4/6] vhost_vdpa: implement IRQ offloading in vhost_vdpa
+Date: Wed, 22 Jul 2020 18:08:57 +0800
+Message-Id: <20200722100859.221669-5-lingshan.zhu@intel.com>
+X-Mailer: git-send-email 2.18.4
+In-Reply-To: <20200722100859.221669-1-lingshan.zhu@intel.com>
+References: <20200722100859.221669-1-lingshan.zhu@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This patch introduce a set of functions for setup/unsetup
+and update irq offloading respectively by register/unregister
+and re-register the irq_bypass_producer.
+
+Signed-off-by: Zhu Lingshan <lingshan.zhu@intel.com>
+---
+ drivers/vhost/Kconfig |  1 +
+ drivers/vhost/vdpa.c  | 66 ++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 66 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/vhost/Kconfig b/drivers/vhost/Kconfig
+index d3688c6afb87..587fbae06182 100644
+--- a/drivers/vhost/Kconfig
++++ b/drivers/vhost/Kconfig
+@@ -65,6 +65,7 @@ config VHOST_VDPA
+ 	tristate "Vhost driver for vDPA-based backend"
+ 	depends on EVENTFD
+ 	select VHOST
++	select IRQ_BYPASS_MANAGER
+ 	depends on VDPA
+ 	help
+ 	  This kernel module can be loaded in host kernel to accelerate
+diff --git a/drivers/vhost/vdpa.c b/drivers/vhost/vdpa.c
+index df3cf386b0cd..558cf0863126 100644
+--- a/drivers/vhost/vdpa.c
++++ b/drivers/vhost/vdpa.c
+@@ -115,6 +115,54 @@ static irqreturn_t vhost_vdpa_config_cb(void *private)
+ 	return IRQ_HANDLED;
+ }
+ 
++static void vhost_vdpa_setup_vq_irq(struct vdpa_device *dev, int qid, int irq)
++{
++	struct vhost_vdpa *v = vdpa_get_drvdata(dev);
++	struct vhost_virtqueue *vq = &v->vqs[qid];
++	int ret;
++
++	spin_lock(&vq->call_ctx.ctx_lock);
++	if (!vq->call_ctx.ctx) {
++		spin_unlock(&vq->call_ctx.ctx_lock);
++		return;
++	}
++
++	vq->call_ctx.producer.token = vq->call_ctx.ctx;
++	vq->call_ctx.producer.irq = irq;
++	ret = irq_bypass_register_producer(&vq->call_ctx.producer);
++	spin_unlock(&vq->call_ctx.ctx_lock);
++}
++
++static void vhost_vdpa_unsetup_vq_irq(struct vdpa_device *dev, int qid)
++{
++	struct vhost_vdpa *v = vdpa_get_drvdata(dev);
++	struct vhost_virtqueue *vq = &v->vqs[qid];
++
++	spin_lock(&vq->call_ctx.ctx_lock);
++	irq_bypass_unregister_producer(&vq->call_ctx.producer);
++	spin_unlock(&vq->call_ctx.ctx_lock);
++}
++
++static void vhost_vdpa_update_vq_irq(struct vhost_virtqueue *vq)
++{
++	spin_lock(&vq->call_ctx.ctx_lock);
++	/*
++	 * if it has a non-zero irq, means there is a
++	 * previsouly registered irq_bypass_producer,
++	 * we should update it when ctx (its token)
++	 * changes.
++	 */
++	if (!vq->call_ctx.producer.irq) {
++		spin_unlock(&vq->call_ctx.ctx_lock);
++		return;
++	}
++
++	irq_bypass_unregister_producer(&vq->call_ctx.producer);
++	vq->call_ctx.producer.token = vq->call_ctx.ctx;
++	irq_bypass_register_producer(&vq->call_ctx.producer);
++	spin_unlock(&vq->call_ctx.ctx_lock);
++}
++
+ static void vhost_vdpa_reset(struct vhost_vdpa *v)
+ {
+ 	struct vdpa_device *vdpa = v->vdpa;
+@@ -122,7 +170,6 @@ static void vhost_vdpa_reset(struct vhost_vdpa *v)
+ 
+ 	ops->set_status(vdpa, 0);
+ }
+-
+ static long vhost_vdpa_get_device_id(struct vhost_vdpa *v, u8 __user *argp)
+ {
+ 	struct vdpa_device *vdpa = v->vdpa;
+@@ -332,6 +379,7 @@ static long vhost_vdpa_set_config_call(struct vhost_vdpa *v, u32 __user *argp)
+ 
+ 	return 0;
+ }
++
+ static long vhost_vdpa_vring_ioctl(struct vhost_vdpa *v, unsigned int cmd,
+ 				   void __user *argp)
+ {
+@@ -390,6 +438,7 @@ static long vhost_vdpa_vring_ioctl(struct vhost_vdpa *v, unsigned int cmd,
+ 			cb.private = NULL;
+ 		}
+ 		ops->set_vq_cb(vdpa, idx, &cb);
++		vhost_vdpa_update_vq_irq(vq);
+ 		break;
+ 
+ 	case VHOST_SET_VRING_NUM:
+@@ -765,6 +814,18 @@ static int vhost_vdpa_open(struct inode *inode, struct file *filep)
+ 	return r;
+ }
+ 
++static void vhost_vdpa_clean_irq(struct vhost_vdpa *v)
++{
++	struct vhost_virtqueue *vq;
++	int i;
++
++	for (i = 0; i < v->nvqs; i++) {
++		vq = &v->vqs[i];
++		if (vq->call_ctx.producer.irq)
++			irq_bypass_unregister_producer(&vq->call_ctx.producer);
++	}
++}
++
+ static int vhost_vdpa_release(struct inode *inode, struct file *filep)
+ {
+ 	struct vhost_vdpa *v = filep->private_data;
+@@ -777,6 +838,7 @@ static int vhost_vdpa_release(struct inode *inode, struct file *filep)
+ 	vhost_vdpa_iotlb_free(v);
+ 	vhost_vdpa_free_domain(v);
+ 	vhost_vdpa_config_put(v);
++	vhost_vdpa_clean_irq(v);
+ 	vhost_dev_cleanup(&v->vdev);
+ 	kfree(v->vdev.vqs);
+ 	mutex_unlock(&d->mutex);
+@@ -951,6 +1013,8 @@ static struct vdpa_driver vhost_vdpa_driver = {
+ 	},
+ 	.probe	= vhost_vdpa_probe,
+ 	.remove	= vhost_vdpa_remove,
++	.setup_vq_irq = vhost_vdpa_setup_vq_irq,
++	.unsetup_vq_irq = vhost_vdpa_unsetup_vq_irq,
+ };
+ 
+ static int __init vhost_vdpa_init(void)
+
+From patchwork Wed Jul 22 10:08:58 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Zhu Lingshan <lingshan.zhu@intel.com>
+X-Patchwork-Id: 11678097
+Return-Path: <SRS0=byMP=BB=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 2EC32618
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 Jul 2020 10:13:23 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 2050D20729
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 Jul 2020 10:13:23 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732039AbgGVKNV (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Jul 2020 06:13:21 -0400
+Received: from mga07.intel.com ([134.134.136.100]:37386 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731827AbgGVKNV (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Jul 2020 06:13:21 -0400
+IronPort-SDR: 
+ 5dkfsi4YfZ+2srQSCMbDjonH32sYHA6dhspJR7m7RAGewxxrsG7DBm+F8NtMawl3IXlgt+/Oly
+ 7nqHFcJraNhA==
+X-IronPort-AV: E=McAfee;i="6000,8403,9689"; a="214940315"
+X-IronPort-AV: E=Sophos;i="5.75,381,1589266800";
+   d="scan'208";a="214940315"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Jul 2020 03:13:20 -0700
+IronPort-SDR: 
+ FY9KCOpktDHzDuajtg8/rqOb+yrEV5T9/UX3QNi/KMhKXnSf9Q1AbHt291eRu1MS+vNhEpAFfr
+ C1xCULTYWsPQ==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.75,381,1589266800";
+   d="scan'208";a="392634941"
+Received: from unknown (HELO localhost.localdomain.bj.intel.com)
+ ([10.240.192.131])
+  by fmsmga001.fm.intel.com with ESMTP; 22 Jul 2020 03:13:18 -0700
+From: Zhu Lingshan <lingshan.zhu@intel.com>
+To: jasowang@redhat.com, alex.williamson@redhat.com, mst@redhat.com,
+        pbonzini@redhat.com, sean.j.christopherson@intel.com,
+        wanpengli@tencent.com
+Cc: virtualization@lists.linux-foundation.org, netdev@vger.kernel.org,
+        kvm@vger.kernel.org, Zhu Lingshan <lingshan.zhu@intel.com>
+Subject: [PATCH V3 5/6] ifcvf: replace irq_request/free with vDPA helpers
+Date: Wed, 22 Jul 2020 18:08:58 +0800
+Message-Id: <20200722100859.221669-6-lingshan.zhu@intel.com>
+X-Mailer: git-send-email 2.18.4
+In-Reply-To: <20200722100859.221669-1-lingshan.zhu@intel.com>
+References: <20200722100859.221669-1-lingshan.zhu@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This commit replaced irq_request/free() with vDPA helpers
+vdpa_devm_request/free_irq() so that it can request/free
+irq and setup irq offloading on order.
+
+Signed-off-by: Zhu Lingshan <lingshan.zhu@intel.com>
+---
+ drivers/vdpa/ifcvf/ifcvf_main.c | 14 +++++++++-----
+ 1 file changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/vdpa/ifcvf/ifcvf_main.c b/drivers/vdpa/ifcvf/ifcvf_main.c
+index f5a60c14b979..65aab6bcaccb 100644
+--- a/drivers/vdpa/ifcvf/ifcvf_main.c
++++ b/drivers/vdpa/ifcvf/ifcvf_main.c
+@@ -47,11 +47,12 @@ static void ifcvf_free_irq(struct ifcvf_adapter *adapter, int queues)
+ {
+ 	struct pci_dev *pdev = adapter->pdev;
+ 	struct ifcvf_hw *vf = &adapter->vf;
++	struct vdpa_device *vdpa = &adapter->vdpa;
+ 	int i;
+ 
+ 
+ 	for (i = 0; i < queues; i++)
+-		devm_free_irq(&pdev->dev, vf->vring[i].irq, &vf->vring[i]);
++		vdpa_devm_free_irq(&pdev->dev, vdpa, vf->vring[i].irq, i, &vf->vring[i]);
+ 
+ 	ifcvf_free_irq_vectors(pdev);
+ }
+@@ -60,6 +61,7 @@ static int ifcvf_request_irq(struct ifcvf_adapter *adapter)
+ {
+ 	struct pci_dev *pdev = adapter->pdev;
+ 	struct ifcvf_hw *vf = &adapter->vf;
++	struct vdpa_device *vdpa = &adapter->vdpa;
+ 	int vector, i, ret, irq;
+ 
+ 	ret = pci_alloc_irq_vectors(pdev, IFCVF_MAX_INTR,
+@@ -73,6 +75,10 @@ static int ifcvf_request_irq(struct ifcvf_adapter *adapter)
+ 		 pci_name(pdev));
+ 	vector = 0;
+ 	irq = pci_irq_vector(pdev, vector);
++	/* This is config interrupt, config accesses all go
++	 * through userspace, so no need to setup
++	 * config interrupt offloading.
++	 */
+ 	ret = devm_request_irq(&pdev->dev, irq,
+ 			       ifcvf_config_changed, 0,
+ 			       vf->config_msix_name, vf);
+@@ -82,13 +88,11 @@ static int ifcvf_request_irq(struct ifcvf_adapter *adapter)
+ 			 pci_name(pdev), i);
+ 		vector = i + IFCVF_MSI_QUEUE_OFF;
+ 		irq = pci_irq_vector(pdev, vector);
+-		ret = devm_request_irq(&pdev->dev, irq,
++		ret = vdpa_devm_request_irq(&pdev->dev, vdpa, irq,
+ 				       ifcvf_intr_handler, 0,
+ 				       vf->vring[i].msix_name,
+-				       &vf->vring[i]);
++				       &vf->vring[i], i);
+ 		if (ret) {
+-			IFCVF_ERR(pdev,
+-				  "Failed to request irq for vq %d\n", i);
+ 			ifcvf_free_irq(adapter, i);
+ 
+ 			return ret;
+
+From patchwork Wed Jul 22 10:08:59 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Zhu Lingshan <lingshan.zhu@intel.com>
+X-Patchwork-Id: 11678099
+Return-Path: <SRS0=byMP=BB=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 68AB9913
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 Jul 2020 10:13:34 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 4F54C20787
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 22 Jul 2020 10:13:34 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732027AbgGVKNc (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 22 Jul 2020 06:13:32 -0400
+Received: from mga09.intel.com ([134.134.136.24]:19155 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727034AbgGVKNc (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 22 Jul 2020 06:13:32 -0400
+IronPort-SDR: 
+ w9TM/dskPB03Sct0iDWOkHizkuT2MNnubHY2XJGYYzS8RsIrTYVbIm6Jz+aYuChqGyRd1/sqL6
+ NJQ3y3TG3I6w==
+X-IronPort-AV: E=McAfee;i="6000,8403,9689"; a="151627944"
+X-IronPort-AV: E=Sophos;i="5.75,381,1589266800";
+   d="scan'208";a="151627944"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 22 Jul 2020 03:13:31 -0700
+IronPort-SDR: 
+ tR4Q+Bj4ejvjaEK9W9I+bMTpIRjV8ZXto3nfrMvjgxndZevx5muHkiyq//U+FXbCkaY3u7nYeA
+ NsQ3rYPeO/IA==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.75,381,1589266800";
+   d="scan'208";a="392634963"
+Received: from unknown (HELO localhost.localdomain.bj.intel.com)
+ ([10.240.192.131])
+  by fmsmga001.fm.intel.com with ESMTP; 22 Jul 2020 03:13:29 -0700
+From: Zhu Lingshan <lingshan.zhu@intel.com>
+To: jasowang@redhat.com, alex.williamson@redhat.com, mst@redhat.com,
+        pbonzini@redhat.com, sean.j.christopherson@intel.com,
+        wanpengli@tencent.com
+Cc: virtualization@lists.linux-foundation.org, netdev@vger.kernel.org,
+        kvm@vger.kernel.org, Zhu Lingshan <lingshan.zhu@intel.com>
+Subject: [PATCH V3 6/6] irqbypass: do not start cons/prod when failed connect
+Date: Wed, 22 Jul 2020 18:08:59 +0800
+Message-Id: <20200722100859.221669-7-lingshan.zhu@intel.com>
+X-Mailer: git-send-email 2.18.4
+In-Reply-To: <20200722100859.221669-1-lingshan.zhu@intel.com>
+References: <20200722100859.221669-1-lingshan.zhu@intel.com>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+If failed to connect, there is no need to start consumer nor
+producer.
+
+Signed-off-by: Zhu Lingshan <lingshan.zhu@intel.com>
+---
+ virt/lib/irqbypass.c | 16 ++++++++++------
+ 1 file changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/virt/lib/irqbypass.c b/virt/lib/irqbypass.c
+index 28fda42e471b..c9bb3957f58a 100644
+--- a/virt/lib/irqbypass.c
++++ b/virt/lib/irqbypass.c
+@@ -40,17 +40,21 @@ static int __connect(struct irq_bypass_producer *prod,
+ 	if (prod->add_consumer)
+ 		ret = prod->add_consumer(prod, cons);
+ 
+-	if (!ret) {
+-		ret = cons->add_producer(cons, prod);
+-		if (ret && prod->del_consumer)
+-			prod->del_consumer(prod, cons);
+-	}
++	if (ret)
++		goto err_add_consumer;
++
++	ret = cons->add_producer(cons, prod);
++	if (ret)
++		goto err_add_producer;
+ 
+ 	if (cons->start)
+ 		cons->start(cons);
+ 	if (prod->start)
+ 		prod->start(prod);
+-
++err_add_producer:
++	if (prod->del_consumer)
++		prod->del_consumer(prod, cons);
++err_add_consumer:
+ 	return ret;
+ }
+ 
