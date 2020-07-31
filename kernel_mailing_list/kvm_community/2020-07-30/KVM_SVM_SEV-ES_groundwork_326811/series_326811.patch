@@ -1,0 +1,525 @@
+From patchwork Thu Jul 30 15:43:37 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 11693329
+Return-Path: <SRS0=wP1B=BJ=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6290D1392
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 30 Jul 2020 15:44:00 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 5473E21D95
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 30 Jul 2020 15:44:00 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729854AbgG3Pnw (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 30 Jul 2020 11:43:52 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:38432 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1729823AbgG3Pns (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 30 Jul 2020 11:43:48 -0400
+Received: from theia.8bytes.org (8bytes.org
+ [IPv6:2a01:238:4383:600:38bc:a715:4b6d:a889])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 27F1FC061574;
+        Thu, 30 Jul 2020 08:43:48 -0700 (PDT)
+Received: by theia.8bytes.org (Postfix, from userid 1000)
+        id 811ED2E3; Thu, 30 Jul 2020 17:43:44 +0200 (CEST)
+From: Joerg Roedel <joro@8bytes.org>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Joerg Roedel <jroedel@suse.de>
+Subject: [PATCH v2 1/4] KVM: SVM: nested: Don't allocate VMCB structures on
+ stack
+Date: Thu, 30 Jul 2020 17:43:37 +0200
+Message-Id: <20200730154340.14021-2-joro@8bytes.org>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200730154340.14021-1-joro@8bytes.org>
+References: <20200730154340.14021-1-joro@8bytes.org>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joerg Roedel <jroedel@suse.de>
+
+Do not allocate a vmcb_control_area and a vmcb_save_area on the stack,
+as these structures will become larger with future extenstions of
+SVM and thus the svm_set_nested_state() function will become a too large
+stack frame.
+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ arch/x86/kvm/svm/nested.c | 47 +++++++++++++++++++++++++++------------
+ 1 file changed, 33 insertions(+), 14 deletions(-)
+
+diff --git a/arch/x86/kvm/svm/nested.c b/arch/x86/kvm/svm/nested.c
+index 61378a3c2ce4..051623b652da 100644
+--- a/arch/x86/kvm/svm/nested.c
++++ b/arch/x86/kvm/svm/nested.c
+@@ -1061,10 +1061,14 @@ static int svm_set_nested_state(struct kvm_vcpu *vcpu,
+ 	struct vmcb *hsave = svm->nested.hsave;
+ 	struct vmcb __user *user_vmcb = (struct vmcb __user *)
+ 		&user_kvm_nested_state->data.svm[0];
+-	struct vmcb_control_area ctl;
+-	struct vmcb_save_area save;
++	struct vmcb_control_area *ctl;
++	struct vmcb_save_area *save;
++	int ret;
+ 	u32 cr0;
+ 
++	BUILD_BUG_ON(sizeof(struct vmcb_control_area) + sizeof(struct vmcb_save_area) >
++		     KVM_STATE_NESTED_SVM_VMCB_SIZE);
++
+ 	if (kvm_state->format != KVM_STATE_NESTED_FORMAT_SVM)
+ 		return -EINVAL;
+ 
+@@ -1096,13 +1100,22 @@ static int svm_set_nested_state(struct kvm_vcpu *vcpu,
+ 		return -EINVAL;
+ 	if (kvm_state->size < sizeof(*kvm_state) + KVM_STATE_NESTED_SVM_VMCB_SIZE)
+ 		return -EINVAL;
+-	if (copy_from_user(&ctl, &user_vmcb->control, sizeof(ctl)))
+-		return -EFAULT;
+-	if (copy_from_user(&save, &user_vmcb->save, sizeof(save)))
+-		return -EFAULT;
+ 
+-	if (!nested_vmcb_check_controls(&ctl))
+-		return -EINVAL;
++	ret  = -ENOMEM;
++	ctl  = kzalloc(sizeof(*ctl),  GFP_KERNEL);
++	save = kzalloc(sizeof(*save), GFP_KERNEL);
++	if (!ctl || !save)
++		goto out_free;
++
++	ret = -EFAULT;
++	if (copy_from_user(ctl, &user_vmcb->control, sizeof(*ctl)))
++		goto out_free;
++	if (copy_from_user(save, &user_vmcb->save, sizeof(*save)))
++		goto out_free;
++
++	ret = -EINVAL;
++	if (!nested_vmcb_check_controls(ctl))
++		goto out_free;
+ 
+ 	/*
+ 	 * Processor state contains L2 state.  Check that it is
+@@ -1110,15 +1123,15 @@ static int svm_set_nested_state(struct kvm_vcpu *vcpu,
+ 	 */
+ 	cr0 = kvm_read_cr0(vcpu);
+         if (((cr0 & X86_CR0_CD) == 0) && (cr0 & X86_CR0_NW))
+-                return -EINVAL;
++                goto out_free;
+ 
+ 	/*
+ 	 * Validate host state saved from before VMRUN (see
+ 	 * nested_svm_check_permissions).
+ 	 * TODO: validate reserved bits for all saved state.
+ 	 */
+-	if (!(save.cr0 & X86_CR0_PG))
+-		return -EINVAL;
++	if (!(save->cr0 & X86_CR0_PG))
++		goto out_free;
+ 
+ 	/*
+ 	 * All checks done, we can enter guest mode.  L1 control fields
+@@ -1127,15 +1140,21 @@ static int svm_set_nested_state(struct kvm_vcpu *vcpu,
+ 	 * contains saved L1 state.
+ 	 */
+ 	copy_vmcb_control_area(&hsave->control, &svm->vmcb->control);
+-	hsave->save = save;
++	hsave->save = *save;
+ 
+ 	svm->nested.vmcb = kvm_state->hdr.svm.vmcb_pa;
+-	load_nested_vmcb_control(svm, &ctl);
++	load_nested_vmcb_control(svm, ctl);
+ 	nested_prepare_vmcb_control(svm);
+ 
+ out_set_gif:
+ 	svm_set_gif(svm, !!(kvm_state->flags & KVM_STATE_NESTED_GIF_SET));
+-	return 0;
++
++	ret = 0;
++out_free:
++	kfree(save);
++	kfree(ctl);
++
++	return ret;
+ }
+ 
+ struct kvm_x86_nested_ops svm_nested_ops = {
+
+From patchwork Thu Jul 30 15:43:38 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 11693331
+Return-Path: <SRS0=wP1B=BJ=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B9B4F1392
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 30 Jul 2020 15:44:01 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id A020A208A9
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 30 Jul 2020 15:44:01 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729843AbgG3Pnu (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 30 Jul 2020 11:43:50 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:38430 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728286AbgG3Pns (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 30 Jul 2020 11:43:48 -0400
+Received: from theia.8bytes.org (8bytes.org
+ [IPv6:2a01:238:4383:600:38bc:a715:4b6d:a889])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 31982C061575;
+        Thu, 30 Jul 2020 08:43:48 -0700 (PDT)
+Received: by theia.8bytes.org (Postfix, from userid 1000)
+        id A2B939B5; Thu, 30 Jul 2020 17:43:44 +0200 (CEST)
+From: Joerg Roedel <joro@8bytes.org>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Joerg Roedel <jroedel@suse.de>
+Subject: [PATCH v2 2/4] KVM: SVM: Add GHCB definitions
+Date: Thu, 30 Jul 2020 17:43:38 +0200
+Message-Id: <20200730154340.14021-3-joro@8bytes.org>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200730154340.14021-1-joro@8bytes.org>
+References: <20200730154340.14021-1-joro@8bytes.org>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Tom Lendacky <thomas.lendacky@amd.com>
+
+Extend the vmcb_safe_area with SEV-ES fields and add a new
+'struct ghcb' which will be used for guest-hypervisor communication.
+
+Signed-off-by: Tom Lendacky <thomas.lendacky@amd.com>
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ arch/x86/include/asm/svm.h | 45 +++++++++++++++++++++++++++++++++++++-
+ arch/x86/kvm/svm/svm.c     |  2 ++
+ 2 files changed, 46 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/svm.h b/arch/x86/include/asm/svm.h
+index 8a1f5382a4ea..9a3e0b802716 100644
+--- a/arch/x86/include/asm/svm.h
++++ b/arch/x86/include/asm/svm.h
+@@ -200,13 +200,56 @@ struct __attribute__ ((__packed__)) vmcb_save_area {
+ 	u64 br_to;
+ 	u64 last_excp_from;
+ 	u64 last_excp_to;
++
++	/*
++	 * The following part of the save area is valid only for
++	 * SEV-ES guests when referenced through the GHCB.
++	 */
++	u8 reserved_7[104];
++	u64 reserved_8;		/* rax already available at 0x01f8 */
++	u64 rcx;
++	u64 rdx;
++	u64 rbx;
++	u64 reserved_9;		/* rsp already available at 0x01d8 */
++	u64 rbp;
++	u64 rsi;
++	u64 rdi;
++	u64 r8;
++	u64 r9;
++	u64 r10;
++	u64 r11;
++	u64 r12;
++	u64 r13;
++	u64 r14;
++	u64 r15;
++	u8 reserved_10[16];
++	u64 sw_exit_code;
++	u64 sw_exit_info_1;
++	u64 sw_exit_info_2;
++	u64 sw_scratch;
++	u8 reserved_11[56];
++	u64 xcr0;
++	u8 valid_bitmap[16];
++	u64 x87_state_gpa;
++};
++
++struct __attribute__ ((__packed__)) ghcb {
++	struct vmcb_save_area save;
++	u8 reserved_save[2048 - sizeof(struct vmcb_save_area)];
++
++	u8 shared_buffer[2032];
++
++	u8 reserved_1[10];
++	u16 protocol_version;	/* negotiated SEV-ES/GHCB protocol version */
++	u32 ghcb_usage;
+ };
+ 
+ 
+ static inline void __unused_size_checks(void)
+ {
+-	BUILD_BUG_ON(sizeof(struct vmcb_save_area) != 0x298);
++	BUILD_BUG_ON(sizeof(struct vmcb_save_area) != 1032);
+ 	BUILD_BUG_ON(sizeof(struct vmcb_control_area) != 256);
++	BUILD_BUG_ON(sizeof(struct ghcb) != 4096);
+ }
+ 
+ struct __attribute__ ((__packed__)) vmcb {
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index 783330d0e7b8..953cf947f022 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -4161,6 +4161,8 @@ static struct kvm_x86_init_ops svm_init_ops __initdata = {
+ 
+ static int __init svm_init(void)
+ {
++	__unused_size_checks();
++
+ 	return kvm_init(&svm_init_ops, sizeof(struct vcpu_svm),
+ 			__alignof__(struct vcpu_svm), THIS_MODULE);
+ }
+
+From patchwork Thu Jul 30 15:43:39 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 11693327
+Return-Path: <SRS0=wP1B=BJ=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6C29E14B7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 30 Jul 2020 15:43:51 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 5B3952082E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 30 Jul 2020 15:43:51 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729797AbgG3Pnq (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 30 Jul 2020 11:43:46 -0400
+Received: from 8bytes.org ([81.169.241.247]:34112 "EHLO theia.8bytes.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728286AbgG3Pnq (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 30 Jul 2020 11:43:46 -0400
+Received: by theia.8bytes.org (Postfix, from userid 1000)
+        id CBEB99CE; Thu, 30 Jul 2020 17:43:44 +0200 (CEST)
+From: Joerg Roedel <joro@8bytes.org>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Joerg Roedel <jroedel@suse.de>
+Subject: [PATCH v2 3/4] KVM: SVM: Add GHCB Accessor functions
+Date: Thu, 30 Jul 2020 17:43:39 +0200
+Message-Id: <20200730154340.14021-4-joro@8bytes.org>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200730154340.14021-1-joro@8bytes.org>
+References: <20200730154340.14021-1-joro@8bytes.org>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joerg Roedel <jroedel@suse.de>
+
+Building a correct GHCB for the hypervisor requires setting valid bits
+in the GHCB. Simplify that process by providing accessor functions to
+set values and to update the valid bitmap and to check the valid bitmap
+in KVM.
+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ arch/x86/include/asm/svm.h | 46 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 46 insertions(+)
+
+diff --git a/arch/x86/include/asm/svm.h b/arch/x86/include/asm/svm.h
+index 9a3e0b802716..8744817358bf 100644
+--- a/arch/x86/include/asm/svm.h
++++ b/arch/x86/include/asm/svm.h
+@@ -341,4 +341,50 @@ struct __attribute__ ((__packed__)) vmcb {
+ 
+ #define SVM_CR0_SELECTIVE_MASK (X86_CR0_TS | X86_CR0_MP)
+ 
++/* GHCB Accessor functions */
++
++#define GHB_BITMAP_IDX(field)								\
++        (offsetof(struct vmcb_save_area, field) / sizeof(u64))
++
++#define GHCB_SET_VALID(ghcb, field)							\
++	__set_bit(GHB_BITMAP_IDX(field), (unsigned long *)&(ghcb)->save.valid_bitmap);	\
++
++#define DEFINE_GHCB_ACCESSORS(field)							\
++	static inline bool ghcb_##field##_is_valid(const struct ghcb *ghcb)		\
++	{										\
++		int idx = offsetof(struct vmcb_save_area, field) / sizeof(u64);		\
++		return test_bit(idx, (unsigned long *)&(ghcb)->save.valid_bitmap);	\
++	}										\
++											\
++	static inline void								\
++	ghcb_set_##field(struct ghcb *ghcb, u64 value)					\
++	{										\
++		GHCB_SET_VALID(ghcb, field)						\
++		ghcb->save.field = value;						\
++	}
++
++DEFINE_GHCB_ACCESSORS(cpl)
++DEFINE_GHCB_ACCESSORS(rip)
++DEFINE_GHCB_ACCESSORS(rsp)
++DEFINE_GHCB_ACCESSORS(rax)
++DEFINE_GHCB_ACCESSORS(rcx)
++DEFINE_GHCB_ACCESSORS(rdx)
++DEFINE_GHCB_ACCESSORS(rbx)
++DEFINE_GHCB_ACCESSORS(rbp)
++DEFINE_GHCB_ACCESSORS(rsi)
++DEFINE_GHCB_ACCESSORS(rdi)
++DEFINE_GHCB_ACCESSORS(r8)
++DEFINE_GHCB_ACCESSORS(r9)
++DEFINE_GHCB_ACCESSORS(r10)
++DEFINE_GHCB_ACCESSORS(r11)
++DEFINE_GHCB_ACCESSORS(r12)
++DEFINE_GHCB_ACCESSORS(r13)
++DEFINE_GHCB_ACCESSORS(r14)
++DEFINE_GHCB_ACCESSORS(r15)
++DEFINE_GHCB_ACCESSORS(sw_exit_code)
++DEFINE_GHCB_ACCESSORS(sw_exit_info_1)
++DEFINE_GHCB_ACCESSORS(sw_exit_info_2)
++DEFINE_GHCB_ACCESSORS(sw_scratch)
++DEFINE_GHCB_ACCESSORS(xcr0)
++
+ #endif
+
+From patchwork Thu Jul 30 15:43:40 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 11693333
+Return-Path: <SRS0=wP1B=BJ=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id C72D21392
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 30 Jul 2020 15:44:04 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id AE50821D95
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 30 Jul 2020 15:44:04 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729885AbgG3PoD (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 30 Jul 2020 11:44:03 -0400
+Received: from 8bytes.org ([81.169.241.247]:34118 "EHLO theia.8bytes.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1728412AbgG3Pnq (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 30 Jul 2020 11:43:46 -0400
+Received: by theia.8bytes.org (Postfix, from userid 1000)
+        id 028269FA; Thu, 30 Jul 2020 17:43:44 +0200 (CEST)
+From: Joerg Roedel <joro@8bytes.org>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>,
+        Tom Lendacky <thomas.lendacky@amd.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, Borislav Petkov <bp@alien8.de>,
+        Joerg Roedel <jroedel@suse.de>
+Subject: [PATCH v2 4/4] KVM: SVM: Use __packed shorthand
+Date: Thu, 30 Jul 2020 17:43:40 +0200
+Message-Id: <20200730154340.14021-5-joro@8bytes.org>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20200730154340.14021-1-joro@8bytes.org>
+References: <20200730154340.14021-1-joro@8bytes.org>
+Sender: kvm-owner@vger.kernel.org
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Borislav Petkov <bp@alien8.de>
+
+Use the shorthand to make it more readable.
+
+No functional changes.
+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ arch/x86/include/asm/svm.h | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/arch/x86/include/asm/svm.h b/arch/x86/include/asm/svm.h
+index 8744817358bf..6b4b43f68f4b 100644
+--- a/arch/x86/include/asm/svm.h
++++ b/arch/x86/include/asm/svm.h
+@@ -150,14 +150,14 @@ struct __attribute__ ((__packed__)) vmcb_control_area {
+ #define SVM_NESTED_CTL_NP_ENABLE	BIT(0)
+ #define SVM_NESTED_CTL_SEV_ENABLE	BIT(1)
+ 
+-struct __attribute__ ((__packed__)) vmcb_seg {
++struct vmcb_seg {
+ 	u16 selector;
+ 	u16 attrib;
+ 	u32 limit;
+ 	u64 base;
+-};
++} __packed;
+ 
+-struct __attribute__ ((__packed__)) vmcb_save_area {
++struct vmcb_save_area {
+ 	struct vmcb_seg es;
+ 	struct vmcb_seg cs;
+ 	struct vmcb_seg ss;
+@@ -231,9 +231,9 @@ struct __attribute__ ((__packed__)) vmcb_save_area {
+ 	u64 xcr0;
+ 	u8 valid_bitmap[16];
+ 	u64 x87_state_gpa;
+-};
++} __packed;
+ 
+-struct __attribute__ ((__packed__)) ghcb {
++struct ghcb {
+ 	struct vmcb_save_area save;
+ 	u8 reserved_save[2048 - sizeof(struct vmcb_save_area)];
+ 
+@@ -242,7 +242,7 @@ struct __attribute__ ((__packed__)) ghcb {
+ 	u8 reserved_1[10];
+ 	u16 protocol_version;	/* negotiated SEV-ES/GHCB protocol version */
+ 	u32 ghcb_usage;
+-};
++} __packed;
+ 
+ 
+ static inline void __unused_size_checks(void)
+@@ -252,11 +252,11 @@ static inline void __unused_size_checks(void)
+ 	BUILD_BUG_ON(sizeof(struct ghcb) != 4096);
+ }
+ 
+-struct __attribute__ ((__packed__)) vmcb {
++struct vmcb {
+ 	struct vmcb_control_area control;
+ 	u8 reserved_control[1024 - sizeof(struct vmcb_control_area)];
+ 	struct vmcb_save_area save;
+-};
++} __packed;
+ 
+ #define SVM_CPUID_FUNC 0x8000000a
+ 
