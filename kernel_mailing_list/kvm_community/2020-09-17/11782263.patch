@@ -1,0 +1,128 @@
+From patchwork Thu Sep 17 11:07:22 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Maxim Levitsky <mlevitsk@redhat.com>
+X-Patchwork-Id: 11782263
+Return-Path: <SRS0=G0gk=C2=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 46BEA112E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 17 Sep 2020 11:08:22 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 2A99D2076D
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu, 17 Sep 2020 11:08:22 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="PiX70Qz3"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726651AbgIQLIR (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 17 Sep 2020 07:08:17 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([63.128.21.124]:59548 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S1726625AbgIQLHm (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Thu, 17 Sep 2020 07:07:42 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1600340852;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding;
+        bh=kkPhCJgbEfe1snOxUIcIHLF53bSNUGZMiNRLxPCaeLg=;
+        b=PiX70Qz38E5lMeqsonbSOM89n+elwJrw0mTqfEHErTTTFkp98SQVFqk2qjsdbClUJ++xav
+        xCoMmT2uh+38EyFG/AbbhhaRx7iqsARdg0NHSI4M7jwldwcg8QAahu1rHKFZtFcp6clHBP
+        1U+IyH1vTtefWj+6KefqZe9jbqqblsM=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-410-32wzq0FnPZG_xa7NCuQrnA-1; Thu, 17 Sep 2020 07:07:31 -0400
+X-MC-Unique: 32wzq0FnPZG_xa7NCuQrnA-1
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 4A33180EF8A;
+        Thu, 17 Sep 2020 11:07:29 +0000 (UTC)
+Received: from localhost.localdomain (unknown [10.35.206.187])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 4FA0875142;
+        Thu, 17 Sep 2020 11:07:24 +0000 (UTC)
+From: Maxim Levitsky <mlevitsk@redhat.com>
+To: kvm@vger.kernel.org
+Cc: linux-kernel@vger.kernel.org,
+        x86@kernel.org (maintainer:X86 ARCHITECTURE (32-BIT AND 64-BIT)),
+        Jim Mattson <jmattson@google.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Borislav Petkov <bp@alien8.de>, Joerg Roedel <joro@8bytes.org>,
+        "H. Peter Anvin" <hpa@zytor.com>,
+        Paolo Bonzini <pbonzini@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Ingo Molnar <mingo@redhat.com>,
+        Thomas Gleixner <tglx@linutronix.de>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Maxim Levitsky <mlevitsk@redhat.com>
+Subject: [PATCH 0/1] KVM: correctly restore the TSC value on nested migration
+Date: Thu, 17 Sep 2020 14:07:22 +0300
+Message-Id: <20200917110723.820666-1-mlevitsk@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This patch is a result of a long investigation I made to understand
+why the nested migration more often than not makes the nested guest hang.
+Sometimes the nested guest recovers and sometimes it hangs forever.
+
+The root cause of this is that reading MSR_IA32_TSC while nested guest is
+running returns its TSC value, that is (assuming no tsc scaling)
+host tsc + L1 tsc offset + L2 tsc offset.
+
+This is correct but it is a result of a nice curiosity of X86 VMX
+(and apparently SVM too, according to my tests) implementation:
+
+As a rule MSR reads done by the guest should either trap to host, or just
+return host value, and therefore kvm_get_msr and friends, should basically
+always return the L1 value of any msr.
+
+Well, MSR_IA32_TSC is an exception. Intel's PRM states that when you disable
+its interception, then in guest mode the host adds the TSC offset to
+the read value.
+
+I haven't found anything like that in AMD's PRM but according to the few
+tests I made, it behaves the same.
+
+However, there is no such exception when writing MSR_IA32_TSC, and this
+poses a problem for nested migration.
+
+When MSR_IA32_TSC is read, we read L2 value (smaller since L2 is started
+after L1), and when we restore it after migration, the value is interpreted
+as L1 value, thus resulting in huge TSC jump backward which the guest usually
+really doesn't like, especially on AMD with APIC deadline timer, which
+usually just doesn't fire afterward sending the guest into endless wait for it.
+
+The proposed patch fixes this by making read of MSR_IA32_TSC depend on
+'msr_info->host_initiated'
+
+If guest reads the MSR, we add the TSC offset, but when host's qemu reads
+the msr we skip that silly emulation of TSC offset, and return the real value
+for the L1 guest which is host tsc + L1 offset.
+
+This patch was tested on both SVM and VMX, and on both it fixes hangs.
+On VMX since it uses VMX preemption timer for APIC deadline, the guest seems
+to recover after a while without that patch.
+
+To make sure that the nested migration happens I usually used
+-overcommit cpu_pm=on but I reproduced this with just running an endless loop
+in L2.
+
+This is tested both with and without -invtsc,tsc-frequency=...
+
+The migration was done by saving the migration stream to a file, and then
+loading the qemu with '-incoming'
+
+Maxim Levitsky (1):
+  KVM: x86: fix MSR_IA32_TSC read for nested migration
+
+ arch/x86/kvm/x86.c | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
