@@ -1,0 +1,537 @@
+From patchwork Wed Sep 30 04:16:55 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11807807
+Return-Path: <SRS0=sA+7=DH=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 07FE613B2
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 30 Sep 2020 04:17:13 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id E1F5D20872
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 30 Sep 2020 04:17:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1725854AbgI3ERG (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 30 Sep 2020 00:17:06 -0400
+Received: from mga18.intel.com ([134.134.136.126]:60796 "EHLO mga18.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725830AbgI3ERE (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 30 Sep 2020 00:17:04 -0400
+IronPort-SDR: 
+ NhirzcgCtt3yLoyC2phvf9aQ7JgZwNVy57GTL7AEVDcXgpRT46mL8uoWU1a7pLkiReuMelpSqP
+ NecUSJBmwNnA==
+X-IronPort-AV: E=McAfee;i="6000,8403,9759"; a="150137439"
+X-IronPort-AV: E=Sophos;i="5.77,321,1596524400";
+   d="scan'208";a="150137439"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga106.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 29 Sep 2020 21:17:02 -0700
+IronPort-SDR: 
+ RiVJiE8GxJ20RKMyGdjkRfqB3WEkixlcftzJ0kc9o1LUMjELbXdo0vtrzz5A2hzp8tasMPmlbL
+ R4kicpeSOsRA==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,321,1596524400";
+   d="scan'208";a="415607856"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.160])
+  by fmsmga001.fm.intel.com with ESMTP; 29 Sep 2020 21:17:01 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Lai Jiangshan <jiangshanlai@gmail.com>,
+        Lai Jiangshan <laijs@linux.alibaba.com>
+Subject: [PATCH 1/5] KVM: x86: Intercept LA57 to inject #GP fault when it's
+ reserved
+Date: Tue, 29 Sep 2020 21:16:55 -0700
+Message-Id: <20200930041659.28181-2-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20200930041659.28181-1-sean.j.christopherson@intel.com>
+References: <20200930041659.28181-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Lai Jiangshan <laijs@linux.alibaba.com>
+
+Unconditionally intercept changes to CR4.LA57 so that KVM correctly
+injects a #GP fault if the guest attempts to set CR4.LA57 when it's
+supported in hardware but not exposed to the guest.
+
+Long term, KVM needs to properly handle CR4 bits that can be under guest
+control but also may be reserved from the guest's perspective.  But, KVM
+currently sets the CR4 guest/host mask only during vCPU creation, and
+reworking flows to change that will take a bit of elbow grease.
+
+Even if/when generic support for intercepting reserved bits exists, it's
+probably not worth letting the guest set CR4.LA57 directly.  LA57 can't
+be toggled while long mode is enabled, thus it's all but guaranteed to
+be set once (maybe twice, e.g. by BIOS and kernel) during boot and never
+touched again.  On the flip side, letting the guest own CR4.LA57 may
+incur extra VMREADs.  In other words, this temporary "hack" is probably
+also the right long term fix.
+
+Fixes: fd8cb433734e ("KVM: MMU: Expose the LA57 feature to VM.")
+Cc: stable@vger.kernel.org
+Cc: Lai Jiangshan <jiangshanlai@gmail.com>
+Signed-off-by: Lai Jiangshan <laijs@linux.alibaba.com>
+[sean: rewrote changelog]
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/kvm_cache_regs.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/kvm_cache_regs.h b/arch/x86/kvm/kvm_cache_regs.h
+index cfe83d4ae625..ca0781b41df9 100644
+--- a/arch/x86/kvm/kvm_cache_regs.h
++++ b/arch/x86/kvm/kvm_cache_regs.h
+@@ -7,7 +7,7 @@
+ #define KVM_POSSIBLE_CR0_GUEST_BITS X86_CR0_TS
+ #define KVM_POSSIBLE_CR4_GUEST_BITS				  \
+ 	(X86_CR4_PVI | X86_CR4_DE | X86_CR4_PCE | X86_CR4_OSFXSR  \
+-	 | X86_CR4_OSXMMEXCPT | X86_CR4_LA57 | X86_CR4_PGE | X86_CR4_TSD)
++	 | X86_CR4_OSXMMEXCPT | X86_CR4_PGE | X86_CR4_TSD)
+ 
+ #define BUILD_KVM_GPR_ACCESSORS(lname, uname)				      \
+ static __always_inline unsigned long kvm_##lname##_read(struct kvm_vcpu *vcpu)\
+
+From patchwork Wed Sep 30 04:16:56 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11807805
+Return-Path: <SRS0=sA+7=DH=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id D5424139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 30 Sep 2020 04:17:12 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C5FAC20872
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 30 Sep 2020 04:17:12 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1725833AbgI3ERE (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 30 Sep 2020 00:17:04 -0400
+Received: from mga18.intel.com ([134.134.136.126]:60793 "EHLO mga18.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725786AbgI3ERD (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 30 Sep 2020 00:17:03 -0400
+IronPort-SDR: 
+ FV5nYk0pSJJ8603KtG/+8XQoa2jRbEEoWiNH9AgkWgQlDM4arb/uKTfFLzGSL/Q9/3UblAU/eV
+ b3Pdszz9c8Xw==
+X-IronPort-AV: E=McAfee;i="6000,8403,9759"; a="150137445"
+X-IronPort-AV: E=Sophos;i="5.77,321,1596524400";
+   d="scan'208";a="150137445"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga106.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 29 Sep 2020 21:17:02 -0700
+IronPort-SDR: 
+ v7GyGQOzf5xPyj4LjDmgOEAsMxM9+TuvPVj1Sj5MQSFcHY+Ay2ss/CHEooLdISE1GBGGZ1Lq9Q
+ QsPgCTrdmG7g==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,321,1596524400";
+   d="scan'208";a="415607862"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.160])
+  by fmsmga001.fm.intel.com with ESMTP; 29 Sep 2020 21:17:01 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Lai Jiangshan <jiangshanlai@gmail.com>,
+        Lai Jiangshan <laijs@linux.alibaba.com>
+Subject: [PATCH 2/5] KVM: x86: Invoke vendor's vcpu_after_set_cpuid() after
+ all common updates
+Date: Tue, 29 Sep 2020 21:16:56 -0700
+Message-Id: <20200930041659.28181-3-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20200930041659.28181-1-sean.j.christopherson@intel.com>
+References: <20200930041659.28181-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Move the call to kvm_x86_ops.vcpu_after_set_cpuid() to the very end of
+kvm_vcpu_after_set_cpuid() to allow the vendor implementation to react
+to changes made by the common code.  In the near future, this will be
+used by VMX to update its CR4 guest/host masks to account for reserved
+bits.  In the long term, SGX support will update the allowed XCR0 mask
+for enclaves based on the vCPU's allowed XCR0.
+
+vcpu_after_set_cpuid() (nee kvm_update_cpuid()) was originally added by
+commit 2acf923e38fb ("KVM: VMX: Enable XSAVE/XRSTOR for guest"), and was
+called separately after kvm_x86_ops.vcpu_after_set_cpuid() (nee
+kvm_x86_ops->cpuid_update()).  There is no indication that the placement
+of the common code updates after the vendor updates was anything more
+than a "new function at the end" decision.
+
+Inspection of the current code reveals no dependency on kvm_x86_ops'
+vcpu_after_set_cpuid() in kvm_vcpu_after_set_cpuid() or any of its
+helpers.  The bulk of the common code depends only on the guest's CPUID
+configuration, kvm_mmu_reset_context() does not consume dynamic vendor
+state, and there are no collisions between kvm_pmu_refresh() and VMX's
+update of PT state.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/cpuid.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 37c3668a774f..963bad7bc0ff 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -121,8 +121,6 @@ static void kvm_vcpu_after_set_cpuid(struct kvm_vcpu *vcpu)
+ 	struct kvm_lapic *apic = vcpu->arch.apic;
+ 	struct kvm_cpuid_entry2 *best;
+ 
+-	kvm_x86_ops.vcpu_after_set_cpuid(vcpu);
+-
+ 	best = kvm_find_cpuid_entry(vcpu, 1, 0);
+ 	if (best && apic) {
+ 		if (cpuid_entry_has(best, X86_FEATURE_TSC_DEADLINE_TIMER))
+@@ -146,6 +144,9 @@ static void kvm_vcpu_after_set_cpuid(struct kvm_vcpu *vcpu)
+ 	kvm_pmu_refresh(vcpu);
+ 	vcpu->arch.cr4_guest_rsvd_bits =
+ 	    __cr4_reserved_bits(guest_cpuid_has, vcpu);
++
++	/* Invoke the vendor callback only after the above state is updated. */
++	kvm_x86_ops.vcpu_after_set_cpuid(vcpu);
+ 	kvm_x86_ops.update_exception_bitmap(vcpu);
+ }
+ 
+
+From patchwork Wed Sep 30 04:16:57 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11807809
+Return-Path: <SRS0=sA+7=DH=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 2D1D2618
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 30 Sep 2020 04:17:14 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 1B9152074B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 30 Sep 2020 04:17:14 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1725884AbgI3ERN (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 30 Sep 2020 00:17:13 -0400
+Received: from mga18.intel.com ([134.134.136.126]:60793 "EHLO mga18.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725820AbgI3ERE (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 30 Sep 2020 00:17:04 -0400
+IronPort-SDR: 
+ D+TNRhCS/ngZBrLq8leAiIkzE38v/NxNDbN9Yz8qMnMq1EQvrGdF7rX9C39Y5ZPza82TzsyTIZ
+ uCefqzBkJMWA==
+X-IronPort-AV: E=McAfee;i="6000,8403,9759"; a="150137447"
+X-IronPort-AV: E=Sophos;i="5.77,321,1596524400";
+   d="scan'208";a="150137447"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga106.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 29 Sep 2020 21:17:02 -0700
+IronPort-SDR: 
+ 2m0uC/+PueI+3xFKIkJ/h+wFBymlfWn9xqRmrWS0br+hsvYsfQ/76LW0RUpT2VWAnESq1ye2G5
+ 5VebHlzL3Z/w==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,321,1596524400";
+   d="scan'208";a="415607865"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.160])
+  by fmsmga001.fm.intel.com with ESMTP; 29 Sep 2020 21:17:02 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Lai Jiangshan <jiangshanlai@gmail.com>,
+        Lai Jiangshan <laijs@linux.alibaba.com>
+Subject: [PATCH 3/5] KVM: x86: Move call to update_exception_bitmap() into VMX
+ code
+Date: Tue, 29 Sep 2020 21:16:57 -0700
+Message-Id: <20200930041659.28181-4-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20200930041659.28181-1-sean.j.christopherson@intel.com>
+References: <20200930041659.28181-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Now that vcpu_after_set_cpuid() and update_exception_bitmap() are called
+back-to-back, subsume the exception bitmap update into the common CPUID
+update.  Drop the SVM invocation entirely as SVM's exception bitmap
+doesn't vary with respect to guest CPUID.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/cpuid.c   | 1 -
+ arch/x86/kvm/vmx/vmx.c | 3 +++
+ 2 files changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 963bad7bc0ff..dd62156b8868 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -147,7 +147,6 @@ static void kvm_vcpu_after_set_cpuid(struct kvm_vcpu *vcpu)
+ 
+ 	/* Invoke the vendor callback only after the above state is updated. */
+ 	kvm_x86_ops.vcpu_after_set_cpuid(vcpu);
+-	kvm_x86_ops.update_exception_bitmap(vcpu);
+ }
+ 
+ static int is_efer_nx(void)
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 4551a7e80ebc..223e070c48b2 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -7232,6 +7232,9 @@ static void vmx_vcpu_after_set_cpuid(struct kvm_vcpu *vcpu)
+ 			vmx_set_guest_uret_msr(vmx, msr, enabled ? 0 : TSX_CTRL_RTM_DISABLE);
+ 		}
+ 	}
++
++	/* Refresh #PF interception to account for MAXPHYADDR changes. */
++	update_exception_bitmap(vcpu);
+ }
+ 
+ static __init void vmx_set_cpu_caps(void)
+
+From patchwork Wed Sep 30 04:16:58 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11807813
+Return-Path: <SRS0=sA+7=DH=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id E034D139A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 30 Sep 2020 04:17:28 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id CFFAF20872
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 30 Sep 2020 04:17:28 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726299AbgI3ERZ (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 30 Sep 2020 00:17:25 -0400
+Received: from mga18.intel.com ([134.134.136.126]:60793 "EHLO mga18.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725306AbgI3ERE (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 30 Sep 2020 00:17:04 -0400
+IronPort-SDR: 
+ gl2AOKhkJHDqFR7o1JCGt4cMKTUaB2Ux8Vm53khrb3N1v6AehR3vS50vjL68RqXOE5oPgZbmrp
+ Bfu2XYVbDONQ==
+X-IronPort-AV: E=McAfee;i="6000,8403,9759"; a="150137451"
+X-IronPort-AV: E=Sophos;i="5.77,321,1596524400";
+   d="scan'208";a="150137451"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga106.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 29 Sep 2020 21:17:03 -0700
+IronPort-SDR: 
+ uPY+seaTO4OX809oX8Mx0xF2xvSVpfJtDPXENLeD0pUqSvkJFd1RTb02vIG8exrD6ekTWRtq8C
+ QrFaUzqtaUuw==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,321,1596524400";
+   d="scan'208";a="415607868"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.160])
+  by fmsmga001.fm.intel.com with ESMTP; 29 Sep 2020 21:17:02 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Lai Jiangshan <jiangshanlai@gmail.com>,
+        Lai Jiangshan <laijs@linux.alibaba.com>
+Subject: [PATCH 4/5] KVM: VMX: Intercept guest reserved CR4 bits to inject #GP
+ fault
+Date: Tue, 29 Sep 2020 21:16:58 -0700
+Message-Id: <20200930041659.28181-5-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20200930041659.28181-1-sean.j.christopherson@intel.com>
+References: <20200930041659.28181-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Intercept CR4 bits that are guest reserved so that KVM correctly injects
+a #GP fault if the guest attempts to set a reserved bit.  If a feature
+is supported by the CPU but is not exposed to the guest, and its
+associated CR4 bit is not intercepted by KVM by default, then KVM will
+fail to inject a #GP if the guest sets the CR4 bit without triggering
+an exit, e.g. by toggling only the bit in question.
+
+Note, KVM doesn't give the guest direct access to any CR4 bits that are
+also dependent on guest CPUID.  Yet.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 15 ++++++++++-----
+ 1 file changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 223e070c48b2..4ff440e7518e 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -4037,13 +4037,16 @@ void vmx_set_constant_host_state(struct vcpu_vmx *vmx)
+ 
+ void set_cr4_guest_host_mask(struct vcpu_vmx *vmx)
+ {
+-	vmx->vcpu.arch.cr4_guest_owned_bits = KVM_POSSIBLE_CR4_GUEST_BITS;
++	struct kvm_vcpu *vcpu = &vmx->vcpu;
++
++	vcpu->arch.cr4_guest_owned_bits = KVM_POSSIBLE_CR4_GUEST_BITS &
++					  ~vcpu->arch.cr4_guest_rsvd_bits;
+ 	if (!enable_ept)
+-		vmx->vcpu.arch.cr4_guest_owned_bits &= ~X86_CR4_PGE;
++		vcpu->arch.cr4_guest_owned_bits &= ~X86_CR4_PGE;
+ 	if (is_guest_mode(&vmx->vcpu))
+-		vmx->vcpu.arch.cr4_guest_owned_bits &=
+-			~get_vmcs12(&vmx->vcpu)->cr4_guest_host_mask;
+-	vmcs_writel(CR4_GUEST_HOST_MASK, ~vmx->vcpu.arch.cr4_guest_owned_bits);
++		vcpu->arch.cr4_guest_owned_bits &=
++			~get_vmcs12(vcpu)->cr4_guest_host_mask;
++	vmcs_writel(CR4_GUEST_HOST_MASK, ~vcpu->arch.cr4_guest_owned_bits);
+ }
+ 
+ u32 vmx_pin_based_exec_ctrl(struct vcpu_vmx *vmx)
+@@ -7233,6 +7236,8 @@ static void vmx_vcpu_after_set_cpuid(struct kvm_vcpu *vcpu)
+ 		}
+ 	}
+ 
++	set_cr4_guest_host_mask(vmx);
++
+ 	/* Refresh #PF interception to account for MAXPHYADDR changes. */
+ 	update_exception_bitmap(vcpu);
+ }
+
+From patchwork Wed Sep 30 04:16:59 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11807811
+Return-Path: <SRS0=sA+7=DH=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 896C8618
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 30 Sep 2020 04:17:21 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 7956C20872
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed, 30 Sep 2020 04:17:21 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1725872AbgI3ERL (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Wed, 30 Sep 2020 00:17:11 -0400
+Received: from mga18.intel.com ([134.134.136.126]:60796 "EHLO mga18.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725839AbgI3ERF (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 30 Sep 2020 00:17:05 -0400
+IronPort-SDR: 
+ BamU55C/aaQPyjxkn/PoFetVVBwvj3fi0UMC9v4Of+/tMIAygAiIWlZtc6xuH+288BBkEd6E52
+ T5KbvXBF7WBA==
+X-IronPort-AV: E=McAfee;i="6000,8403,9759"; a="150137455"
+X-IronPort-AV: E=Sophos;i="5.77,321,1596524400";
+   d="scan'208";a="150137455"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga106.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 29 Sep 2020 21:17:03 -0700
+IronPort-SDR: 
+ /saY0BVd/QPYHi2iRfhP+TIsXqXfC2ZUELIrQ5kKEmWXwWZ/Kt5OUuoP71JLRX3Tj3J2liN954
+ uoWY0rpNQ4uw==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,321,1596524400";
+   d="scan'208";a="415607871"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.160])
+  by fmsmga001.fm.intel.com with ESMTP; 29 Sep 2020 21:17:03 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Lai Jiangshan <jiangshanlai@gmail.com>,
+        Lai Jiangshan <laijs@linux.alibaba.com>
+Subject: [PATCH 5/5] KVM: x86: Let the guest own CR4.FSGSBASE
+Date: Tue, 29 Sep 2020 21:16:59 -0700
+Message-Id: <20200930041659.28181-6-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20200930041659.28181-1-sean.j.christopherson@intel.com>
+References: <20200930041659.28181-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Lai Jiangshan <laijs@linux.alibaba.com>
+
+Add FSGSBASE to the set of possible guest-owned CR4 bits, i.e. let the
+guest own it on VMX.  KVM never queries the guest's CR4.FSGSBASE value,
+thus there is no reason to force VM-Exit on FSGSBASE being toggled.
+
+Note, because FSGSBASE is conditionally available, this is dependent on
+recent changes to intercept reserved CR4 bits and to update the CR4
+guest/host mask in response to guest CPUID changes.
+
+Cc: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Lai Jiangshan <laijs@linux.alibaba.com>
+[sean: added justification in changelog]
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/kvm_cache_regs.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/kvm_cache_regs.h b/arch/x86/kvm/kvm_cache_regs.h
+index ca0781b41df9..a889563ad02d 100644
+--- a/arch/x86/kvm/kvm_cache_regs.h
++++ b/arch/x86/kvm/kvm_cache_regs.h
+@@ -7,7 +7,7 @@
+ #define KVM_POSSIBLE_CR0_GUEST_BITS X86_CR0_TS
+ #define KVM_POSSIBLE_CR4_GUEST_BITS				  \
+ 	(X86_CR4_PVI | X86_CR4_DE | X86_CR4_PCE | X86_CR4_OSFXSR  \
+-	 | X86_CR4_OSXMMEXCPT | X86_CR4_PGE | X86_CR4_TSD)
++	 | X86_CR4_OSXMMEXCPT | X86_CR4_PGE | X86_CR4_TSD | X86_CR4_FSGSBASE)
+ 
+ #define BUILD_KVM_GPR_ACCESSORS(lname, uname)				      \
+ static __always_inline unsigned long kvm_##lname##_read(struct kvm_vcpu *vcpu)\
