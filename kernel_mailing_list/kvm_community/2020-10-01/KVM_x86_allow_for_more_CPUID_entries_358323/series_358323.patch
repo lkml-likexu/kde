@@ -1,0 +1,507 @@
+From patchwork Thu Oct  1 13:05:39 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 11811431
+Return-Path: <SRS0=iPdE=DI=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id DA69D174A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  1 Oct 2020 13:05:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id BE59F2068E
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  1 Oct 2020 13:05:58 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="VyRbTIsP"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732150AbgJANF4 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 1 Oct 2020 09:05:56 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:35939 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S1732104AbgJANFz (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Thu, 1 Oct 2020 09:05:55 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1601557553;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=X023FkD4CJHQd7Fpzt9OiSpx1o5f72B3yqJkQa1RT8k=;
+        b=VyRbTIsPpPyV8zLWjdLsoRRFKQPUdMmJY285pFKjBJH6jv2wYtMx9Y95g9KvQMgFIcjHQO
+        xmPyX9MWa/nXtrTca1uBgzI1sxNdK3abYpCqDzZM/nIP6cYGG0E+Twx5HBEQREMZzT7CH7
+        yWwa2HZG7Ts1wWGcqAjd2HTWmD4lYf4=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-473-pYKqZROSN3umcfMtjvlpLg-1; Thu, 01 Oct 2020 09:05:52 -0400
+X-MC-Unique: pYKqZROSN3umcfMtjvlpLg-1
+Received: from smtp.corp.redhat.com (int-mx06.intmail.prod.int.phx2.redhat.com
+ [10.5.11.16])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id E673E1062724;
+        Thu,  1 Oct 2020 13:05:50 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.195.161])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id EFD705C1CF;
+        Thu,  1 Oct 2020 13:05:45 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        "Dr . David Alan Gilbert" <dgilbert@redhat.com>,
+        Wei Huang <whuang2@amd.com>, linux-kernel@vger.kernel.org
+Subject: [PATCH 1/3] KVM: x86: disconnect kvm_check_cpuid() from
+ vcpu->arch.cpuid_entries
+Date: Thu,  1 Oct 2020 15:05:39 +0200
+Message-Id: <20201001130541.1398392-2-vkuznets@redhat.com>
+In-Reply-To: <20201001130541.1398392-1-vkuznets@redhat.com>
+References: <20201001130541.1398392-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.16
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+As a preparatory step to allocating vcpu->arch.cpuid_entries dynamically
+make kvm_check_cpuid() check work with an arbitrary 'struct kvm_cpuid_entry2'
+array.
+
+Currently, when kvm_check_cpuid() fails we reset vcpu->arch.cpuid_nent to
+0 and this is kind of weird, i.e. one would expect CPUIDs to remain
+unchanged when KVM_SET_CPUID[2] call fails.
+
+No functional change intended. It would've been possible to move the updated
+kvm_check_cpuid() in kvm_vcpu_ioctl_set_cpuid2() and check the supplied
+input before we start updating vcpu->arch.cpuid_entries/nent but we
+can't do the same in kvm_vcpu_ioctl_set_cpuid() as we'll have to copy
+'struct kvm_cpuid_entry' entries first. The change will be made when
+vcpu->arch.cpuid_entries[] array becomes allocated dynamically.
+
+Suggested-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ arch/x86/kvm/cpuid.c | 38 +++++++++++++++++++++++---------------
+ 1 file changed, 23 insertions(+), 15 deletions(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 37c3668a774f..529348ddedc1 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -54,7 +54,24 @@ static u32 xstate_required_size(u64 xstate_bv, bool compacted)
+ 
+ #define F feature_bit
+ 
+-static int kvm_check_cpuid(struct kvm_vcpu *vcpu)
++static inline struct kvm_cpuid_entry2 *cpuid_entry2_find(
++	struct kvm_cpuid_entry2 *entries, int nent, u32 function, u32 index)
++{
++	struct kvm_cpuid_entry2 *e;
++	int i;
++
++	for (i = 0; i < nent; i++) {
++		e = &entries[i];
++
++		if (e->function == function && (e->index == index ||
++		    !(e->flags & KVM_CPUID_FLAG_SIGNIFCANT_INDEX)))
++			return e;
++	}
++
++	return NULL;
++}
++
++static int kvm_check_cpuid(struct kvm_cpuid_entry2 *entries, int nent)
+ {
+ 	struct kvm_cpuid_entry2 *best;
+ 
+@@ -62,7 +79,7 @@ static int kvm_check_cpuid(struct kvm_vcpu *vcpu)
+ 	 * The existing code assumes virtual address is 48-bit or 57-bit in the
+ 	 * canonical address checks; exit if it is ever changed.
+ 	 */
+-	best = kvm_find_cpuid_entry(vcpu, 0x80000008, 0);
++	best = cpuid_entry2_find(entries, nent, 0x80000008, 0);
+ 	if (best) {
+ 		int vaddr_bits = (best->eax & 0xff00) >> 8;
+ 
+@@ -220,7 +237,7 @@ int kvm_vcpu_ioctl_set_cpuid(struct kvm_vcpu *vcpu,
+ 		vcpu->arch.cpuid_entries[i].padding[2] = 0;
+ 	}
+ 	vcpu->arch.cpuid_nent = cpuid->nent;
+-	r = kvm_check_cpuid(vcpu);
++	r = kvm_check_cpuid(vcpu->arch.cpuid_entries, cpuid->nent);
+ 	if (r) {
+ 		vcpu->arch.cpuid_nent = 0;
+ 		kvfree(cpuid_entries);
+@@ -250,7 +267,7 @@ int kvm_vcpu_ioctl_set_cpuid2(struct kvm_vcpu *vcpu,
+ 			   cpuid->nent * sizeof(struct kvm_cpuid_entry2)))
+ 		goto out;
+ 	vcpu->arch.cpuid_nent = cpuid->nent;
+-	r = kvm_check_cpuid(vcpu);
++	r = kvm_check_cpuid(vcpu->arch.cpuid_entries, cpuid->nent);
+ 	if (r) {
+ 		vcpu->arch.cpuid_nent = 0;
+ 		goto out;
+@@ -940,17 +957,8 @@ int kvm_dev_ioctl_get_cpuid(struct kvm_cpuid2 *cpuid,
+ struct kvm_cpuid_entry2 *kvm_find_cpuid_entry(struct kvm_vcpu *vcpu,
+ 					      u32 function, u32 index)
+ {
+-	struct kvm_cpuid_entry2 *e;
+-	int i;
+-
+-	for (i = 0; i < vcpu->arch.cpuid_nent; ++i) {
+-		e = &vcpu->arch.cpuid_entries[i];
+-
+-		if (e->function == function && (e->index == index ||
+-		    !(e->flags & KVM_CPUID_FLAG_SIGNIFCANT_INDEX)))
+-			return e;
+-	}
+-	return NULL;
++	return cpuid_entry2_find(vcpu->arch.cpuid_entries, vcpu->arch.cpuid_nent,
++				 function, index);
+ }
+ EXPORT_SYMBOL_GPL(kvm_find_cpuid_entry);
+ 
+
+From patchwork Thu Oct  1 13:05:40 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 11811435
+Return-Path: <SRS0=iPdE=DI=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id A8C946CB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  1 Oct 2020 13:06:15 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 8A8CD2075F
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  1 Oct 2020 13:06:15 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="QYMELtic"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732119AbgJANGM (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 1 Oct 2020 09:06:12 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([63.128.21.124]:52565 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S1732207AbgJANF6 (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Thu, 1 Oct 2020 09:05:58 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1601557556;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=EML2yVy00qzvw0yduBf60TTMc1E88Fj3kk+iIdNVqTo=;
+        b=QYMELtichj9IhxeqWePcXsB1A0k7qJL51cGhLa2M8jvsb9olB44COVTvmz5iJXsQ+CLv8j
+        PvxKPP93Jz4MNp5mbZN4HoivPypLb0q0WXvW4Vdggkh0lWpDMqL5+4R1vEC3GZpvDpVqaX
+        /SViakn7/i89W8gaI2LXrm3r3Sb+IZ4=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-296-VpXeiEgiNvOn3_liXVOkpQ-1; Thu, 01 Oct 2020 09:05:54 -0400
+X-MC-Unique: VpXeiEgiNvOn3_liXVOkpQ-1
+Received: from smtp.corp.redhat.com (int-mx06.intmail.prod.int.phx2.redhat.com
+ [10.5.11.16])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 907EA18C5201;
+        Thu,  1 Oct 2020 13:05:53 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.195.161])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 42EE45C1CF;
+        Thu,  1 Oct 2020 13:05:51 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        "Dr . David Alan Gilbert" <dgilbert@redhat.com>,
+        Wei Huang <whuang2@amd.com>, linux-kernel@vger.kernel.org
+Subject: [PATCH 2/3] KVM: x86: allocate vcpu->arch.cpuid_entries dynamically
+Date: Thu,  1 Oct 2020 15:05:40 +0200
+Message-Id: <20201001130541.1398392-3-vkuznets@redhat.com>
+In-Reply-To: <20201001130541.1398392-1-vkuznets@redhat.com>
+References: <20201001130541.1398392-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.16
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The current limit for guest CPUID leaves (KVM_MAX_CPUID_ENTRIES, 80)
+is reported to be insufficient but before we bump it let's switch to
+allocating vcpu->arch.cpuid_entries[] array dynamically. Currently,
+'struct kvm_cpuid_entry2' is 40 bytes so vcpu->arch.cpuid_entries is
+3200 bytes which accounts for 1/4 of the whole 'struct kvm_vcpu_arch'
+but having it pre-allocated (for all vCPUs which we also pre-allocate)
+gives us no real benefits.
+
+Another plus of the dynamic allocation is that we now do kvm_check_cpuid()
+check before we assign anything to vcpu->arch.cpuid_nent/cpuid_entries so
+no changes are made in case the check fails.
+
+Opportunistically remove unneeded 'out' labels from
+kvm_vcpu_ioctl_set_cpuid()/kvm_vcpu_ioctl_set_cpuid2() and return
+directly whenever possible.
+
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ arch/x86/include/asm/kvm_host.h |  2 +-
+ arch/x86/kvm/cpuid.c            | 89 +++++++++++++++++++--------------
+ arch/x86/kvm/x86.c              |  1 +
+ 3 files changed, 53 insertions(+), 39 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index d0f77235da92..7d259e21ea04 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -637,7 +637,7 @@ struct kvm_vcpu_arch {
+ 	int halt_request; /* real mode on Intel only */
+ 
+ 	int cpuid_nent;
+-	struct kvm_cpuid_entry2 cpuid_entries[KVM_MAX_CPUID_ENTRIES];
++	struct kvm_cpuid_entry2 *cpuid_entries;
+ 
+ 	int maxphyaddr;
+ 	int max_tdp_level;
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 529348ddedc1..3fe20c4da0a6 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -210,46 +210,53 @@ int kvm_vcpu_ioctl_set_cpuid(struct kvm_vcpu *vcpu,
+ 			     struct kvm_cpuid_entry __user *entries)
+ {
+ 	int r, i;
+-	struct kvm_cpuid_entry *cpuid_entries = NULL;
++	struct kvm_cpuid_entry *e = NULL;
++	struct kvm_cpuid_entry2 *e2 = NULL;
+ 
+-	r = -E2BIG;
+ 	if (cpuid->nent > KVM_MAX_CPUID_ENTRIES)
+-		goto out;
++		return -E2BIG;
++
+ 	if (cpuid->nent) {
+-		cpuid_entries = vmemdup_user(entries,
+-					     array_size(sizeof(struct kvm_cpuid_entry),
+-							cpuid->nent));
+-		if (IS_ERR(cpuid_entries)) {
+-			r = PTR_ERR(cpuid_entries);
+-			goto out;
++		e = vmemdup_user(entries, array_size(sizeof(*e), cpuid->nent));
++		if (IS_ERR(e))
++			return PTR_ERR(e);
++
++		e2 = kvmalloc_array(cpuid->nent, sizeof(*e2), GFP_KERNEL_ACCOUNT);
++		if (!e2) {
++			r = -ENOMEM;
++			goto out_free_cpuid;
+ 		}
+ 	}
+ 	for (i = 0; i < cpuid->nent; i++) {
+-		vcpu->arch.cpuid_entries[i].function = cpuid_entries[i].function;
+-		vcpu->arch.cpuid_entries[i].eax = cpuid_entries[i].eax;
+-		vcpu->arch.cpuid_entries[i].ebx = cpuid_entries[i].ebx;
+-		vcpu->arch.cpuid_entries[i].ecx = cpuid_entries[i].ecx;
+-		vcpu->arch.cpuid_entries[i].edx = cpuid_entries[i].edx;
+-		vcpu->arch.cpuid_entries[i].index = 0;
+-		vcpu->arch.cpuid_entries[i].flags = 0;
+-		vcpu->arch.cpuid_entries[i].padding[0] = 0;
+-		vcpu->arch.cpuid_entries[i].padding[1] = 0;
+-		vcpu->arch.cpuid_entries[i].padding[2] = 0;
++		e2[i].function = e[i].function;
++		e2[i].eax = e[i].eax;
++		e2[i].ebx = e[i].ebx;
++		e2[i].ecx = e[i].ecx;
++		e2[i].edx = e[i].edx;
++		e2[i].index = 0;
++		e2[i].flags = 0;
++		e2[i].padding[0] = 0;
++		e2[i].padding[1] = 0;
++		e2[i].padding[2] = 0;
+ 	}
+-	vcpu->arch.cpuid_nent = cpuid->nent;
+-	r = kvm_check_cpuid(vcpu->arch.cpuid_entries, cpuid->nent);
++
++	r = kvm_check_cpuid(e2, cpuid->nent);
+ 	if (r) {
+-		vcpu->arch.cpuid_nent = 0;
+-		kvfree(cpuid_entries);
+-		goto out;
++		kvfree(e2);
++		goto out_free_cpuid;
+ 	}
+ 
++	kvfree(vcpu->arch.cpuid_entries);
++	vcpu->arch.cpuid_entries = e2;
++	vcpu->arch.cpuid_nent = cpuid->nent;
++
+ 	cpuid_fix_nx_cap(vcpu);
+ 	kvm_update_cpuid_runtime(vcpu);
+ 	kvm_vcpu_after_set_cpuid(vcpu);
+ 
+-	kvfree(cpuid_entries);
+-out:
++out_free_cpuid:
++	kvfree(e);
++
+ 	return r;
+ }
+ 
+@@ -257,26 +264,32 @@ int kvm_vcpu_ioctl_set_cpuid2(struct kvm_vcpu *vcpu,
+ 			      struct kvm_cpuid2 *cpuid,
+ 			      struct kvm_cpuid_entry2 __user *entries)
+ {
++	struct kvm_cpuid_entry2 *e2 = NULL;
+ 	int r;
+ 
+-	r = -E2BIG;
+ 	if (cpuid->nent > KVM_MAX_CPUID_ENTRIES)
+-		goto out;
+-	r = -EFAULT;
+-	if (copy_from_user(&vcpu->arch.cpuid_entries, entries,
+-			   cpuid->nent * sizeof(struct kvm_cpuid_entry2)))
+-		goto out;
+-	vcpu->arch.cpuid_nent = cpuid->nent;
+-	r = kvm_check_cpuid(vcpu->arch.cpuid_entries, cpuid->nent);
++		return -E2BIG;
++
++	if (cpuid->nent) {
++		e2 = vmemdup_user(entries, array_size(sizeof(*e2), cpuid->nent));
++		if (IS_ERR(e2))
++			return PTR_ERR(e2);
++	}
++
++	r = kvm_check_cpuid(e2, cpuid->nent);
+ 	if (r) {
+-		vcpu->arch.cpuid_nent = 0;
+-		goto out;
++		kvfree(e2);
++		return r;
+ 	}
+ 
++	kvfree(vcpu->arch.cpuid_entries);
++	vcpu->arch.cpuid_entries = e2;
++	vcpu->arch.cpuid_nent = cpuid->nent;
++
+ 	kvm_update_cpuid_runtime(vcpu);
+ 	kvm_vcpu_after_set_cpuid(vcpu);
+-out:
+-	return r;
++
++	return 0;
+ }
+ 
+ int kvm_vcpu_ioctl_get_cpuid2(struct kvm_vcpu *vcpu,
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index c4015a43cc8a..f8ed1bde18af 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -9877,6 +9877,7 @@ void kvm_arch_vcpu_destroy(struct kvm_vcpu *vcpu)
+ 	kvm_mmu_destroy(vcpu);
+ 	srcu_read_unlock(&vcpu->kvm->srcu, idx);
+ 	free_page((unsigned long)vcpu->arch.pio_data);
++	kvfree(vcpu->arch.cpuid_entries);
+ 	if (!lapic_in_kernel(vcpu))
+ 		static_key_slow_dec(&kvm_no_apic_vcpu);
+ }
+
+From patchwork Thu Oct  1 13:05:41 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 11811433
+Return-Path: <SRS0=iPdE=DI=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1DC4E1668
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  1 Oct 2020 13:06:02 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id F208B21D24
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Thu,  1 Oct 2020 13:06:01 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="jNVS9DOO"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732256AbgJANGB (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Thu, 1 Oct 2020 09:06:01 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:40452 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S1732227AbgJANGA (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Thu, 1 Oct 2020 09:06:00 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1601557559;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=CqeR3uAKWwgiVR77lBGw+uusUYIh/rVmFkUgiBSbq/E=;
+        b=jNVS9DOO7RCMMwA0xC5pfkbm/3anfXujIu0z1PzYUr0IRj+io7qjeD11DBguWu+aA71eC6
+        J90EdBpUNV0iA47vrCK1EoDH9CChymhxTnXeMAGrayRKfc65WKNGOZEb+fZQacG9/Z3+Ox
+        sKXc4QBS6LtaEIjgYBkRP1MKF73h9NU=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-385-4bY9DclHMEqb7ZA8h96vhw-1; Thu, 01 Oct 2020 09:05:57 -0400
+X-MC-Unique: 4bY9DclHMEqb7ZA8h96vhw-1
+Received: from smtp.corp.redhat.com (int-mx06.intmail.prod.int.phx2.redhat.com
+ [10.5.11.16])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 32CD5AE821;
+        Thu,  1 Oct 2020 13:05:56 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.195.161])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id EDE295C1CF;
+        Thu,  1 Oct 2020 13:05:53 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        "Dr . David Alan Gilbert" <dgilbert@redhat.com>,
+        Wei Huang <whuang2@amd.com>, linux-kernel@vger.kernel.org
+Subject: [PATCH 3/3] KVM: x86: bump KVM_MAX_CPUID_ENTRIES
+Date: Thu,  1 Oct 2020 15:05:41 +0200
+Message-Id: <20201001130541.1398392-4-vkuznets@redhat.com>
+In-Reply-To: <20201001130541.1398392-1-vkuznets@redhat.com>
+References: <20201001130541.1398392-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.16
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+As vcpu->arch.cpuid_entries is now allocated dynamically, the only
+remaining use for KVM_MAX_CPUID_ENTRIES is to check KVM_SET_CPUID/
+KVM_SET_CPUID2 input for sanity. Since it was reported that the
+current limit (80) is insufficient for some CPUs, bump
+KVM_MAX_CPUID_ENTRIES and use an arbitrary value '256' as the new
+limit.
+
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ arch/x86/include/asm/kvm_host.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 7d259e21ea04..f6d6df64e63a 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -133,7 +133,7 @@ static inline gfn_t gfn_to_index(gfn_t gfn, gfn_t base_gfn, int level)
+ #define KVM_NUM_MMU_PAGES (1 << KVM_MMU_HASH_SHIFT)
+ #define KVM_MIN_FREE_MMU_PAGES 5
+ #define KVM_REFILL_PAGES 25
+-#define KVM_MAX_CPUID_ENTRIES 80
++#define KVM_MAX_CPUID_ENTRIES 256
+ #define KVM_NR_FIXED_MTRR_REGION 88
+ #define KVM_NR_VAR_MTRR 8
+ 
