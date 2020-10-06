@@ -1,0 +1,2300 @@
+From patchwork Mon Oct  5 15:28:44 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 11816859
+Return-Path: <SRS0=R7/Q=DM=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 6FD5892C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:56 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 52B1C2075A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:56 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=infradead.org header.i=@infradead.org
+ header.b="WIhf+2hP"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728785AbgJEPkz (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 5 Oct 2020 11:40:55 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:48710 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727484AbgJEP3A (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 5 Oct 2020 11:29:00 -0400
+Received: from merlin.infradead.org (merlin.infradead.org
+ [IPv6:2001:8b0:10b:1231::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 2782FC0613A9;
+        Mon,  5 Oct 2020 08:29:00 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=merlin.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=dED8vHaXb6tu8ZuPD0ZmCjPUI1h1W+XMTR/qU+F/+qA=;
+ b=WIhf+2hPDPoXekPiE44xibj2Ky
+        7et55tmHoeyyRNG0QSMj0O5uiSAe7fH8lIWeImmTUWXJdhFyoRUJXB2NwNoZbbeAloKEWiJMfHQqU
+        AIMKGPslEj3EXYaAXJ2efV312g30akfbxdd94NCVvesfA+lM3kq3zvNdtxsqxF9/Ry24PGNy3DOnN
+        M0+UoYi1eMNSQdhx3u8ONVLlE1M7LFwvKo8ohvojFdzPB5eUE1YvtgtK5YVUhKX3rmTRYhy9wvQc9
+        lXsEnfgJEGO8zkIVdh2NviZGBnRsVPLQRABJmLuL/ywyUUQSbce+l4UxG8e4Lo1hjy8jkYOVj63gN
+        W+5SSyrw==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by merlin.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kPSQ5-0004MH-8v; Mon, 05 Oct 2020 15:28:57 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.93 #3 (Red Hat
+ Linux))
+        id 1kPSQ4-0045QD-7l; Mon, 05 Oct 2020 16:28:56 +0100
+From: David Woodhouse <dwmw2@infradead.org>
+To: x86@kernel.org
+Cc: iommu <iommu@lists.linux-foundation.org>,
+        kvm <kvm@vger.kernel.org>, linux-hyperv@vger.kernel.org,
+        Paolo Bonzini <pbonzini@redhat.com>
+Subject: [PATCH 01/13] x86/apic: Use x2apic in guest kernels even with
+ unusable CPUs.
+Date: Mon,  5 Oct 2020 16:28:44 +0100
+Message-Id: <20201005152856.974112-1-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.26.2
+In-Reply-To: <77e64f977f559412f62b467fd062d051ea288f14.camel@infradead.org>
+References: <77e64f977f559412f62b467fd062d051ea288f14.camel@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ merlin.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+If the BIOS has enabled x2apic mode, then leave it enabled and don't
+fall back to xapic just because some CPUs can't be targeted.
+
+Previously, if there are CPUs with APIC IDs > 255, the kernel will
+disable x2apic and fall back to xapic. And then not use the additional
+CPUs anyway, since xapic can't target them either.
+
+In fact, xapic mode can target even *fewer* CPUs, since it can't use
+the one with APIC ID 255 either. Using x2apic instead gives us at least
+one more CPU without needing interrupt remapping in the guest.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/include/asm/apic.h        |  1 +
+ arch/x86/kernel/apic/apic.c        | 18 ++++++++++++++----
+ arch/x86/kernel/apic/x2apic_phys.c |  9 +++++++++
+ 3 files changed, 24 insertions(+), 4 deletions(-)
+
+diff --git a/arch/x86/include/asm/apic.h b/arch/x86/include/asm/apic.h
+index 1c129abb7f09..b0fd204e0023 100644
+--- a/arch/x86/include/asm/apic.h
++++ b/arch/x86/include/asm/apic.h
+@@ -259,6 +259,7 @@ static inline u64 native_x2apic_icr_read(void)
+ 
+ extern int x2apic_mode;
+ extern int x2apic_phys;
++extern void __init x2apic_set_max_apicid(u32 apicid);
+ extern void __init check_x2apic(void);
+ extern void x2apic_setup(void);
+ static inline int x2apic_enabled(void)
+diff --git a/arch/x86/kernel/apic/apic.c b/arch/x86/kernel/apic/apic.c
+index b3eef1d5c903..a75767052a92 100644
+--- a/arch/x86/kernel/apic/apic.c
++++ b/arch/x86/kernel/apic/apic.c
+@@ -1841,14 +1841,24 @@ static __init void try_to_enable_x2apic(int remap_mode)
+ 		return;
+ 
+ 	if (remap_mode != IRQ_REMAP_X2APIC_MODE) {
+-		/* IR is required if there is APIC ID > 255 even when running
+-		 * under KVM
++		/*
++		 * If there are APIC IDs above 255, they cannot be used
++		 * without interrupt remapping. In a virtual machine, but
++		 * not on bare metal, X2APIC can be used anyway. In the
++		 * case where BIOS has enabled X2APIC, don't disable it
++		 * just because there are APIC IDs that can't be used.
++		 * They couldn't be used if the kernel falls back to XAPIC
++		 * anyway.
+ 		 */
+ 		if (max_physical_apicid > 255 ||
+ 		    !x86_init.hyper.x2apic_available()) {
+ 			pr_info("x2apic: IRQ remapping doesn't support X2APIC mode\n");
+-			x2apic_disable();
+-			return;
++			if (!x2apic_mode) {
++				x2apic_disable();
++				return;
++			}
++
++			x2apic_set_max_apicid(255);
+ 		}
+ 
+ 		/*
+diff --git a/arch/x86/kernel/apic/x2apic_phys.c b/arch/x86/kernel/apic/x2apic_phys.c
+index bc9693841353..b4b4e89c1118 100644
+--- a/arch/x86/kernel/apic/x2apic_phys.c
++++ b/arch/x86/kernel/apic/x2apic_phys.c
+@@ -8,6 +8,12 @@
+ int x2apic_phys;
+ 
+ static struct apic apic_x2apic_phys;
++static u32 x2apic_max_apicid;
++
++void __init x2apic_set_max_apicid(u32 apicid)
++{
++	x2apic_max_apicid = apicid;
++}
+ 
+ static int __init set_x2apic_phys_mode(char *arg)
+ {
+@@ -98,6 +104,9 @@ static int x2apic_phys_probe(void)
+ /* Common x2apic functions, also used by x2apic_cluster */
+ int x2apic_apic_id_valid(u32 apicid)
+ {
++	if (x2apic_max_apicid && apicid > x2apic_max_apicid)
++		return 0;
++
+ 	return 1;
+ }
+ 
+
+From patchwork Mon Oct  5 15:28:45 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 11816827
+Return-Path: <SRS0=R7/Q=DM=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 9AC036CB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:29:16 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 7D9E32137B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:29:16 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=infradead.org header.i=@infradead.org
+ header.b="HDro/TSE"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727558AbgJEP3P (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 5 Oct 2020 11:29:15 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:48714 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727486AbgJEP3A (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 5 Oct 2020 11:29:00 -0400
+Received: from merlin.infradead.org (merlin.infradead.org
+ [IPv6:2001:8b0:10b:1231::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 31A1BC0613AB;
+        Mon,  5 Oct 2020 08:29:00 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=merlin.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=lyPVYoaHwjsnXkUEZdaJkJjqQjrE8gIBWZLSCTwUPec=;
+ b=HDro/TSE0gHgkjLa+dMb+opTsu
+        1Pf+l+eTRn/SyozTcLUce7ta2RjiO0QaPOqbJr4jCRRD76UQ8mY8Cne6SuOCz6fRFve3NjUsjhq4E
+        E6gwj2nLMCBQecPTaILWdLnM56SCqhIjFTjTwJm2yT25tpt2DU0Fy8H7DsOZeDXq1gSDKP08VvwC2
+        DHvwN/D9vYHRd/q6avT1m97D8SNm+uRAlsxiej0lk1mm9oT98NaQrlzSVpNzW7gwhZ/Re9JbvcB0n
+        zHQCsM8XP83YSinl1XYBoDjXNmZoXccNAdMZZ1Jvbj3zf44KYkp2cqjDbXGpbeqa+vGxrTPKTDIZR
+        lB9fQeyg==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by merlin.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kPSQ5-0004MI-99; Mon, 05 Oct 2020 15:28:57 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.93 #3 (Red Hat
+ Linux))
+        id 1kPSQ4-0045QG-8R; Mon, 05 Oct 2020 16:28:56 +0100
+From: David Woodhouse <dwmw2@infradead.org>
+To: x86@kernel.org
+Cc: iommu <iommu@lists.linux-foundation.org>,
+        kvm <kvm@vger.kernel.org>, linux-hyperv@vger.kernel.org,
+        Paolo Bonzini <pbonzini@redhat.com>
+Subject: [PATCH 02/13] x86/msi: Only use high bits of MSI address for DMAR
+ unit
+Date: Mon,  5 Oct 2020 16:28:45 +0100
+Message-Id: <20201005152856.974112-2-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.26.2
+In-Reply-To: <20201005152856.974112-1-dwmw2@infradead.org>
+References: <77e64f977f559412f62b467fd062d051ea288f14.camel@infradead.org>
+ <20201005152856.974112-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ merlin.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+The Intel IOMMU has an MSI-like configuration for its interrupt, but
+it isn't really MSI. So it gets to abuse the high 32 bits of the address,
+and puts the high 24 bits of the extended APIC ID there.
+
+This isn't something that can be used in the general case for real MSIs,
+since external devices using the high bits of the address would be
+performing writes to actual memory space above 4GiB, not targeted at the
+APIC.
+
+Factor the hack out and allow it only to be used when appropriate,
+adding a WARN_ON_ONCE() if other MSIs are targeted at an unreachable APIC
+ID. That should never happen since the legacy MSI messages are not supposed
+to be used with Interrupt Remapping enabled.
+
+The x2apic_enabled() check isn't needed because we won't bring up CPUs
+with higher APIC IDs unless x2apic is enabled anyway.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/kernel/apic/msi.c | 34 ++++++++++++++++++++++++++++------
+ 1 file changed, 28 insertions(+), 6 deletions(-)
+
+diff --git a/arch/x86/kernel/apic/msi.c b/arch/x86/kernel/apic/msi.c
+index 6313f0a05db7..356f8acf4927 100644
+--- a/arch/x86/kernel/apic/msi.c
++++ b/arch/x86/kernel/apic/msi.c
+@@ -23,13 +23,10 @@
+ 
+ struct irq_domain *x86_pci_msi_default_domain __ro_after_init;
+ 
+-static void __irq_msi_compose_msg(struct irq_cfg *cfg, struct msi_msg *msg)
++static void __irq_msi_compose_msg(struct irq_cfg *cfg, struct msi_msg *msg, int dmar)
+ {
+ 	msg->address_hi = MSI_ADDR_BASE_HI;
+ 
+-	if (x2apic_enabled())
+-		msg->address_hi |= MSI_ADDR_EXT_DEST_ID(cfg->dest_apicid);
+-
+ 	msg->address_lo =
+ 		MSI_ADDR_BASE_LO |
+ 		((apic->irq_dest_mode == 0) ?
+@@ -43,18 +40,42 @@ static void __irq_msi_compose_msg(struct irq_cfg *cfg, struct msi_msg *msg)
+ 		MSI_DATA_LEVEL_ASSERT |
+ 		MSI_DATA_DELIVERY_FIXED |
+ 		MSI_DATA_VECTOR(cfg->vector);
++
++	/*
++	 * Only the IOMMU itself can use the trick of putting destination
++	 * APIC ID into the high bits of the address. Anything else would
++	 * just be writing to memory if it tried that, and needs IR to
++	 * address APICs above 255.
++	 */
++	if (dmar)
++		msg->address_hi |= MSI_ADDR_EXT_DEST_ID(cfg->dest_apicid);
++	else
++		WARN_ON_ONCE(MSI_ADDR_EXT_DEST_ID(cfg->dest_apicid));
+ }
+ 
+ void x86_vector_msi_compose_msg(struct irq_data *data, struct msi_msg *msg)
+ {
+-	__irq_msi_compose_msg(irqd_cfg(data), msg);
++	__irq_msi_compose_msg(irqd_cfg(data), msg, 0);
+ }
+ 
++/*
++ * The Intel IOMMU (ab)uses the high bits of the MSI address to contain the
++ * high bits of the destination APIC ID. This can't be done in the general
++ * case for MSIs as it would be targeting real memory above 4GiB not the
++ * APIC.
++ */
++static void dmar_msi_compose_msg(struct irq_data *data, struct msi_msg *msg)
++{
++	__irq_msi_compose_msg(irqd_cfg(data), msg, 1);
++
++
++
++}
+ static void irq_msi_update_msg(struct irq_data *irqd, struct irq_cfg *cfg)
+ {
+ 	struct msi_msg msg[2] = { [1] = { }, };
+ 
+-	__irq_msi_compose_msg(cfg, msg);
++	__irq_msi_compose_msg(cfg, msg, 0);
+ 	irq_data_get_irq_chip(irqd)->irq_write_msi_msg(irqd, msg);
+ }
+ 
+@@ -288,6 +309,7 @@ static struct irq_chip dmar_msi_controller = {
+ 	.irq_ack		= irq_chip_ack_parent,
+ 	.irq_set_affinity	= msi_domain_set_affinity,
+ 	.irq_retrigger		= irq_chip_retrigger_hierarchy,
++	.irq_compose_msi_msg	= dmar_msi_compose_msg,
+ 	.irq_write_msi_msg	= dmar_msi_write_msg,
+ 	.flags			= IRQCHIP_SKIP_SET_WAKE,
+ };
+
+From patchwork Mon Oct  5 15:28:46 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 11816845
+Return-Path: <SRS0=R7/Q=DM=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8E14C6CA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:42 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 7170D208C7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:42 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=infradead.org header.i=@infradead.org
+ header.b="wXaGlU4v"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728763AbgJEPkl (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 5 Oct 2020 11:40:41 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:48754 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727529AbgJEP3K (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 5 Oct 2020 11:29:10 -0400
+Received: from casper.infradead.org (casper.infradead.org
+ [IPv6:2001:8b0:10b:1236::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 8AE29C0613B2;
+        Mon,  5 Oct 2020 08:29:01 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=casper.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=gvAsnJJ1/zRcEGHp7vzyF/e1khe55jvd/2pvrS/D7RY=;
+ b=wXaGlU4v1PypzRTV8kxQOkDho4
+        ZA/Xh7BtKtaoBaZ5D2+dMf+XUIXpp/5n6Bz5LnvQkT3m4FnBGwtyDO98Ls2HNWRCcFQf03c8dVvlW
+        P4QEbEeysbQBcqQFVvQgjIvBqQT33S2uIdedfGwhUR7hOF9ny84RAATU+LB4HZScR7u4H0+QPwh5B
+        P7bofAGMp0YXw75hC0hSDm06OIi/R7O0+UNcjpAp5rP8Sy8BdVDoPGD9E+mEQcqc7sGfpWPQjvH3u
+        pf7BQPVfzG2OGOoe7KhKyhDQkzIb6hlgF+IK3E6Ht+fu+5eguzCHolkSBbZs0GV/nWjqBmidX1PPP
+        9ChKSXkg==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by casper.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kPSQ4-0001mG-Na; Mon, 05 Oct 2020 15:28:57 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.93 #3 (Red Hat
+ Linux))
+        id 1kPSQ4-0045QK-99; Mon, 05 Oct 2020 16:28:56 +0100
+From: David Woodhouse <dwmw2@infradead.org>
+To: x86@kernel.org
+Cc: iommu <iommu@lists.linux-foundation.org>,
+        kvm <kvm@vger.kernel.org>, linux-hyperv@vger.kernel.org,
+        Paolo Bonzini <pbonzini@redhat.com>
+Subject: [PATCH 03/13] x86/ioapic: Handle Extended Destination ID field in RTE
+Date: Mon,  5 Oct 2020 16:28:46 +0100
+Message-Id: <20201005152856.974112-3-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.26.2
+In-Reply-To: <20201005152856.974112-1-dwmw2@infradead.org>
+References: <77e64f977f559412f62b467fd062d051ea288f14.camel@infradead.org>
+ <20201005152856.974112-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ casper.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+The IOAPIC Redirection Table Entries contain an 8-bit Extended
+Destination ID field which maps to bits 11-4 of the MSI address.
+
+The lowest bit is used to indicate remappable format, when interrupt
+remapping is in use. A hypervisor can use the other 7 bits to permit
+guests to address up to 15 bits of APIC IDs, thus allowing 32768 vCPUs
+before having to expose a vIOMMU and interrupt remapping to the guest.
+
+No behavioural change in this patch, since nothing yet permits APIC IDs
+above 255 to be used with the non-IR IOAPIC domain.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/include/asm/io_apic.h |  3 ++-
+ arch/x86/kernel/apic/io_apic.c | 19 +++++++++++++------
+ 2 files changed, 15 insertions(+), 7 deletions(-)
+
+diff --git a/arch/x86/include/asm/io_apic.h b/arch/x86/include/asm/io_apic.h
+index a1a26f6d3aa4..e65a0b7379d0 100644
+--- a/arch/x86/include/asm/io_apic.h
++++ b/arch/x86/include/asm/io_apic.h
+@@ -78,7 +78,8 @@ struct IO_APIC_route_entry {
+ 		mask		:  1,	/* 0: enabled, 1: disabled */
+ 		__reserved_2	: 15;
+ 
+-	__u32	__reserved_3	: 24,
++	__u32	__reserved_3	: 17,
++		ext_dest	:  7,
+ 		dest		:  8;
+ } __attribute__ ((packed));
+ 
+diff --git a/arch/x86/kernel/apic/io_apic.c b/arch/x86/kernel/apic/io_apic.c
+index a33380059db6..aa9a3b54a96c 100644
+--- a/arch/x86/kernel/apic/io_apic.c
++++ b/arch/x86/kernel/apic/io_apic.c
+@@ -1239,10 +1239,10 @@ static void io_apic_print_entries(unsigned int apic, unsigned int nr_entries)
+ 			       buf, (ir_entry->index2 << 15) | ir_entry->index,
+ 			       ir_entry->zero);
+ 		else
+-			printk(KERN_DEBUG "%s, %s, D(%02X), M(%1d)\n",
++			printk(KERN_DEBUG "%s, %s, D(%02X%02X), M(%1d)\n",
+ 			       buf,
+ 			       entry.dest_mode == IOAPIC_DEST_MODE_LOGICAL ?
+-			       "logical " : "physical",
++			       "logical " : "physical", entry.ext_dest,
+ 			       entry.dest, entry.delivery_mode);
+ 	}
+ }
+@@ -1410,6 +1410,7 @@ void native_restore_boot_irq_mode(void)
+ 	 */
+ 	if (ioapic_i8259.pin != -1) {
+ 		struct IO_APIC_route_entry entry;
++		u32 apic_id = read_apic_id();
+ 
+ 		memset(&entry, 0, sizeof(entry));
+ 		entry.mask		= IOAPIC_UNMASKED;
+@@ -1417,7 +1418,8 @@ void native_restore_boot_irq_mode(void)
+ 		entry.polarity		= IOAPIC_POL_HIGH;
+ 		entry.dest_mode		= IOAPIC_DEST_MODE_PHYSICAL;
+ 		entry.delivery_mode	= dest_ExtINT;
+-		entry.dest		= read_apic_id();
++		entry.dest		= apic_id & 0xff;
++		entry.ext_dest		= apic_id >> 8;
+ 
+ 		/*
+ 		 * Add it to the IO-APIC irq-routing table:
+@@ -1861,7 +1863,8 @@ static void ioapic_configure_entry(struct irq_data *irqd)
+ 	 * ioapic chip to verify that.
+ 	 */
+ 	if (irqd->chip == &ioapic_chip) {
+-		mpd->entry.dest = cfg->dest_apicid;
++		mpd->entry.dest = cfg->dest_apicid & 0xff;
++		mpd->entry.ext_dest = cfg->dest_apicid >> 8;
+ 		mpd->entry.vector = cfg->vector;
+ 	}
+ 	for_each_irq_pin(entry, mpd->irq_2_pin)
+@@ -2027,6 +2030,7 @@ static inline void __init unlock_ExtINT_logic(void)
+ 	int apic, pin, i;
+ 	struct IO_APIC_route_entry entry0, entry1;
+ 	unsigned char save_control, save_freq_select;
++	u32 apic_id;
+ 
+ 	pin  = find_isa_irq_pin(8, mp_INT);
+ 	if (pin == -1) {
+@@ -2042,11 +2046,13 @@ static inline void __init unlock_ExtINT_logic(void)
+ 	entry0 = ioapic_read_entry(apic, pin);
+ 	clear_IO_APIC_pin(apic, pin);
+ 
++	apic_id = hard_smp_processor_id();
+ 	memset(&entry1, 0, sizeof(entry1));
+ 
+ 	entry1.dest_mode = IOAPIC_DEST_MODE_PHYSICAL;
+ 	entry1.mask = IOAPIC_UNMASKED;
+-	entry1.dest = hard_smp_processor_id();
++	entry1.dest = apic_id & 0xff;
++	entry1.ext_dest = apic_id >> 8;
+ 	entry1.delivery_mode = dest_ExtINT;
+ 	entry1.polarity = entry0.polarity;
+ 	entry1.trigger = IOAPIC_EDGE;
+@@ -2949,7 +2955,8 @@ static void mp_setup_entry(struct irq_cfg *cfg, struct mp_chip_data *data,
+ 	memset(entry, 0, sizeof(*entry));
+ 	entry->delivery_mode = apic->irq_delivery_mode;
+ 	entry->dest_mode     = apic->irq_dest_mode;
+-	entry->dest	     = cfg->dest_apicid;
++	entry->dest	     = cfg->dest_apicid & 0xff;
++	entry->ext_dest	     = cfg->dest_apicid >> 8;
+ 	entry->vector	     = cfg->vector;
+ 	entry->trigger	     = data->trigger;
+ 	entry->polarity	     = data->polarity;
+
+From patchwork Mon Oct  5 15:28:47 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 11816851
+Return-Path: <SRS0=R7/Q=DM=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id EC3ED92C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:48 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id CB40421534
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:48 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=infradead.org header.i=@infradead.org
+ header.b="F/n2xgF7"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727907AbgJEPks (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 5 Oct 2020 11:40:48 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:48750 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727526AbgJEP3K (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 5 Oct 2020 11:29:10 -0400
+Received: from casper.infradead.org (casper.infradead.org
+ [IPv6:2001:8b0:10b:1236::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 77844C0613B0;
+        Mon,  5 Oct 2020 08:29:01 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=casper.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=ZV/fjSF6pH7/wOwZLIkIDwayzPfklfK3xHDiPr3tsXE=;
+ b=F/n2xgF71eoPpmD0cC1MVZyrFs
+        c7QhheLFFmPx7bi5UCoADb8VyTFZgzLVEiMv57cdb1cTzvxz1Gs1GGpLxdw8qHJh+dFDz20N34trn
+        1VaR05gqM67fz43I432j+5eoEcZv31CY/YiYyHGvW27xqFnlpGkm/aENyHQk3FcufQJPdWz5b8fyf
+        8bsjjyohnQ7Yr43wdZRWIb25EkDblv/ZK+t83qMikiR6twnde1XW1D+phEnGrgq3RrhEuU3SaCecX
+        JVhS9SZVTEyOU10E4ljWZ/n4Sw7TjN1+FyPftqhiymo23IciVwZvVT3gNb2wUdYI/qPUaJqOJ+686
+        5Jt6/HAQ==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by casper.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kPSQ4-0001mI-QF; Mon, 05 Oct 2020 15:28:57 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.93 #3 (Red Hat
+ Linux))
+        id 1kPSQ4-0045QQ-9t; Mon, 05 Oct 2020 16:28:56 +0100
+From: David Woodhouse <dwmw2@infradead.org>
+To: x86@kernel.org
+Cc: iommu <iommu@lists.linux-foundation.org>,
+        kvm <kvm@vger.kernel.org>, linux-hyperv@vger.kernel.org,
+        Paolo Bonzini <pbonzini@redhat.com>
+Subject: [PATCH 04/13] x86/apic: Support 15 bits of APIC ID in IOAPIC/MSI
+ where available
+Date: Mon,  5 Oct 2020 16:28:47 +0100
+Message-Id: <20201005152856.974112-4-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.26.2
+In-Reply-To: <20201005152856.974112-1-dwmw2@infradead.org>
+References: <77e64f977f559412f62b467fd062d051ea288f14.camel@infradead.org>
+ <20201005152856.974112-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ casper.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+Some hypervisors can allow the guest to use the Extended Destination ID
+field in the IOAPIC RTE and MSI address to address up to 32768 CPUs.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/include/asm/mpspec.h   |  1 +
+ arch/x86/include/asm/x86_init.h |  2 ++
+ arch/x86/kernel/apic/apic.c     | 15 ++++++++++++++-
+ arch/x86/kernel/apic/msi.c      |  9 ++++++++-
+ arch/x86/kernel/x86_init.c      |  1 +
+ 5 files changed, 26 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/include/asm/mpspec.h b/arch/x86/include/asm/mpspec.h
+index e90ac7e9ae2c..25ee8ca0a1f2 100644
+--- a/arch/x86/include/asm/mpspec.h
++++ b/arch/x86/include/asm/mpspec.h
+@@ -42,6 +42,7 @@ extern DECLARE_BITMAP(mp_bus_not_pci, MAX_MP_BUSSES);
+ extern unsigned int boot_cpu_physical_apicid;
+ extern u8 boot_cpu_apic_version;
+ extern unsigned long mp_lapic_addr;
++extern int msi_ext_dest_id;
+ 
+ #ifdef CONFIG_X86_LOCAL_APIC
+ extern int smp_found_config;
+diff --git a/arch/x86/include/asm/x86_init.h b/arch/x86/include/asm/x86_init.h
+index 397196fae24d..5af3fe9e38f3 100644
+--- a/arch/x86/include/asm/x86_init.h
++++ b/arch/x86/include/asm/x86_init.h
+@@ -114,6 +114,7 @@ struct x86_init_pci {
+  * @init_platform:		platform setup
+  * @guest_late_init:		guest late init
+  * @x2apic_available:		X2APIC detection
++ * @msi_ext_dest_id:		MSI and IOAPIC support 15-bit APIC IDs
+  * @init_mem_mapping:		setup early mappings during init_mem_mapping()
+  * @init_after_bootmem:		guest init after boot allocator is finished
+  */
+@@ -121,6 +122,7 @@ struct x86_hyper_init {
+ 	void (*init_platform)(void);
+ 	void (*guest_late_init)(void);
+ 	bool (*x2apic_available)(void);
++	bool (*msi_ext_dest_id)(void);
+ 	void (*init_mem_mapping)(void);
+ 	void (*init_after_bootmem)(void);
+ };
+diff --git a/arch/x86/kernel/apic/apic.c b/arch/x86/kernel/apic/apic.c
+index a75767052a92..459c78558f36 100644
+--- a/arch/x86/kernel/apic/apic.c
++++ b/arch/x86/kernel/apic/apic.c
+@@ -1837,6 +1837,8 @@ static __init void x2apic_enable(void)
+ 
+ static __init void try_to_enable_x2apic(int remap_mode)
+ {
++	u32 apic_limit = 0;
++
+ 	if (x2apic_state == X2APIC_DISABLED)
+ 		return;
+ 
+@@ -1858,7 +1860,15 @@ static __init void try_to_enable_x2apic(int remap_mode)
+ 				return;
+ 			}
+ 
+-			x2apic_set_max_apicid(255);
++			/*
++			 * If the hypervisor supports extended destination ID
++			 * in IOAPIC and MSI, we can support that many CPUs.
++			 */
++			if (x86_init.hyper.msi_ext_dest_id()) {
++				msi_ext_dest_id = 1;
++				apic_limit = 32767;
++			} else
++				apic_limit = 255;
+ 		}
+ 
+ 		/*
+@@ -1867,6 +1877,9 @@ static __init void try_to_enable_x2apic(int remap_mode)
+ 		 */
+ 		x2apic_phys = 1;
+ 	}
++	if (apic_limit)
++		x2apic_set_max_apicid(apic_limit);
++
+ 	x2apic_enable();
+ }
+ 
+diff --git a/arch/x86/kernel/apic/msi.c b/arch/x86/kernel/apic/msi.c
+index 356f8acf4927..4d891967bea4 100644
+--- a/arch/x86/kernel/apic/msi.c
++++ b/arch/x86/kernel/apic/msi.c
+@@ -23,6 +23,8 @@
+ 
+ struct irq_domain *x86_pci_msi_default_domain __ro_after_init;
+ 
++int msi_ext_dest_id __ro_after_init;
++
+ static void __irq_msi_compose_msg(struct irq_cfg *cfg, struct msi_msg *msg, int dmar)
+ {
+ 	msg->address_hi = MSI_ADDR_BASE_HI;
+@@ -45,10 +47,15 @@ static void __irq_msi_compose_msg(struct irq_cfg *cfg, struct msi_msg *msg, int
+ 	 * Only the IOMMU itself can use the trick of putting destination
+ 	 * APIC ID into the high bits of the address. Anything else would
+ 	 * just be writing to memory if it tried that, and needs IR to
+-	 * address APICs above 255.
++	 * address APICs which can't be addressed in the normal 32-bit
++	 * address range at 0xFFExxxxx. That is typically just 8 bits, but
++	 * some hypervisors allow the extended destination ID field in bits
++	 * 11-5 to be used, giving support for 15 bits of APIC IDs in total.
+ 	 */
+ 	if (dmar)
+ 		msg->address_hi |= MSI_ADDR_EXT_DEST_ID(cfg->dest_apicid);
++	else if (msi_ext_dest_id && cfg->dest_apicid < 0x8000)
++		msg->address_lo |= MSI_ADDR_EXT_DEST_ID(cfg->dest_apicid) >> 3;
+ 	else
+ 		WARN_ON_ONCE(MSI_ADDR_EXT_DEST_ID(cfg->dest_apicid));
+ }
+diff --git a/arch/x86/kernel/x86_init.c b/arch/x86/kernel/x86_init.c
+index a3038d8deb6a..8b395821cb8d 100644
+--- a/arch/x86/kernel/x86_init.c
++++ b/arch/x86/kernel/x86_init.c
+@@ -110,6 +110,7 @@ struct x86_init_ops x86_init __initdata = {
+ 		.init_platform		= x86_init_noop,
+ 		.guest_late_init	= x86_init_noop,
+ 		.x2apic_available	= bool_x86_init_noop,
++		.msi_ext_dest_id	= bool_x86_init_noop,
+ 		.init_mem_mapping	= x86_init_noop,
+ 		.init_after_bootmem	= x86_init_noop,
+ 	},
+
+From patchwork Mon Oct  5 15:28:48 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 11816853
+Return-Path: <SRS0=R7/Q=DM=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3E10C92C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:51 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 233652085B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:51 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=infradead.org header.i=@infradead.org
+ header.b="P1LxG0wb"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728775AbgJEPku (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 5 Oct 2020 11:40:50 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:48748 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727525AbgJEP3K (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 5 Oct 2020 11:29:10 -0400
+Received: from casper.infradead.org (casper.infradead.org
+ [IPv6:2001:8b0:10b:1236::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 321BAC0613AE;
+        Mon,  5 Oct 2020 08:29:01 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=casper.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=3FOmkBv1Wgvw1BuIqjWYCJkYC/NtwagU3klyZLVG2gg=;
+ b=P1LxG0wbD3/7CtYqpT441k6Feg
+        2TnfQrJUH2NRjIonGGT2+YU74UZ7gPl/NZyfdDKv4Wh7IaNkyEGQezbGle/gunBL98p1G5HTzjbpf
+        QBSRJjlLz795xq+qrRxbo+cYklF7U/DzMW+4mXDvtqUiv5slS6BYSoEHfOpdG4TCaT3U63Lw9QdmB
+        jYwiGrKodX/Kdu+dA/m3QRLTBSi7QTV534mdlwCltL+KB7O5sCpWgkEXbLL16XOpdngNC7ihmeZPv
+        LXv6oEm85zzuJ0C4975UvEWikRUqC1RThNch2/iI1OCNqlM4cdmj++fV/85B8f95H2MPlJSYzNXm0
+        jyJYc8nw==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by casper.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kPSQ4-0001mJ-PD; Mon, 05 Oct 2020 15:28:57 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.93 #3 (Red Hat
+ Linux))
+        id 1kPSQ4-0045QV-Ag; Mon, 05 Oct 2020 16:28:56 +0100
+From: David Woodhouse <dwmw2@infradead.org>
+To: x86@kernel.org
+Cc: iommu <iommu@lists.linux-foundation.org>,
+        kvm <kvm@vger.kernel.org>, linux-hyperv@vger.kernel.org,
+        Paolo Bonzini <pbonzini@redhat.com>
+Subject: [PATCH 05/13] genirq: Prepare for default affinity to be passed to
+ __irq_alloc_descs()
+Date: Mon,  5 Oct 2020 16:28:48 +0100
+Message-Id: <20201005152856.974112-5-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.26.2
+In-Reply-To: <20201005152856.974112-1-dwmw2@infradead.org>
+References: <77e64f977f559412f62b467fd062d051ea288f14.camel@infradead.org>
+ <20201005152856.974112-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ casper.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+Instead of plugging in irq_default_affinity at the lowest level in
+desc_smp_init() if the caller didn't specify an affinity for this
+specific IRQ in its array, allow the default affinity to be passed
+down from __irq_alloc_descs() instead.
+
+This is in preparation for irq domains having their own default (and
+indeed maximum) affinities.
+
+An alternative possibility would have been to make the caller allocate
+an entire array of struct irq_affinity_desc for the allocation, but
+that's a lot nastier than simply passing in an additional const cpumask.
+
+This commit has no visible API change outside static functions in
+irqdesc.c for now; the actual change will come later.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ include/linux/interrupt.h |  2 ++
+ kernel/irq/irqdesc.c      | 21 +++++++++++++--------
+ 2 files changed, 15 insertions(+), 8 deletions(-)
+
+diff --git a/include/linux/interrupt.h b/include/linux/interrupt.h
+index f9aee3538461..cd0ff293486a 100644
+--- a/include/linux/interrupt.h
++++ b/include/linux/interrupt.h
+@@ -364,6 +364,8 @@ unsigned int irq_calc_affinity_vectors(unsigned int minvec, unsigned int maxvec,
+ 
+ #else /* CONFIG_SMP */
+ 
++#define irq_default_affinity (NULL)
++
+ static inline int irq_set_affinity(unsigned int irq, const struct cpumask *m)
+ {
+ 	return -EINVAL;
+diff --git a/kernel/irq/irqdesc.c b/kernel/irq/irqdesc.c
+index 1a7723604399..4ac91b9fc618 100644
+--- a/kernel/irq/irqdesc.c
++++ b/kernel/irq/irqdesc.c
+@@ -81,8 +81,6 @@ static int alloc_masks(struct irq_desc *desc, int node)
+ static void desc_smp_init(struct irq_desc *desc, int node,
+ 			  const struct cpumask *affinity)
+ {
+-	if (!affinity)
+-		affinity = irq_default_affinity;
+ 	cpumask_copy(desc->irq_common_data.affinity, affinity);
+ 
+ #ifdef CONFIG_GENERIC_PENDING_IRQ
+@@ -465,12 +463,16 @@ static void free_desc(unsigned int irq)
+ 
+ static int alloc_descs(unsigned int start, unsigned int cnt, int node,
+ 		       const struct irq_affinity_desc *affinity,
++		       const struct cpumask *default_affinity,
+ 		       struct module *owner)
+ {
+ 	struct irq_desc *desc;
+ 	int i;
+ 
+ 	/* Validate affinity mask(s) */
++	if (!default_affinity || cpumask_empty(default_affinity))
++		return -EINVAL;
++
+ 	if (affinity) {
+ 		for (i = 0; i < cnt; i++) {
+ 			if (cpumask_empty(&affinity[i].mask))
+@@ -479,7 +481,7 @@ static int alloc_descs(unsigned int start, unsigned int cnt, int node,
+ 	}
+ 
+ 	for (i = 0; i < cnt; i++) {
+-		const struct cpumask *mask = NULL;
++		const struct cpumask *mask = default_affinity;
+ 		unsigned int flags = 0;
+ 
+ 		if (affinity) {
+@@ -488,10 +490,10 @@ static int alloc_descs(unsigned int start, unsigned int cnt, int node,
+ 					IRQD_MANAGED_SHUTDOWN;
+ 			}
+ 			mask = &affinity->mask;
+-			node = cpu_to_node(cpumask_first(mask));
+ 			affinity++;
+ 		}
+ 
++		node = cpu_to_node(cpumask_first(mask));
+ 		desc = alloc_desc(start + i, node, flags, mask, owner);
+ 		if (!desc)
+ 			goto err;
+@@ -538,7 +540,7 @@ int __init early_irq_init(void)
+ 		nr_irqs = initcnt;
+ 
+ 	for (i = 0; i < initcnt; i++) {
+-		desc = alloc_desc(i, node, 0, NULL, NULL);
++		desc = alloc_desc(i, node, 0, irq_default_affinity, NULL);
+ 		set_bit(i, allocated_irqs);
+ 		irq_insert_desc(i, desc);
+ 	}
+@@ -573,7 +575,8 @@ int __init early_irq_init(void)
+ 		raw_spin_lock_init(&desc[i].lock);
+ 		lockdep_set_class(&desc[i].lock, &irq_desc_lock_class);
+ 		mutex_init(&desc[i].request_mutex);
+-		desc_set_defaults(i, &desc[i], node, NULL, NULL);
++		desc_set_defaults(i, &desc[i], node, irq_default_affinity,
++				  NULL);
+ 	}
+ 	return arch_early_irq_init();
+ }
+@@ -590,12 +593,14 @@ static void free_desc(unsigned int irq)
+ 	unsigned long flags;
+ 
+ 	raw_spin_lock_irqsave(&desc->lock, flags);
+-	desc_set_defaults(irq, desc, irq_desc_get_node(desc), NULL, NULL);
++	desc_set_defaults(irq, desc, irq_desc_get_node(desc),
++			  irq_default_affinity, NULL);
+ 	raw_spin_unlock_irqrestore(&desc->lock, flags);
+ }
+ 
+ static inline int alloc_descs(unsigned int start, unsigned int cnt, int node,
+ 			      const struct irq_affinity_desc *affinity,
++			      const struct cpumask *default_affinity,
+ 			      struct module *owner)
+ {
+ 	u32 i;
+@@ -803,7 +808,7 @@ __irq_alloc_descs(int irq, unsigned int from, unsigned int cnt, int node,
+ 		if (ret)
+ 			goto unlock;
+ 	}
+-	ret = alloc_descs(start, cnt, node, affinity, owner);
++	ret = alloc_descs(start, cnt, node, affinity, irq_default_affinity, owner);
+ unlock:
+ 	mutex_unlock(&sparse_irq_lock);
+ 	return ret;
+
+From patchwork Mon Oct  5 15:28:49 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 11816867
+Return-Path: <SRS0=R7/Q=DM=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 1F0C992C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:41:22 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id EC4D520B80
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:41:21 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=infradead.org header.i=@infradead.org
+ header.b="lCd0Xzlr"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728779AbgJEPkz (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 5 Oct 2020 11:40:55 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:48722 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727489AbgJEP3C (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 5 Oct 2020 11:29:02 -0400
+Received: from merlin.infradead.org (merlin.infradead.org
+ [IPv6:2001:8b0:10b:1231::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 94A27C0613AC;
+        Mon,  5 Oct 2020 08:29:00 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=merlin.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=Wl3IkjJBUUxi3oxlkfGR/3vrMCl8kgivTGhAoZmqxgU=;
+ b=lCd0XzlrYSd6b5lfYfJg99NYqp
+        MDbQn98GnIajhGC1tuNDSTCUFl6Fmw5s/cIm/C1fpnQoGrD5hYxygBT0nYkqMcmsHxJx4bU/yt5Ov
+        jwdSlL+WnndLsylOxJqEcENBz+2nSFUHjNMkBpnZPHv4qVmYE3EH4fHCh5p+/AlHJVGVuxf/p0PF7
+        15OuOcNqunrSP4p41XExqUTJfPv6YbN3MNZ/iYsoDRMk+2LO2/gLfeGu6fC4x5bQfYurxgiv77kpI
+        1m51xXY3N95F/EgoUvKO0Cquddr7cq0bRV/+N2+WFjqnVYJadu3SyMxdTmOu+P/Qcnwr0geb168OB
+        CMedJzQw==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by merlin.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kPSQ5-0004MJ-Cc; Mon, 05 Oct 2020 15:28:57 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.93 #3 (Red Hat
+ Linux))
+        id 1kPSQ4-0045Qa-BS; Mon, 05 Oct 2020 16:28:56 +0100
+From: David Woodhouse <dwmw2@infradead.org>
+To: x86@kernel.org
+Cc: iommu <iommu@lists.linux-foundation.org>,
+        kvm <kvm@vger.kernel.org>, linux-hyperv@vger.kernel.org,
+        Paolo Bonzini <pbonzini@redhat.com>
+Subject: [PATCH 06/13] genirq: Add default_affinity argument to
+ __irq_alloc_descs()
+Date: Mon,  5 Oct 2020 16:28:49 +0100
+Message-Id: <20201005152856.974112-6-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.26.2
+In-Reply-To: <20201005152856.974112-1-dwmw2@infradead.org>
+References: <77e64f977f559412f62b467fd062d051ea288f14.camel@infradead.org>
+ <20201005152856.974112-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ merlin.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+It already takes an array of affinities for each individual irq being
+allocated but that's awkward to allocate and populate in the case
+where they're all the same and inherited from the irqdomain, so pass
+the default in separately as a simple cpumask.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ include/linux/irq.h    | 10 ++++++----
+ kernel/irq/devres.c    |  8 ++++++--
+ kernel/irq/irqdesc.c   | 10 ++++++++--
+ kernel/irq/irqdomain.c |  6 +++---
+ 4 files changed, 23 insertions(+), 11 deletions(-)
+
+diff --git a/include/linux/irq.h b/include/linux/irq.h
+index 1b7f4dfee35b..6e119594d35d 100644
+--- a/include/linux/irq.h
++++ b/include/linux/irq.h
+@@ -897,15 +897,17 @@ unsigned int arch_dynirq_lower_bound(unsigned int from);
+ 
+ int __irq_alloc_descs(int irq, unsigned int from, unsigned int cnt, int node,
+ 		      struct module *owner,
+-		      const struct irq_affinity_desc *affinity);
++		      const struct irq_affinity_desc *affinity,
++		      const struct cpumask *default_affinity);
+ 
+ int __devm_irq_alloc_descs(struct device *dev, int irq, unsigned int from,
+ 			   unsigned int cnt, int node, struct module *owner,
+-			   const struct irq_affinity_desc *affinity);
++			   const struct irq_affinity_desc *affinity,
++			   const struct cpumask *default_affinity);
+ 
+ /* use macros to avoid needing export.h for THIS_MODULE */
+ #define irq_alloc_descs(irq, from, cnt, node)	\
+-	__irq_alloc_descs(irq, from, cnt, node, THIS_MODULE, NULL)
++	__irq_alloc_descs(irq, from, cnt, node, THIS_MODULE, NULL, NULL)
+ 
+ #define irq_alloc_desc(node)			\
+ 	irq_alloc_descs(-1, 0, 1, node)
+@@ -920,7 +922,7 @@ int __devm_irq_alloc_descs(struct device *dev, int irq, unsigned int from,
+ 	irq_alloc_descs(-1, from, cnt, node)
+ 
+ #define devm_irq_alloc_descs(dev, irq, from, cnt, node)		\
+-	__devm_irq_alloc_descs(dev, irq, from, cnt, node, THIS_MODULE, NULL)
++	__devm_irq_alloc_descs(dev, irq, from, cnt, node, THIS_MODULE, NULL, NULL)
+ 
+ #define devm_irq_alloc_desc(dev, node)				\
+ 	devm_irq_alloc_descs(dev, -1, 0, 1, node)
+diff --git a/kernel/irq/devres.c b/kernel/irq/devres.c
+index f6e5515ee077..079339decc23 100644
+--- a/kernel/irq/devres.c
++++ b/kernel/irq/devres.c
+@@ -170,6 +170,8 @@ static void devm_irq_desc_release(struct device *dev, void *res)
+  * @affinity:	Optional pointer to an irq_affinity_desc array of size @cnt
+  *		which hints where the irq descriptors should be allocated
+  *		and which default affinities to use
++ * @default_affinity: Optional pointer to a cpumask indicating the default
++ *              affinity to use where not specified by the @affinity array
+  *
+  * Returns the first irq number or error code.
+  *
+@@ -177,7 +179,8 @@ static void devm_irq_desc_release(struct device *dev, void *res)
+  */
+ int __devm_irq_alloc_descs(struct device *dev, int irq, unsigned int from,
+ 			   unsigned int cnt, int node, struct module *owner,
+-			   const struct irq_affinity_desc *affinity)
++			   const struct irq_affinity_desc *affinity,
++			   const struct cpumask *default_affinity)
+ {
+ 	struct irq_desc_devres *dr;
+ 	int base;
+@@ -186,7 +189,8 @@ int __devm_irq_alloc_descs(struct device *dev, int irq, unsigned int from,
+ 	if (!dr)
+ 		return -ENOMEM;
+ 
+-	base = __irq_alloc_descs(irq, from, cnt, node, owner, affinity);
++	base = __irq_alloc_descs(irq, from, cnt, node, owner, affinity,
++				 default_affinity);
+ 	if (base < 0) {
+ 		devres_free(dr);
+ 		return base;
+diff --git a/kernel/irq/irqdesc.c b/kernel/irq/irqdesc.c
+index 4ac91b9fc618..fcc3b8a1fe01 100644
+--- a/kernel/irq/irqdesc.c
++++ b/kernel/irq/irqdesc.c
+@@ -770,15 +770,21 @@ EXPORT_SYMBOL_GPL(irq_free_descs);
+  * @affinity:	Optional pointer to an affinity mask array of size @cnt which
+  *		hints where the irq descriptors should be allocated and which
+  *		default affinities to use
++ * @default_affinity: Optional pointer to a cpumask indicating the default
++ *              affinity where not specified in the @affinity array
+  *
+  * Returns the first irq number or error code
+  */
+ int __ref
+ __irq_alloc_descs(int irq, unsigned int from, unsigned int cnt, int node,
+-		  struct module *owner, const struct irq_affinity_desc *affinity)
++		  struct module *owner, const struct irq_affinity_desc *affinity,
++		  const struct cpumask *default_affinity)
+ {
+ 	int start, ret;
+ 
++	if (!default_affinity)
++		default_affinity = irq_default_affinity;
++
+ 	if (!cnt)
+ 		return -EINVAL;
+ 
+@@ -808,7 +814,7 @@ __irq_alloc_descs(int irq, unsigned int from, unsigned int cnt, int node,
+ 		if (ret)
+ 			goto unlock;
+ 	}
+-	ret = alloc_descs(start, cnt, node, affinity, irq_default_affinity, owner);
++	ret = alloc_descs(start, cnt, node, affinity, default_affinity, owner);
+ unlock:
+ 	mutex_unlock(&sparse_irq_lock);
+ 	return ret;
+diff --git a/kernel/irq/irqdomain.c b/kernel/irq/irqdomain.c
+index 76cd7ebd1178..c93e00ca11d8 100644
+--- a/kernel/irq/irqdomain.c
++++ b/kernel/irq/irqdomain.c
+@@ -1017,16 +1017,16 @@ int irq_domain_alloc_descs(int virq, unsigned int cnt, irq_hw_number_t hwirq,
+ 
+ 	if (virq >= 0) {
+ 		virq = __irq_alloc_descs(virq, virq, cnt, node, THIS_MODULE,
+-					 affinity);
++					 affinity, NULL);
+ 	} else {
+ 		hint = hwirq % nr_irqs;
+ 		if (hint == 0)
+ 			hint++;
+ 		virq = __irq_alloc_descs(-1, hint, cnt, node, THIS_MODULE,
+-					 affinity);
++					 affinity, NULL);
+ 		if (virq <= 0 && hint > 1) {
+ 			virq = __irq_alloc_descs(-1, 1, cnt, node, THIS_MODULE,
+-						 affinity);
++						 affinity, NULL);
+ 		}
+ 	}
+ 
+
+From patchwork Mon Oct  5 15:28:50 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 11816835
+Return-Path: <SRS0=R7/Q=DM=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B4D1D6CA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:23 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 967F62085B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:23 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=infradead.org header.i=@infradead.org
+ header.b="rRL24VUo"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728748AbgJEPkX (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 5 Oct 2020 11:40:23 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:48756 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727530AbgJEP3L (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 5 Oct 2020 11:29:11 -0400
+Received: from casper.infradead.org (casper.infradead.org
+ [IPv6:2001:8b0:10b:1236::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 97D8CC0613B3;
+        Mon,  5 Oct 2020 08:29:01 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=casper.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=XZpeaCY1LXv0wJCD9ljKy5PuloAeL+yvhqxfkxIE2j4=;
+ b=rRL24VUobJKY5mMHt//txZEHiE
+        WMsuak0+jZk88U2WgfPSJ9NT7hifqNBRASBdU12LOZ8X8VGGkUN/+rTKa47g/iXdi1zTNJuPl2UEo
+        GWNZ9Ct5GfvjCD0r1oaS0lG5fuZrpN4Y7M5eEsDUOVTjTWOj2dELhDbwrvbZ0UfggaMfGFPMrJA/8
+        YxSN/hcfylRt1LLzuTUb+UsUWwoE6PqhympTTf01bF5jyNqTD/4CC/TIsV2vSIQCO13Wvn7FtBY61
+        thLER1bEsp6cZgyILOWUj1b4SkqB4UPvNnu7x3rYEnJ7XhH9+wwn7cQdroXQT77scxYA+YNeeHjmZ
+        dRKoZ2dg==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by casper.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kPSQ4-0001mL-RB; Mon, 05 Oct 2020 15:28:57 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.93 #3 (Red Hat
+ Linux))
+        id 1kPSQ4-0045Qf-CD; Mon, 05 Oct 2020 16:28:56 +0100
+From: David Woodhouse <dwmw2@infradead.org>
+To: x86@kernel.org
+Cc: iommu <iommu@lists.linux-foundation.org>,
+        kvm <kvm@vger.kernel.org>, linux-hyperv@vger.kernel.org,
+        Paolo Bonzini <pbonzini@redhat.com>
+Subject: [PATCH 07/13] irqdomain: Add max_affinity argument to
+ irq_domain_alloc_descs()
+Date: Mon,  5 Oct 2020 16:28:50 +0100
+Message-Id: <20201005152856.974112-7-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.26.2
+In-Reply-To: <20201005152856.974112-1-dwmw2@infradead.org>
+References: <77e64f977f559412f62b467fd062d051ea288f14.camel@infradead.org>
+ <20201005152856.974112-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ casper.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+This is the maximum possible set of CPUs which can be used. Use it
+to calculate the default affinity requested from __irq_alloc_descs()
+by first attempting to find the intersection with irq_default_affinity,
+or falling back to using just the max_affinity if the intersection
+would be empty.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ include/linux/irqdomain.h |  3 ++-
+ kernel/irq/ipi.c          |  2 +-
+ kernel/irq/irqdomain.c    | 45 +++++++++++++++++++++++++++++++++------
+ 3 files changed, 42 insertions(+), 8 deletions(-)
+
+diff --git a/include/linux/irqdomain.h b/include/linux/irqdomain.h
+index 44445d9de881..6b5576da77f0 100644
+--- a/include/linux/irqdomain.h
++++ b/include/linux/irqdomain.h
+@@ -278,7 +278,8 @@ extern void irq_set_default_host(struct irq_domain *host);
+ extern struct irq_domain *irq_get_default_host(void);
+ extern int irq_domain_alloc_descs(int virq, unsigned int nr_irqs,
+ 				  irq_hw_number_t hwirq, int node,
+-				  const struct irq_affinity_desc *affinity);
++				  const struct irq_affinity_desc *affinity,
++				  const struct cpumask *max_affinity);
+ 
+ static inline struct fwnode_handle *of_node_to_fwnode(struct device_node *node)
+ {
+diff --git a/kernel/irq/ipi.c b/kernel/irq/ipi.c
+index 43e3d1be622c..13f56210eca9 100644
+--- a/kernel/irq/ipi.c
++++ b/kernel/irq/ipi.c
+@@ -75,7 +75,7 @@ int irq_reserve_ipi(struct irq_domain *domain,
+ 		}
+ 	}
+ 
+-	virq = irq_domain_alloc_descs(-1, nr_irqs, 0, NUMA_NO_NODE, NULL);
++	virq = irq_domain_alloc_descs(-1, nr_irqs, 0, NUMA_NO_NODE, NULL, dest);
+ 	if (virq <= 0) {
+ 		pr_warn("Can't reserve IPI, failed to alloc descs\n");
+ 		return -ENOMEM;
+diff --git a/kernel/irq/irqdomain.c b/kernel/irq/irqdomain.c
+index c93e00ca11d8..ffd41f21afca 100644
+--- a/kernel/irq/irqdomain.c
++++ b/kernel/irq/irqdomain.c
+@@ -660,7 +660,8 @@ unsigned int irq_create_mapping(struct irq_domain *domain,
+ 	}
+ 
+ 	/* Allocate a virtual interrupt number */
+-	virq = irq_domain_alloc_descs(-1, 1, hwirq, of_node_to_nid(of_node), NULL);
++	virq = irq_domain_alloc_descs(-1, 1, hwirq, of_node_to_nid(of_node),
++				      NULL, NULL);
+ 	if (virq <= 0) {
+ 		pr_debug("-> virq allocation failed\n");
+ 		return 0;
+@@ -1011,25 +1012,57 @@ int irq_domain_translate_twocell(struct irq_domain *d,
+ EXPORT_SYMBOL_GPL(irq_domain_translate_twocell);
+ 
+ int irq_domain_alloc_descs(int virq, unsigned int cnt, irq_hw_number_t hwirq,
+-			   int node, const struct irq_affinity_desc *affinity)
++			   int node, const struct irq_affinity_desc *affinity,
++			   const struct cpumask *max_affinity)
+ {
++	cpumask_var_t default_affinity;
+ 	unsigned int hint;
++	int i;
++
++	/* Check requested per-IRQ affinities are in the possible range */
++	if (affinity && max_affinity) {
++		for (i = 0; i < cnt; i++)
++			if (!cpumask_subset(&affinity[i].mask, max_affinity))
++				return -EINVAL;
++	}
++
++	/*
++	 * Generate default affinity. Either the possible subset of
++	 * irq_default_affinity if such a subset is non-empty, or fall
++	 * back to the provided max_affinity if there is no intersection.
++	 * And just a copy of irq_default_affinity in the
++	 * !CONFIG_CPUMASK_OFFSTACK case.
++	 */
++	memset(&default_affinity, 0, sizeof(default_affinity));
++	if ((max_affinity &&
++	     !cpumask_subset(irq_default_affinity, max_affinity))) {
++		if (!alloc_cpumask_var(&default_affinity, GFP_KERNEL))
++			return -ENOMEM;
++		cpumask_and(default_affinity, max_affinity,
++			    irq_default_affinity);
++		if (cpumask_empty(default_affinity))
++			cpumask_copy(default_affinity, max_affinity);
++	} else if (cpumask_available(default_affinity))
++		cpumask_copy(default_affinity, irq_default_affinity);
+ 
+ 	if (virq >= 0) {
+ 		virq = __irq_alloc_descs(virq, virq, cnt, node, THIS_MODULE,
+-					 affinity, NULL);
++					 affinity, default_affinity);
+ 	} else {
+ 		hint = hwirq % nr_irqs;
+ 		if (hint == 0)
+ 			hint++;
+ 		virq = __irq_alloc_descs(-1, hint, cnt, node, THIS_MODULE,
+-					 affinity, NULL);
++					 affinity, default_affinity);
+ 		if (virq <= 0 && hint > 1) {
+ 			virq = __irq_alloc_descs(-1, 1, cnt, node, THIS_MODULE,
+-						 affinity, NULL);
++						 affinity, default_affinity);
+ 		}
+ 	}
+ 
++	if (cpumask_available(default_affinity))
++		free_cpumask_var(default_affinity);
++
+ 	return virq;
+ }
+ 
+@@ -1342,7 +1375,7 @@ int __irq_domain_alloc_irqs(struct irq_domain *domain, int irq_base,
+ 		virq = irq_base;
+ 	} else {
+ 		virq = irq_domain_alloc_descs(irq_base, nr_irqs, 0, node,
+-					      affinity);
++					      affinity, NULL);
+ 		if (virq < 0) {
+ 			pr_debug("cannot allocate IRQ(base %d, count %d)\n",
+ 				 irq_base, nr_irqs);
+
+From patchwork Mon Oct  5 15:28:51 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 11816829
+Return-Path: <SRS0=R7/Q=DM=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 2553C6CB
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:29:33 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 0362C2100A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:29:32 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=infradead.org header.i=@infradead.org
+ header.b="0IVPH4+m"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727553AbgJEP3O (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 5 Oct 2020 11:29:14 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:48720 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727487AbgJEP3C (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 5 Oct 2020 11:29:02 -0400
+Received: from merlin.infradead.org (merlin.infradead.org
+ [IPv6:2001:8b0:10b:1231::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 7D59FC0613A8;
+        Mon,  5 Oct 2020 08:29:00 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=merlin.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=IVCSakrSwvBC/94Qs7X2IIppr71sOhGWu/QBQEBl22I=;
+ b=0IVPH4+m+qk7v2uMU02/NMpO3B
+        K3H1JlXjphg3LK3TPa7y6AUlxOKR6nYcU4HyGj4fmcXmdm+kTFsBdciKT1cGbUbyJb1kqnMxdT5zX
+        s5sUqDR0KPloxduhUYQNUb0Auc9dnGxTWqCEAw6PPQJ0kot+pgsCiq/SJRVf1RcNh9HvWCq/iFENP
+        DcI6CmVXe6hHtmwqedqqDXHbS7ikjt2+MvPIPOJ5pgN/WYfUosMPgm23Tevn3ThXWzlWJSdZOlPGe
+        E86/1CDCZV8fwbx8UXF+ljYZZY6UCj+M00856oZjrfg/Af9ZTAz0doyKy7vdZkkPr+dw8D+JyxgXE
+        r5wgcdiw==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by merlin.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kPSQ5-0004MK-Dn; Mon, 05 Oct 2020 15:28:57 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.93 #3 (Red Hat
+ Linux))
+        id 1kPSQ4-0045Qk-D3; Mon, 05 Oct 2020 16:28:56 +0100
+From: David Woodhouse <dwmw2@infradead.org>
+To: x86@kernel.org
+Cc: iommu <iommu@lists.linux-foundation.org>,
+        kvm <kvm@vger.kernel.org>, linux-hyperv@vger.kernel.org,
+        Paolo Bonzini <pbonzini@redhat.com>
+Subject: [PATCH 08/13] genirq: Add irq_domain_set_affinity()
+Date: Mon,  5 Oct 2020 16:28:51 +0100
+Message-Id: <20201005152856.974112-8-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.26.2
+In-Reply-To: <20201005152856.974112-1-dwmw2@infradead.org>
+References: <77e64f977f559412f62b467fd062d051ea288f14.camel@infradead.org>
+ <20201005152856.974112-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ merlin.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+This allows a maximal affinity to be set, for IRQ domains which cannot
+target all CPUs in the system.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ include/linux/irqdomain.h |  4 ++++
+ kernel/irq/irqdomain.c    | 28 ++++++++++++++++++++++++++--
+ kernel/irq/manage.c       | 19 +++++++++++++++----
+ 3 files changed, 45 insertions(+), 6 deletions(-)
+
+diff --git a/include/linux/irqdomain.h b/include/linux/irqdomain.h
+index 6b5576da77f0..cf686f18c1fa 100644
+--- a/include/linux/irqdomain.h
++++ b/include/linux/irqdomain.h
+@@ -151,6 +151,7 @@ struct irq_domain_chip_generic;
+  *      drivers using the generic chip library which uses this pointer.
+  * @parent: Pointer to parent irq_domain to support hierarchy irq_domains
+  * @debugfs_file: dentry for the domain debugfs file
++ * @max_affinity: mask of CPUs targetable by this IRQ domain
+  *
+  * Revmap data, used internally by irq_domain
+  * @revmap_direct_max_irq: The largest hwirq that can be set for controllers that
+@@ -177,6 +178,7 @@ struct irq_domain {
+ #ifdef CONFIG_GENERIC_IRQ_DEBUGFS
+ 	struct dentry		*debugfs_file;
+ #endif
++	const struct cpumask *max_affinity;
+ 
+ 	/* reverse map data. The linear map gets appended to the irq_domain */
+ 	irq_hw_number_t hwirq_max;
+@@ -453,6 +455,8 @@ extern void irq_domain_set_info(struct irq_domain *domain, unsigned int virq,
+ 				void *chip_data, irq_flow_handler_t handler,
+ 				void *handler_data, const char *handler_name);
+ extern void irq_domain_reset_irq_data(struct irq_data *irq_data);
++extern int irq_domain_set_affinity(struct irq_domain *domain,
++				   const struct cpumask *affinity);
+ #ifdef	CONFIG_IRQ_DOMAIN_HIERARCHY
+ extern struct irq_domain *irq_domain_create_hierarchy(struct irq_domain *parent,
+ 			unsigned int flags, unsigned int size,
+diff --git a/kernel/irq/irqdomain.c b/kernel/irq/irqdomain.c
+index ffd41f21afca..0b298355be1b 100644
+--- a/kernel/irq/irqdomain.c
++++ b/kernel/irq/irqdomain.c
+@@ -661,7 +661,7 @@ unsigned int irq_create_mapping(struct irq_domain *domain,
+ 
+ 	/* Allocate a virtual interrupt number */
+ 	virq = irq_domain_alloc_descs(-1, 1, hwirq, of_node_to_nid(of_node),
+-				      NULL, NULL);
++				      NULL, domain->max_affinity);
+ 	if (virq <= 0) {
+ 		pr_debug("-> virq allocation failed\n");
+ 		return 0;
+@@ -1078,6 +1078,27 @@ void irq_domain_reset_irq_data(struct irq_data *irq_data)
+ }
+ EXPORT_SYMBOL_GPL(irq_domain_reset_irq_data);
+ 
++/**
++ * irq_domain_set_affinity - Set maximum CPU affinity for domain
++ * @parent:	Domain to set affinity for
++ * @affinity:	Pointer to cpumask, consumed by domain
++ *
++ * Sets the maximal set of CPUs to which interrupts in this domain may
++ * be delivered. Must only be called after creation, before any interrupts
++ * have been in the domain.
++ *
++ * This function retains a pointer to the cpumask which is passed in.
++ */
++int irq_domain_set_affinity(struct irq_domain *domain,
++			    const struct cpumask *affinity)
++{
++	if (cpumask_empty(affinity))
++		return -EINVAL;
++	domain->max_affinity = affinity;
++	return 0;
++}
++EXPORT_SYMBOL_GPL(irq_domain_set_affinity);
++
+ #ifdef	CONFIG_IRQ_DOMAIN_HIERARCHY
+ /**
+  * irq_domain_create_hierarchy - Add a irqdomain into the hierarchy
+@@ -1110,6 +1131,9 @@ struct irq_domain *irq_domain_create_hierarchy(struct irq_domain *parent,
+ 	if (domain) {
+ 		domain->parent = parent;
+ 		domain->flags |= flags;
++		if (parent && parent->max_affinity)
++			irq_domain_set_affinity(domain,
++						parent->max_affinity);
+ 	}
+ 
+ 	return domain;
+@@ -1375,7 +1399,7 @@ int __irq_domain_alloc_irqs(struct irq_domain *domain, int irq_base,
+ 		virq = irq_base;
+ 	} else {
+ 		virq = irq_domain_alloc_descs(irq_base, nr_irqs, 0, node,
+-					      affinity, NULL);
++					      affinity, domain->max_affinity);
+ 		if (virq < 0) {
+ 			pr_debug("cannot allocate IRQ(base %d, count %d)\n",
+ 				 irq_base, nr_irqs);
+diff --git a/kernel/irq/manage.c b/kernel/irq/manage.c
+index 5df903fccb60..e8c5f8ecd306 100644
+--- a/kernel/irq/manage.c
++++ b/kernel/irq/manage.c
+@@ -345,6 +345,10 @@ int irq_set_affinity_locked(struct irq_data *data, const struct cpumask *mask,
+ 	struct irq_desc *desc = irq_data_to_desc(data);
+ 	int ret = 0;
+ 
++	if (data->domain && data->domain->max_affinity &&
++	    !cpumask_subset(mask, data->domain->max_affinity))
++		return -EINVAL;
++
+ 	if (!chip || !chip->irq_set_affinity)
+ 		return -EINVAL;
+ 
+@@ -484,13 +488,20 @@ int irq_setup_affinity(struct irq_desc *desc)
+ 	struct cpumask *set = irq_default_affinity;
+ 	int ret, node = irq_desc_get_node(desc);
+ 	static DEFINE_RAW_SPINLOCK(mask_lock);
+-	static struct cpumask mask;
++	static struct cpumask mask, max_mask;
+ 
+ 	/* Excludes PER_CPU and NO_BALANCE interrupts */
+ 	if (!__irq_can_set_affinity(desc))
+ 		return 0;
+ 
+ 	raw_spin_lock(&mask_lock);
++
++	if (desc->irq_data.domain && desc->irq_data.domain->max_affinity)
++		cpumask_and(&max_mask, cpu_online_mask,
++			    desc->irq_data.domain->max_affinity);
++	else
++		cpumask_copy(&max_mask, cpu_online_mask);
++
+ 	/*
+ 	 * Preserve the managed affinity setting and a userspace affinity
+ 	 * setup, but make sure that one of the targets is online.
+@@ -498,15 +509,15 @@ int irq_setup_affinity(struct irq_desc *desc)
+ 	if (irqd_affinity_is_managed(&desc->irq_data) ||
+ 	    irqd_has_set(&desc->irq_data, IRQD_AFFINITY_SET)) {
+ 		if (cpumask_intersects(desc->irq_common_data.affinity,
+-				       cpu_online_mask))
++				       &max_mask))
+ 			set = desc->irq_common_data.affinity;
+ 		else
+ 			irqd_clear(&desc->irq_data, IRQD_AFFINITY_SET);
+ 	}
+ 
+-	cpumask_and(&mask, cpu_online_mask, set);
++	cpumask_and(&mask, &max_mask, set);
+ 	if (cpumask_empty(&mask))
+-		cpumask_copy(&mask, cpu_online_mask);
++		cpumask_copy(&mask, &max_mask);
+ 
+ 	if (node != NUMA_NO_NODE) {
+ 		const struct cpumask *nodemask = cpumask_of_node(node);
+
+From patchwork Mon Oct  5 15:28:52 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 11816843
+Return-Path: <SRS0=R7/Q=DM=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3F5F26CA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:41 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 1FCC52085B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:41 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=infradead.org header.i=@infradead.org
+ header.b="Q1YCVnUc"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727446AbgJEPkk (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 5 Oct 2020 11:40:40 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:48720 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727524AbgJEP3K (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 5 Oct 2020 11:29:10 -0400
+Received: from casper.infradead.org (casper.infradead.org
+ [IPv6:2001:8b0:10b:1236::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 669A2C0613AF;
+        Mon,  5 Oct 2020 08:29:01 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=casper.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=Mgg6kezGCxQyZfR1XtRZQfzcS8/IMb4UEOhailZTsT0=;
+ b=Q1YCVnUcbTrToEFiUSc8yVe3Xt
+        wKg0pnossS2LjB5wwGHpFWzLo4jSYSAjkk6QDriWfuWSNeF8oeggeSJwUh8yyAJS8k3HfEgBAHalH
+        ZBDCb5jQj1aiV26yX7fWS50MuGEYf3wH6PrkwqSNcOchTGKWsp++MLXOupaH/N/3cmex3WClhMy/R
+        SvWjr+B/aCLDxukGqyfDI4v1HdcfnLUGTk7iJc/cr82lQTjCHeD9XYR7XsADrJ113mcvMxQMQFxY7
+        +U0Mi9vEhg09HU1sbGUKq1wCpOLaujbruCaYSgvQOO7wbe5tPtXJIOsbMEBviRChW7ChT2gUzBRMU
+        zQlRgeZw==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by casper.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kPSQ4-0001mN-SV; Mon, 05 Oct 2020 15:28:57 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.93 #3 (Red Hat
+ Linux))
+        id 1kPSQ4-0045Qp-Dq; Mon, 05 Oct 2020 16:28:56 +0100
+From: David Woodhouse <dwmw2@infradead.org>
+To: x86@kernel.org
+Cc: iommu <iommu@lists.linux-foundation.org>,
+        kvm <kvm@vger.kernel.org>, linux-hyperv@vger.kernel.org,
+        Paolo Bonzini <pbonzini@redhat.com>
+Subject: [PATCH 09/13] x86/irq: Add x86_non_ir_cpumask
+Date: Mon,  5 Oct 2020 16:28:52 +0100
+Message-Id: <20201005152856.974112-9-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.26.2
+In-Reply-To: <20201005152856.974112-1-dwmw2@infradead.org>
+References: <77e64f977f559412f62b467fd062d051ea288f14.camel@infradead.org>
+ <20201005152856.974112-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ casper.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+This is the mask of CPUs to which IRQs can be delivered without interrupt
+remapping.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/include/asm/mpspec.h  |  1 +
+ arch/x86/kernel/apic/apic.c    | 12 ++++++++++++
+ arch/x86/kernel/apic/io_apic.c |  2 ++
+ 3 files changed, 15 insertions(+)
+
+diff --git a/arch/x86/include/asm/mpspec.h b/arch/x86/include/asm/mpspec.h
+index 25ee8ca0a1f2..b2090be5b444 100644
+--- a/arch/x86/include/asm/mpspec.h
++++ b/arch/x86/include/asm/mpspec.h
+@@ -141,5 +141,6 @@ static inline void physid_set_mask_of_physid(int physid, physid_mask_t *map)
+ #define PHYSID_MASK_NONE	{ {[0 ... PHYSID_ARRAY_SIZE-1] = 0UL} }
+ 
+ extern physid_mask_t phys_cpu_present_map;
++extern cpumask_t x86_non_ir_cpumask;
+ 
+ #endif /* _ASM_X86_MPSPEC_H */
+diff --git a/arch/x86/kernel/apic/apic.c b/arch/x86/kernel/apic/apic.c
+index 459c78558f36..069f5e9f1d28 100644
+--- a/arch/x86/kernel/apic/apic.c
++++ b/arch/x86/kernel/apic/apic.c
+@@ -103,6 +103,9 @@ EXPORT_EARLY_PER_CPU_SYMBOL(x86_cpu_to_apicid);
+ EXPORT_EARLY_PER_CPU_SYMBOL(x86_bios_cpu_apicid);
+ EXPORT_EARLY_PER_CPU_SYMBOL(x86_cpu_to_acpiid);
+ 
++/* Mask of CPUs which can be targeted by non-remapped interrupts. */
++cpumask_t x86_non_ir_cpumask = { CPU_BITS_ALL };
++
+ #ifdef CONFIG_X86_32
+ 
+ /*
+@@ -1838,6 +1841,7 @@ static __init void x2apic_enable(void)
+ static __init void try_to_enable_x2apic(int remap_mode)
+ {
+ 	u32 apic_limit = 0;
++	int i;
+ 
+ 	if (x2apic_state == X2APIC_DISABLED)
+ 		return;
+@@ -1880,6 +1884,14 @@ static __init void try_to_enable_x2apic(int remap_mode)
+ 	if (apic_limit)
+ 		x2apic_set_max_apicid(apic_limit);
+ 
++	/* Build the affinity mask for interrupts that can't be remapped. */
++	cpumask_clear(&x86_non_ir_cpumask);
++	i = min_t(unsigned int, num_possible_cpus() - 1, apic_limit);
++	for ( ; i >= 0; i--) {
++		if (cpu_physical_id(i) <= apic_limit)
++			cpumask_set_cpu(i, &x86_non_ir_cpumask);
++	}
++
+ 	x2apic_enable();
+ }
+ 
+diff --git a/arch/x86/kernel/apic/io_apic.c b/arch/x86/kernel/apic/io_apic.c
+index aa9a3b54a96c..4d0ef46fedb9 100644
+--- a/arch/x86/kernel/apic/io_apic.c
++++ b/arch/x86/kernel/apic/io_apic.c
+@@ -2098,6 +2098,8 @@ static int mp_alloc_timer_irq(int ioapic, int pin)
+ 		struct irq_alloc_info info;
+ 
+ 		ioapic_set_alloc_attr(&info, NUMA_NO_NODE, 0, 0);
++		if (domain->parent == x86_vector_domain)
++			info.mask = &x86_non_ir_cpumask;
+ 		info.devid = mpc_ioapic_id(ioapic);
+ 		info.ioapic.pin = pin;
+ 		mutex_lock(&ioapic_mutex);
+
+From patchwork Mon Oct  5 15:28:53 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 11816871
+Return-Path: <SRS0=R7/Q=DM=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 5AEC01580
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:41:33 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 3D2F8208C7
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:41:33 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=infradead.org header.i=@infradead.org
+ header.b="UK75vErF"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728574AbgJEPlY (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 5 Oct 2020 11:41:24 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:48712 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727485AbgJEP3A (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 5 Oct 2020 11:29:00 -0400
+Received: from merlin.infradead.org (merlin.infradead.org
+ [IPv6:2001:8b0:10b:1231::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 2AE7EC0613AA;
+        Mon,  5 Oct 2020 08:29:00 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=merlin.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=AHXKkF//pg8HXvfEGdRvLZPd/GZADKu/SygTIEeX7dk=;
+ b=UK75vErFXwrfBfdBqN7fE9wxXp
+        uJWOoKpVjyKY/YJOLsNub3BYpptK0ZdTEqZHrvucmPcphtJbBElLORZ1nN/5H9tajC+dB1mZwdEIQ
+        xWq7kuK1/Cbhlx+v03xE6nvXuUBXfmHHiXvO4uY3bgDrSdNum4u043yl/Rx//bBBTWuzzrS9fNbez
+        sMr+kFBLqkXU5EDz6rTBLDA3G41fuTLrLdH6Y3E/YQKnoaKG1kin+DLUtWusQDL99x6q/ZgkrvOcF
+        5uxHQmFRoJKt5lVSiq2TvyiXfAW+2eKLFZSHB1xiHGeMmHwfqCShcxWl+cJ2xM5G8agTHkJaLpLcV
+        YCDhDUBA==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by merlin.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kPSQ5-0004MM-F1; Mon, 05 Oct 2020 15:28:57 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.93 #3 (Red Hat
+ Linux))
+        id 1kPSQ4-0045Qu-EZ; Mon, 05 Oct 2020 16:28:56 +0100
+From: David Woodhouse <dwmw2@infradead.org>
+To: x86@kernel.org
+Cc: iommu <iommu@lists.linux-foundation.org>,
+        kvm <kvm@vger.kernel.org>, linux-hyperv@vger.kernel.org,
+        Paolo Bonzini <pbonzini@redhat.com>
+Subject: [PATCH 10/13] x86/irq: Limit IOAPIC and MSI domains' affinity without
+ IR
+Date: Mon,  5 Oct 2020 16:28:53 +0100
+Message-Id: <20201005152856.974112-10-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.26.2
+In-Reply-To: <20201005152856.974112-1-dwmw2@infradead.org>
+References: <77e64f977f559412f62b467fd062d051ea288f14.camel@infradead.org>
+ <20201005152856.974112-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ merlin.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+When interrupt remapping isn't enabled, only the first 255 CPUs can
+receive external interrupts. Set the appropriate max affinity for
+the IOAPIC and MSI IRQ domains accordingly.
+
+This also fixes the case where interrupt remapping is enabled but some
+devices are not within the scope of any active IOMMU.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/kernel/apic/io_apic.c | 2 ++
+ arch/x86/kernel/apic/msi.c     | 3 +++
+ 2 files changed, 5 insertions(+)
+
+diff --git a/arch/x86/kernel/apic/io_apic.c b/arch/x86/kernel/apic/io_apic.c
+index 4d0ef46fedb9..1c8ce7bc098f 100644
+--- a/arch/x86/kernel/apic/io_apic.c
++++ b/arch/x86/kernel/apic/io_apic.c
+@@ -2332,6 +2332,8 @@ static int mp_irqdomain_create(int ioapic)
+ 	}
+ 
+ 	ip->irqdomain->parent = parent;
++	if (parent == x86_vector_domain)
++		irq_domain_set_affinity(ip->irqdomain, &x86_non_ir_cpumask);
+ 
+ 	if (cfg->type == IOAPIC_DOMAIN_LEGACY ||
+ 	    cfg->type == IOAPIC_DOMAIN_STRICT)
+diff --git a/arch/x86/kernel/apic/msi.c b/arch/x86/kernel/apic/msi.c
+index 4d891967bea4..af5ce5c4da02 100644
+--- a/arch/x86/kernel/apic/msi.c
++++ b/arch/x86/kernel/apic/msi.c
+@@ -259,6 +259,7 @@ struct irq_domain * __init native_create_pci_msi_domain(void)
+ 		pr_warn("Failed to initialize PCI-MSI irqdomain.\n");
+ 	} else {
+ 		d->flags |= IRQ_DOMAIN_MSI_NOMASK_QUIRK;
++		irq_domain_set_affinity(d, &x86_non_ir_cpumask);
+ 	}
+ 	return d;
+ }
+@@ -479,6 +480,8 @@ struct irq_domain *hpet_create_irq_domain(int hpet_id)
+ 		irq_domain_free_fwnode(fn);
+ 		kfree(domain_info);
+ 	}
++	if (parent == x86_vector_domain)
++		irq_domain_set_affinity(d, &x86_non_ir_cpumask);
+ 	return d;
+ }
+ 
+
+From patchwork Mon Oct  5 15:28:54 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 11816833
+Return-Path: <SRS0=R7/Q=DM=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id F2DFF92C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:20 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id B4A52206DD
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:20 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=infradead.org header.i=@infradead.org
+ header.b="gmD3ayvS"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728729AbgJEPkN (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 5 Oct 2020 11:40:13 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:48758 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727533AbgJEP3L (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 5 Oct 2020 11:29:11 -0400
+Received: from casper.infradead.org (casper.infradead.org
+ [IPv6:2001:8b0:10b:1236::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id A79C8C0613B4;
+        Mon,  5 Oct 2020 08:29:01 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=casper.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=HqqwdRjVDoj9+F/+r3bh/9jhBNHxbUs9BYhMrQMENKE=;
+ b=gmD3ayvSPj1DprApblctSTU3J4
+        r0DicvjW6naTXV3IHO74tZFlH3LaakjjaVCL2AmVdGM6Vf4lN6PgfnZClO3Oma29yDjFn2q82HeAh
+        bI2ZUVOrCy+1LxonlKeX694LuAi2DWjRyI/590pFmxWz1rcpbUep7QbmmllcNwnwaiyGsfZMI+ko8
+        9UMhc4eiP4zSJ52JRaoFO54FhpBZsxPO+P7Wl8T7opu0SCJPRzZVua/OcoEcE6Y2f4QZ0KajckUmB
+        rPoh1YXm+IweE+Yaz+4G6wppvU6+BiU2V90NyC7KkVELfdQNW6r+bxRL+L8Odx03+Xb2GvfRMIhZx
+        gZjw1cKw==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by casper.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kPSQ4-0001mP-V1; Mon, 05 Oct 2020 15:28:57 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.93 #3 (Red Hat
+ Linux))
+        id 1kPSQ4-0045Qz-FI; Mon, 05 Oct 2020 16:28:56 +0100
+From: David Woodhouse <dwmw2@infradead.org>
+To: x86@kernel.org
+Cc: iommu <iommu@lists.linux-foundation.org>,
+        kvm <kvm@vger.kernel.org>, linux-hyperv@vger.kernel.org,
+        Paolo Bonzini <pbonzini@redhat.com>
+Subject: [PATCH 11/13] x86/smp: Allow more than 255 CPUs even without
+ interrupt remapping
+Date: Mon,  5 Oct 2020 16:28:54 +0100
+Message-Id: <20201005152856.974112-11-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.26.2
+In-Reply-To: <20201005152856.974112-1-dwmw2@infradead.org>
+References: <77e64f977f559412f62b467fd062d051ea288f14.camel@infradead.org>
+ <20201005152856.974112-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ casper.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+Now that external interrupt affinity can be limited to the range of
+CPUs that can be reached through legacy IOAPIC RTEs and MSI, it is
+possible to use additional CPUs.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/kernel/apic/apic.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/arch/x86/kernel/apic/apic.c b/arch/x86/kernel/apic/apic.c
+index 069f5e9f1d28..750a92464bec 100644
+--- a/arch/x86/kernel/apic/apic.c
++++ b/arch/x86/kernel/apic/apic.c
+@@ -1881,8 +1881,6 @@ static __init void try_to_enable_x2apic(int remap_mode)
+ 		 */
+ 		x2apic_phys = 1;
+ 	}
+-	if (apic_limit)
+-		x2apic_set_max_apicid(apic_limit);
+ 
+ 	/* Build the affinity mask for interrupts that can't be remapped. */
+ 	cpumask_clear(&x86_non_ir_cpumask);
+
+From patchwork Mon Oct  5 15:28:55 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 11816857
+Return-Path: <SRS0=R7/Q=DM=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 720FF6CA
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:52 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 55D482085B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:52 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=infradead.org header.i=@infradead.org
+ header.b="EFFJ8Am3"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728771AbgJEPks (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 5 Oct 2020 11:40:48 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:48746 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727433AbgJEP3K (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 5 Oct 2020 11:29:10 -0400
+Received: from merlin.infradead.org (merlin.infradead.org
+ [IPv6:2001:8b0:10b:1231::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id A603EC0613AD;
+        Mon,  5 Oct 2020 08:29:00 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=merlin.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=9X9x96P6+npWyg0gx9B1UAwiuJCvc5Y9h8UrX/LH4UU=;
+ b=EFFJ8Am3fJf4TuqV/8S0XbN9OF
+        H0depyFkplbOkt2skOOM/wy9P2C6QXW3eemD4lgJOGv2+t4VswR1aoVa2VyYg2YuWwfU15XMZwPTf
+        M/JokO96FKxWd7mSuqrvR3PQl2XNOooe7+UQwJGxyOpNO3borWMNKWFBdVS2s1sIDQKsEhVVO8/yk
+        koYl13KsgP6USxPyUv5YEY0//nR4vKGJQoXdcZPdpjfC7JHD6B025f3DelZXAHy3p14T7sHl1r9ZR
+        PiuoImmg7z0IYrFIJ492E9B7xB5NknzaVlJCTkkBAfCIYEYVLzejiSYcAJURz9n2DUGpGGEyQoWG/
+        hdfdYsCg==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by merlin.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kPSQ5-0004MO-Gc; Mon, 05 Oct 2020 15:28:57 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.93 #3 (Red Hat
+ Linux))
+        id 1kPSQ4-0045R4-Fy; Mon, 05 Oct 2020 16:28:56 +0100
+From: David Woodhouse <dwmw2@infradead.org>
+To: x86@kernel.org
+Cc: iommu <iommu@lists.linux-foundation.org>,
+        kvm <kvm@vger.kernel.org>, linux-hyperv@vger.kernel.org,
+        Paolo Bonzini <pbonzini@redhat.com>
+Subject: [PATCH 12/13] iommu/irq_remapping: Kill most of hyperv-iommu.c now
+ it's redundant
+Date: Mon,  5 Oct 2020 16:28:55 +0100
+Message-Id: <20201005152856.974112-12-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.26.2
+In-Reply-To: <20201005152856.974112-1-dwmw2@infradead.org>
+References: <77e64f977f559412f62b467fd062d051ea288f14.camel@infradead.org>
+ <20201005152856.974112-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ merlin.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+It took me a while to realise that this "IRQ remapping" driver exists
+not to actually remap interrupts, but to return -EINVAL if anyone ever
+tries to set the affinity to a set of CPUs which can't be reached
+*without* remapping. Having fixed the core IRQ domain code to handle
+such limited, all this hackery can now die.
+
+I haven't deleted it entirely because its existence still causes the
+kernel to use X2APIC in cluster mode not physical. I'm not sure we
+*want* that, but it wants further thought and testing before ripping
+it out too.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ drivers/iommu/hyperv-iommu.c | 149 +----------------------------------
+ 1 file changed, 1 insertion(+), 148 deletions(-)
+
+diff --git a/drivers/iommu/hyperv-iommu.c b/drivers/iommu/hyperv-iommu.c
+index e09e2d734c57..46a794d34f57 100644
+--- a/drivers/iommu/hyperv-iommu.c
++++ b/drivers/iommu/hyperv-iommu.c
+@@ -24,156 +24,12 @@
+ #include "irq_remapping.h"
+ 
+ #ifdef CONFIG_IRQ_REMAP
+-
+-/*
+- * According 82093AA IO-APIC spec , IO APIC has a 24-entry Interrupt
+- * Redirection Table. Hyper-V exposes one single IO-APIC and so define
+- * 24 IO APIC remmapping entries.
+- */
+-#define IOAPIC_REMAPPING_ENTRY 24
+-
+-static cpumask_t ioapic_max_cpumask = { CPU_BITS_NONE };
+-static struct irq_domain *ioapic_ir_domain;
+-
+-static int hyperv_ir_set_affinity(struct irq_data *data,
+-		const struct cpumask *mask, bool force)
+-{
+-	struct irq_data *parent = data->parent_data;
+-	struct irq_cfg *cfg = irqd_cfg(data);
+-	struct IO_APIC_route_entry *entry;
+-	int ret;
+-
+-	/* Return error If new irq affinity is out of ioapic_max_cpumask. */
+-	if (!cpumask_subset(mask, &ioapic_max_cpumask))
+-		return -EINVAL;
+-
+-	ret = parent->chip->irq_set_affinity(parent, mask, force);
+-	if (ret < 0 || ret == IRQ_SET_MASK_OK_DONE)
+-		return ret;
+-
+-	entry = data->chip_data;
+-	entry->dest = cfg->dest_apicid;
+-	entry->vector = cfg->vector;
+-	send_cleanup_vector(cfg);
+-
+-	return 0;
+-}
+-
+-static struct irq_chip hyperv_ir_chip = {
+-	.name			= "HYPERV-IR",
+-	.irq_ack		= apic_ack_irq,
+-	.irq_set_affinity	= hyperv_ir_set_affinity,
+-};
+-
+-static int hyperv_irq_remapping_alloc(struct irq_domain *domain,
+-				     unsigned int virq, unsigned int nr_irqs,
+-				     void *arg)
+-{
+-	struct irq_alloc_info *info = arg;
+-	struct irq_data *irq_data;
+-	struct irq_desc *desc;
+-	int ret = 0;
+-
+-	if (!info || info->type != X86_IRQ_ALLOC_TYPE_IOAPIC || nr_irqs > 1)
+-		return -EINVAL;
+-
+-	ret = irq_domain_alloc_irqs_parent(domain, virq, nr_irqs, arg);
+-	if (ret < 0)
+-		return ret;
+-
+-	irq_data = irq_domain_get_irq_data(domain, virq);
+-	if (!irq_data) {
+-		irq_domain_free_irqs_common(domain, virq, nr_irqs);
+-		return -EINVAL;
+-	}
+-
+-	irq_data->chip = &hyperv_ir_chip;
+-
+-	/*
+-	 * If there is interrupt remapping function of IOMMU, setting irq
+-	 * affinity only needs to change IRTE of IOMMU. But Hyper-V doesn't
+-	 * support interrupt remapping function, setting irq affinity of IO-APIC
+-	 * interrupts still needs to change IO-APIC registers. But ioapic_
+-	 * configure_entry() will ignore value of cfg->vector and cfg->
+-	 * dest_apicid when IO-APIC's parent irq domain is not the vector
+-	 * domain.(See ioapic_configure_entry()) In order to setting vector
+-	 * and dest_apicid to IO-APIC register, IO-APIC entry pointer is saved
+-	 * in the chip_data and hyperv_irq_remapping_activate()/hyperv_ir_set_
+-	 * affinity() set vector and dest_apicid directly into IO-APIC entry.
+-	 */
+-	irq_data->chip_data = info->ioapic.entry;
+-
+-	/*
+-	 * Hypver-V IO APIC irq affinity should be in the scope of
+-	 * ioapic_max_cpumask because no irq remapping support.
+-	 */
+-	desc = irq_data_to_desc(irq_data);
+-	cpumask_copy(desc->irq_common_data.affinity, &ioapic_max_cpumask);
+-
+-	return 0;
+-}
+-
+-static void hyperv_irq_remapping_free(struct irq_domain *domain,
+-				 unsigned int virq, unsigned int nr_irqs)
+-{
+-	irq_domain_free_irqs_common(domain, virq, nr_irqs);
+-}
+-
+-static int hyperv_irq_remapping_activate(struct irq_domain *domain,
+-			  struct irq_data *irq_data, bool reserve)
+-{
+-	struct irq_cfg *cfg = irqd_cfg(irq_data);
+-	struct IO_APIC_route_entry *entry = irq_data->chip_data;
+-
+-	entry->dest = cfg->dest_apicid;
+-	entry->vector = cfg->vector;
+-
+-	return 0;
+-}
+-
+-static const struct irq_domain_ops hyperv_ir_domain_ops = {
+-	.alloc = hyperv_irq_remapping_alloc,
+-	.free = hyperv_irq_remapping_free,
+-	.activate = hyperv_irq_remapping_activate,
+-};
+-
+ static int __init hyperv_prepare_irq_remapping(void)
+ {
+-	struct fwnode_handle *fn;
+-	int i;
+-
+ 	if (!hypervisor_is_type(X86_HYPER_MS_HYPERV) ||
+ 	    !x2apic_supported())
+ 		return -ENODEV;
+ 
+-	fn = irq_domain_alloc_named_id_fwnode("HYPERV-IR", 0);
+-	if (!fn)
+-		return -ENOMEM;
+-
+-	ioapic_ir_domain =
+-		irq_domain_create_hierarchy(arch_get_ir_parent_domain(),
+-				0, IOAPIC_REMAPPING_ENTRY, fn,
+-				&hyperv_ir_domain_ops, NULL);
+-
+-	if (!ioapic_ir_domain) {
+-		irq_domain_free_fwnode(fn);
+-		return -ENOMEM;
+-	}
+-
+-	/*
+-	 * Hyper-V doesn't provide irq remapping function for
+-	 * IO-APIC and so IO-APIC only accepts 8-bit APIC ID.
+-	 * Cpu's APIC ID is read from ACPI MADT table and APIC IDs
+-	 * in the MADT table on Hyper-v are sorted monotonic increasingly.
+-	 * APIC ID reflects cpu topology. There maybe some APIC ID
+-	 * gaps when cpu number in a socket is not power of two. Prepare
+-	 * max cpu affinity for IOAPIC irqs. Scan cpu 0-255 and set cpu
+-	 * into ioapic_max_cpumask if its APIC ID is less than 256.
+-	 */
+-	for (i = min_t(unsigned int, num_possible_cpus() - 1, 255); i >= 0; i--)
+-		if (cpu_physical_id(i) < 256)
+-			cpumask_set_cpu(i, &ioapic_max_cpumask);
+-
+ 	return 0;
+ }
+ 
+@@ -184,10 +40,7 @@ static int __init hyperv_enable_irq_remapping(void)
+ 
+ static struct irq_domain *hyperv_get_irq_domain(struct irq_alloc_info *info)
+ {
+-	if (info->type == X86_IRQ_ALLOC_TYPE_IOAPIC_GET_PARENT)
+-		return ioapic_ir_domain;
+-	else
+-		return NULL;
++	return NULL;
+ }
+ 
+ struct irq_remap_ops hyperv_irq_remap_ops = {
+
+From patchwork Mon Oct  5 15:28:56 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 11816855
+Return-Path: <SRS0=R7/Q=DM=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 3F37092C
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:52 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 21AD52085B
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Mon,  5 Oct 2020 15:40:52 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=infradead.org header.i=@infradead.org
+ header.b="jGBK+e7j"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728773AbgJEPkt (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Mon, 5 Oct 2020 11:40:49 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:48752 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727527AbgJEP3K (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 5 Oct 2020 11:29:10 -0400
+Received: from casper.infradead.org (casper.infradead.org
+ [IPv6:2001:8b0:10b:1236::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 7FFECC0613B1;
+        Mon,  5 Oct 2020 08:29:01 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=casper.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=fMb2jRZcwl6ZMvzoHQut4iOi+P6VzDgyIwZGzGlY6Xo=;
+ b=jGBK+e7j5L+l5Xt1xkW003nw4w
+        3XfroHAZv7KJqHkPMT4F8qtpsfgMbXqc58WmCt11q+95DDI/cFkwZtItBgdqmzWdjXL+94VkGpkvP
+        7L2LzKTrSEQppLeMT+zwBH0ky9ZTbZUQ8V3PbkJj2atrSjWlqDfBAqpkQk+0d5avSYbA4xSxWqz3K
+        EVwXW6Hj+5sdAORxUlBOB6XWRaO0nUAxVKBYrlO3XmIpnPmzdI1sydiVRRpbniE2LWYfuixOUEHfg
+        tcZRW5smbBRp160xtOAhRmGC5gjZuGr+5qLdbafK6Ag1HexuyqnISiYZx4XkRRXODCZOe6PRbxkoV
+        MGegVXuw==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by casper.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kPSQ5-0001mQ-1H; Mon, 05 Oct 2020 15:28:57 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.93 #3 (Red Hat
+ Linux))
+        id 1kPSQ4-0045R9-Gz; Mon, 05 Oct 2020 16:28:56 +0100
+From: David Woodhouse <dwmw2@infradead.org>
+To: x86@kernel.org
+Cc: iommu <iommu@lists.linux-foundation.org>,
+        kvm <kvm@vger.kernel.org>, linux-hyperv@vger.kernel.org,
+        Paolo Bonzini <pbonzini@redhat.com>
+Subject: [PATCH 13/13] x86/kvm: Add KVM_FEATURE_MSI_EXT_DEST_ID
+Date: Mon,  5 Oct 2020 16:28:56 +0100
+Message-Id: <20201005152856.974112-13-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.26.2
+In-Reply-To: <20201005152856.974112-1-dwmw2@infradead.org>
+References: <77e64f977f559412f62b467fd062d051ea288f14.camel@infradead.org>
+ <20201005152856.974112-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ casper.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+This allows the host to indicate that IOAPIC and MSI emulation supports
+15-bit destination IDs, allowing up to 32Ki CPUs without remapping.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ Documentation/virt/kvm/cpuid.rst     | 4 ++++
+ arch/x86/include/uapi/asm/kvm_para.h | 1 +
+ arch/x86/kernel/kvm.c                | 6 ++++++
+ 3 files changed, 11 insertions(+)
+
+diff --git a/Documentation/virt/kvm/cpuid.rst b/Documentation/virt/kvm/cpuid.rst
+index a7dff9186bed..1726b5925d2b 100644
+--- a/Documentation/virt/kvm/cpuid.rst
++++ b/Documentation/virt/kvm/cpuid.rst
+@@ -92,6 +92,10 @@ KVM_FEATURE_ASYNC_PF_INT          14          guest checks this feature bit
+                                               async pf acknowledgment msr
+                                               0x4b564d07.
+ 
++KVM_FEATURE_MSI_EXT_DEST_ID       15          guest checks this feature bit
++                                              before using extended destination
++                                              ID bits in MSI address bits 11-5.
++
+ KVM_FEATURE_CLOCSOURCE_STABLE_BIT 24          host will warn if no guest-side
+                                               per-cpu warps are expeced in
+                                               kvmclock
+diff --git a/arch/x86/include/uapi/asm/kvm_para.h b/arch/x86/include/uapi/asm/kvm_para.h
+index 812e9b4c1114..950afebfba88 100644
+--- a/arch/x86/include/uapi/asm/kvm_para.h
++++ b/arch/x86/include/uapi/asm/kvm_para.h
+@@ -32,6 +32,7 @@
+ #define KVM_FEATURE_POLL_CONTROL	12
+ #define KVM_FEATURE_PV_SCHED_YIELD	13
+ #define KVM_FEATURE_ASYNC_PF_INT	14
++#define KVM_FEATURE_MSI_EXT_DEST_ID	15
+ 
+ #define KVM_HINTS_REALTIME      0
+ 
+diff --git a/arch/x86/kernel/kvm.c b/arch/x86/kernel/kvm.c
+index 1b51b727b140..4986b4399aef 100644
+--- a/arch/x86/kernel/kvm.c
++++ b/arch/x86/kernel/kvm.c
+@@ -743,12 +743,18 @@ static void __init kvm_init_platform(void)
+ 	x86_platform.apic_post_init = kvm_apic_init;
+ }
+ 
++static bool __init kvm_msi_ext_dest_id(void)
++{
++	return kvm_para_has_feature(KVM_FEATURE_MSI_EXT_DEST_ID);
++}
++
+ const __initconst struct hypervisor_x86 x86_hyper_kvm = {
+ 	.name			= "KVM",
+ 	.detect			= kvm_detect,
+ 	.type			= X86_HYPER_KVM,
+ 	.init.guest_late_init	= kvm_guest_init,
+ 	.init.x2apic_available	= kvm_para_available,
++	.init.msi_ext_dest_id	= kvm_msi_ext_dest_id,
+ 	.init.init_platform	= kvm_init_platform,
+ };
+ 
