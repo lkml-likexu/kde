@@ -1,0 +1,993 @@
+From patchwork Wed Oct  7 01:44:12 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11819637
+Return-Path: <SRS0=rZqs=DO=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 74CFD139F
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  7 Oct 2020 01:44:35 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 5FFFF20782
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  7 Oct 2020 01:44:35 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727351AbgJGBoV (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 6 Oct 2020 21:44:21 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7786 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726323AbgJGBoT (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 6 Oct 2020 21:44:19 -0400
+IronPort-SDR: 
+ OQZzdcldT/AWS8dV55KTiw1kOjynNkACiTreEVQmX5tEUz4ZDympu1zekgdIk4WhVo1uIFSuHM
+ J+w2u77omkpw==
+X-IronPort-AV: E=McAfee;i="6000,8403,9766"; a="164914596"
+X-IronPort-AV: E=Sophos;i="5.77,344,1596524400";
+   d="scan'208";a="164914596"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga008.fm.intel.com ([10.253.24.58])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 06 Oct 2020 18:44:18 -0700
+IronPort-SDR: 
+ vdIVN1gcPV5l+C1riTE0uMgVqZRz19PP8fLkc8NyKxq/zSXAadMYnLp8a/oCbygAnVpLRS/dFO
+ dIxG6y8AWqgw==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,344,1596524400";
+   d="scan'208";a="297410297"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.160])
+  by fmsmga008.fm.intel.com with ESMTP; 06 Oct 2020 18:44:18 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Stas Sergeev <stsp@users.sourceforge.net>
+Subject: [PATCH 1/6] KVM: VMX: Drop guest CPUID check for VMXE in
+ vmx_set_cr4()
+Date: Tue,  6 Oct 2020 18:44:12 -0700
+Message-Id: <20201007014417.29276-2-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201007014417.29276-1-sean.j.christopherson@intel.com>
+References: <20201007014417.29276-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Drop vmx_set_cr4()'s somewhat hidden guest_cpuid_has() check on VMXE now
+that common x86 handles the check by incorporating VMXE into the CR4
+reserved bits, i.e. in cr4_guest_rsvd_bits.  This fixes a bug where KVM
+incorrectly rejects KVM_SET_SREGS with CR4.VMXE=1 if it's executed
+before KVM_SET_CPUID{,2}.
+
+Fixes: 5e1746d6205d ("KVM: nVMX: Allow setting the VMXE bit in CR4")
+Reported-by: Stas Sergeev <stsp@users.sourceforge.net>
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index e23c41ccfac9..99ea57ba2a84 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -3110,9 +3110,10 @@ int vmx_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ 		 * must first be able to turn on cr4.VMXE (see handle_vmon()).
+ 		 * So basically the check on whether to allow nested VMX
+ 		 * is here.  We operate under the default treatment of SMM,
+-		 * so VMX cannot be enabled under SMM.
++		 * so VMX cannot be enabled under SMM.  Note, guest CPUID is
++		 * intentionally ignored, it's handled by cr4_guest_rsvd_bits.
+ 		 */
+-		if (!nested_vmx_allowed(vcpu) || is_smm(vcpu))
++		if (!nested || is_smm(vcpu))
+ 			return 1;
+ 	}
+ 
+
+From patchwork Wed Oct  7 01:44:13 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11819641
+Return-Path: <SRS0=rZqs=DO=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id A5A7A618
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  7 Oct 2020 01:44:44 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 95CA52080A
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  7 Oct 2020 01:44:44 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727268AbgJGBoU (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 6 Oct 2020 21:44:20 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7786 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1725996AbgJGBoT (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 6 Oct 2020 21:44:19 -0400
+IronPort-SDR: 
+ augEx6RMjvDLytXLG/GDFNBA2sNW3r6SLo93/tBX1nLOydiaXJV+tKA/2/gVdghC8xT0a/DvAv
+ a7CRZppb8RlQ==
+X-IronPort-AV: E=McAfee;i="6000,8403,9766"; a="164914598"
+X-IronPort-AV: E=Sophos;i="5.77,344,1596524400";
+   d="scan'208";a="164914598"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga008.fm.intel.com ([10.253.24.58])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 06 Oct 2020 18:44:18 -0700
+IronPort-SDR: 
+ ClxIysU7kjze7rjcytzQqlWKI4Hrh8ofDwhey6mUxV/8Oq67RLswPUT3G7X60HFIQ+ziR+v/2o
+ qzZ0O3o5fI0w==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,344,1596524400";
+   d="scan'208";a="297410300"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.160])
+  by fmsmga008.fm.intel.com with ESMTP; 06 Oct 2020 18:44:18 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Stas Sergeev <stsp@users.sourceforge.net>
+Subject: [PATCH 2/6] KVM: VMX: Drop explicit 'nested' check from vmx_set_cr4()
+Date: Tue,  6 Oct 2020 18:44:13 -0700
+Message-Id: <20201007014417.29276-3-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201007014417.29276-1-sean.j.christopherson@intel.com>
+References: <20201007014417.29276-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Drop vmx_set_cr4()'s explicit check on the 'nested' module param now
+that common x86 handles the check by incorporating VMXE into the CR4
+reserved bits, via kvm_cpu_caps.  X86_FEATURE_VMX is set in kvm_cpu_caps
+(by vmx_set_cpu_caps()), if and only if 'nested' is true.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/vmx/vmx.c | 19 +++++++------------
+ 1 file changed, 7 insertions(+), 12 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 99ea57ba2a84..dac93346aca9 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -3104,18 +3104,13 @@ int vmx_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ 		}
+ 	}
+ 
+-	if (cr4 & X86_CR4_VMXE) {
+-		/*
+-		 * To use VMXON (and later other VMX instructions), a guest
+-		 * must first be able to turn on cr4.VMXE (see handle_vmon()).
+-		 * So basically the check on whether to allow nested VMX
+-		 * is here.  We operate under the default treatment of SMM,
+-		 * so VMX cannot be enabled under SMM.  Note, guest CPUID is
+-		 * intentionally ignored, it's handled by cr4_guest_rsvd_bits.
+-		 */
+-		if (!nested || is_smm(vcpu))
+-			return 1;
+-	}
++	/*
++	 * We operate under the default treatment of SMM, so VMX cannot be
++	 * enabled under SMM.  Note, whether or not VMXE is allowed at all is
++	 * handled by kvm_valid_cr4().
++	 */
++	if ((cr4 & X86_CR4_VMXE) && is_smm(vcpu))
++		return 1;
+ 
+ 	if (vmx->nested.vmxon && !nested_cr4_valid(vcpu, cr4))
+ 		return 1;
+
+From patchwork Wed Oct  7 01:44:14 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11819643
+Return-Path: <SRS0=rZqs=DO=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 168C9139F
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  7 Oct 2020 01:44:51 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 00CB520782
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  7 Oct 2020 01:44:50 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727454AbgJGBor (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 6 Oct 2020 21:44:47 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7792 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727208AbgJGBoU (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 6 Oct 2020 21:44:20 -0400
+IronPort-SDR: 
+ Au1hPQApfOCzEuH3sxeuJdUITPOj/7Z8dPsFrIscKp74Vs1NaullLInJN26nnJ0GUYSRYUW2lz
+ 2PQsXaDGm3rQ==
+X-IronPort-AV: E=McAfee;i="6000,8403,9766"; a="164914600"
+X-IronPort-AV: E=Sophos;i="5.77,344,1596524400";
+   d="scan'208";a="164914600"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga008.fm.intel.com ([10.253.24.58])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 06 Oct 2020 18:44:18 -0700
+IronPort-SDR: 
+ SHL5sLPz2PGABQSabKsQ23HJaX9Pd5X8W0q1U7vvh4HGnHy9Gb2ThVzIbVPDxifOgP6aFejoIl
+ CFNfEFoldAsg==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,344,1596524400";
+   d="scan'208";a="297410303"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.160])
+  by fmsmga008.fm.intel.com with ESMTP; 06 Oct 2020 18:44:18 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Stas Sergeev <stsp@users.sourceforge.net>
+Subject: [PATCH 3/6] KVM: SVM: Drop VMXE check from svm_set_cr4()
+Date: Tue,  6 Oct 2020 18:44:14 -0700
+Message-Id: <20201007014417.29276-4-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201007014417.29276-1-sean.j.christopherson@intel.com>
+References: <20201007014417.29276-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Drop svm_set_cr4()'s explicit check CR4.VMXE now that common x86 handles
+the check by incorporating VMXE into the CR4 reserved bits, via
+kvm_cpu_caps.  SVM obviously does not set X86_FEATURE_VMX.
+
+No functional change intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/svm/svm.c | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index 4f401fc6a05d..f92a19b77da3 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -1684,9 +1684,6 @@ int svm_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ 	unsigned long host_cr4_mce = cr4_read_shadow() & X86_CR4_MCE;
+ 	unsigned long old_cr4 = to_svm(vcpu)->vmcb->save.cr4;
+ 
+-	if (cr4 & X86_CR4_VMXE)
+-		return 1;
+-
+ 	if (npt_enabled && ((old_cr4 ^ cr4) & X86_CR4_PGE))
+ 		svm_flush_tlb(vcpu);
+ 
+
+From patchwork Wed Oct  7 01:44:15 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11819639
+Return-Path: <SRS0=rZqs=DO=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 8A53A618
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  7 Oct 2020 01:44:37 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 76C9820782
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  7 Oct 2020 01:44:37 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727513AbgJGBog (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 6 Oct 2020 21:44:36 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7786 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1727215AbgJGBoU (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 6 Oct 2020 21:44:20 -0400
+IronPort-SDR: 
+ aqYtfWheU+M67nRaNQrFl/xBrdNsH/pzkAZYISgW6765Cki93imqj4nActABAEr5ymE/SVx3nU
+ Trz54qzmUreg==
+X-IronPort-AV: E=McAfee;i="6000,8403,9766"; a="164914603"
+X-IronPort-AV: E=Sophos;i="5.77,344,1596524400";
+   d="scan'208";a="164914603"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga008.fm.intel.com ([10.253.24.58])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 06 Oct 2020 18:44:19 -0700
+IronPort-SDR: 
+ Tp41jLrchQ6B2fLrl9caaGcPIt8qm+rhFCDL02mTOeSKB7wD2pQa6R1Z7ee0b8NZZ2jrU2WErg
+ gpY4y/xTfOWg==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,344,1596524400";
+   d="scan'208";a="297410306"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.160])
+  by fmsmga008.fm.intel.com with ESMTP; 06 Oct 2020 18:44:18 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Stas Sergeev <stsp@users.sourceforge.net>
+Subject: [PATCH 4/6] KVM: x86: Move vendor CR4 validity check to dedicated
+ kvm_x86_ops hook
+Date: Tue,  6 Oct 2020 18:44:15 -0700
+Message-Id: <20201007014417.29276-5-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201007014417.29276-1-sean.j.christopherson@intel.com>
+References: <20201007014417.29276-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Split out VMX's checks on CR4.VMXE to a dedicated hook, .is_valid_cr4(),
+and invoke the new hook from kvm_valid_cr4().  This fixes an issue where
+KVM_SET_SREGS would return success while failing to actually set CR4.
+
+Fixing the issue by explicitly checking kvm_x86_ops.set_cr4()'s return
+in __set_sregs() is not a viable option as KVM has already stuffed a
+variety of vCPU state.
+
+Note, kvm_valid_cr4() and is_valid_cr4() have different return types and
+inverted semantics.  This will be remedied in a future patch.
+
+Fixes: 5e1746d6205d ("KVM: nVMX: Allow setting the VMXE bit in CR4")
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/include/asm/kvm_host.h |  3 ++-
+ arch/x86/kvm/svm/svm.c          |  9 +++++++--
+ arch/x86/kvm/svm/svm.h          |  2 +-
+ arch/x86/kvm/vmx/nested.c       |  2 +-
+ arch/x86/kvm/vmx/vmx.c          | 31 ++++++++++++++++++-------------
+ arch/x86/kvm/vmx/vmx.h          |  2 +-
+ arch/x86/kvm/x86.c              |  6 ++++--
+ 7 files changed, 34 insertions(+), 21 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index d0f77235da92..e0fb61d8f6fb 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1085,7 +1085,8 @@ struct kvm_x86_ops {
+ 			    struct kvm_segment *var, int seg);
+ 	void (*get_cs_db_l_bits)(struct kvm_vcpu *vcpu, int *db, int *l);
+ 	void (*set_cr0)(struct kvm_vcpu *vcpu, unsigned long cr0);
+-	int (*set_cr4)(struct kvm_vcpu *vcpu, unsigned long cr4);
++	bool (*is_valid_cr4)(struct kvm_vcpu *vcpu, unsigned long cr0);
++	void (*set_cr4)(struct kvm_vcpu *vcpu, unsigned long cr4);
+ 	void (*set_efer)(struct kvm_vcpu *vcpu, u64 efer);
+ 	void (*get_idt)(struct kvm_vcpu *vcpu, struct desc_ptr *dt);
+ 	void (*set_idt)(struct kvm_vcpu *vcpu, struct desc_ptr *dt);
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index f92a19b77da3..38680d453f80 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -1679,7 +1679,12 @@ void svm_set_cr0(struct kvm_vcpu *vcpu, unsigned long cr0)
+ 	update_cr0_intercept(svm);
+ }
+ 
+-int svm_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
++static bool svm_is_valid_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
++{
++	return true;
++}
++
++void svm_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ {
+ 	unsigned long host_cr4_mce = cr4_read_shadow() & X86_CR4_MCE;
+ 	unsigned long old_cr4 = to_svm(vcpu)->vmcb->save.cr4;
+@@ -1693,7 +1698,6 @@ int svm_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ 	cr4 |= host_cr4_mce;
+ 	to_svm(vcpu)->vmcb->save.cr4 = cr4;
+ 	vmcb_mark_dirty(to_svm(vcpu)->vmcb, VMCB_CR);
+-	return 0;
+ }
+ 
+ static void svm_set_segment(struct kvm_vcpu *vcpu,
+@@ -4192,6 +4196,7 @@ static struct kvm_x86_ops svm_x86_ops __initdata = {
+ 	.get_cpl = svm_get_cpl,
+ 	.get_cs_db_l_bits = kvm_get_cs_db_l_bits,
+ 	.set_cr0 = svm_set_cr0,
++	.is_valid_cr4 = svm_is_valid_cr4,
+ 	.set_cr4 = svm_set_cr4,
+ 	.set_efer = svm_set_efer,
+ 	.get_idt = svm_get_idt,
+diff --git a/arch/x86/kvm/svm/svm.h b/arch/x86/kvm/svm/svm.h
+index a7f997459b87..8fe632d7fca4 100644
+--- a/arch/x86/kvm/svm/svm.h
++++ b/arch/x86/kvm/svm/svm.h
+@@ -352,7 +352,7 @@ static inline bool gif_set(struct vcpu_svm *svm)
+ u32 svm_msrpm_offset(u32 msr);
+ void svm_set_efer(struct kvm_vcpu *vcpu, u64 efer);
+ void svm_set_cr0(struct kvm_vcpu *vcpu, unsigned long cr0);
+-int svm_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4);
++void svm_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4);
+ void svm_flush_tlb(struct kvm_vcpu *vcpu);
+ void disable_nmi_singlestep(struct vcpu_svm *svm);
+ bool svm_smi_blocked(struct kvm_vcpu *vcpu);
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 6eca8a7deed1..650ff3e4b5ca 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -4814,7 +4814,7 @@ static int handle_vmon(struct kvm_vcpu *vcpu)
+ 	/*
+ 	 * The Intel VMX Instruction Reference lists a bunch of bits that are
+ 	 * prerequisite to running VMXON, most notably cr4.VMXE must be set to
+-	 * 1 (see vmx_set_cr4() for when we allow the guest to set this).
++	 * 1 (see vmx_is_valid_cr4() for when we allow the guest to set this).
+ 	 * Otherwise, we should fail with #UD.  But most faulting conditions
+ 	 * have already been checked by hardware, prior to the VM-exit for
+ 	 * VMXON.  We do test guest cr4.VMXE because processor CR4 always has
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index dac93346aca9..5aa0a3af7dbb 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -3076,7 +3076,23 @@ static void vmx_load_mmu_pgd(struct kvm_vcpu *vcpu, unsigned long pgd,
+ 		vmcs_writel(GUEST_CR3, guest_cr3);
+ }
+ 
+-int vmx_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
++static bool vmx_is_valid_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
++{
++	/*
++	 * We operate under the default treatment of SMM, so VMX cannot be
++	 * enabled under SMM.  Note, whether or not VMXE is allowed at all is
++	 * handled by kvm_valid_cr4().
++	 */
++	if ((cr4 & X86_CR4_VMXE) && is_smm(vcpu))
++		return false;
++
++	if (to_vmx(vcpu)->nested.vmxon && !nested_cr4_valid(vcpu, cr4))
++		return false;
++
++	return true;
++}
++
++void vmx_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+ 	/*
+@@ -3104,17 +3120,6 @@ int vmx_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ 		}
+ 	}
+ 
+-	/*
+-	 * We operate under the default treatment of SMM, so VMX cannot be
+-	 * enabled under SMM.  Note, whether or not VMXE is allowed at all is
+-	 * handled by kvm_valid_cr4().
+-	 */
+-	if ((cr4 & X86_CR4_VMXE) && is_smm(vcpu))
+-		return 1;
+-
+-	if (vmx->nested.vmxon && !nested_cr4_valid(vcpu, cr4))
+-		return 1;
+-
+ 	vcpu->arch.cr4 = cr4;
+ 	kvm_register_mark_available(vcpu, VCPU_EXREG_CR4);
+ 
+@@ -3145,7 +3150,6 @@ int vmx_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ 
+ 	vmcs_writel(CR4_READ_SHADOW, cr4);
+ 	vmcs_writel(GUEST_CR4, hw_cr4);
+-	return 0;
+ }
+ 
+ void vmx_get_segment(struct kvm_vcpu *vcpu, struct kvm_segment *var, int seg)
+@@ -7597,6 +7601,7 @@ static struct kvm_x86_ops vmx_x86_ops __initdata = {
+ 	.get_cpl = vmx_get_cpl,
+ 	.get_cs_db_l_bits = vmx_get_cs_db_l_bits,
+ 	.set_cr0 = vmx_set_cr0,
++	.is_valid_cr4 = vmx_is_valid_cr4,
+ 	.set_cr4 = vmx_set_cr4,
+ 	.set_efer = vmx_set_efer,
+ 	.get_idt = vmx_get_idt,
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index 5961cb897125..96895ac16b27 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -321,7 +321,7 @@ u32 vmx_get_interrupt_shadow(struct kvm_vcpu *vcpu);
+ void vmx_set_interrupt_shadow(struct kvm_vcpu *vcpu, int mask);
+ void vmx_set_efer(struct kvm_vcpu *vcpu, u64 efer);
+ void vmx_set_cr0(struct kvm_vcpu *vcpu, unsigned long cr0);
+-int vmx_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4);
++void vmx_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4);
+ void set_cr4_guest_host_mask(struct vcpu_vmx *vmx);
+ void ept_save_pdptrs(struct kvm_vcpu *vcpu);
+ void vmx_get_segment(struct kvm_vcpu *vcpu, struct kvm_segment *var, int seg);
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index c4015a43cc8a..64cc86f4f18f 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -973,6 +973,9 @@ int kvm_valid_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ 	if (cr4 & vcpu->arch.cr4_guest_rsvd_bits)
+ 		return -EINVAL;
+ 
++	if (!kvm_x86_ops.is_valid_cr4(vcpu, cr4))
++		return -EINVAL;
++
+ 	return 0;
+ }
+ EXPORT_SYMBOL_GPL(kvm_valid_cr4);
+@@ -1006,8 +1009,7 @@ int kvm_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ 			return 1;
+ 	}
+ 
+-	if (kvm_x86_ops.set_cr4(vcpu, cr4))
+-		return 1;
++	kvm_x86_ops.set_cr4(vcpu, cr4);
+ 
+ 	if (((cr4 ^ old_cr4) & pdptr_bits) ||
+ 	    (!(cr4 & X86_CR4_PCIDE) && (old_cr4 & X86_CR4_PCIDE)))
+
+From patchwork Wed Oct  7 01:44:16 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11819633
+Return-Path: <SRS0=rZqs=DO=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id 90FDF618
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  7 Oct 2020 01:44:30 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 7E0FB20782
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  7 Oct 2020 01:44:30 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727397AbgJGBoY (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 6 Oct 2020 21:44:24 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7792 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726323AbgJGBoX (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 6 Oct 2020 21:44:23 -0400
+IronPort-SDR: 
+ rt8APeZ4S8pojpOyqy0W/clwWU1GiSH2k/3HyeXuWtv5Mx3G9G4/1rCoq/RcM8ZAymJWb/CAxn
+ hf+3aby1AzGw==
+X-IronPort-AV: E=McAfee;i="6000,8403,9766"; a="164914607"
+X-IronPort-AV: E=Sophos;i="5.77,344,1596524400";
+   d="scan'208";a="164914607"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga008.fm.intel.com ([10.253.24.58])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 06 Oct 2020 18:44:19 -0700
+IronPort-SDR: 
+ vqALXjD9B736iV7bM/uGxTF9Sr6B/GL4NvRhnzDfm4lrwKGYuoR/hF0XfYZyj1lirC/q8o/O3v
+ ow0etGiP/eIA==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,344,1596524400";
+   d="scan'208";a="297410309"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.160])
+  by fmsmga008.fm.intel.com with ESMTP; 06 Oct 2020 18:44:19 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Stas Sergeev <stsp@users.sourceforge.net>
+Subject: [PATCH 5/6] KVM: x86: Return bool instead of int for CR4 and SREGS
+ validity checks
+Date: Tue,  6 Oct 2020 18:44:16 -0700
+Message-Id: <20201007014417.29276-6-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201007014417.29276-1-sean.j.christopherson@intel.com>
+References: <20201007014417.29276-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Rework the common CR4 and SREGS checks to return a bool instead of an
+int, i.e. true/false instead of 0/-EINVAL, and add "is" to the name to
+clarify the polarity of the return value (which is effectively inverted
+by this change).
+
+No functional changed intended.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ arch/x86/kvm/svm/nested.c |  2 +-
+ arch/x86/kvm/vmx/vmx.c    |  2 +-
+ arch/x86/kvm/x86.c        | 28 ++++++++++++----------------
+ arch/x86/kvm/x86.h        |  2 +-
+ 4 files changed, 15 insertions(+), 19 deletions(-)
+
+diff --git a/arch/x86/kvm/svm/nested.c b/arch/x86/kvm/svm/nested.c
+index ba50ff6e35c7..114e0e8561bc 100644
+--- a/arch/x86/kvm/svm/nested.c
++++ b/arch/x86/kvm/svm/nested.c
+@@ -254,7 +254,7 @@ static bool nested_vmcb_checks(struct vcpu_svm *svm, struct vmcb *vmcb12)
+ 		    (vmcb12->save.cr3 & MSR_CR3_LONG_MBZ_MASK))
+ 			return false;
+ 	}
+-	if (kvm_valid_cr4(&svm->vcpu, vmcb12->save.cr4))
++	if (!kvm_is_valid_cr4(&svm->vcpu, vmcb12->save.cr4))
+ 		return false;
+ 
+ 	return nested_vmcb_check_controls(&vmcb12->control);
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 5aa0a3af7dbb..ac69aa3076d8 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -3081,7 +3081,7 @@ static bool vmx_is_valid_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ 	/*
+ 	 * We operate under the default treatment of SMM, so VMX cannot be
+ 	 * enabled under SMM.  Note, whether or not VMXE is allowed at all is
+-	 * handled by kvm_valid_cr4().
++	 * handled by kvm_is_valid_cr4().
+ 	 */
+ 	if ((cr4 & X86_CR4_VMXE) && is_smm(vcpu))
+ 		return false;
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 64cc86f4f18f..5870aa6cbad2 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -965,20 +965,17 @@ int kvm_set_xcr(struct kvm_vcpu *vcpu, u32 index, u64 xcr)
+ }
+ EXPORT_SYMBOL_GPL(kvm_set_xcr);
+ 
+-int kvm_valid_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
++bool kvm_is_valid_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ {
+ 	if (cr4 & cr4_reserved_bits)
+-		return -EINVAL;
++		return false;
+ 
+ 	if (cr4 & vcpu->arch.cr4_guest_rsvd_bits)
+-		return -EINVAL;
++		return false;
+ 
+-	if (!kvm_x86_ops.is_valid_cr4(vcpu, cr4))
+-		return -EINVAL;
+-
+-	return 0;
++	return kvm_x86_ops.is_valid_cr4(vcpu, cr4);
+ }
+-EXPORT_SYMBOL_GPL(kvm_valid_cr4);
++EXPORT_SYMBOL_GPL(kvm_is_valid_cr4);
+ 
+ int kvm_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ {
+@@ -986,7 +983,7 @@ int kvm_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ 	unsigned long pdptr_bits = X86_CR4_PGE | X86_CR4_PSE | X86_CR4_PAE |
+ 				   X86_CR4_SMEP;
+ 
+-	if (kvm_valid_cr4(vcpu, cr4))
++	if (!kvm_is_valid_cr4(vcpu, cr4))
+ 		return 1;
+ 
+ 	if (is_long_mode(vcpu)) {
+@@ -9422,7 +9419,7 @@ int kvm_task_switch(struct kvm_vcpu *vcpu, u16 tss_selector, int idt_index,
+ }
+ EXPORT_SYMBOL_GPL(kvm_task_switch);
+ 
+-static int kvm_valid_sregs(struct kvm_vcpu *vcpu, struct kvm_sregs *sregs)
++static bool kvm_is_valid_sregs(struct kvm_vcpu *vcpu, struct kvm_sregs *sregs)
+ {
+ 	if ((sregs->efer & EFER_LME) && (sregs->cr0 & X86_CR0_PG)) {
+ 		/*
+@@ -9430,19 +9427,18 @@ static int kvm_valid_sregs(struct kvm_vcpu *vcpu, struct kvm_sregs *sregs)
+ 		 * 64-bit mode (though maybe in a 32-bit code segment).
+ 		 * CR4.PAE and EFER.LMA must be set.
+ 		 */
+-		if (!(sregs->cr4 & X86_CR4_PAE)
+-		    || !(sregs->efer & EFER_LMA))
+-			return -EINVAL;
++		if (!(sregs->cr4 & X86_CR4_PAE) || !(sregs->efer & EFER_LMA))
++			return false;
+ 	} else {
+ 		/*
+ 		 * Not in 64-bit mode: EFER.LMA is clear and the code
+ 		 * segment cannot be 64-bit.
+ 		 */
+ 		if (sregs->efer & EFER_LMA || sregs->cs.l)
+-			return -EINVAL;
++			return false;
+ 	}
+ 
+-	return kvm_valid_cr4(vcpu, sregs->cr4);
++	return kvm_is_valid_cr4(vcpu, sregs->cr4);
+ }
+ 
+ static int __set_sregs(struct kvm_vcpu *vcpu, struct kvm_sregs *sregs)
+@@ -9454,7 +9450,7 @@ static int __set_sregs(struct kvm_vcpu *vcpu, struct kvm_sregs *sregs)
+ 	struct desc_ptr dt;
+ 	int ret = -EINVAL;
+ 
+-	if (kvm_valid_sregs(vcpu, sregs))
++	if (!kvm_is_valid_sregs(vcpu, sregs))
+ 		goto out;
+ 
+ 	apic_base_msr.data = sregs->apic_base;
+diff --git a/arch/x86/kvm/x86.h b/arch/x86/kvm/x86.h
+index 3900ab0c6004..b3b1d237ffe5 100644
+--- a/arch/x86/kvm/x86.h
++++ b/arch/x86/kvm/x86.h
+@@ -369,7 +369,7 @@ static inline bool kvm_dr6_valid(u64 data)
+ void kvm_load_guest_xsave_state(struct kvm_vcpu *vcpu);
+ void kvm_load_host_xsave_state(struct kvm_vcpu *vcpu);
+ int kvm_spec_ctrl_test_value(u64 value);
+-int kvm_valid_cr4(struct kvm_vcpu *vcpu, unsigned long cr4);
++bool kvm_is_valid_cr4(struct kvm_vcpu *vcpu, unsigned long cr4);
+ bool kvm_vcpu_exit_request(struct kvm_vcpu *vcpu);
+ int kvm_handle_memory_failure(struct kvm_vcpu *vcpu, int r,
+ 			      struct x86_exception *e);
+
+From patchwork Wed Oct  7 01:44:17 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Sean Christopherson <sean.j.christopherson@intel.com>
+X-Patchwork-Id: 11819635
+Return-Path: <SRS0=rZqs=DO=vger.kernel.org=kvm-owner@kernel.org>
+Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org
+ [172.30.200.123])
+	by pdx-korg-patchwork-2.web.codeaurora.org (Postfix) with ESMTP id B49C6139F
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  7 Oct 2020 01:44:30 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id A318A20782
+	for <patchwork-kvm@patchwork.kernel.org>;
+ Wed,  7 Oct 2020 01:44:30 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727445AbgJGBo0 (ORCPT
+        <rfc822;patchwork-kvm@patchwork.kernel.org>);
+        Tue, 6 Oct 2020 21:44:26 -0400
+Received: from mga09.intel.com ([134.134.136.24]:7786 "EHLO mga09.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726604AbgJGBoX (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 6 Oct 2020 21:44:23 -0400
+IronPort-SDR: 
+ HzMPk2t4JepU2S2jR9wkSy3wSBn+qjAvekcaVdYviEie2FUM6UfuyvTbtBIs23lw8MJiDtwD2C
+ vBIMzwkFjX9A==
+X-IronPort-AV: E=McAfee;i="6000,8403,9766"; a="164914609"
+X-IronPort-AV: E=Sophos;i="5.77,344,1596524400";
+   d="scan'208";a="164914609"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga008.fm.intel.com ([10.253.24.58])
+  by orsmga102.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 06 Oct 2020 18:44:19 -0700
+IronPort-SDR: 
+ Zb3cF6oTEt81BZEh7UKANgZLoqTxNnGEgLWFiIPXl75nA+TInj4si1icwhjxnOPuyMyO8Xn43u
+ DPqU6oq7ycDA==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,344,1596524400";
+   d="scan'208";a="297410312"
+Received: from sjchrist-coffee.jf.intel.com ([10.54.74.160])
+  by fmsmga008.fm.intel.com with ESMTP; 06 Oct 2020 18:44:19 -0700
+From: Sean Christopherson <sean.j.christopherson@intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <sean.j.christopherson@intel.com>,
+        Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Stas Sergeev <stsp@users.sourceforge.net>
+Subject: [PATCH 6/6] KVM: selftests: Verify supported CR4 bits can be set
+ before KVM_SET_CPUID2
+Date: Tue,  6 Oct 2020 18:44:17 -0700
+Message-Id: <20201007014417.29276-7-sean.j.christopherson@intel.com>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201007014417.29276-1-sean.j.christopherson@intel.com>
+References: <20201007014417.29276-1-sean.j.christopherson@intel.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Extend the KVM_SET_SREGS test to verify that all supported CR4 bits, as
+enumerated by KVM, can be set before KVM_SET_CPUID2, i.e. without first
+defining the vCPU model.  KVM is supposed to skip guest CPUID checks
+when host userspace is stuffing guest state.
+
+Check the inverse as well, i.e. that KVM rejects KVM_SET_REGS if CR4
+has one or more unsupported bits set.
+
+Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+---
+ .../selftests/kvm/include/x86_64/processor.h  | 17 ++++
+ .../selftests/kvm/include/x86_64/vmx.h        |  4 -
+ .../selftests/kvm/x86_64/set_sregs_test.c     | 92 ++++++++++++++++++-
+ 3 files changed, 108 insertions(+), 5 deletions(-)
+
+diff --git a/tools/testing/selftests/kvm/include/x86_64/processor.h b/tools/testing/selftests/kvm/include/x86_64/processor.h
+index 82b7fe16a824..29f0bd7d8271 100644
+--- a/tools/testing/selftests/kvm/include/x86_64/processor.h
++++ b/tools/testing/selftests/kvm/include/x86_64/processor.h
+@@ -27,6 +27,7 @@
+ #define X86_CR4_OSFXSR		(1ul << 9)
+ #define X86_CR4_OSXMMEXCPT	(1ul << 10)
+ #define X86_CR4_UMIP		(1ul << 11)
++#define X86_CR4_LA57		(1ul << 12)
+ #define X86_CR4_VMXE		(1ul << 13)
+ #define X86_CR4_SMXE		(1ul << 14)
+ #define X86_CR4_FSGSBASE	(1ul << 16)
+@@ -36,6 +37,22 @@
+ #define X86_CR4_SMAP		(1ul << 21)
+ #define X86_CR4_PKE		(1ul << 22)
+ 
++/* CPUID.1.ECX */
++#define CPUID_VMX		(1ul << 5)
++#define CPUID_SMX		(1ul << 6)
++#define CPUID_PCID		(1ul << 17)
++#define CPUID_XSAVE		(1ul << 26)
++
++/* CPUID.7.EBX */
++#define CPUID_FSGSBASE		(1ul << 0)
++#define CPUID_SMEP		(1ul << 7)
++#define CPUID_SMAP		(1ul << 20)
++
++/* CPUID.7.ECX */
++#define CPUID_UMIP		(1ul << 2)
++#define CPUID_PKU		(1ul << 3)
++#define CPUID_LA57		(1ul << 16)
++
+ /* General Registers in 64-Bit Mode */
+ struct gpr64_regs {
+ 	u64 rax;
+diff --git a/tools/testing/selftests/kvm/include/x86_64/vmx.h b/tools/testing/selftests/kvm/include/x86_64/vmx.h
+index 54d624dd6c10..e4da3e784f90 100644
+--- a/tools/testing/selftests/kvm/include/x86_64/vmx.h
++++ b/tools/testing/selftests/kvm/include/x86_64/vmx.h
+@@ -11,10 +11,6 @@
+ #include <stdint.h>
+ #include "processor.h"
+ 
+-#define CPUID_VMX_BIT				5
+-
+-#define CPUID_VMX				(1 << 5)
+-
+ /*
+  * Definitions of Primary Processor-Based VM-Execution Controls.
+  */
+diff --git a/tools/testing/selftests/kvm/x86_64/set_sregs_test.c b/tools/testing/selftests/kvm/x86_64/set_sregs_test.c
+index 9f7656184f31..318be0bf77ab 100644
+--- a/tools/testing/selftests/kvm/x86_64/set_sregs_test.c
++++ b/tools/testing/selftests/kvm/x86_64/set_sregs_test.c
+@@ -24,16 +24,106 @@
+ 
+ #define VCPU_ID                  5
+ 
++static void test_cr4_feature_bit(struct kvm_vm *vm, struct kvm_sregs *orig,
++				 uint64_t feature_bit)
++{
++	struct kvm_sregs sregs;
++	int rc;
++
++	/* Skip the sub-test, the feature is supported. */
++	if (orig->cr4 & feature_bit)
++		return;
++
++	memcpy(&sregs, orig, sizeof(sregs));
++	sregs.cr4 |= feature_bit;
++
++	rc = _vcpu_sregs_set(vm, VCPU_ID, &sregs);
++	TEST_ASSERT(rc, "KVM allowed unsupported CR4 bit (0x%lx)", feature_bit);
++
++	/* Sanity check that KVM didn't change anything. */
++	vcpu_sregs_get(vm, VCPU_ID, &sregs);
++	TEST_ASSERT(!memcmp(&sregs, orig, sizeof(sregs)), "KVM modified sregs");
++}
++
++static uint64_t calc_cr4_feature_bits(struct kvm_vm *vm)
++{
++	struct kvm_cpuid_entry2 *cpuid_1, *cpuid_7;
++	uint64_t cr4;
++
++	cpuid_1 = kvm_get_supported_cpuid_entry(1);
++	cpuid_7 = kvm_get_supported_cpuid_entry(7);
++
++	cr4 = X86_CR4_VME | X86_CR4_PVI | X86_CR4_TSD | X86_CR4_DE |
++	      X86_CR4_PSE | X86_CR4_PAE | X86_CR4_MCE | X86_CR4_PGE |
++	      X86_CR4_PCE | X86_CR4_OSFXSR | X86_CR4_OSXMMEXCPT;
++	if (cpuid_7->ecx & CPUID_UMIP)
++		cr4 |= X86_CR4_UMIP;
++	if (cpuid_7->ecx & CPUID_LA57)
++		cr4 |= X86_CR4_LA57;
++	if (cpuid_1->ecx & CPUID_VMX)
++		cr4 |= X86_CR4_VMXE;
++	if (cpuid_1->ecx & CPUID_SMX)
++		cr4 |= X86_CR4_SMXE;
++	if (cpuid_7->ebx & CPUID_FSGSBASE)
++		cr4 |= X86_CR4_FSGSBASE;
++	if (cpuid_1->ecx & CPUID_PCID)
++		cr4 |= X86_CR4_PCIDE;
++	if (cpuid_1->ecx & CPUID_XSAVE)
++		cr4 |= X86_CR4_OSXSAVE;
++	if (cpuid_7->ebx & CPUID_SMEP)
++		cr4 |= X86_CR4_SMEP;
++	if (cpuid_7->ebx & CPUID_SMAP)
++		cr4 |= X86_CR4_SMAP;
++	if (cpuid_7->ecx & CPUID_PKU)
++		cr4 |= X86_CR4_PKE;
++
++	return cr4;
++}
++
+ int main(int argc, char *argv[])
+ {
+ 	struct kvm_sregs sregs;
+ 	struct kvm_vm *vm;
++	uint64_t cr4;
+ 	int rc;
+ 
+ 	/* Tell stdout not to buffer its content */
+ 	setbuf(stdout, NULL);
+ 
+-	/* Create VM */
++	/*
++	 * Create a dummy VM, specifically to avoid doing KVM_SET_CPUID2, and
++	 * use it to verify all supported CR4 bits can be set prior to defining
++	 * the vCPU model, i.e. without doing KVM_SET_CPUID2.
++	 */
++	vm = vm_create(VM_MODE_DEFAULT, DEFAULT_GUEST_PHY_PAGES, O_RDWR);
++	vm_vcpu_add(vm, VCPU_ID);
++
++	vcpu_sregs_get(vm, VCPU_ID, &sregs);
++
++	sregs.cr4 |= calc_cr4_feature_bits(vm);
++	cr4 = sregs.cr4;
++
++	rc = _vcpu_sregs_set(vm, VCPU_ID, &sregs);
++	TEST_ASSERT(!rc, "Failed to set supported CR4 bits (0x%lx)", cr4);
++
++	vcpu_sregs_get(vm, VCPU_ID, &sregs);
++	TEST_ASSERT(sregs.cr4 == cr4, "sregs.CR4 (0x%llx) != CR4 (0x%lx)",
++		    sregs.cr4, cr4);
++
++	/* Verify all unsupported features are rejected by KVM. */
++	test_cr4_feature_bit(vm, &sregs, X86_CR4_UMIP);
++	test_cr4_feature_bit(vm, &sregs, X86_CR4_LA57);
++	test_cr4_feature_bit(vm, &sregs, X86_CR4_VMXE);
++	test_cr4_feature_bit(vm, &sregs, X86_CR4_SMXE);
++	test_cr4_feature_bit(vm, &sregs, X86_CR4_FSGSBASE);
++	test_cr4_feature_bit(vm, &sregs, X86_CR4_PCIDE);
++	test_cr4_feature_bit(vm, &sregs, X86_CR4_OSXSAVE);
++	test_cr4_feature_bit(vm, &sregs, X86_CR4_SMEP);
++	test_cr4_feature_bit(vm, &sregs, X86_CR4_SMAP);
++	test_cr4_feature_bit(vm, &sregs, X86_CR4_PKE);
++	kvm_vm_free(vm);
++
++	/* Create a "real" VM and verify APIC_BASE can be set. */
+ 	vm = vm_create_default(VCPU_ID, 0, NULL);
+ 
+ 	vcpu_sregs_get(vm, VCPU_ID, &sregs);
