@@ -1,0 +1,966 @@
+From patchwork Wed Oct 21 09:10:04 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Robert Hoo <robert.hu@linux.intel.com>
+X-Patchwork-Id: 11848823
+Return-Path: <SRS0=abDU=D4=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-12.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_PATCH,MAILING_LIST_MULTI,SIGNED_OFF_BY,
+	SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id F1A2EC561F8
+	for <kvm@archiver.kernel.org>; Wed, 21 Oct 2020 09:10:32 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 85D7C22249
+	for <kvm@archiver.kernel.org>; Wed, 21 Oct 2020 09:10:32 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2437390AbgJUJKb (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 21 Oct 2020 05:10:31 -0400
+Received: from mga07.intel.com ([134.134.136.100]:58972 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2388839AbgJUJKb (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 21 Oct 2020 05:10:31 -0400
+IronPort-SDR: 
+ nR7oAk4RxekLulYMQ+2NpLAXEKnCAu5QVe05QmAgVlF+fzu/Gm9d6WsTfHz+H7VCEhE8rJw4Z8
+ RmnExNyk2wSw==
+X-IronPort-AV: E=McAfee;i="6000,8403,9780"; a="231530446"
+X-IronPort-AV: E=Sophos;i="5.77,400,1596524400";
+   d="scan'208";a="231530446"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga006.fm.intel.com ([10.253.24.20])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 21 Oct 2020 02:10:28 -0700
+IronPort-SDR: 
+ Qa3Rf/7Pyb8PPlbS/6TpCPDQaiA1mdcrIDZFSo+noH1r13fL/UT7OwFGtR2b8ATAxO8E6UZInj
+ YV1q+2YcMq9g==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,400,1596524400";
+   d="scan'208";a="522682410"
+Received: from sqa-gate.sh.intel.com (HELO robert-ivt.tsp.org)
+ ([10.239.48.212])
+  by fmsmga006.fm.intel.com with ESMTP; 21 Oct 2020 02:10:26 -0700
+From: Robert Hoo <robert.hu@linux.intel.com>
+To: sean.j.christopherson@intel.com, pbonzini@redhat.com,
+        xiaoyao.li@intel.com, vkuznets@redhat.com, wanpengli@tencent.com,
+        jmattson@google.com, joro@8bytes.org
+Cc: kvm@vger.kernel.org, robert.hu@intel.com,
+        Robert Hoo <robert.hu@linux.intel.com>
+Subject: [PATCH v2 1/7] kvm: x86: Extract kvm_apic_base_update_cpuid() from
+ kvm_update_cpuid_runtime()
+Date: Wed, 21 Oct 2020 17:10:04 +0800
+Message-Id: <1603271410-71343-2-git-send-email-robert.hu@linux.intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1603271410-71343-1-git-send-email-robert.hu@linux.intel.com>
+References: <1603271410-71343-1-git-send-email-robert.hu@linux.intel.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+And let kvm_lapic_set_base() call kvm_apic_base_update_cpuid() instead of
+whole kvm_update_cpuid_runtime().
+
+Signed-off-by: Robert Hoo <robert.hu@linux.intel.com>
+---
+ arch/x86/kvm/cpuid.c | 14 ++++++++++++++
+ arch/x86/kvm/cpuid.h |  1 +
+ arch/x86/kvm/lapic.c |  2 +-
+ 3 files changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 3fd6eec..b6dd4ee 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -73,6 +73,20 @@ static int kvm_check_cpuid(struct kvm_vcpu *vcpu)
+ 	return 0;
+ }
+ 
++static inline void guest_cpuid_change(struct kvm_vcpu *vcpu, u32 function,
++					    u32 index, unsigned int feature, bool set)
++{
++	struct kvm_cpuid_entry2 *e =  kvm_find_cpuid_entry(vcpu, function, index);
++
++	if (e)
++		cpuid_entry_change(e, feature, set);
++}
++
++void kvm_apic_base_update_cpuid(struct kvm_vcpu *vcpu, bool set)
++{
++	guest_cpuid_change(vcpu, 1, 0, X86_FEATURE_APIC, set);
++}
++
+ void kvm_update_cpuid_runtime(struct kvm_vcpu *vcpu)
+ {
+ 	struct kvm_cpuid_entry2 *best;
+diff --git a/arch/x86/kvm/cpuid.h b/arch/x86/kvm/cpuid.h
+index 3a923ae..ef4cb9c 100644
+--- a/arch/x86/kvm/cpuid.h
++++ b/arch/x86/kvm/cpuid.h
+@@ -9,6 +9,7 @@
+ extern u32 kvm_cpu_caps[NCAPINTS] __read_mostly;
+ void kvm_set_cpu_caps(void);
+ 
++void kvm_apic_base_update_cpuid(struct kvm_vcpu *vcpu, bool set);
+ void kvm_update_cpuid_runtime(struct kvm_vcpu *vcpu);
+ struct kvm_cpuid_entry2 *kvm_find_cpuid_entry(struct kvm_vcpu *vcpu,
+ 					      u32 function, u32 index);
+diff --git a/arch/x86/kvm/lapic.c b/arch/x86/kvm/lapic.c
+index 5ccbee7..5221b89 100644
+--- a/arch/x86/kvm/lapic.c
++++ b/arch/x86/kvm/lapic.c
+@@ -2231,7 +2231,7 @@ void kvm_lapic_set_base(struct kvm_vcpu *vcpu, u64 value)
+ 	vcpu->arch.apic_base = value;
+ 
+ 	if ((old_value ^ value) & MSR_IA32_APICBASE_ENABLE)
+-		kvm_update_cpuid_runtime(vcpu);
++		kvm_apic_base_update_cpuid(vcpu, !!(value & MSR_IA32_APICBASE_ENABLE));
+ 
+ 	if (!apic)
+ 		return;
+
+From patchwork Wed Oct 21 09:10:05 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Robert Hoo <robert.hu@linux.intel.com>
+X-Patchwork-Id: 11848825
+Return-Path: <SRS0=abDU=D4=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-12.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_PATCH,MAILING_LIST_MULTI,SIGNED_OFF_BY,
+	SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 94B58C56201
+	for <kvm@archiver.kernel.org>; Wed, 21 Oct 2020 09:10:33 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 3C4F821D7B
+	for <kvm@archiver.kernel.org>; Wed, 21 Oct 2020 09:10:33 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2437392AbgJUJKc (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 21 Oct 2020 05:10:32 -0400
+Received: from mga07.intel.com ([134.134.136.100]:58974 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2389165AbgJUJKb (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 21 Oct 2020 05:10:31 -0400
+IronPort-SDR: 
+ SIewW4vD0mhnJb2JKQqctZwUfnJR9vkp0/dGKSg9K19LJ1URoFDv67mye5IvktEQo/B+wS9f2w
+ MKJ5mzZRC3mg==
+X-IronPort-AV: E=McAfee;i="6000,8403,9780"; a="231530449"
+X-IronPort-AV: E=Sophos;i="5.77,400,1596524400";
+   d="scan'208";a="231530449"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga006.fm.intel.com ([10.253.24.20])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 21 Oct 2020 02:10:30 -0700
+IronPort-SDR: 
+ mFj6Z322wev9vhOMbOvSrMmhooGvkHCL0qrIppIhgpDels7hgTBn9qLkCLfO94n0tD5vcS3oNM
+ XPqduvd+EoxQ==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,400,1596524400";
+   d="scan'208";a="522682423"
+Received: from sqa-gate.sh.intel.com (HELO robert-ivt.tsp.org)
+ ([10.239.48.212])
+  by fmsmga006.fm.intel.com with ESMTP; 21 Oct 2020 02:10:28 -0700
+From: Robert Hoo <robert.hu@linux.intel.com>
+To: sean.j.christopherson@intel.com, pbonzini@redhat.com,
+        xiaoyao.li@intel.com, vkuznets@redhat.com, wanpengli@tencent.com,
+        jmattson@google.com, joro@8bytes.org
+Cc: kvm@vger.kernel.org, robert.hu@intel.com,
+        Robert Hoo <robert.hu@linux.intel.com>
+Subject: [PATCH v2 2/7] kvm: x86: Extract kvm_xcr0_update_cpuid() from
+ kvm_update_cpuid_runtime()
+Date: Wed, 21 Oct 2020 17:10:05 +0800
+Message-Id: <1603271410-71343-3-git-send-email-robert.hu@linux.intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1603271410-71343-1-git-send-email-robert.hu@linux.intel.com>
+References: <1603271410-71343-1-git-send-email-robert.hu@linux.intel.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+And let __kvm_set_xcr() call kvm_xcr0_update_cpuid() instead of whole
+kvm_update_cpuid_runtime()
+
+Signed-off-by: Robert Hoo <robert.hu@linux.intel.com>
+---
+ arch/x86/kvm/cpuid.c | 22 ++++++++++++++++++++++
+ arch/x86/kvm/cpuid.h |  2 ++
+ arch/x86/kvm/x86.c   |  2 +-
+ 3 files changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index b6dd4ee..6d5cd03 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -87,6 +87,28 @@ void kvm_apic_base_update_cpuid(struct kvm_vcpu *vcpu, bool set)
+ 	guest_cpuid_change(vcpu, 1, 0, X86_FEATURE_APIC, set);
+ }
+ 
++
++void kvm_xcr0_update_cpuid(struct kvm_vcpu *vcpu)
++{
++	struct kvm_cpuid_entry2 *e;
++
++	e = kvm_find_cpuid_entry(vcpu, 0xD, 0);
++	if (!e) {
++		vcpu->arch.guest_supported_xcr0 = 0;
++	} else {
++		vcpu->arch.guest_supported_xcr0 =
++			(e->eax | ((u64)e->edx << 32)) & supported_xcr0;
++		e->ebx = xstate_required_size(vcpu->arch.xcr0, false);
++	}
++
++	e = kvm_find_cpuid_entry(vcpu, 0xD, 1);
++	if (!e)
++		return;
++	if (cpuid_entry_has(e, X86_FEATURE_XSAVES) ||
++	    cpuid_entry_has(e, X86_FEATURE_XSAVEC))
++		e->ebx = xstate_required_size(vcpu->arch.xcr0, true);
++}
++
+ void kvm_update_cpuid_runtime(struct kvm_vcpu *vcpu)
+ {
+ 	struct kvm_cpuid_entry2 *best;
+diff --git a/arch/x86/kvm/cpuid.h b/arch/x86/kvm/cpuid.h
+index ef4cb9c..845544e 100644
+--- a/arch/x86/kvm/cpuid.h
++++ b/arch/x86/kvm/cpuid.h
+@@ -10,6 +10,8 @@
+ void kvm_set_cpu_caps(void);
+ 
+ void kvm_apic_base_update_cpuid(struct kvm_vcpu *vcpu, bool set);
++void kvm_xcr0_update_cpuid(struct kvm_vcpu *vcpu);
++
+ void kvm_update_cpuid_runtime(struct kvm_vcpu *vcpu);
+ struct kvm_cpuid_entry2 *kvm_find_cpuid_entry(struct kvm_vcpu *vcpu,
+ 					      u32 function, u32 index);
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 58fa354..cd41bec 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -944,7 +944,7 @@ static int __kvm_set_xcr(struct kvm_vcpu *vcpu, u32 index, u64 xcr)
+ 	vcpu->arch.xcr0 = xcr0;
+ 
+ 	if ((xcr0 ^ old_xcr0) & XFEATURE_MASK_EXTEND)
+-		kvm_update_cpuid_runtime(vcpu);
++		kvm_xcr0_update_cpuid(vcpu);
+ 	return 0;
+ }
+ 
+
+From patchwork Wed Oct 21 09:10:06 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Robert Hoo <robert.hu@linux.intel.com>
+X-Patchwork-Id: 11848833
+Return-Path: <SRS0=abDU=D4=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-12.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_PATCH,MAILING_LIST_MULTI,SIGNED_OFF_BY,
+	SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id CBB1DC561F8
+	for <kvm@archiver.kernel.org>; Wed, 21 Oct 2020 09:10:35 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 81F7321D7B
+	for <kvm@archiver.kernel.org>; Wed, 21 Oct 2020 09:10:35 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2437405AbgJUJKe (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 21 Oct 2020 05:10:34 -0400
+Received: from mga07.intel.com ([134.134.136.100]:58976 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2437394AbgJUJKe (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 21 Oct 2020 05:10:34 -0400
+IronPort-SDR: 
+ Ug2OLLaEm9qv2D0buPssireTsHJeXKjMaRvlymKM/6esIUPFWsmJwlhzVG39IUbc72HgT7dweF
+ eD1zqjMQ76mA==
+X-IronPort-AV: E=McAfee;i="6000,8403,9780"; a="231530451"
+X-IronPort-AV: E=Sophos;i="5.77,400,1596524400";
+   d="scan'208";a="231530451"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga006.fm.intel.com ([10.253.24.20])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 21 Oct 2020 02:10:33 -0700
+IronPort-SDR: 
+ tMZbMCOZMTAJWmDKwTyS5jrOHwhEJiknIRork/qlu827POBFzwi2VTflRiVYCmKOcdQIXRYb1x
+ VqvUNqj+XeWA==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,400,1596524400";
+   d="scan'208";a="522682439"
+Received: from sqa-gate.sh.intel.com (HELO robert-ivt.tsp.org)
+ ([10.239.48.212])
+  by fmsmga006.fm.intel.com with ESMTP; 21 Oct 2020 02:10:31 -0700
+From: Robert Hoo <robert.hu@linux.intel.com>
+To: sean.j.christopherson@intel.com, pbonzini@redhat.com,
+        xiaoyao.li@intel.com, vkuznets@redhat.com, wanpengli@tencent.com,
+        jmattson@google.com, joro@8bytes.org
+Cc: kvm@vger.kernel.org, robert.hu@intel.com,
+        Robert Hoo <robert.hu@linux.intel.com>
+Subject: [PATCH v2 3/7] kvm: x86: Extract kvm_osxsave_update_cpuid() and
+ kvm_pke_update_cpuid() from kvm_update_cpuid_runtime()
+Date: Wed, 21 Oct 2020 17:10:06 +0800
+Message-Id: <1603271410-71343-4-git-send-email-robert.hu@linux.intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1603271410-71343-1-git-send-email-robert.hu@linux.intel.com>
+References: <1603271410-71343-1-git-send-email-robert.hu@linux.intel.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+And substitute kvm_update_cpuid_runtime() invocations in kvm_set_cr4(),
+enter_smm() and __set_sregs() with them accordingly.
+
+Signed-off-by: Robert Hoo <robert.hu@linux.intel.com>
+---
+ arch/x86/kvm/cpuid.c | 11 +++++++++++
+ arch/x86/kvm/cpuid.h |  2 ++
+ arch/x86/kvm/x86.c   | 24 +++++++++++++++---------
+ 3 files changed, 28 insertions(+), 9 deletions(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 6d5cd03..18cd27a 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -82,11 +82,22 @@ static inline void guest_cpuid_change(struct kvm_vcpu *vcpu, u32 function,
+ 		cpuid_entry_change(e, feature, set);
+ }
+ 
++void kvm_osxsave_update_cpuid(struct kvm_vcpu *vcpu, bool set)
++{
++	if (boot_cpu_has(X86_FEATURE_XSAVE))
++		guest_cpuid_change(vcpu, 1, 0, X86_FEATURE_OSXSAVE, set);
++}
++
+ void kvm_apic_base_update_cpuid(struct kvm_vcpu *vcpu, bool set)
+ {
+ 	guest_cpuid_change(vcpu, 1, 0, X86_FEATURE_APIC, set);
+ }
+ 
++void kvm_pke_update_cpuid(struct kvm_vcpu *vcpu, bool set)
++{
++	if (boot_cpu_has(X86_FEATURE_PKU))
++		guest_cpuid_change(vcpu, 7, 0, X86_FEATURE_OSPKE, set);
++}
+ 
+ void kvm_xcr0_update_cpuid(struct kvm_vcpu *vcpu)
+ {
+diff --git a/arch/x86/kvm/cpuid.h b/arch/x86/kvm/cpuid.h
+index 845544e..98ea431 100644
+--- a/arch/x86/kvm/cpuid.h
++++ b/arch/x86/kvm/cpuid.h
+@@ -9,6 +9,8 @@
+ extern u32 kvm_cpu_caps[NCAPINTS] __read_mostly;
+ void kvm_set_cpu_caps(void);
+ 
++void kvm_osxsave_update_cpuid(struct kvm_vcpu *vcpu, bool set);
++void kvm_pke_update_cpuid(struct kvm_vcpu *vcpu, bool set);
+ void kvm_apic_base_update_cpuid(struct kvm_vcpu *vcpu, bool set);
+ void kvm_xcr0_update_cpuid(struct kvm_vcpu *vcpu);
+ 
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index cd41bec..5e9a51d 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -1008,8 +1008,10 @@ int kvm_set_cr4(struct kvm_vcpu *vcpu, unsigned long cr4)
+ 	    (!(cr4 & X86_CR4_PCIDE) && (old_cr4 & X86_CR4_PCIDE)))
+ 		kvm_mmu_reset_context(vcpu);
+ 
+-	if ((cr4 ^ old_cr4) & (X86_CR4_OSXSAVE | X86_CR4_PKE))
+-		kvm_update_cpuid_runtime(vcpu);
++	if ((cr4 ^ old_cr4) & X86_CR4_OSXSAVE)
++		kvm_osxsave_update_cpuid(vcpu, !!(cr4 & X86_CR4_OSXSAVE));
++	if ((cr4 ^ old_cr4) & X86_CR4_PKE)
++		kvm_pke_update_cpuid(vcpu, !!(cr4 & X86_CR4_PKE));
+ 
+ 	return 0;
+ }
+@@ -8177,6 +8179,8 @@ static void enter_smm(struct kvm_vcpu *vcpu)
+ 	vcpu->arch.cr0 = cr0;
+ 
+ 	kvm_x86_ops.set_cr4(vcpu, 0);
++	kvm_osxsave_update_cpuid(vcpu, false);
++	kvm_pke_update_cpuid(vcpu, false);
+ 
+ 	/* Undocumented: IDT limit is set to zero on entry to SMM.  */
+ 	dt.address = dt.size = 0;
+@@ -8214,7 +8218,6 @@ static void enter_smm(struct kvm_vcpu *vcpu)
+ 		kvm_x86_ops.set_efer(vcpu, 0);
+ #endif
+ 
+-	kvm_update_cpuid_runtime(vcpu);
+ 	kvm_mmu_reset_context(vcpu);
+ }
+ 
+@@ -9193,7 +9196,7 @@ static int __set_sregs(struct kvm_vcpu *vcpu, struct kvm_sregs *sregs)
+ {
+ 	struct msr_data apic_base_msr;
+ 	int mmu_reset_needed = 0;
+-	int cpuid_update_needed = 0;
++	ulong old_cr4 = 0;
+ 	int pending_vec, max_bits, idx;
+ 	struct desc_ptr dt;
+ 	int ret = -EINVAL;
+@@ -9227,12 +9230,15 @@ static int __set_sregs(struct kvm_vcpu *vcpu, struct kvm_sregs *sregs)
+ 	kvm_x86_ops.set_cr0(vcpu, sregs->cr0);
+ 	vcpu->arch.cr0 = sregs->cr0;
+ 
+-	mmu_reset_needed |= kvm_read_cr4(vcpu) != sregs->cr4;
+-	cpuid_update_needed |= ((kvm_read_cr4(vcpu) ^ sregs->cr4) &
+-				(X86_CR4_OSXSAVE | X86_CR4_PKE));
++	old_cr4 = kvm_read_cr4(vcpu);
++	mmu_reset_needed |= old_cr4 != sregs->cr4;
++
+ 	kvm_x86_ops.set_cr4(vcpu, sregs->cr4);
+-	if (cpuid_update_needed)
+-		kvm_update_cpuid_runtime(vcpu);
++
++	if ((old_cr4 ^ sregs->cr4) & X86_CR4_OSXSAVE)
++		kvm_osxsave_update_cpuid(vcpu, !!(sregs->cr4 & X86_CR4_OSXSAVE));
++	if ((old_cr4 ^ sregs->cr4) & X86_CR4_PKE)
++		kvm_pke_update_cpuid(vcpu, !!(sregs->cr4 & X86_CR4_PKE));
+ 
+ 	idx = srcu_read_lock(&vcpu->kvm->srcu);
+ 	if (is_pae_paging(vcpu)) {
+
+From patchwork Wed Oct 21 09:10:07 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Robert Hoo <robert.hu@linux.intel.com>
+X-Patchwork-Id: 11848831
+Return-Path: <SRS0=abDU=D4=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-12.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_PATCH,MAILING_LIST_MULTI,SIGNED_OFF_BY,
+	SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id AD189C56201
+	for <kvm@archiver.kernel.org>; Wed, 21 Oct 2020 09:10:37 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 4C32321D7B
+	for <kvm@archiver.kernel.org>; Wed, 21 Oct 2020 09:10:37 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2437401AbgJUJKg (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 21 Oct 2020 05:10:36 -0400
+Received: from mga07.intel.com ([134.134.136.100]:58976 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2437398AbgJUJKf (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 21 Oct 2020 05:10:35 -0400
+IronPort-SDR: 
+ 7Wh4ehq6z7Yy3S7z53XFTpraBXM7HeZpQAVJ7dloiq1RMZZTWwz1Qg8EnlYym4uaK+dZn+NqeB
+ BiA9a4AMOOKA==
+X-IronPort-AV: E=McAfee;i="6000,8403,9780"; a="231530453"
+X-IronPort-AV: E=Sophos;i="5.77,400,1596524400";
+   d="scan'208";a="231530453"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga006.fm.intel.com ([10.253.24.20])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 21 Oct 2020 02:10:35 -0700
+IronPort-SDR: 
+ qoHI6RhjSKe2OX+VFGQHv0w438xECTTfaK0GCJ4pqz5PISWmeZBaPPRjL7WINmpk7aSqq8WrOS
+ vcEWgSHBhkfA==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,400,1596524400";
+   d="scan'208";a="522682449"
+Received: from sqa-gate.sh.intel.com (HELO robert-ivt.tsp.org)
+ ([10.239.48.212])
+  by fmsmga006.fm.intel.com with ESMTP; 21 Oct 2020 02:10:33 -0700
+From: Robert Hoo <robert.hu@linux.intel.com>
+To: sean.j.christopherson@intel.com, pbonzini@redhat.com,
+        xiaoyao.li@intel.com, vkuznets@redhat.com, wanpengli@tencent.com,
+        jmattson@google.com, joro@8bytes.org
+Cc: kvm@vger.kernel.org, robert.hu@intel.com,
+        Robert Hoo <robert.hu@linux.intel.com>
+Subject: [PATCH v2 4/7] kvm: x86: Extract kvm_mwait_update_cpuid() from
+ kvm_update_cpuid_runtime()
+Date: Wed, 21 Oct 2020 17:10:07 +0800
+Message-Id: <1603271410-71343-5-git-send-email-robert.hu@linux.intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1603271410-71343-1-git-send-email-robert.hu@linux.intel.com>
+References: <1603271410-71343-1-git-send-email-robert.hu@linux.intel.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+And let kvm_set_msr_common() call kvm_mwait_update_cpuid() instead of whole
+kvm_update_cpuid_runtime().
+
+Signed-off-by: Robert Hoo <robert.hu@linux.intel.com>
+---
+ arch/x86/kvm/cpuid.c | 5 +++++
+ arch/x86/kvm/cpuid.h | 1 +
+ arch/x86/kvm/x86.c   | 3 ++-
+ 3 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 18cd27a..556c018 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -88,6 +88,11 @@ void kvm_osxsave_update_cpuid(struct kvm_vcpu *vcpu, bool set)
+ 		guest_cpuid_change(vcpu, 1, 0, X86_FEATURE_OSXSAVE, set);
+ }
+ 
++void kvm_mwait_update_cpuid(struct kvm_vcpu *vcpu, bool set)
++{
++	guest_cpuid_change(vcpu, 1, 0, X86_FEATURE_MWAIT, set);
++}
++
+ void kvm_apic_base_update_cpuid(struct kvm_vcpu *vcpu, bool set)
+ {
+ 	guest_cpuid_change(vcpu, 1, 0, X86_FEATURE_APIC, set);
+diff --git a/arch/x86/kvm/cpuid.h b/arch/x86/kvm/cpuid.h
+index 98ea431..7eabb44 100644
+--- a/arch/x86/kvm/cpuid.h
++++ b/arch/x86/kvm/cpuid.h
+@@ -12,6 +12,7 @@
+ void kvm_osxsave_update_cpuid(struct kvm_vcpu *vcpu, bool set);
+ void kvm_pke_update_cpuid(struct kvm_vcpu *vcpu, bool set);
+ void kvm_apic_base_update_cpuid(struct kvm_vcpu *vcpu, bool set);
++void kvm_mwait_update_cpuid(struct kvm_vcpu *vcpu, bool set);
+ void kvm_xcr0_update_cpuid(struct kvm_vcpu *vcpu);
+ 
+ void kvm_update_cpuid_runtime(struct kvm_vcpu *vcpu);
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 5e9a51d..0d3cb34 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -2936,8 +2936,9 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 		    ((vcpu->arch.ia32_misc_enable_msr ^ data) & MSR_IA32_MISC_ENABLE_MWAIT)) {
+ 			if (!guest_cpuid_has(vcpu, X86_FEATURE_XMM3))
+ 				return 1;
++			kvm_mwait_update_cpuid(vcpu, !!(data & MSR_IA32_MISC_ENABLE_MWAIT));
++
+ 			vcpu->arch.ia32_misc_enable_msr = data;
+-			kvm_update_cpuid_runtime(vcpu);
+ 		} else {
+ 			vcpu->arch.ia32_misc_enable_msr = data;
+ 		}
+
+From patchwork Wed Oct 21 09:10:08 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Robert Hoo <robert.hu@linux.intel.com>
+X-Patchwork-Id: 11848829
+Return-Path: <SRS0=abDU=D4=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-12.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_PATCH,MAILING_LIST_MULTI,SIGNED_OFF_BY,
+	SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 99BB5C4363A
+	for <kvm@archiver.kernel.org>; Wed, 21 Oct 2020 09:10:40 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 4E45D21D7B
+	for <kvm@archiver.kernel.org>; Wed, 21 Oct 2020 09:10:40 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2437418AbgJUJKj (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 21 Oct 2020 05:10:39 -0400
+Received: from mga07.intel.com ([134.134.136.100]:58976 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2437412AbgJUJKi (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 21 Oct 2020 05:10:38 -0400
+IronPort-SDR: 
+ lBDJxM9vk2HKXBv0s1aDtYHFPN5PFhG0+47CO7ttaIoumBdD4v45CHYcMJbGF9ETFQEUMz9CRc
+ 5ZdQNegSlo0Q==
+X-IronPort-AV: E=McAfee;i="6000,8403,9780"; a="231530459"
+X-IronPort-AV: E=Sophos;i="5.77,400,1596524400";
+   d="scan'208";a="231530459"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga006.fm.intel.com ([10.253.24.20])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 21 Oct 2020 02:10:37 -0700
+IronPort-SDR: 
+ H9Px2hJvDPOfU0ALHHBmzY97pXg2x5yLpkaCj6JxMFCTFDqqnh0QMvtAst16OLhg1Z8MuvyuYl
+ FB1cXeyElVMQ==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,400,1596524400";
+   d="scan'208";a="522682465"
+Received: from sqa-gate.sh.intel.com (HELO robert-ivt.tsp.org)
+ ([10.239.48.212])
+  by fmsmga006.fm.intel.com with ESMTP; 21 Oct 2020 02:10:35 -0700
+From: Robert Hoo <robert.hu@linux.intel.com>
+To: sean.j.christopherson@intel.com, pbonzini@redhat.com,
+        xiaoyao.li@intel.com, vkuznets@redhat.com, wanpengli@tencent.com,
+        jmattson@google.com, joro@8bytes.org
+Cc: kvm@vger.kernel.org, robert.hu@intel.com,
+        Robert Hoo <robert.hu@linux.intel.com>
+Subject: [PATCH v2 5/7] [Trivial] kvm: x86: cpuid_query_maxphyaddr(): Use a
+ simple 'e' instead of misleading 'best', as the variable name
+Date: Wed, 21 Oct 2020 17:10:08 +0800
+Message-Id: <1603271410-71343-6-git-send-email-robert.hu@linux.intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1603271410-71343-1-git-send-email-robert.hu@linux.intel.com>
+References: <1603271410-71343-1-git-send-email-robert.hu@linux.intel.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Function's logic doesn't change at all.
+
+Signed-off-by: Robert Hoo <robert.hu@linux.intel.com>
+---
+ arch/x86/kvm/cpuid.c | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 556c018..ff2d73c 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -227,14 +227,14 @@ static void cpuid_fix_nx_cap(struct kvm_vcpu *vcpu)
+ 
+ int cpuid_query_maxphyaddr(struct kvm_vcpu *vcpu)
+ {
+-	struct kvm_cpuid_entry2 *best;
++	struct kvm_cpuid_entry2 *e;
+ 
+-	best = kvm_find_cpuid_entry(vcpu, 0x80000000, 0);
+-	if (!best || best->eax < 0x80000008)
++	e = kvm_find_cpuid_entry(vcpu, 0x80000000, 0);
++	if (!e || e->eax < 0x80000008)
+ 		goto not_found;
+-	best = kvm_find_cpuid_entry(vcpu, 0x80000008, 0);
+-	if (best)
+-		return best->eax & 0xff;
++	e = kvm_find_cpuid_entry(vcpu, 0x80000008, 0);
++	if (e)
++		return e->eax & 0xff;
+ not_found:
+ 	return 36;
+ }
+
+From patchwork Wed Oct 21 09:10:09 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Robert Hoo <robert.hu@linux.intel.com>
+X-Patchwork-Id: 11848837
+Return-Path: <SRS0=abDU=D4=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-9.9 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_PATCH,MAILING_LIST_MULTI,SIGNED_OFF_BY,
+	SPF_HELO_NONE,SPF_PASS,UNWANTED_LANGUAGE_BODY,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 70C8DC4363A
+	for <kvm@archiver.kernel.org>; Wed, 21 Oct 2020 09:10:43 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 1820C21D7B
+	for <kvm@archiver.kernel.org>; Wed, 21 Oct 2020 09:10:43 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2437421AbgJUJKl (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 21 Oct 2020 05:10:41 -0400
+Received: from mga07.intel.com ([134.134.136.100]:58982 "EHLO mga07.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2437412AbgJUJKl (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 21 Oct 2020 05:10:41 -0400
+IronPort-SDR: 
+ beshNKjWfC/TpHV2fUZtxSWZHbF5pO+lETlBvIG2J9jyeQ30qDKVzWQ1Onw4IOFdx2CXX3YVSo
+ Bnd3U8hXeYeQ==
+X-IronPort-AV: E=McAfee;i="6000,8403,9780"; a="231530470"
+X-IronPort-AV: E=Sophos;i="5.77,400,1596524400";
+   d="scan'208";a="231530470"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga006.fm.intel.com ([10.253.24.20])
+  by orsmga105.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 21 Oct 2020 02:10:39 -0700
+IronPort-SDR: 
+ NyV5lLzv6sQZ2+jtKDJV5Bgjjg+9D4k8nRvVhTTuBVvc/mhA4heLhO+QfL0igeqCJOKzJEk2PM
+ h1njaRiKyn9Q==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,400,1596524400";
+   d="scan'208";a="522682477"
+Received: from sqa-gate.sh.intel.com (HELO robert-ivt.tsp.org)
+ ([10.239.48.212])
+  by fmsmga006.fm.intel.com with ESMTP; 21 Oct 2020 02:10:37 -0700
+From: Robert Hoo <robert.hu@linux.intel.com>
+To: sean.j.christopherson@intel.com, pbonzini@redhat.com,
+        xiaoyao.li@intel.com, vkuznets@redhat.com, wanpengli@tencent.com,
+        jmattson@google.com, joro@8bytes.org
+Cc: kvm@vger.kernel.org, robert.hu@intel.com,
+        Robert Hoo <robert.hu@linux.intel.com>
+Subject: [PATCH v2 6/7] kvm: x86: Refactor kvm_vcpu_after_set_cpuid()
+Date: Wed, 21 Oct 2020 17:10:09 +0800
+Message-Id: <1603271410-71343-7-git-send-email-robert.hu@linux.intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1603271410-71343-1-git-send-email-robert.hu@linux.intel.com>
+References: <1603271410-71343-1-git-send-email-robert.hu@linux.intel.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Extract kvm_pv_unhalt_toggle_cpuid() from kvm_update_cpuid_runtime().
+Add/wrap other 2 functions: kvm_pv_unhalt_toggle_cpuid() and
+kvm_pv_unhalt_toggle_cpuid().
+Refactor kvm_vcpu_after_set_cpuid() with these new functions.
+
+kvm_vcpu_after_set_cpuid() contents doesn't essentially change.
+
+Signed-off-by: Robert Hoo <robert.hu@linux.intel.com>
+---
+ arch/x86/kvm/cpuid.c | 59 +++++++++++++++++++++++++++++++++++-----------------
+ 1 file changed, 40 insertions(+), 19 deletions(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index ff2d73c..454eda9 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -125,6 +125,41 @@ void kvm_xcr0_update_cpuid(struct kvm_vcpu *vcpu)
+ 		e->ebx = xstate_required_size(vcpu->arch.xcr0, true);
+ }
+ 
++static void kvm_pv_unhalt_toggle_cpuid(struct kvm_vcpu *vcpu)
++{
++	struct kvm_cpuid_entry2 *e;
++
++	e = kvm_find_cpuid_entry(vcpu, KVM_CPUID_FEATURES, 0);
++	if (kvm_hlt_in_guest(vcpu->kvm) && e &&
++	    (e->eax & (1 << KVM_FEATURE_PV_UNHALT)))
++		e->eax &= ~(1 << KVM_FEATURE_PV_UNHALT);
++}
++
++static void kvm_update_maxphyaddr(struct kvm_vcpu *vcpu)
++{
++
++	/* Note, maxphyaddr must be updated before tdp_level. */
++	vcpu->arch.maxphyaddr = cpuid_query_maxphyaddr(vcpu);
++	kvm_mmu_reset_context(vcpu);
++}
++
++static void kvm_update_lapic_timer_mode(struct kvm_vcpu *vcpu)
++{
++	struct kvm_lapic *apic = vcpu->arch.apic;
++
++	if (apic) {
++		struct kvm_cpuid_entry2 *e;
++
++		e = kvm_find_cpuid_entry(vcpu, 1, 0);
++		if (!e)
++			return;
++		if (cpuid_entry_has(e, X86_FEATURE_TSC_DEADLINE_TIMER))
++			apic->lapic_timer.timer_mode_mask = 3 << 17;
++		else
++			apic->lapic_timer.timer_mode_mask = 1 << 17;
++	}
++}
++
+ void kvm_update_cpuid_runtime(struct kvm_vcpu *vcpu)
+ {
+ 	struct kvm_cpuid_entry2 *best;
+@@ -170,30 +205,16 @@ void kvm_update_cpuid_runtime(struct kvm_vcpu *vcpu)
+ 
+ static void kvm_vcpu_after_set_cpuid(struct kvm_vcpu *vcpu)
+ {
+-	struct kvm_lapic *apic = vcpu->arch.apic;
+-	struct kvm_cpuid_entry2 *best;
+-
+ 	kvm_x86_ops.vcpu_after_set_cpuid(vcpu);
+ 
+-	best = kvm_find_cpuid_entry(vcpu, 1, 0);
+-	if (best && apic) {
+-		if (cpuid_entry_has(best, X86_FEATURE_TSC_DEADLINE_TIMER))
+-			apic->lapic_timer.timer_mode_mask = 3 << 17;
+-		else
+-			apic->lapic_timer.timer_mode_mask = 1 << 17;
++	kvm_update_lapic_timer_mode(vcpu);
++	kvm_apic_set_version(vcpu);
+ 
+-		kvm_apic_set_version(vcpu);
+-	}
++	kvm_xcr0_update_cpuid(vcpu);
+ 
+-	best = kvm_find_cpuid_entry(vcpu, 0xD, 0);
+-	if (!best)
+-		vcpu->arch.guest_supported_xcr0 = 0;
+-	else
+-		vcpu->arch.guest_supported_xcr0 =
+-			(best->eax | ((u64)best->edx << 32)) & supported_xcr0;
++	kvm_update_maxphyaddr(vcpu);
+ 
+-	vcpu->arch.maxphyaddr = cpuid_query_maxphyaddr(vcpu);
+-	kvm_mmu_reset_context(vcpu);
++	kvm_pv_unhalt_toggle_cpuid(vcpu);
+ 
+ 	kvm_pmu_refresh(vcpu);
+ 	vcpu->arch.cr4_guest_rsvd_bits =
+
+From patchwork Wed Oct 21 09:10:10 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Robert Hoo <robert.hu@linux.intel.com>
+X-Patchwork-Id: 11848835
+Return-Path: <SRS0=abDU=D4=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-12.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_PATCH,MAILING_LIST_MULTI,SIGNED_OFF_BY,
+	SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 176FFC561F8
+	for <kvm@archiver.kernel.org>; Wed, 21 Oct 2020 09:10:45 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id AB62021D7B
+	for <kvm@archiver.kernel.org>; Wed, 21 Oct 2020 09:10:44 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2437415AbgJUJKn (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 21 Oct 2020 05:10:43 -0400
+Received: from mga14.intel.com ([192.55.52.115]:30783 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2437398AbgJUJKn (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 21 Oct 2020 05:10:43 -0400
+IronPort-SDR: 
+ Fkr+o6F9XPJ2lNrdyNs+xVk9qKLMsmmUM91zKmgqeYr9/inYtotVUvUv2lBhgMNHm0hcLILR7X
+ Anap8Pjw7V1A==
+X-IronPort-AV: E=McAfee;i="6000,8403,9780"; a="166561666"
+X-IronPort-AV: E=Sophos;i="5.77,400,1596524400";
+   d="scan'208";a="166561666"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga006.fm.intel.com ([10.253.24.20])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 21 Oct 2020 02:10:42 -0700
+IronPort-SDR: 
+ s4UPYx2xs+F+JbCm1YM6Q+sRMTMVfVDX3aOqowZd5jcR3VMMobbTJDE5QSpovd43gnLxkO27N4
+ uhmpOUBz72Fw==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.77,400,1596524400";
+   d="scan'208";a="522682482"
+Received: from sqa-gate.sh.intel.com (HELO robert-ivt.tsp.org)
+ ([10.239.48.212])
+  by fmsmga006.fm.intel.com with ESMTP; 21 Oct 2020 02:10:40 -0700
+From: Robert Hoo <robert.hu@linux.intel.com>
+To: sean.j.christopherson@intel.com, pbonzini@redhat.com,
+        xiaoyao.li@intel.com, vkuznets@redhat.com, wanpengli@tencent.com,
+        jmattson@google.com, joro@8bytes.org
+Cc: kvm@vger.kernel.org, robert.hu@intel.com,
+        Robert Hoo <robert.hu@linux.intel.com>
+Subject: [PATCH v2 7/7] kvm: x86: Remove kvm_update_cpuid_runtime()
+Date: Wed, 21 Oct 2020 17:10:10 +0800
+Message-Id: <1603271410-71343-8-git-send-email-robert.hu@linux.intel.com>
+X-Mailer: git-send-email 1.8.3.1
+In-Reply-To: <1603271410-71343-1-git-send-email-robert.hu@linux.intel.com>
+References: <1603271410-71343-1-git-send-email-robert.hu@linux.intel.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Now kvm_update_cpuid_runtime() has been discerped into previous
+extracted functions, and kvm_vcpu_after_set_cpuid() has all necessary
+updates for kvm_vcpu_ioctl_set_cpuid2(), remove kvm_update_cpuid_runtime().
+
+Signed-off-by: Robert Hoo <robert.hu@linux.intel.com>
+---
+ arch/x86/kvm/cpuid.c | 45 ---------------------------------------------
+ arch/x86/kvm/cpuid.h |  1 -
+ 2 files changed, 46 deletions(-)
+
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index 454eda9..8f40148 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -160,49 +160,6 @@ static void kvm_update_lapic_timer_mode(struct kvm_vcpu *vcpu)
+ 	}
+ }
+ 
+-void kvm_update_cpuid_runtime(struct kvm_vcpu *vcpu)
+-{
+-	struct kvm_cpuid_entry2 *best;
+-
+-	best = kvm_find_cpuid_entry(vcpu, 1, 0);
+-	if (best) {
+-		/* Update OSXSAVE bit */
+-		if (boot_cpu_has(X86_FEATURE_XSAVE))
+-			cpuid_entry_change(best, X86_FEATURE_OSXSAVE,
+-				   kvm_read_cr4_bits(vcpu, X86_CR4_OSXSAVE));
+-
+-		cpuid_entry_change(best, X86_FEATURE_APIC,
+-			   vcpu->arch.apic_base & MSR_IA32_APICBASE_ENABLE);
+-	}
+-
+-	best = kvm_find_cpuid_entry(vcpu, 7, 0);
+-	if (best && boot_cpu_has(X86_FEATURE_PKU) && best->function == 0x7)
+-		cpuid_entry_change(best, X86_FEATURE_OSPKE,
+-				   kvm_read_cr4_bits(vcpu, X86_CR4_PKE));
+-
+-	best = kvm_find_cpuid_entry(vcpu, 0xD, 0);
+-	if (best)
+-		best->ebx = xstate_required_size(vcpu->arch.xcr0, false);
+-
+-	best = kvm_find_cpuid_entry(vcpu, 0xD, 1);
+-	if (best && (cpuid_entry_has(best, X86_FEATURE_XSAVES) ||
+-		     cpuid_entry_has(best, X86_FEATURE_XSAVEC)))
+-		best->ebx = xstate_required_size(vcpu->arch.xcr0, true);
+-
+-	best = kvm_find_cpuid_entry(vcpu, KVM_CPUID_FEATURES, 0);
+-	if (kvm_hlt_in_guest(vcpu->kvm) && best &&
+-		(best->eax & (1 << KVM_FEATURE_PV_UNHALT)))
+-		best->eax &= ~(1 << KVM_FEATURE_PV_UNHALT);
+-
+-	if (!kvm_check_has_quirk(vcpu->kvm, KVM_X86_QUIRK_MISC_ENABLE_NO_MWAIT)) {
+-		best = kvm_find_cpuid_entry(vcpu, 0x1, 0);
+-		if (best)
+-			cpuid_entry_change(best, X86_FEATURE_MWAIT,
+-					   vcpu->arch.ia32_misc_enable_msr &
+-					   MSR_IA32_MISC_ENABLE_MWAIT);
+-	}
+-}
+-
+ static void kvm_vcpu_after_set_cpuid(struct kvm_vcpu *vcpu)
+ {
+ 	kvm_x86_ops.vcpu_after_set_cpuid(vcpu);
+@@ -302,7 +259,6 @@ int kvm_vcpu_ioctl_set_cpuid(struct kvm_vcpu *vcpu,
+ 	}
+ 
+ 	cpuid_fix_nx_cap(vcpu);
+-	kvm_update_cpuid_runtime(vcpu);
+ 	kvm_vcpu_after_set_cpuid(vcpu);
+ 
+ 	kvfree(cpuid_entries);
+@@ -330,7 +286,6 @@ int kvm_vcpu_ioctl_set_cpuid2(struct kvm_vcpu *vcpu,
+ 		goto out;
+ 	}
+ 
+-	kvm_update_cpuid_runtime(vcpu);
+ 	kvm_vcpu_after_set_cpuid(vcpu);
+ out:
+ 	return r;
+diff --git a/arch/x86/kvm/cpuid.h b/arch/x86/kvm/cpuid.h
+index 7eabb44..7ef46bc 100644
+--- a/arch/x86/kvm/cpuid.h
++++ b/arch/x86/kvm/cpuid.h
+@@ -15,7 +15,6 @@
+ void kvm_mwait_update_cpuid(struct kvm_vcpu *vcpu, bool set);
+ void kvm_xcr0_update_cpuid(struct kvm_vcpu *vcpu);
+ 
+-void kvm_update_cpuid_runtime(struct kvm_vcpu *vcpu);
+ struct kvm_cpuid_entry2 *kvm_find_cpuid_entry(struct kvm_vcpu *vcpu,
+ 					      u32 function, u32 index);
+ int kvm_dev_ioctl_get_cpuid(struct kvm_cpuid2 *cpuid,
