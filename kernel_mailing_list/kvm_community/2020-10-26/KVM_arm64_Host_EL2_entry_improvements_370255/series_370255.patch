@@ -1,0 +1,1166 @@
+From patchwork Mon Oct 26 09:51:09 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11856223
+Return-Path: <SRS0=RIF0=EB=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,INCLUDES_PATCH,MAILING_LIST_MULTI,
+	SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 13E73C2D0A3
+	for <kvm@archiver.kernel.org>; Mon, 26 Oct 2020 09:51:49 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id CCBED223AC
+	for <kvm@archiver.kernel.org>; Mon, 26 Oct 2020 09:51:48 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1603705908;
+	bh=M9e70BEFvF5FajpDUL4748IzzfhwguzKhvy5dXrsgVY=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=HuV0j0yEm2avGpMfz48H+Ik6NSYjDI8ijKkGBJanrwsd6wM6UVVixRWF5aRFnQHjj
+	 YWYcyB0Tv0kmzfrml9B69Bvx+J58gvjmLu+avBCeVXErHCjZD+7HIwRjloUA7Zxysx
+	 exYibOl9igQFsX4VJigLU6HpVqBPaZDinRQiwfIY=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1768646AbgJZJvs (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 26 Oct 2020 05:51:48 -0400
+Received: from mail.kernel.org ([198.145.29.99]:44100 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1737069AbgJZJvc (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 26 Oct 2020 05:51:32 -0400
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id 9AB82222EC;
+        Mon, 26 Oct 2020 09:51:31 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+        s=default; t=1603705891;
+        bh=M9e70BEFvF5FajpDUL4748IzzfhwguzKhvy5dXrsgVY=;
+        h=From:To:Cc:Subject:Date:In-Reply-To:References:From;
+        b=vROdnfbQxI4Ju2iB6xoCt7CemBetIOumxE1d+KQqxDvEdVsJnhGCsSIb2cfp+IrKt
+         4asYcTyiMm1cYQIk95FWa4uF7WlLY8FflURgUu+ArxLtXpX68VgL5n65f4aZ2VSVim
+         NhcyLDWCyx2LKy2f+gKC3uOIDnTuflgQBp3P5A2w=
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1kWzA1-004HZn-Qc; Mon, 26 Oct 2020 09:51:29 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Andrew Scull <ascull@google.com>,
+        Will Deacon <will@kernel.org>,
+        Quentin Perret <qperret@google.com>, kernel-team@android.com
+Subject: [PATCH 1/8] KVM: arm64: Don't corrupt tpidr_el2 on failed HVC call
+Date: Mon, 26 Oct 2020 09:51:09 +0000
+Message-Id: <20201026095116.72051-2-maz@kernel.org>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201026095116.72051-1-maz@kernel.org>
+References: <20201026095116.72051-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org, james.morse@arm.com,
+ julien.thierry.kdev@gmail.com, suzuki.poulose@arm.com, ascull@google.com,
+ will@kernel.org, qperret@google.com, kernel-team@android.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The hyp-init code starts by stashing a register in TPIDR_EL2
+in in order to free a register. This happens no matter if the
+HVC call is legal or not.
+
+Although nothing wrong seems to come out of it, it feels odd
+to alter the EL2 state for something that eventually returns
+an error.
+
+Instead, use the fact that we know exactly which bits of the
+__kvm_hyp_init call are non-zero to perform the check with
+a series of EOR/ROR instructions, combined with a build-time
+check that the value is the one we expect.
+
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/kvm/hyp/nvhe/hyp-init.S | 23 ++++++++++++++++-------
+ 1 file changed, 16 insertions(+), 7 deletions(-)
+
+diff --git a/arch/arm64/kvm/hyp/nvhe/hyp-init.S b/arch/arm64/kvm/hyp/nvhe/hyp-init.S
+index 47224dc62c51..b11a9d7db677 100644
+--- a/arch/arm64/kvm/hyp/nvhe/hyp-init.S
++++ b/arch/arm64/kvm/hyp/nvhe/hyp-init.S
+@@ -57,16 +57,25 @@ __do_hyp_init:
+ 	cmp	x0, #HVC_STUB_HCALL_NR
+ 	b.lo	__kvm_handle_stub_hvc
+ 
+-	/* Set tpidr_el2 for use by HYP to free a register */
+-	msr	tpidr_el2, x2
+-
+-	mov	x2, #KVM_HOST_SMCCC_FUNC(__kvm_hyp_init)
+-	cmp	x0, x2
+-	b.eq	1f
++	// We only actively check bits [24:31], and everything
++	// else has to be zero, which we check at build time.
++#if (KVM_HOST_SMCCC_FUNC(__kvm_hyp_init) & 0xFFFFFFFF00FFFFFF)
++#error Unexpected __KVM_HOST_SMCCC_FUNC___kvm_hyp_init value
++#endif
++
++	ror	x0, x0, #24
++	eor	x0, x0, #((KVM_HOST_SMCCC_FUNC(__kvm_hyp_init) >> 24) & 0xF)
++	ror	x0, x0, #4
++	eor	x0, x0, #((KVM_HOST_SMCCC_FUNC(__kvm_hyp_init) >> 28) & 0xF)
++	cbz	x0, 1f
+ 	mov	x0, #SMCCC_RET_NOT_SUPPORTED
+ 	eret
+ 
+-1:	phys_to_ttbr x0, x1
++1:
++	/* Set tpidr_el2 for use by HYP to free a register */
++	msr	tpidr_el2, x2
++
++	phys_to_ttbr x0, x1
+ alternative_if ARM64_HAS_CNP
+ 	orr	x0, x0, #TTBR_CNP_BIT
+ alternative_else_nop_endif
+
+From patchwork Mon Oct 26 09:51:10 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11856231
+Return-Path: <SRS0=RIF0=EB=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,INCLUDES_PATCH,MAILING_LIST_MULTI,
+	SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 3D8E0C4363A
+	for <kvm@archiver.kernel.org>; Mon, 26 Oct 2020 09:51:55 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id E48AE20704
+	for <kvm@archiver.kernel.org>; Mon, 26 Oct 2020 09:51:54 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1603705915;
+	bh=RxIejDssnp3c9YZuqjwSJ+E0qxuqFvO3cP9dq3FNOLI=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=tKdBGgb+xC6ruoq69MWcDO5bNo+1EBfWhv+HVMkFgAJ4Eh5K4g4zLO2kc0Y/41/cz
+	 yz/de42HHdDOwwNNtytIY8MaJv/Zudurn8P6lqY2NDBScFjn5YpcDW0YtJisXDQfUq
+	 /xFNQBBXmgxxFoKJXNWVOGAg/BLTPu2s6PRWMvS8=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1768643AbgJZJvr (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 26 Oct 2020 05:51:47 -0400
+Received: from mail.kernel.org ([198.145.29.99]:44134 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1737071AbgJZJvc (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 26 Oct 2020 05:51:32 -0400
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id 22F6E20874;
+        Mon, 26 Oct 2020 09:51:32 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+        s=default; t=1603705892;
+        bh=RxIejDssnp3c9YZuqjwSJ+E0qxuqFvO3cP9dq3FNOLI=;
+        h=From:To:Cc:Subject:Date:In-Reply-To:References:From;
+        b=cANCkC8PalxOt+08trD/schoZS87cPNUgBlQxbyZD/k73amuGekrt7qanXiaQIKZX
+         9rT4XZKo82Smc6ssSQn6JwmcyH7EeDGbnLPRz3xIW+6jdTLdmYLloUgFM/DHdiSYaI
+         H6nTyRsH4DT49+PQrgFGZuBZQrHshj9GX3tKYDJA=
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1kWzA2-004HZn-Bk; Mon, 26 Oct 2020 09:51:30 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Andrew Scull <ascull@google.com>,
+        Will Deacon <will@kernel.org>,
+        Quentin Perret <qperret@google.com>, kernel-team@android.com
+Subject: [PATCH 2/8] KVM: arm64: Remove leftover kern_hyp_va() in nVHE TLB
+ invalidation
+Date: Mon, 26 Oct 2020 09:51:10 +0000
+Message-Id: <20201026095116.72051-3-maz@kernel.org>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201026095116.72051-1-maz@kernel.org>
+References: <20201026095116.72051-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org, james.morse@arm.com,
+ julien.thierry.kdev@gmail.com, suzuki.poulose@arm.com, ascull@google.com,
+ will@kernel.org, qperret@google.com, kernel-team@android.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The new calling convention says that pointers coming from the SMCCC
+interface are turned into their HYP version in the host HVC handler.
+However, there is still a stray kern_hyp_va() in the TLB invalidation
+code, which could result in a corrupted pointer.
+
+Drop the spurious conversion.
+
+Fixes: a071261d9318 ("KVM: arm64: nVHE: Fix pointers during SMCCC convertion")
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/kvm/hyp/nvhe/tlb.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/arch/arm64/kvm/hyp/nvhe/tlb.c b/arch/arm64/kvm/hyp/nvhe/tlb.c
+index 39ca71ab8866..fbde89a2c6e8 100644
+--- a/arch/arm64/kvm/hyp/nvhe/tlb.c
++++ b/arch/arm64/kvm/hyp/nvhe/tlb.c
+@@ -128,7 +128,6 @@ void __kvm_tlb_flush_local_vmid(struct kvm_s2_mmu *mmu)
+ 	struct tlb_inv_context cxt;
+ 
+ 	/* Switch to requested VMID */
+-	mmu = kern_hyp_va(mmu);
+ 	__tlb_switch_to_guest(mmu, &cxt);
+ 
+ 	__tlbi(vmalle1);
+
+From patchwork Mon Oct 26 09:51:11 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11856225
+Return-Path: <SRS0=RIF0=EB=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,INCLUDES_PATCH,MAILING_LIST_MULTI,
+	SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 19920C388F9
+	for <kvm@archiver.kernel.org>; Mon, 26 Oct 2020 09:51:54 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id B020420874
+	for <kvm@archiver.kernel.org>; Mon, 26 Oct 2020 09:51:53 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1603705913;
+	bh=I0emVrpU4FQs/PK2I8FmbykSgA6RGwyV5X+pSjq779w=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=TEyJ3lRmd1T1u5YuhicnpOrQdaYZnJd5V9yLC0p3hmp0IRLEUvL1sO/1C3I2kDqAy
+	 s0Pzq3kkRiCiCmHUU+pPTxoD0x7aG1P7/EW/x+67la/fjSk8UQFgyEzvZq8snyvk/P
+	 cPg2kEwPI+cpxrxgciAIrX2ekHgf1q5Dft1gznvs=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1768644AbgJZJvr (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 26 Oct 2020 05:51:47 -0400
+Received: from mail.kernel.org ([198.145.29.99]:44174 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1737072AbgJZJvd (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 26 Oct 2020 05:51:33 -0400
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id A83DC223AC;
+        Mon, 26 Oct 2020 09:51:32 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+        s=default; t=1603705892;
+        bh=I0emVrpU4FQs/PK2I8FmbykSgA6RGwyV5X+pSjq779w=;
+        h=From:To:Cc:Subject:Date:In-Reply-To:References:From;
+        b=BNjWIzS0outAIK5FsrLNToH0cVil4Ze33kejCmpoJH5YnmKU9K+AlEV2gwhP4b62Q
+         ZXFus2f1g4MhTpwmus9y7hEmNRCnEkV8v/ryIQhOTbg1/3DUqG5F3aRVns1+VkqzQv
+         uypJoJhaxVk7HAdphDITx2rrf+iVr0uDxBZv8Y4Q=
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1kWzA2-004HZn-T3; Mon, 26 Oct 2020 09:51:31 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Andrew Scull <ascull@google.com>,
+        Will Deacon <will@kernel.org>,
+        Quentin Perret <qperret@google.com>, kernel-team@android.com
+Subject: [PATCH 3/8] KVM: arm64: Drop useless PAN setting on host EL1 to EL2
+ transition
+Date: Mon, 26 Oct 2020 09:51:11 +0000
+Message-Id: <20201026095116.72051-4-maz@kernel.org>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201026095116.72051-1-maz@kernel.org>
+References: <20201026095116.72051-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org, james.morse@arm.com,
+ julien.thierry.kdev@gmail.com, suzuki.poulose@arm.com, ascull@google.com,
+ will@kernel.org, qperret@google.com, kernel-team@android.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Setting PSTATE.PAN when entering EL2 on nVHE doesn't make much
+sense as this bit only means something for translation regimes
+that include EL0. This obviously isn't the case in the nVHE case,
+so let's drop this setting.
+
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/kvm/hyp/nvhe/host.S | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/arch/arm64/kvm/hyp/nvhe/host.S b/arch/arm64/kvm/hyp/nvhe/host.S
+index ff9a0f547b9f..ed27f06a31ba 100644
+--- a/arch/arm64/kvm/hyp/nvhe/host.S
++++ b/arch/arm64/kvm/hyp/nvhe/host.S
+@@ -17,8 +17,6 @@ SYM_FUNC_START(__host_exit)
+ 
+ 	get_host_ctxt	x0, x1
+ 
+-	ALTERNATIVE(nop, SET_PSTATE_PAN(1), ARM64_HAS_PAN, CONFIG_ARM64_PAN)
+-
+ 	/* Store the host regs x2 and x3 */
+ 	stp	x2, x3,   [x0, #CPU_XREG_OFFSET(2)]
+ 
+
+From patchwork Mon Oct 26 09:51:12 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11856227
+Return-Path: <SRS0=RIF0=EB=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,INCLUDES_PATCH,MAILING_LIST_MULTI,
+	SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT autolearn=unavailable
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id C0836C4363A
+	for <kvm@archiver.kernel.org>; Mon, 26 Oct 2020 09:51:48 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 7B25120874
+	for <kvm@archiver.kernel.org>; Mon, 26 Oct 2020 09:51:48 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1603705908;
+	bh=ZaUD2F7SZRHILLCA2CT1oSveAZ8OhGgoocNvSoRV2wo=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=LClvjc8G/80StgwrFDO+C7ZoK823/K5eJnzKvMatS3TTO7EAvtd4oTv3NZr/ipctr
+	 l2VVyuCUjtR3nfEU8qthhFNF2BQIROa5yBMGJwY9PSCUzcHynnknS9cmhtcDnU57nI
+	 imfAnsRWRxUfd7ZknQD6FrPH0t0+QGxVn9/fBeTA=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1768645AbgJZJvs (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 26 Oct 2020 05:51:48 -0400
+Received: from mail.kernel.org ([198.145.29.99]:44134 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1737078AbgJZJvd (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 26 Oct 2020 05:51:33 -0400
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id 371D2223EA;
+        Mon, 26 Oct 2020 09:51:33 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+        s=default; t=1603705893;
+        bh=ZaUD2F7SZRHILLCA2CT1oSveAZ8OhGgoocNvSoRV2wo=;
+        h=From:To:Cc:Subject:Date:In-Reply-To:References:From;
+        b=1pZvU7Aa6agPVnioglcUm4qkb2jtf2T35dlvC+jDvwBJSQpc2x4qwkAfNv6Xvb42J
+         oM3MJWdU3mY29SWhBrkhDvy3j1wuEFdsExwq7kVnIS6ispkPKtZW0/oQcwqioSPeF6
+         pAH7Sk4vXF6HQ2FCey/atuPDXdMLfxlHE8Q3fx9U=
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1kWzA3-004HZn-EX; Mon, 26 Oct 2020 09:51:31 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Andrew Scull <ascull@google.com>,
+        Will Deacon <will@kernel.org>,
+        Quentin Perret <qperret@google.com>, kernel-team@android.com
+Subject: [PATCH 4/8] KVM: arm64: Add kimg_hyp_va() helper
+Date: Mon, 26 Oct 2020 09:51:12 +0000
+Message-Id: <20201026095116.72051-5-maz@kernel.org>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201026095116.72051-1-maz@kernel.org>
+References: <20201026095116.72051-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org, james.morse@arm.com,
+ julien.thierry.kdev@gmail.com, suzuki.poulose@arm.com, ascull@google.com,
+ will@kernel.org, qperret@google.com, kernel-team@android.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+KVM/arm64 is so far unable to deal with function pointers, as the compiler
+will generate the kernel's runtime VA, and not the linear mapping address,
+meaning that kern_hyp_va() will give the wrong result.
+
+We so far have been able to use PC-relative addressing, but that's not
+always easy to use, and prevents the implementation of things like
+the mapping of an index to a pointer.
+
+To allow this, provide a new helper that computes the required
+translation from the kernel image to the HYP VA space.
+
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/include/asm/kvm_mmu.h | 16 ++++++++++
+ arch/arm64/kvm/va_layout.c       | 50 ++++++++++++++++++++++++++++++++
+ 2 files changed, 66 insertions(+)
+
+diff --git a/arch/arm64/include/asm/kvm_mmu.h b/arch/arm64/include/asm/kvm_mmu.h
+index 331394306cce..e0d50e614bd9 100644
+--- a/arch/arm64/include/asm/kvm_mmu.h
++++ b/arch/arm64/include/asm/kvm_mmu.h
+@@ -98,6 +98,22 @@ static __always_inline unsigned long __kern_hyp_va(unsigned long v)
+ 
+ #define kern_hyp_va(v) 	((typeof(v))(__kern_hyp_va((unsigned long)(v))))
+ 
++static __always_inline unsigned long __kimg_hyp_va(unsigned long v)
++{
++	unsigned long offset;
++
++	asm volatile(ALTERNATIVE_CB("movz %0, #0\n"
++				    "movk %0, #0, lsl #16\n"
++				    "movk %0, #0, lsl #32\n"
++				    "movk %0, #0, lsl #48\n",
++				    kvm_update_kimg_phys_offset)
++		     : "=r" (offset));
++
++	return __kern_hyp_va((v - offset) | PAGE_OFFSET);
++}
++
++#define kimg_hyp_va(v) 	((typeof(v))(__kimg_hyp_va((unsigned long)(v))))
++
+ /*
+  * We currently support using a VM-specified IPA size. For backward
+  * compatibility, the default IPA size is fixed to 40bits.
+diff --git a/arch/arm64/kvm/va_layout.c b/arch/arm64/kvm/va_layout.c
+index e0404bcab019..1d00d2cb93fd 100644
+--- a/arch/arm64/kvm/va_layout.c
++++ b/arch/arm64/kvm/va_layout.c
+@@ -11,6 +11,7 @@
+ #include <asm/debug-monitors.h>
+ #include <asm/insn.h>
+ #include <asm/kvm_mmu.h>
++#include <asm/memory.h>
+ 
+ /*
+  * The LSB of the HYP VA tag
+@@ -201,3 +202,52 @@ void kvm_patch_vector_branch(struct alt_instr *alt,
+ 					   AARCH64_INSN_BRANCH_NOLINK);
+ 	*updptr++ = cpu_to_le32(insn);
+ }
++
++static void generate_mov_q(u64 val, __le32 *origptr, __le32 *updptr, int nr_inst)
++{
++	u32 insn, oinsn, rd;
++
++	BUG_ON(nr_inst != 4);
++
++	/* Compute target register */
++	oinsn = le32_to_cpu(*origptr);
++	rd = aarch64_insn_decode_register(AARCH64_INSN_REGTYPE_RD, oinsn);
++
++	/* movz rd, #(val & 0xffff) */
++	insn = aarch64_insn_gen_movewide(rd,
++					 (u16)val,
++					 0,
++					 AARCH64_INSN_VARIANT_64BIT,
++					 AARCH64_INSN_MOVEWIDE_ZERO);
++	*updptr++ = cpu_to_le32(insn);
++
++	/* movk rd, #((val >> 16) & 0xffff), lsl #16 */
++	insn = aarch64_insn_gen_movewide(rd,
++					 (u16)(val >> 16),
++					 16,
++					 AARCH64_INSN_VARIANT_64BIT,
++					 AARCH64_INSN_MOVEWIDE_KEEP);
++	*updptr++ = cpu_to_le32(insn);
++
++	/* movk rd, #((val >> 32) & 0xffff), lsl #32 */
++	insn = aarch64_insn_gen_movewide(rd,
++					 (u16)(val >> 32),
++					 32,
++					 AARCH64_INSN_VARIANT_64BIT,
++					 AARCH64_INSN_MOVEWIDE_KEEP);
++	*updptr++ = cpu_to_le32(insn);
++
++	/* movk rd, #((val >> 48) & 0xffff), lsl #48 */
++	insn = aarch64_insn_gen_movewide(rd,
++					 (u16)(val >> 48),
++					 48,
++					 AARCH64_INSN_VARIANT_64BIT,
++					 AARCH64_INSN_MOVEWIDE_KEEP);
++	*updptr++ = cpu_to_le32(insn);
++}
++
++void kvm_update_kimg_phys_offset(struct alt_instr *alt,
++				 __le32 *origptr, __le32 *updptr, int nr_inst)
++{
++	generate_mov_q(kimage_voffset + PHYS_OFFSET, origptr, updptr, nr_inst);
++}
+
+From patchwork Mon Oct 26 09:51:13 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11856255
+Return-Path: <SRS0=RIF0=EB=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,INCLUDES_PATCH,MAILING_LIST_MULTI,
+	SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT autolearn=unavailable
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 7C897C4363A
+	for <kvm@archiver.kernel.org>; Mon, 26 Oct 2020 10:05:28 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 175E420723
+	for <kvm@archiver.kernel.org>; Mon, 26 Oct 2020 10:05:28 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1603706728;
+	bh=k6TpTdF9zeoGVgXjTXPkB7MqGhN+afdp01vXhs9WD6c=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=eXk4iQ/TZu26oaJepZkX+IoEPTOHNnwXEXKLyWOKJRItZbKlDOJuNqzMyCB1iPUnd
+	 cxceMclly5Si2pPKA28XXyF+mizysFzx1wPN5nFGdeAPEKiWzTl8ehil373TMcImEs
+	 sE6QkdyIu1k6+hPUyyBvICDVXl+fUrVpHJYE+Eb8=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1768496AbgJZJvq (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 26 Oct 2020 05:51:46 -0400
+Received: from mail.kernel.org ([198.145.29.99]:44240 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1737079AbgJZJvf (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 26 Oct 2020 05:51:35 -0400
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id AE43C22409;
+        Mon, 26 Oct 2020 09:51:33 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+        s=default; t=1603705893;
+        bh=k6TpTdF9zeoGVgXjTXPkB7MqGhN+afdp01vXhs9WD6c=;
+        h=From:To:Cc:Subject:Date:In-Reply-To:References:From;
+        b=AdJlf0sw85GMsI+e7KFS8Yy/GZk8uE+6sqauUshGEllb0JXvcslWXlPy9sSOCFwvj
+         CMF+Wpv8vxpUVKXNOqlc0ivQ6qOsEf+kxb+qrB2bVqSDotrlH+ZCWuxuqFND5Yg30Q
+         gWZjPzQD4BxO/CMfBTYepWqJvjXwL0prlJbEfl6U=
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1kWzA3-004HZn-Uv; Mon, 26 Oct 2020 09:51:32 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Andrew Scull <ascull@google.com>,
+        Will Deacon <will@kernel.org>,
+        Quentin Perret <qperret@google.com>, kernel-team@android.com
+Subject: [PATCH 5/8] KVM: arm64: Turn host HVC handling into a dispatch table
+Date: Mon, 26 Oct 2020 09:51:13 +0000
+Message-Id: <20201026095116.72051-6-maz@kernel.org>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201026095116.72051-1-maz@kernel.org>
+References: <20201026095116.72051-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org, james.morse@arm.com,
+ julien.thierry.kdev@gmail.com, suzuki.poulose@arm.com, ascull@google.com,
+ will@kernel.org, qperret@google.com, kernel-team@android.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Now that we can use function pointer, use a dispatch table to call
+the individual HVC handlers, leading to more maintainable code.
+
+Further improvements include helpers to declare the mapping of
+local variables to values passed in the host context.
+
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/kernel/image-vars.h     |   1 +
+ arch/arm64/kvm/hyp/nvhe/hyp-main.c | 227 +++++++++++++++++------------
+ 2 files changed, 134 insertions(+), 94 deletions(-)
+
+diff --git a/arch/arm64/kernel/image-vars.h b/arch/arm64/kernel/image-vars.h
+index 61684a500914..b5b0fdd1043c 100644
+--- a/arch/arm64/kernel/image-vars.h
++++ b/arch/arm64/kernel/image-vars.h
+@@ -64,6 +64,7 @@ __efistub__ctype		= _ctype;
+ /* Alternative callbacks for init-time patching of nVHE hyp code. */
+ KVM_NVHE_ALIAS(kvm_patch_vector_branch);
+ KVM_NVHE_ALIAS(kvm_update_va_mask);
++KVM_NVHE_ALIAS(kvm_update_kimg_phys_offset);
+ 
+ /* Global kernel state accessed by nVHE hyp code. */
+ KVM_NVHE_ALIAS(kvm_vgic_global_state);
+diff --git a/arch/arm64/kvm/hyp/nvhe/hyp-main.c b/arch/arm64/kvm/hyp/nvhe/hyp-main.c
+index e2eafe2c93af..2af8a5e902af 100644
+--- a/arch/arm64/kvm/hyp/nvhe/hyp-main.c
++++ b/arch/arm64/kvm/hyp/nvhe/hyp-main.c
+@@ -12,106 +12,145 @@
+ #include <asm/kvm_hyp.h>
+ #include <asm/kvm_mmu.h>
+ 
+-#include <kvm/arm_hypercalls.h>
+-
+-static void handle_host_hcall(unsigned long func_id,
+-			      struct kvm_cpu_context *host_ctxt)
+-{
+-	unsigned long ret = 0;
+-
+-	switch (func_id) {
+-	case KVM_HOST_SMCCC_FUNC(__kvm_vcpu_run): {
+-		unsigned long r1 = host_ctxt->regs.regs[1];
+-		struct kvm_vcpu *vcpu = (struct kvm_vcpu *)r1;
+-
+-		ret = __kvm_vcpu_run(kern_hyp_va(vcpu));
+-		break;
+-	}
+-	case KVM_HOST_SMCCC_FUNC(__kvm_flush_vm_context):
+-		__kvm_flush_vm_context();
+-		break;
+-	case KVM_HOST_SMCCC_FUNC(__kvm_tlb_flush_vmid_ipa): {
+-		unsigned long r1 = host_ctxt->regs.regs[1];
+-		struct kvm_s2_mmu *mmu = (struct kvm_s2_mmu *)r1;
+-		phys_addr_t ipa = host_ctxt->regs.regs[2];
+-		int level = host_ctxt->regs.regs[3];
+-
+-		__kvm_tlb_flush_vmid_ipa(kern_hyp_va(mmu), ipa, level);
+-		break;
+-	}
+-	case KVM_HOST_SMCCC_FUNC(__kvm_tlb_flush_vmid): {
+-		unsigned long r1 = host_ctxt->regs.regs[1];
+-		struct kvm_s2_mmu *mmu = (struct kvm_s2_mmu *)r1;
+-
+-		__kvm_tlb_flush_vmid(kern_hyp_va(mmu));
+-		break;
+-	}
+-	case KVM_HOST_SMCCC_FUNC(__kvm_tlb_flush_local_vmid): {
+-		unsigned long r1 = host_ctxt->regs.regs[1];
+-		struct kvm_s2_mmu *mmu = (struct kvm_s2_mmu *)r1;
+-
+-		__kvm_tlb_flush_local_vmid(kern_hyp_va(mmu));
+-		break;
+-	}
+-	case KVM_HOST_SMCCC_FUNC(__kvm_timer_set_cntvoff): {
+-		u64 cntvoff = host_ctxt->regs.regs[1];
+-
+-		__kvm_timer_set_cntvoff(cntvoff);
+-		break;
+-	}
+-	case KVM_HOST_SMCCC_FUNC(__kvm_enable_ssbs):
+-		__kvm_enable_ssbs();
+-		break;
+-	case KVM_HOST_SMCCC_FUNC(__vgic_v3_get_ich_vtr_el2):
+-		ret = __vgic_v3_get_ich_vtr_el2();
+-		break;
+-	case KVM_HOST_SMCCC_FUNC(__vgic_v3_read_vmcr):
+-		ret = __vgic_v3_read_vmcr();
+-		break;
+-	case KVM_HOST_SMCCC_FUNC(__vgic_v3_write_vmcr): {
+-		u32 vmcr = host_ctxt->regs.regs[1];
+-
+-		__vgic_v3_write_vmcr(vmcr);
+-		break;
+-	}
+-	case KVM_HOST_SMCCC_FUNC(__vgic_v3_init_lrs):
+-		__vgic_v3_init_lrs();
+-		break;
+-	case KVM_HOST_SMCCC_FUNC(__kvm_get_mdcr_el2):
+-		ret = __kvm_get_mdcr_el2();
+-		break;
+-	case KVM_HOST_SMCCC_FUNC(__vgic_v3_save_aprs): {
+-		unsigned long r1 = host_ctxt->regs.regs[1];
+-		struct vgic_v3_cpu_if *cpu_if = (struct vgic_v3_cpu_if *)r1;
+-
+-		__vgic_v3_save_aprs(kern_hyp_va(cpu_if));
+-		break;
+-	}
+-	case KVM_HOST_SMCCC_FUNC(__vgic_v3_restore_aprs): {
+-		unsigned long r1 = host_ctxt->regs.regs[1];
+-		struct vgic_v3_cpu_if *cpu_if = (struct vgic_v3_cpu_if *)r1;
+-
+-		__vgic_v3_restore_aprs(kern_hyp_va(cpu_if));
+-		break;
+-	}
+-	default:
+-		/* Invalid host HVC. */
+-		host_ctxt->regs.regs[0] = SMCCC_RET_NOT_SUPPORTED;
+-		return;
+-	}
+-
+-	host_ctxt->regs.regs[0] = SMCCC_RET_SUCCESS;
+-	host_ctxt->regs.regs[1] = ret;
++#define cpu_reg(ctxt, r)	(ctxt)->regs.regs[r]
++#define DECLARE_REG(type, name, ctxt, reg)	\
++				type name = (type)cpu_reg(ctxt, (reg))
++
++static void handle___kvm_vcpu_run(struct kvm_cpu_context *host_ctxt)
++{
++	DECLARE_REG(struct kvm_vcpu *, vcpu, host_ctxt, 1);
++
++	cpu_reg(host_ctxt, 1) =  __kvm_vcpu_run(kern_hyp_va(vcpu));
++}
++
++static void handle___kvm_flush_vm_context(struct kvm_cpu_context *host_ctxt)
++{
++	__kvm_flush_vm_context();
++}
++
++static void handle___kvm_tlb_flush_vmid_ipa(struct kvm_cpu_context *host_ctxt)
++{
++	DECLARE_REG(struct kvm_s2_mmu *, mmu, host_ctxt, 1);
++	DECLARE_REG(phys_addr_t, ipa, host_ctxt, 2);
++	DECLARE_REG(int, level, host_ctxt, 3);
++
++	__kvm_tlb_flush_vmid_ipa(kern_hyp_va(mmu), ipa, level);
++}
++
++static void handle___kvm_tlb_flush_vmid(struct kvm_cpu_context *host_ctxt)
++{
++	DECLARE_REG(struct kvm_s2_mmu *, mmu, host_ctxt, 1);
++
++	__kvm_tlb_flush_vmid(kern_hyp_va(mmu));
++}
++
++static void handle___kvm_tlb_flush_local_vmid(struct kvm_cpu_context *host_ctxt)
++{
++	DECLARE_REG(struct kvm_s2_mmu *, mmu, host_ctxt, 1);
++
++	__kvm_tlb_flush_local_vmid(kern_hyp_va(mmu));
++}
++
++static void handle___kvm_timer_set_cntvoff(struct kvm_cpu_context *host_ctxt)
++{
++	__kvm_timer_set_cntvoff(cpu_reg(host_ctxt, 1));
++}
++
++static void handle___kvm_enable_ssbs(struct kvm_cpu_context *host_ctxt)
++{
++	__kvm_enable_ssbs();
++}
++
++static void handle___vgic_v3_get_ich_vtr_el2(struct kvm_cpu_context *host_ctxt)
++{
++	cpu_reg(host_ctxt, 1) = __vgic_v3_get_ich_vtr_el2();
++}
++
++static void handle___vgic_v3_read_vmcr(struct kvm_cpu_context *host_ctxt)
++{
++	cpu_reg(host_ctxt, 1) = __vgic_v3_read_vmcr();
++}
++
++static void handle___vgic_v3_write_vmcr(struct kvm_cpu_context *host_ctxt)
++{
++	__vgic_v3_write_vmcr(cpu_reg(host_ctxt, 1));
++}
++
++static void handle___vgic_v3_init_lrs(struct kvm_cpu_context *host_ctxt)
++{
++	__vgic_v3_init_lrs();
++}
++
++static void handle___kvm_get_mdcr_el2(struct kvm_cpu_context *host_ctxt)
++{
++	cpu_reg(host_ctxt, 1) = __kvm_get_mdcr_el2();
++}
++
++static void handle___vgic_v3_save_aprs(struct kvm_cpu_context *host_ctxt)
++{
++	DECLARE_REG(struct vgic_v3_cpu_if *, cpu_if, host_ctxt, 1);
++
++	__vgic_v3_save_aprs(kern_hyp_va(cpu_if));
++}
++
++static void handle___vgic_v3_restore_aprs(struct kvm_cpu_context *host_ctxt)
++{
++	DECLARE_REG(struct vgic_v3_cpu_if *, cpu_if, host_ctxt, 1);
++
++	__vgic_v3_restore_aprs(kern_hyp_va(cpu_if));
++}
++
++#define HANDLE_FUNC(x)	[__KVM_HOST_SMCCC_FUNC_##x] = handle_##x
++
++typedef void (*hcall_t)(struct kvm_cpu_context *);
++
++static const hcall_t host_hcall[] = {
++	HANDLE_FUNC(__kvm_vcpu_run),
++	HANDLE_FUNC(__kvm_flush_vm_context),
++	HANDLE_FUNC(__kvm_tlb_flush_vmid_ipa),
++	HANDLE_FUNC(__kvm_tlb_flush_vmid),
++	HANDLE_FUNC(__kvm_tlb_flush_local_vmid),
++	HANDLE_FUNC(__kvm_timer_set_cntvoff),
++	HANDLE_FUNC(__kvm_enable_ssbs),
++	HANDLE_FUNC(__vgic_v3_get_ich_vtr_el2),
++	HANDLE_FUNC(__vgic_v3_read_vmcr),
++	HANDLE_FUNC(__vgic_v3_write_vmcr),
++	HANDLE_FUNC(__vgic_v3_init_lrs),
++	HANDLE_FUNC(__kvm_get_mdcr_el2),
++	HANDLE_FUNC(__vgic_v3_save_aprs),
++	HANDLE_FUNC(__vgic_v3_restore_aprs),
++};
++
++static void handle_host_hcall(struct kvm_cpu_context *host_ctxt)
++{
++	DECLARE_REG(unsigned long, id, host_ctxt, 0);
++	unsigned long ret = SMCCC_RET_NOT_SUPPORTED;
++	hcall_t hcall;
++
++	id -= KVM_HOST_SMCCC_ID(0);
++
++	if (unlikely(id >= ARRAY_SIZE(host_hcall)))
++		goto inval;
++
++	hcall = host_hcall[id];
++	if (unlikely(!hcall))
++		goto inval;
++
++	hcall = kimg_hyp_va(hcall);
++
++	hcall(host_ctxt);
++	ret = SMCCC_RET_SUCCESS;
++
++inval:
++	cpu_reg(host_ctxt, 0) = ret;
+ }
+ 
+ void handle_trap(struct kvm_cpu_context *host_ctxt)
+ {
+ 	u64 esr = read_sysreg_el2(SYS_ESR);
+-	unsigned long func_id;
+ 
+-	if (ESR_ELx_EC(esr) != ESR_ELx_EC_HVC64)
++	if (unlikely(ESR_ELx_EC(esr) != ESR_ELx_EC_HVC64))
+ 		hyp_panic();
+ 
+-	func_id = host_ctxt->regs.regs[0];
+-	handle_host_hcall(func_id, host_ctxt);
++	handle_host_hcall(host_ctxt);
+ }
+
+From patchwork Mon Oct 26 09:51:14 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11856233
+Return-Path: <SRS0=RIF0=EB=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,INCLUDES_PATCH,MAILING_LIST_MULTI,
+	SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT autolearn=unavailable
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 15A00C4363A
+	for <kvm@archiver.kernel.org>; Mon, 26 Oct 2020 09:52:00 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id B8A972087C
+	for <kvm@archiver.kernel.org>; Mon, 26 Oct 2020 09:51:59 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1603705919;
+	bh=kDb9dgfCqN99WeV24iJj+2Y3Ko1XbY7GmOWMOSHZFRA=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=1lM0zEKeuApLy+oXbnf0aWMrhipri/lxcbBTXB79RaQesfCfdQ7EKoVAANloeSOhl
+	 Khfz9z/4l8BvudWvZyPVswc09vF8kj6mZV7hHLezmvbctwLb9elfg2M0U5G9gMYq9t
+	 rxeVQowfZPOYNuD/1Q7l0G9gjKsp3zaf5Ri0NPtc=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1737062AbgJZJvq (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 26 Oct 2020 05:51:46 -0400
+Received: from mail.kernel.org ([198.145.29.99]:44274 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1737090AbgJZJvf (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 26 Oct 2020 05:51:35 -0400
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id 33FDA2240A;
+        Mon, 26 Oct 2020 09:51:34 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+        s=default; t=1603705894;
+        bh=kDb9dgfCqN99WeV24iJj+2Y3Ko1XbY7GmOWMOSHZFRA=;
+        h=From:To:Cc:Subject:Date:In-Reply-To:References:From;
+        b=c0uB4nnBViQmZ0yG0HUdZ2oAUBpo7Ogfn9eUSIePu+mNpKjrd69owbaK2YKTJWGdQ
+         5L9s4x7b+GTB1CmlM3SF/ZS7x6UhpZejjTCcKKIDeAhzUy1UAAPmxk4KfziZ7jTLnL
+         ORp6r2As0mmFKFG9RXdZJ6eFEI7Y0eyJQP9vsjjU=
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1kWzA4-004HZn-Ei; Mon, 26 Oct 2020 09:51:32 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Andrew Scull <ascull@google.com>,
+        Will Deacon <will@kernel.org>,
+        Quentin Perret <qperret@google.com>, kernel-team@android.com
+Subject: [PATCH 6/8] KVM: arm64: Patch kimage_voffset instead of loading the
+ EL1 value
+Date: Mon, 26 Oct 2020 09:51:14 +0000
+Message-Id: <20201026095116.72051-7-maz@kernel.org>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201026095116.72051-1-maz@kernel.org>
+References: <20201026095116.72051-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org, james.morse@arm.com,
+ julien.thierry.kdev@gmail.com, suzuki.poulose@arm.com, ascull@google.com,
+ will@kernel.org, qperret@google.com, kernel-team@android.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Directly using the kimage_voffset variable is fine for now, but
+will become more problematic as we start distrusting EL1.
+
+Instead, patch the kimage_voffset into the HYP text, ensuring
+we don't have to load an untrusted value later on.
+
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/kernel/image-vars.h | 4 +---
+ arch/arm64/kvm/hyp/nvhe/host.S | 7 ++++++-
+ arch/arm64/kvm/va_layout.c     | 6 ++++++
+ 3 files changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm64/kernel/image-vars.h b/arch/arm64/kernel/image-vars.h
+index b5b0fdd1043c..259c704a548a 100644
+--- a/arch/arm64/kernel/image-vars.h
++++ b/arch/arm64/kernel/image-vars.h
+@@ -65,13 +65,11 @@ __efistub__ctype		= _ctype;
+ KVM_NVHE_ALIAS(kvm_patch_vector_branch);
+ KVM_NVHE_ALIAS(kvm_update_va_mask);
+ KVM_NVHE_ALIAS(kvm_update_kimg_phys_offset);
++KVM_NVHE_ALIAS(kvm_get_kimage_voffset);
+ 
+ /* Global kernel state accessed by nVHE hyp code. */
+ KVM_NVHE_ALIAS(kvm_vgic_global_state);
+ 
+-/* Kernel constant needed to compute idmap addresses. */
+-KVM_NVHE_ALIAS(kimage_voffset);
+-
+ /* Kernel symbols used to call panic() from nVHE hyp code (via ERET). */
+ KVM_NVHE_ALIAS(__hyp_panic_string);
+ KVM_NVHE_ALIAS(panic);
+diff --git a/arch/arm64/kvm/hyp/nvhe/host.S b/arch/arm64/kvm/hyp/nvhe/host.S
+index ed27f06a31ba..e2d316d13180 100644
+--- a/arch/arm64/kvm/hyp/nvhe/host.S
++++ b/arch/arm64/kvm/hyp/nvhe/host.S
+@@ -115,7 +115,12 @@ SYM_FUNC_END(__hyp_do_panic)
+ 	 * Preserve x0-x4, which may contain stub parameters.
+ 	 */
+ 	ldr	x5, =__kvm_handle_stub_hvc
+-	ldr_l	x6, kimage_voffset
++alternative_cb kvm_get_kimage_voffset
++	movz	x6, #0
++	movk	x6, #0, lsl #16
++	movk	x6, #0, lsl #32
++	movk	x6, #0, lsl #48
++alternative_cb_end
+ 
+ 	/* x5 = __pa(x5) */
+ 	sub	x5, x5, x6
+diff --git a/arch/arm64/kvm/va_layout.c b/arch/arm64/kvm/va_layout.c
+index 1d00d2cb93fd..d61117805de0 100644
+--- a/arch/arm64/kvm/va_layout.c
++++ b/arch/arm64/kvm/va_layout.c
+@@ -251,3 +251,9 @@ void kvm_update_kimg_phys_offset(struct alt_instr *alt,
+ {
+ 	generate_mov_q(kimage_voffset + PHYS_OFFSET, origptr, updptr, nr_inst);
+ }
++
++void kvm_get_kimage_voffset(struct alt_instr *alt,
++			    __le32 *origptr, __le32 *updptr, int nr_inst)
++{
++	generate_mov_q(kimage_voffset, origptr, updptr, nr_inst);
++}
+
+From patchwork Mon Oct 26 09:51:16 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11856271
+Return-Path: <SRS0=RIF0=EB=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,INCLUDES_PATCH,MAILING_LIST_MULTI,
+	SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id C4E4FC4363A
+	for <kvm@archiver.kernel.org>; Mon, 26 Oct 2020 10:09:22 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 72397223EA
+	for <kvm@archiver.kernel.org>; Mon, 26 Oct 2020 10:09:22 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+	s=default; t=1603706962;
+	bh=SurefXaVHTkq8zMCu3OywCnUsZc0fFu5URrqoO8B4xE=;
+	h=From:To:Cc:Subject:Date:In-Reply-To:References:List-ID:From;
+	b=0PgBR8+d5U7CDasN+JTqH5SJe7jv+3nE67X+AZnXn72RjymKkuBxXqkVWjjIspFgP
+	 OEIs7zoKIBKPziDkjK97j5tLDdbdHne7McGQGHGt8dCrW+k1ynb67QTI28DyM8As03
+	 87u8X97s1nGSg0PSK98aJf/Vv2mqTzSyVoIj5JJ0=
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1768394AbgJZJvq (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 26 Oct 2020 05:51:46 -0400
+Received: from mail.kernel.org ([198.145.29.99]:44336 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1744149AbgJZJvg (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 26 Oct 2020 05:51:36 -0400
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id 52CEB222EC;
+        Mon, 26 Oct 2020 09:51:35 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+        s=default; t=1603705895;
+        bh=SurefXaVHTkq8zMCu3OywCnUsZc0fFu5URrqoO8B4xE=;
+        h=From:To:Cc:Subject:Date:In-Reply-To:References:From;
+        b=i/7ZdOxQbzEv8h+8z1RnD1VA6PKO8a90na1JhFWRRUwezTCrkJQpKzyhY4ABHGETj
+         6Q6518zDC22x6MwQ5nXo+iogozTR7Xnx4mMD80QydAXT7rwuOcWgajDgM5VGZkTFhf
+         QzL7Q1dNz6BLfO9sKxCrXefFp7f3KqO0nheKeAaI=
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1kWzA5-004HZn-F6; Mon, 26 Oct 2020 09:51:33 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: linux-arm-kernel@lists.infradead.org, kvmarm@lists.cs.columbia.edu,
+        kvm@vger.kernel.org
+Cc: James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Andrew Scull <ascull@google.com>,
+        Will Deacon <will@kernel.org>,
+        Quentin Perret <qperret@google.com>, kernel-team@android.com
+Subject: [PATCH 8/8] KVM: arm64: Avoid repetitive stack access on host EL1 to
+ EL2 exception
+Date: Mon, 26 Oct 2020 09:51:16 +0000
+Message-Id: <20201026095116.72051-9-maz@kernel.org>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201026095116.72051-1-maz@kernel.org>
+References: <20201026095116.72051-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org, james.morse@arm.com,
+ julien.thierry.kdev@gmail.com, suzuki.poulose@arm.com, ascull@google.com,
+ will@kernel.org, qperret@google.com, kernel-team@android.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Registers x0/x1 get repeateadly pushed and poped during a host
+HVC call. Instead, leave the registers on the stack, saving
+a store instruction on the fast path for an add on the slow path.
+
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/kvm/hyp/nvhe/host.S | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm64/kvm/hyp/nvhe/host.S b/arch/arm64/kvm/hyp/nvhe/host.S
+index e2d316d13180..7b69f9ff8da0 100644
+--- a/arch/arm64/kvm/hyp/nvhe/host.S
++++ b/arch/arm64/kvm/hyp/nvhe/host.S
+@@ -13,8 +13,6 @@
+ 	.text
+ 
+ SYM_FUNC_START(__host_exit)
+-	stp	x0, x1, [sp, #-16]!
+-
+ 	get_host_ctxt	x0, x1
+ 
+ 	/* Store the host regs x2 and x3 */
+@@ -99,13 +97,14 @@ SYM_FUNC_END(__hyp_do_panic)
+ 	mrs	x0, esr_el2
+ 	lsr	x0, x0, #ESR_ELx_EC_SHIFT
+ 	cmp	x0, #ESR_ELx_EC_HVC64
+-	ldp	x0, x1, [sp], #16
++	ldp	x0, x1, [sp]		// Don't fixup the stack yet
+ 	b.ne	__host_exit
+ 
+ 	/* Check for a stub HVC call */
+ 	cmp	x0, #HVC_STUB_HCALL_NR
+ 	b.hs	__host_exit
+ 
++	add	sp, sp, #16
+ 	/*
+ 	 * Compute the idmap address of __kvm_handle_stub_hvc and
+ 	 * jump there. Since we use kimage_voffset, do not use the
