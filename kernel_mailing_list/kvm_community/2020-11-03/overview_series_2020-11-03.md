@@ -1,3 +1,8 @@
+#### 
+##### 
+
+```c
+```
 #### [PATCH 1/3] KVM: arm64: Allow setting of ID_AA64PFR0_EL1.CSV2 from userspace
 ##### From: Marc Zyngier <maz@kernel.org>
 
@@ -337,6 +342,111 @@ Signed-off-by: David Edmondson <david.edmondson@oracle.com>
 ---
  arch/x86/kvm/emulate.c | 8 +++++++-
  1 file changed, 7 insertions(+), 1 deletion(-)
+
+```
+#### [PATCH v2 1/5] KVM: selftests: Remove address rounding in guest codeFrom: Ben Gardon <bgardon@google.com>
+##### From: Ben Gardon <bgardon@google.com>
+
+```c
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Ben Gardon <bgardon@google.com>
+X-Patchwork-Id: 11879275
+Return-Path: <SRS0=IfBm=EJ=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-20.4 required=3.0 tests=BAYES_00,DKIMWL_WL_MED,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,
+	USER_AGENT_GIT,USER_IN_DEF_DKIM_WL autolearn=unavailable autolearn_force=no
+	version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 032ABC2D0A3
+	for <kvm@archiver.kernel.org>; Tue,  3 Nov 2020 23:50:26 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id BF6B2223AB
+	for <kvm@archiver.kernel.org>; Tue,  3 Nov 2020 23:50:25 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=google.com header.i=@google.com
+ header.b="exOaqDLO"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729778AbgKCXt7 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 3 Nov 2020 18:49:59 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:50194 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1729662AbgKCXt5 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 3 Nov 2020 18:49:57 -0500
+Received: from mail-qk1-x74a.google.com (mail-qk1-x74a.google.com
+ [IPv6:2607:f8b0:4864:20::74a])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 6EC63C061A47
+        for <kvm@vger.kernel.org>; Tue,  3 Nov 2020 15:49:57 -0800 (PST)
+Received: by mail-qk1-x74a.google.com with SMTP id q18so8756036qke.9
+        for <kvm@vger.kernel.org>; Tue, 03 Nov 2020 15:49:57 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=google.com; s=20161025;
+        h=sender:date:in-reply-to:message-id:mime-version:references:subject
+         :from:to:cc;
+        bh=98B4SMJScchAYm+B6VeRF0sz9ED0V6CnMu0GP5al+Qc=;
+        b=exOaqDLOfoClAUwauo3IbRppRPEo5nM49bRF28fseKhJJm/Vr3lG5gwejDPIqnACdI
+         vlaci54e+uabnSxBoIcyaRAZhnPv9xAXUqvD1IM/YWC2If8fAZqvhzoowRuwx0IMVopx
+         vERacFX486czDrnuUGzzdYild34lX77YJgfWSjHn1o7GPm5AO4hZyCzXb2CiWLEoNLhp
+         1UWPt3mJZwIIqL3RbbPrrO6Dm9aqHm/RLtEQUyvNu0woSNOOQ6vZwLFLs7/KhIm30rIu
+         lMtXwQCV62ac2oRaZeVvlxGZSqYcxFMsvIZBGoNjhe3w43lm75hbSQFpeAVj7kHUbcrs
+         xwcQ==
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=1e100.net; s=20161025;
+        h=x-gm-message-state:sender:date:in-reply-to:message-id:mime-version
+         :references:subject:from:to:cc;
+        bh=98B4SMJScchAYm+B6VeRF0sz9ED0V6CnMu0GP5al+Qc=;
+        b=bfZdivXNZmS0L2kryFjBXzDCQCTFIRP/C0ct2HbYGioYMJJLd9BU1AB00Jl4lnUC4h
+         knXuDnqYXdmQTgffIX0VLHJ4DdmeVPEur8PzOmYoUuvOyzHXqlrRKcSf0mmEp7kC5FNk
+         2ZygDtHr8GVqbF7kbXnb2dL0ewlJgON6lI3w4j2rBVQcSsEn0NI+cqsYTkW3OXe2Gp52
+         Dzt8310ps1aZaAR31DQ84A7MOVWrhR5I1uMgPzK3E+L4coYaPs9I+8WjDVswnoCdzlJF
+         VoP5ui23zwazeYtBUEWXHaylHFtfj16P2pJ5ANxm9xIq41HFH5wAvASfuaxqas4qRCoU
+         CTsA==
+X-Gm-Message-State: AOAM533NFNbQcL/RNXoy4lF6GJP+m03JmhPhbzwHcuM1ek9wNsS1tQn+
+        I275Ne6O9pEkH0ihBSMR5lEygtqrvy39
+X-Google-Smtp-Source: 
+ ABdhPJwdPlntaN4XG640esGJzdQigZ7OVKF00zfcBH1ziXGQ9hFnDsNIjLMsak1eZpUdbPEV6qSE2lSBfYJz
+Sender: "bgardon via sendgmr" <bgardon@bgardon.sea.corp.google.com>
+X-Received: from bgardon.sea.corp.google.com
+ ([2620:15c:100:202:f693:9fff:fef4:a293])
+ (user=bgardon job=sendgmr) by 2002:a05:6214:951:: with SMTP id
+ dn17mr30174501qvb.9.1604447396571; Tue, 03 Nov 2020 15:49:56 -0800 (PST)
+Date: Tue,  3 Nov 2020 15:49:48 -0800
+In-Reply-To: <20201103234952.1626730-1-bgardon@google.com>
+Message-Id: <20201103234952.1626730-2-bgardon@google.com>
+Mime-Version: 1.0
+References: <20201103234952.1626730-1-bgardon@google.com>
+X-Mailer: git-send-email 2.29.1.341.ge80a0c044ae-goog
+Subject: [PATCH v2 1/5] KVM: selftests: Remove address rounding in guest code
+From: Ben Gardon <bgardon@google.com>
+To: linux-kernel@vger.kernel.org, kvm@vger.kernel.org,
+        linux-kselftest@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>, Peter Xu <peterx@redhat.com>,
+        Andrew Jones <drjones@redhat.com>,
+        Peter Shier <pshier@google.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Thomas Huth <thuth@redhat.com>,
+        Peter Feiner <pfeiner@google.com>,
+        Ben Gardon <bgardon@google.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Rounding the address the guest writes to a host page boundary
+will only have an effect if the host page size is larger than the guest
+page size, but in that case the guest write would still go to the same
+host page. There's no reason to round the address down, so remove the
+rounding to simplify the demand paging test.
+
+Signed-off-by: Ben Gardon <bgardon@google.com>
+Reviewed-by: Andrew Jones <drjones@redhat.com>
+---
+ tools/testing/selftests/kvm/demand_paging_test.c | 1 -
+ 1 file changed, 1 deletion(-)
 
 ```
 #### [PATCH v5] KVM: Check the allocation of pv cpu mask

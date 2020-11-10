@@ -194,6 +194,229 @@ Signed-off-by: Ben Gardon <bgardon@google.com>
  2 files changed, 24 insertions(+), 6 deletions(-)
 
 ```
+#### [PATCH 1/5] KVM: selftests: Factor code out of demand_paging_testFrom: Ben Gardon <bgardon@google.com>
+##### From: Ben Gardon <bgardon@google.com>
+
+```c
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Ben Gardon <bgardon@google.com>
+X-Patchwork-Id: 11862319
+Return-Path: <SRS0=Fh8n=ED=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-20.4 required=3.0 tests=BAYES_00,DKIMWL_WL_MED,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,
+	USER_AGENT_GIT,USER_IN_DEF_DKIM_WL autolearn=unavailable autolearn_force=no
+	version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 529AFC55179
+	for <kvm@archiver.kernel.org>; Wed, 28 Oct 2020 01:48:31 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id F029E22258
+	for <kvm@archiver.kernel.org>; Wed, 28 Oct 2020 01:48:30 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=google.com header.i=@google.com
+ header.b="CPg/cwAF"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1725934AbgJ1BiV (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 27 Oct 2020 21:38:21 -0400
+Received: from mail-yb1-f202.google.com ([209.85.219.202]:34118 "EHLO
+        mail-yb1-f202.google.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1833030AbgJ0Xhm (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 27 Oct 2020 19:37:42 -0400
+Received: by mail-yb1-f202.google.com with SMTP id h64so3209044ybc.1
+        for <kvm@vger.kernel.org>; Tue, 27 Oct 2020 16:37:39 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=google.com; s=20161025;
+        h=sender:date:in-reply-to:message-id:mime-version:references:subject
+         :from:to:cc;
+        bh=+NKych0lei92pF0DnR3xSxE3EXjwlX80tTaoPZzMuss=;
+        b=CPg/cwAFiB9lgz7JnG1lyzEHwYNqh/4gVCMNJxyhGuwAAwiaOdz0VtUciTYOUpT11l
+         ADRiq8GhXxbVGGLgESgW9jHLlGCYtXLHvZE3elrTIyNWrtgZS3dyQ/PUnRzwLyRMwF31
+         bwXOj+A5ZjWWpDEL9kWLcsJcPZuvOENDIGE6rznaSD+k6g1tY9mnQt5MkgKcMe0T9S+D
+         WYn6hYh+ODlyscptOkaf6nfQlT6PA/A4hC94WuZob1/6MOAxeTQn2lQMl4Pto+Cx7P3h
+         RCBzDblgxhwobpfTy5K4uQYuHI45esGybRixYth8G3QeOeiBzVeOvT6ODKIkrX/VnFSK
+         RAIw==
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=1e100.net; s=20161025;
+        h=x-gm-message-state:sender:date:in-reply-to:message-id:mime-version
+         :references:subject:from:to:cc;
+        bh=+NKych0lei92pF0DnR3xSxE3EXjwlX80tTaoPZzMuss=;
+        b=cKCXDfp401LZLYn+TP+vMidHLZ37MHGTut4msfo2IwFy0ucy2L/aTFJlIOxxdPIK/Z
+         q0k8S5I6yuY2HKnKykWfuPzSxhVb8xgqkpn2ox6bQGzKW+9lQ/tD+DKF4EoX9ptLwOLh
+         sPktw9n7Uorb3abbBRBMHfCklxIYWDXYiPCsNBZJq+XVQoz8TpV5AzuwqZSuRnuoDVYp
+         igMVEANBoNjEiFoQ3UQHJckClFVbW4KKzx36dHpmVI4p4jkUozGnRUaURRVNGsdH46Yw
+         ZcCQfuux3jT0GKxovOC5Efi1BHJosnItYE6fXsPDb9Vf615k6vKE+NpP56D9UO2ghYNf
+         U+Ow==
+X-Gm-Message-State: AOAM530IQDRK8GsSZq+2ZVPmeUgzMC8f81BBlAP3555qujw1IBH7t1ji
+        nNuJHBQz1fckhyx84zfTN/7fdyOyKWI4
+X-Google-Smtp-Source: 
+ ABdhPJwF7T9l6lPl+O0JX6GoaYjadMbyOlzGeCyVD0GXX6aCJUj2RCC1MNvTBGQ7bm0rTmnoB/AftQqgLktU
+Sender: "bgardon via sendgmr" <bgardon@bgardon.sea.corp.google.com>
+X-Received: from bgardon.sea.corp.google.com
+ ([2620:15c:100:202:f693:9fff:fef4:a293])
+ (user=bgardon job=sendgmr) by 2002:a25:d308:: with SMTP id
+ e8mr7669754ybf.277.1603841858659; Tue, 27 Oct 2020 16:37:38 -0700 (PDT)
+Date: Tue, 27 Oct 2020 16:37:29 -0700
+In-Reply-To: <20201027233733.1484855-1-bgardon@google.com>
+Message-Id: <20201027233733.1484855-2-bgardon@google.com>
+Mime-Version: 1.0
+References: <20201027233733.1484855-1-bgardon@google.com>
+X-Mailer: git-send-email 2.29.0.rc2.309.g374f81d7ae-goog
+Subject: [PATCH 1/5] KVM: selftests: Factor code out of demand_paging_test
+From: Ben Gardon <bgardon@google.com>
+To: linux-kernel@vger.kernel.org, kvm@vger.kernel.org,
+        linux-kselftest@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>, Peter Xu <peterx@redhat.com>,
+        Andrew Jones <drjones@redhat.com>,
+        Peter Shier <pshier@google.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Thomas Huth <thuth@redhat.com>,
+        Peter Feiner <pfeiner@google.com>,
+        Ben Gardon <bgardon@google.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Much of the code in demand_paging_test can be reused by other, similar
+multi-vCPU-memory-touching-perfromance-tests. Factor that common code
+out for reuse.
+
+No functional change expected.
+
+This series was tested by running the following invocations on an Intel
+Skylake machine:
+dirty_log_perf_test -b 20m -i 100 -v 64
+dirty_log_perf_test -b 20g -i 5 -v 4
+dirty_log_perf_test -b 4g -i 5 -v 32
+demand_paging_test -b 20m -v 64
+demand_paging_test -b 20g -v 4
+demand_paging_test -b 4g -v 32
+All behaved as expected.
+
+Signed-off-by: Ben Gardon <bgardon@google.com>
+---
+ .../selftests/kvm/demand_paging_test.c        | 204 ++----------------
+ .../selftests/kvm/include/perf_test_util.h    | 187 ++++++++++++++++
+ 2 files changed, 210 insertions(+), 181 deletions(-)
+ create mode 100644 tools/testing/selftests/kvm/include/perf_test_util.h
+
+```
+#### [PATCH 2/5] KVM: selftests: Remove address rounding in guest codeFrom: Ben Gardon <bgardon@google.com>
+##### From: Ben Gardon <bgardon@google.com>
+
+```c
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Ben Gardon <bgardon@google.com>
+X-Patchwork-Id: 11862327
+Return-Path: <SRS0=Fh8n=ED=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-20.4 required=3.0 tests=BAYES_00,DKIMWL_WL_MED,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,
+	USER_AGENT_GIT,USER_IN_DEF_DKIM_WL autolearn=unavailable autolearn_force=no
+	version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 3470CC388F9
+	for <kvm@archiver.kernel.org>; Wed, 28 Oct 2020 01:48:37 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id EA65522281
+	for <kvm@archiver.kernel.org>; Wed, 28 Oct 2020 01:48:36 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=google.com header.i=@google.com
+ header.b="qRACHt2j"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1725916AbgJ1BiV (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 27 Oct 2020 21:38:21 -0400
+Received: from mail-qt1-f202.google.com ([209.85.160.202]:44996 "EHLO
+        mail-qt1-f202.google.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1833033AbgJ0Xhl (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 27 Oct 2020 19:37:41 -0400
+Received: by mail-qt1-f202.google.com with SMTP id g11so1812081qto.11
+        for <kvm@vger.kernel.org>; Tue, 27 Oct 2020 16:37:40 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=google.com; s=20161025;
+        h=sender:date:in-reply-to:message-id:mime-version:references:subject
+         :from:to:cc;
+        bh=FvatsgTsG1WoGGeJeoTzHqVyn+DKjuS046eIP4vRHj8=;
+        b=qRACHt2j3hYxik5R1ejBQfrsWDhp+9n5u36jQJz/c6TYECvpqUT7ijQGGj2CFnBhUa
+         o/PnX2l65TYyCAVEfVXQMElOiIwvXWQjn1sKkfjiWck+vtN3XiQUYs2oyaSyXSQzgn8h
+         iROxg5YcEbPjVUv/LJxBOkUOe7+LM/4GJUoF9D1vdKDWLwZvEdGh0XmTNuzcQapm0Oc3
+         q6OyrWv/lfaOsAX9OGRls3NdYH6J3RluFmELsfzZ7QV7fhmypwaPg4gluKRc9m9bp17u
+         Nn8vFPlKGLFa/GhxJJybnZJiofiiOHfc8miFq8J48yYD0k8CZTQ4EDs4rhVAq798CYXA
+         gYZQ==
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=1e100.net; s=20161025;
+        h=x-gm-message-state:sender:date:in-reply-to:message-id:mime-version
+         :references:subject:from:to:cc;
+        bh=FvatsgTsG1WoGGeJeoTzHqVyn+DKjuS046eIP4vRHj8=;
+        b=KQoesRgVR4inTHUTmcLLuUIFrPQKEkSvheVyg/PF0wwIBElWgUb3q1tMR6m5ePU8YJ
+         1nNCHt71AsCfPZbhJK49zXxYaAEM9G3/DWMM6Ykn5BJTPAnO+M/r0trPuv78T/9fcfsr
+         MZRkN8l0L7Wh3fCCiVCw3DOc0x/M9ohrtIMaZwMuq4hXAl6Ecr4ym7/4P7RuieEyLR71
+         LywsnMxI4c8U+KJn3OoNfBYMWVWKCdSrmSDR5Ema2B+vS0n6ZHWWAcjavKFdOanvSyhO
+         XRRSNYAKwo6AeAgwbRTZ1imdn28u5eo4TlsFTIrmWQ2ojJPpxeIlmCssEhmHf5hfIqBA
+         ohDQ==
+X-Gm-Message-State: AOAM530F5tgqbbXsiET2qkLQ5xpSwuadJkbF5kyLAHLrVBcS8my2ADhC
+        Wz+hoCHR0dyiyuuFWOAJfXsJEzRPzDcq
+X-Google-Smtp-Source: 
+ ABdhPJzpJHZ1zLUzxHV1BXnrEt/HxOlNf71ANUuumESWHQD/ivyGrzEyPzmqH3kshyVrXtTvTgzX/KMcfkmn
+Sender: "bgardon via sendgmr" <bgardon@bgardon.sea.corp.google.com>
+X-Received: from bgardon.sea.corp.google.com
+ ([2620:15c:100:202:f693:9fff:fef4:a293])
+ (user=bgardon job=sendgmr) by 2002:a0c:fec6:: with SMTP id
+ z6mr5059288qvs.10.1603841860309; Tue, 27 Oct 2020 16:37:40 -0700 (PDT)
+Date: Tue, 27 Oct 2020 16:37:30 -0700
+In-Reply-To: <20201027233733.1484855-1-bgardon@google.com>
+Message-Id: <20201027233733.1484855-3-bgardon@google.com>
+Mime-Version: 1.0
+References: <20201027233733.1484855-1-bgardon@google.com>
+X-Mailer: git-send-email 2.29.0.rc2.309.g374f81d7ae-goog
+Subject: [PATCH 2/5] KVM: selftests: Remove address rounding in guest code
+From: Ben Gardon <bgardon@google.com>
+To: linux-kernel@vger.kernel.org, kvm@vger.kernel.org,
+        linux-kselftest@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>, Peter Xu <peterx@redhat.com>,
+        Andrew Jones <drjones@redhat.com>,
+        Peter Shier <pshier@google.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Thomas Huth <thuth@redhat.com>,
+        Peter Feiner <pfeiner@google.com>,
+        Ben Gardon <bgardon@google.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Rounding the address the guest writes to a host page boundary
+will only have an effect if the host page size is larger than the guest
+page size, but in that case the guest write would still go to the same
+host page. There's no reason to round the address down, so remove the
+rounding to simplify the demand paging test.
+
+This series was tested by running the following invocations on an Intel
+Skylake machine:
+dirty_log_perf_test -b 20m -i 100 -v 64
+dirty_log_perf_test -b 20g -i 5 -v 4
+dirty_log_perf_test -b 4g -i 5 -v 32
+demand_paging_test -b 20m -v 64
+demand_paging_test -b 20g -v 4
+demand_paging_test -b 4g -v 32
+All behaved as expected.
+
+Signed-off-by: Ben Gardon <bgardon@google.com>
+Reviewed-by: Peter Xu <peterx@redhat.com>
+---
+ tools/testing/selftests/kvm/include/perf_test_util.h | 1 -
+ 1 file changed, 1 deletion(-)
+
+```
 #### [PATCH 1/3] eventfd: Export eventfd_ctx_do_read()
 ##### From: David Woodhouse <dwmw2@infradead.org>
 
@@ -382,6 +605,7 @@ that userspace doesn't have to jump through hoops to avoid listening
 on the erroneously noisy eventfd and injecting duplicate interrupts.
 
 Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+Acked-by: Peter Zijlstra (Intel) <peterz@infradead.org>
 ---
  include/linux/wait.h | 12 +++++++++++-
  kernel/sched/wait.c  | 17 ++++++++++++++++-
@@ -992,6 +1216,98 @@ Acked-by: Vlastimil Babka <vbabka@suse.cz>
 ---
  include/linux/slab.h | 11 +++++++++++
  1 file changed, 11 insertions(+)
+
+```
+#### [PATCH 1/6] selftests: kvm: add tsc_msrs_test binary to gitignoreFrom: Oliver Upton <oupton@google.com>
+##### From: Oliver Upton <oupton@google.com>
+
+```c
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Oliver Upton <oupton@google.com>
+X-Patchwork-Id: 11862341
+Return-Path: <SRS0=Fh8n=ED=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-20.4 required=3.0 tests=BAYES_00,DKIMWL_WL_MED,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,
+	USER_AGENT_GIT,USER_IN_DEF_DKIM_WL autolearn=ham autolearn_force=no
+	version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 4549EC388F9
+	for <kvm@archiver.kernel.org>; Wed, 28 Oct 2020 01:49:47 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 037C722258
+	for <kvm@archiver.kernel.org>; Wed, 28 Oct 2020 01:49:44 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=google.com header.i=@google.com
+ header.b="DdTWKmn7"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1725796AbgJ1BiR (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 27 Oct 2020 21:38:17 -0400
+Received: from mail-pg1-f201.google.com ([209.85.215.201]:39290 "EHLO
+        mail-pg1-f201.google.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1832969AbgJ0XKy (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 27 Oct 2020 19:10:54 -0400
+Received: by mail-pg1-f201.google.com with SMTP id j10so1559320pgc.6
+        for <kvm@vger.kernel.org>; Tue, 27 Oct 2020 16:10:54 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=google.com; s=20161025;
+        h=sender:date:in-reply-to:message-id:mime-version:references:subject
+         :from:to:cc;
+        bh=GUpfgn1Atr/2cgV/VF9psyOiQEeFuFoj8Fw//sfCSj8=;
+        b=DdTWKmn7fGFcxd+qoXrvE3LWbuDlW7z0ERl0bxE2SMCPY9oeEYk6H+59ceRSwCdf12
+         Y7OUHygpvbV6KjGKg6j6udXOaDN1VQ9fbEdxv2sDoJNzKpmKnGj7c/6GsvstslkHA9j2
+         Y0Y8z0SNGqG3o9i/0Hic4U7E8VtIqkfNNaCazTbOcc27BOS7ytp4KGaVzpQnMPGaftfA
+         a7W+2VCcwgt2MAsO0CqhpeAck6tpBU+U43APTa60qO0Ur7R/F9YdCnpghd+vsrUsBPzs
+         pn0wZbTk4nSJO9wfCRYIxMMyJenJ2MESmLBX35DZFY8Ar05nMAREg4R2ONMxWF2Hnt1E
+         e3Lg==
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=1e100.net; s=20161025;
+        h=x-gm-message-state:sender:date:in-reply-to:message-id:mime-version
+         :references:subject:from:to:cc;
+        bh=GUpfgn1Atr/2cgV/VF9psyOiQEeFuFoj8Fw//sfCSj8=;
+        b=rNPuiT+9a/LJNhQSHHlO1oz2sm+Cmnlx3HHNZi/kf+LAwtjMOyRHo6NWWpFhVOO4Kl
+         YQMj8ZRDqpO6tOpkrOYNr1XQoOYRtPGuzJHlzEFqVEIr2kz1XRqZp+igNP5Qhs0p5wPq
+         60UA2KEIC7taXrqmYpqYtQvtT0fS3IyQ5tFy9foes4JFVA2hvzSnoHbak73oNdv6uFCB
+         80jKMbCOtCNHmy0+stCfUpf1dTZDcvauzJqbHGMuBfyz0g4K+HpK+h2T3fTN5YwAbTN5
+         i99Eg60OZwnLqUwnzf7246VF/+FHif1f/96vxdr0tOD0WvTWmqJqs91nwS2kKdrSraSa
+         NPvA==
+X-Gm-Message-State: AOAM530VdN42X4P0KS2KluErtLQyfL12qr4AAugM5xp9NBNIySinYtK5
+        iaUTn4DXiZP9STrta3Xx2z5pfHbGMxbFEFuTTUf/L7sXohiH5sUDskZO8IkVbdDqbrfd9h8gUmr
+        Y87kGcUDzDliqU3L3duKMIM07Tzu8rr+z0veoJ26aWhdJRgg1sCq5gqucOw==
+X-Google-Smtp-Source: 
+ ABdhPJyEzTEEvDlJjlDbUn/6XfE1h8nlUGycDTApGRN9bfGl+92UGQWSSM7P9UEOct96Ma7ISmCTPBIjC+U=
+Sender: "oupton via sendgmr" <oupton@oupton.sea.corp.google.com>
+X-Received: from oupton.sea.corp.google.com
+ ([2620:15c:100:202:f693:9fff:fef5:7be1])
+ (user=oupton job=sendgmr) by 2002:a17:902:d213:b029:d4:d273:d40a with SMTP id
+ t19-20020a170902d213b02900d4d273d40amr4692991ply.76.1603840253558; Tue, 27
+ Oct 2020 16:10:53 -0700 (PDT)
+Date: Tue, 27 Oct 2020 16:10:39 -0700
+In-Reply-To: <20201027231044.655110-1-oupton@google.com>
+Message-Id: <20201027231044.655110-2-oupton@google.com>
+Mime-Version: 1.0
+References: <20201027231044.655110-1-oupton@google.com>
+X-Mailer: git-send-email 2.29.0.rc2.309.g374f81d7ae-goog
+Subject: [PATCH 1/6] selftests: kvm: add tsc_msrs_test binary to gitignore
+From: Oliver Upton <oupton@google.com>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Sean Christopherson <sean.j.christopherson@intel.com>,
+        Oliver Upton <oupton@google.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Fixes: 0c899c25d754 ("KVM: x86: do not attempt TSC synchronization on guest writes")
+Signed-off-by: Oliver Upton <oupton@google.com>
+---
+ tools/testing/selftests/kvm/.gitignore | 1 +
+ 1 file changed, 1 insertion(+)
 
 ```
 #### [RFC PATCH kvmtool v3 1/3] update_headers: Sync kvm UAPI headers with linux 5.10-rc1

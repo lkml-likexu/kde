@@ -1400,7 +1400,7 @@ Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
 Content-Type: text/plain; charset="utf-8"
 MIME-Version: 1.0
 Content-Transfer-Encoding: 7bit
-X-Patchwork-Submitter: Zhang Qilong <zhangqilong3@huawei.com>
+X-Patchwork-Submitter: zhangqilong <zhangqilong3@huawei.com>
 X-Patchwork-Id: 11870121
 Return-Path: <SRS0=2Kgf=EF=vger.kernel.org=kvm-owner@kernel.org>
 X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on

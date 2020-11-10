@@ -70,6 +70,7 @@ the string comparison would return the same value for VAR* as for
 VAR, when VAR came first in the environ array.
 
 Signed-off-by: Andrew Jones <drjones@redhat.com>
+Reviewed-by: Thomas Huth <thuth@redhat.com>
 ---
  lib/string.c | 5 ++++-
  1 file changed, 4 insertions(+), 1 deletion(-)
@@ -629,7 +630,7 @@ Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
 Content-Type: text/plain; charset="utf-8"
 MIME-Version: 1.0
 Content-Transfer-Encoding: 7bit
-X-Patchwork-Submitter: Andra Paraschiv <andraprs@amazon.com>
+X-Patchwork-Submitter: "Paraschiv, Andra-Irina" <andraprs@amazon.com>
 X-Patchwork-Id: 11837085
 Return-Path: <SRS0=7LGy=DV=vger.kernel.org=kvm-owner@kernel.org>
 Received: from mail.kernel.org (pdx-korg-mail-1.web.codeaurora.org

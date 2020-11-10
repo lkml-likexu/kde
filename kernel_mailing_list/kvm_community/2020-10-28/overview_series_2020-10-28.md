@@ -5,7 +5,7 @@
 Content-Type: text/plain; charset="utf-8"
 MIME-Version: 1.0
 Content-Transfer-Encoding: 7bit
-X-Patchwork-Submitter: AlexChen <alex.chen@huawei.com>
+X-Patchwork-Submitter: Alex Chen <alex.chen@huawei.com>
 X-Patchwork-Id: 11863695
 Return-Path: <SRS0=Fh8n=ED=vger.kernel.org=kvm-owner@kernel.org>
 X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on

@@ -313,7 +313,8 @@ Signed-off-by: Kirill A. Shutemov <kirill.shutemov@linux.intel.com>
 Content-Type: text/plain; charset="utf-8"
 MIME-Version: 1.0
 Content-Transfer-Encoding: 7bit
-X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Submitter: =?utf-8?q?Andr=C3=A9_Przywara?=
+ <andre.przywara@arm.com>
 X-Patchwork-Id: 11846713
 Return-Path: <SRS0=07X0=D3=vger.kernel.org=kvm-owner@kernel.org>
 X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
@@ -708,6 +709,7 @@ hv_remote_flush_tlb_with_range() with to_kvm_vmx(kvm).
 No functional change intended.
 
 Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Reviewed-by: Vitaly Kuznetsov <vkuznets@redhat.com>
 ---
  arch/x86/kvm/vmx/vmx.c | 13 +++++++------
  1 file changed, 7 insertions(+), 6 deletions(-)
@@ -788,6 +790,7 @@ likelihood this is a meaningless optimization, but there are (uncommon)
 scenarios where KVM can reload the same EPTP.
 
 Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Reviewed-by: Vitaly Kuznetsov <vkuznets@redhat.com>
 ---
  arch/x86/kvm/vmx/vmx.c | 3 ++-
  1 file changed, 2 insertions(+), 1 deletion(-)
@@ -874,6 +877,7 @@ impossible to trigger a remote TLB flush in such a scenario.  In any
 case, the superfluous flush is completely benign.
 
 Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
+Reviewed-by: Vitaly Kuznetsov <vkuznets@redhat.com>
 ---
  arch/x86/kvm/vmx/vmx.c | 19 ++++++++-----------
  arch/x86/kvm/vmx/vmx.h |  1 +

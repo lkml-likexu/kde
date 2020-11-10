@@ -135,6 +135,7 @@ List-ID: <kvm.vger.kernel.org>
 X-Mailing-List: kvm@vger.kernel.org
 
 Signed-off-by: Nikos Nikoleris <nikos.nikoleris@arm.com>
+Reviewed-by: Andrew Jones <drjones@redhat.com>
 ---
  lib/arm64/asm/pgtable-hwdef.h | 2 ++
  arm/cstart64.S                | 6 +++++-
@@ -576,6 +577,8 @@ Add the mmu_get_pte() function that allows a test to get a pointer to
 the PTE for a valid virtual address. Return NULL if the MMU is off.
 
 Signed-off-by: Nikos Nikoleris <nikos.nikoleris@arm.com>
+Reviewed-by: Andrew Jones <drjones@redhat.com>
+Reviewed-by: Alexandru Elisei <alexandru.elisei@arm.com>
 ---
  lib/arm/asm/mmu-api.h |  1 +
  lib/arm/mmu.c         | 23 ++++++++++++++---------

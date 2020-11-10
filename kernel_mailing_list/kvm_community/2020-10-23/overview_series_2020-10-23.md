@@ -101,6 +101,7 @@ copied, but this code should return -EFAULT.
 
 Fixes: df747bcd5b21 ("vfio/fsl-mc: Implement VFIO_DEVICE_GET_REGION_INFO ioctl call")
 Signed-off-by: Dan Carpenter <dan.carpenter@oracle.com>
+Acked-by: Diana Craciun <diana.craciun@oss.nxp.com>
 ---
  drivers/vfio/fsl-mc/vfio_fsl_mc.c | 8 ++++++--
  1 file changed, 6 insertions(+), 2 deletions(-)
@@ -945,6 +946,7 @@ weren't able to copy but the ioctl should return -EFAULT if they fail.
 Fixes: a127c5bbb6a8 ("vhost-vdpa: fix backend feature ioctls")
 Signed-off-by: Dan Carpenter <dan.carpenter@oracle.com>
 Acked-by: Michael S. Tsirkin <mst@redhat.com>
+Acked-by: Jason Wang <jasowang@redhat.com>
 ---
  drivers/vhost/vdpa.c | 10 +++++-----
  1 file changed, 5 insertions(+), 5 deletions(-)

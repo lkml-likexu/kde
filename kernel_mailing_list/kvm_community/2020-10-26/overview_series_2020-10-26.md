@@ -917,6 +917,7 @@ Move the setting of SSBS directly into the HVC handler, using
 the C helpers rather than the inline asssembly code.
 
 Signed-off-by: Marc Zyngier <maz@kernel.org>
+Reviewed-by: Alexandru Elisei <alexandru.elisei@arm.com>
 ---
  arch/arm64/include/asm/kvm_asm.h    |  2 --
  arch/arm64/include/asm/sysreg.h     |  1 +
@@ -1283,6 +1284,7 @@ Linux-5.10-rc1 tip: 3650b228
 Fixes: 6d674e28 ("KVM: arm/arm64: Properly handle faulting of device mappings")
 Suggested-by: Marc Zyngier <maz@kernel.org>
 Signed-off-by: Santosh Shukla <sashukla@nvidia.com>
+Reviewed-by: Gavin Shan <gshan@redhat.com>
 ---
 v2:
 - Per Marc's suggestion - setting force_pte=true.
