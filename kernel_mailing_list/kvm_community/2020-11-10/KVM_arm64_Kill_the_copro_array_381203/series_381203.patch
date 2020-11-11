@@ -1,0 +1,1699 @@
+From patchwork Tue Nov 10 13:36:11 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11894347
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,INCLUDES_PATCH,MAILING_LIST_MULTI,
+	SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 03806C55ABD
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:33 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 9EBA9216C4
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:32 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=kernel.org header.i=@kernel.org
+ header.b="dvyQyJF4"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730714AbgKJNga (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 10 Nov 2020 08:36:30 -0500
+Received: from mail.kernel.org ([198.145.29.99]:49066 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730124AbgKJNga (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 10 Nov 2020 08:36:30 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id E209220797;
+        Tue, 10 Nov 2020 13:36:29 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+        s=default; t=1605015390;
+        bh=UGunF+n2Tlt0+f7UsAUfC3s0o6hjEqARAiJkLJ6vA5U=;
+        h=From:To:Cc:Subject:Date:In-Reply-To:References:From;
+        b=dvyQyJF4QHUvQA1NA6ddifwbuuMbIM41NuMC4GA1RwtS9VUVTWmryxQPloi0VySPY
+         76T85oHrChx5xAXgQlEIWH6XPhY5nlIAGpA21K3l26SacvLh+dKcUUF64dWSdylj2/
+         e6JoiG6B4uhGtKmHGASsU67NFOMAJvJivAVfFVYI=
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1kcToy-009SZy-1d; Tue, 10 Nov 2020 13:36:28 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org
+Cc: James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        kernel-team@android.com, stable@vger.kernel.org
+Subject: [PATCH v2 1/9] KVM: arm64: Introduce handling of AArch32 TTBCR2 traps
+Date: Tue, 10 Nov 2020 13:36:11 +0000
+Message-Id: <20201110133619.451157-2-maz@kernel.org>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201110133619.451157-1-maz@kernel.org>
+References: <20201110133619.451157-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+ linux-arm-kernel@lists.infradead.org, james.morse@arm.com,
+ julien.thierry.kdev@gmail.com, suzuki.poulose@arm.com,
+ kernel-team@android.com, stable@vger.kernel.org
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+ARMv8.2 introduced TTBCR2, which shares TCR_EL1 with TTBCR.
+Gracefully handle traps to this register when HCR_EL2.TVM is set.
+
+Cc: stable@vger.kernel.org
+Reported-by: James Morse <james.morse@arm.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/include/asm/kvm_host.h | 1 +
+ arch/arm64/kvm/sys_regs.c         | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
+index 7a1faf917f3c..803cb2427b54 100644
+--- a/arch/arm64/include/asm/kvm_host.h
++++ b/arch/arm64/include/asm/kvm_host.h
+@@ -212,6 +212,7 @@ enum vcpu_sysreg {
+ #define c2_TTBR1	(TTBR1_EL1 * 2)	/* Translation Table Base Register 1 */
+ #define c2_TTBR1_high	(c2_TTBR1 + 1)	/* TTBR1 top 32 bits */
+ #define c2_TTBCR	(TCR_EL1 * 2)	/* Translation Table Base Control R. */
++#define c2_TTBCR2	(c2_TTBCR + 1)	/* Translation Table Base Control R. 2 */
+ #define c3_DACR		(DACR32_EL2 * 2)/* Domain Access Control Register */
+ #define c5_DFSR		(ESR_EL1 * 2)	/* Data Fault Status Register */
+ #define c5_IFSR		(IFSR32_EL2 * 2)/* Instruction Fault Status Register */
+diff --git a/arch/arm64/kvm/sys_regs.c b/arch/arm64/kvm/sys_regs.c
+index 26c7c25f8a6d..afdf18d694cb 100644
+--- a/arch/arm64/kvm/sys_regs.c
++++ b/arch/arm64/kvm/sys_regs.c
+@@ -1925,6 +1925,7 @@ static const struct sys_reg_desc cp15_regs[] = {
+ 	{ Op1( 0), CRn( 2), CRm( 0), Op2( 0), access_vm_reg, NULL, c2_TTBR0 },
+ 	{ Op1( 0), CRn( 2), CRm( 0), Op2( 1), access_vm_reg, NULL, c2_TTBR1 },
+ 	{ Op1( 0), CRn( 2), CRm( 0), Op2( 2), access_vm_reg, NULL, c2_TTBCR },
++	{ Op1( 0), CRn( 2), CRm( 0), Op2( 3), access_vm_reg, NULL, c2_TTBCR2 },
+ 	{ Op1( 0), CRn( 3), CRm( 0), Op2( 0), access_vm_reg, NULL, c3_DACR },
+ 	{ Op1( 0), CRn( 5), CRm( 0), Op2( 0), access_vm_reg, NULL, c5_DFSR },
+ 	{ Op1( 0), CRn( 5), CRm( 0), Op2( 1), access_vm_reg, NULL, c5_IFSR },
+
+From patchwork Tue Nov 10 13:36:12 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11894339
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,INCLUDES_PATCH,MAILING_LIST_MULTI,
+	SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 7DEEDC4742C
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:34 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 15FE9216C4
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:34 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=kernel.org header.i=@kernel.org
+ header.b="k5AvbH5Z"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731961AbgKJNgc (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 10 Nov 2020 08:36:32 -0500
+Received: from mail.kernel.org ([198.145.29.99]:49088 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730705AbgKJNgb (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 10 Nov 2020 08:36:31 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id 6C2D2207D3;
+        Tue, 10 Nov 2020 13:36:30 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+        s=default; t=1605015390;
+        bh=Q2FlY7BpvXcPTtmcmTGIhO77yAmIF8KMzHMNzz1Yytc=;
+        h=From:To:Cc:Subject:Date:In-Reply-To:References:From;
+        b=k5AvbH5Zu4GW3Z4wi4oIRrBT8/+FHAWKZuORpG7CSUbXc/W/BIB6l5e5mlx88I96G
+         z31q+p0MHNa4x7jqGYSdhKvWlUFvhmQTWL0fI9OeLGZw0o2Y/rIgbAT2JAfzYbtupp
+         0/9pdRwjmXSV+PYVyIUYS0NrDuHn9gxtkk9Uztao=
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1kcToy-009SZy-Jh; Tue, 10 Nov 2020 13:36:28 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org
+Cc: James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        kernel-team@android.com
+Subject: [PATCH v2 2/9] KVM: arm64: Move AArch32 exceptions over to AArch64
+ sysregs
+Date: Tue, 10 Nov 2020 13:36:12 +0000
+Message-Id: <20201110133619.451157-3-maz@kernel.org>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201110133619.451157-1-maz@kernel.org>
+References: <20201110133619.451157-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+ linux-arm-kernel@lists.infradead.org, james.morse@arm.com,
+ julien.thierry.kdev@gmail.com, suzuki.poulose@arm.com,
+ kernel-team@android.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The use of the AArch32-specific accessors have always been a bit
+annoying on 64bit, and it is time for a change.
+
+Let's move the AArch32 exception injection over to the AArch64 encoding,
+which requires us to split the two halves of FAR_EL1 into DFAR and IFAR.
+This enables us to drop the preempt_disable() games on VHE, and to kill
+the last user of the vcpu_cp15() macro.
+
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/include/asm/kvm_host.h |  1 -
+ arch/arm64/kvm/inject_fault.c     | 62 ++++++++++---------------------
+ 2 files changed, 20 insertions(+), 43 deletions(-)
+
+diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
+index 803cb2427b54..c905c3fcaaa0 100644
+--- a/arch/arm64/include/asm/kvm_host.h
++++ b/arch/arm64/include/asm/kvm_host.h
+@@ -562,7 +562,6 @@ static inline bool __vcpu_write_sys_reg_to_cpu(u64 val, int reg)
+ #define CPx_BIAS		IS_ENABLED(CONFIG_CPU_BIG_ENDIAN)
+ 
+ #define vcpu_cp14(v,r)		((v)->arch.ctxt.copro[(r) ^ CPx_BIAS])
+-#define vcpu_cp15(v,r)		((v)->arch.ctxt.copro[(r) ^ CPx_BIAS])
+ 
+ struct kvm_vm_stat {
+ 	ulong remote_tlb_flush;
+diff --git a/arch/arm64/kvm/inject_fault.c b/arch/arm64/kvm/inject_fault.c
+index e2a2e48ca371..b47df73e98d7 100644
+--- a/arch/arm64/kvm/inject_fault.c
++++ b/arch/arm64/kvm/inject_fault.c
+@@ -69,26 +69,7 @@ static void inject_undef64(struct kvm_vcpu *vcpu)
+ #define DFSR_FSC_EXTABT_LPAE	0x10
+ #define DFSR_FSC_EXTABT_nLPAE	0x08
+ #define DFSR_LPAE		BIT(9)
+-
+-static bool pre_fault_synchronize(struct kvm_vcpu *vcpu)
+-{
+-	preempt_disable();
+-	if (vcpu->arch.sysregs_loaded_on_cpu) {
+-		kvm_arch_vcpu_put(vcpu);
+-		return true;
+-	}
+-
+-	preempt_enable();
+-	return false;
+-}
+-
+-static void post_fault_synchronize(struct kvm_vcpu *vcpu, bool loaded)
+-{
+-	if (loaded) {
+-		kvm_arch_vcpu_load(vcpu, smp_processor_id());
+-		preempt_enable();
+-	}
+-}
++#define TTBCR_EAE		BIT(31)
+ 
+ static void inject_undef32(struct kvm_vcpu *vcpu)
+ {
+@@ -100,39 +81,36 @@ static void inject_undef32(struct kvm_vcpu *vcpu)
+  * Modelled after TakeDataAbortException() and TakePrefetchAbortException
+  * pseudocode.
+  */
+-static void inject_abt32(struct kvm_vcpu *vcpu, bool is_pabt,
+-			 unsigned long addr)
++static void inject_abt32(struct kvm_vcpu *vcpu, bool is_pabt, u32 addr)
+ {
+-	u32 *far, *fsr;
+-	bool is_lpae;
+-	bool loaded;
++	u64 far;
++	u32 fsr;
++
++	/* Give the guest an IMPLEMENTATION DEFINED exception */
++	if (vcpu_read_sys_reg(vcpu, TCR_EL1) & TTBCR_EAE) {
++		fsr = DFSR_LPAE | DFSR_FSC_EXTABT_LPAE;
++	} else {
++		/* no need to shuffle FS[4] into DFSR[10] as its 0 */
++		fsr = DFSR_FSC_EXTABT_nLPAE;
++	}
+ 
+-	loaded = pre_fault_synchronize(vcpu);
++	far = vcpu_read_sys_reg(vcpu, FAR_EL1);
+ 
+ 	if (is_pabt) {
+ 		vcpu->arch.flags |= (KVM_ARM64_EXCEPT_AA32_IABT |
+ 				     KVM_ARM64_PENDING_EXCEPTION);
+-		far = &vcpu_cp15(vcpu, c6_IFAR);
+-		fsr = &vcpu_cp15(vcpu, c5_IFSR);
++		far &= GENMASK(31, 0);
++		far |= (u64)addr << 32;
++		vcpu_write_sys_reg(vcpu, fsr, IFSR32_EL2);
+ 	} else { /* !iabt */
+ 		vcpu->arch.flags |= (KVM_ARM64_EXCEPT_AA32_DABT |
+ 				     KVM_ARM64_PENDING_EXCEPTION);
+-		far = &vcpu_cp15(vcpu, c6_DFAR);
+-		fsr = &vcpu_cp15(vcpu, c5_DFSR);
+-	}
+-
+-	*far = addr;
+-
+-	/* Give the guest an IMPLEMENTATION DEFINED exception */
+-	is_lpae = (vcpu_cp15(vcpu, c2_TTBCR) >> 31);
+-	if (is_lpae) {
+-		*fsr = DFSR_LPAE | DFSR_FSC_EXTABT_LPAE;
+-	} else {
+-		/* no need to shuffle FS[4] into DFSR[10] as its 0 */
+-		*fsr = DFSR_FSC_EXTABT_nLPAE;
++		far &= GENMASK(63, 32);
++		far |= addr;
++		vcpu_write_sys_reg(vcpu, fsr, ESR_EL1);
+ 	}
+ 
+-	post_fault_synchronize(vcpu, loaded);
++	vcpu_write_sys_reg(vcpu, far, FAR_EL1);
+ }
+ 
+ /**
+
+From patchwork Tue Nov 10 13:36:13 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11894343
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,INCLUDES_PATCH,MAILING_LIST_MULTI,
+	SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 34FE8C388F7
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:35 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C7D2B21D46
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:34 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=kernel.org header.i=@kernel.org
+ header.b="NDde93Vz"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1730097AbgKJNgd (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 10 Nov 2020 08:36:33 -0500
+Received: from mail.kernel.org ([198.145.29.99]:49120 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1729908AbgKJNgc (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 10 Nov 2020 08:36:32 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id 1BA7F207E8;
+        Tue, 10 Nov 2020 13:36:31 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+        s=default; t=1605015391;
+        bh=/vSypgHV3ppGf3VM+3b9Uw3XIcZP+Wgme9h2xxf4rZk=;
+        h=From:To:Cc:Subject:Date:In-Reply-To:References:From;
+        b=NDde93VzfhcuDPCXjEoxZP05SEo3FPIlXyx3b9VAEUY8JvZBVmUw3v4EEzO+btM/L
+         FFgUPsN6CTunS6rp1vQ3netC6hTUm+vYXvIeU4a3vHa9WE/s7YrwJi4rDbEGB7yhwf
+         hXNjAfHveMdam/0ViTfhF3wygodO9fACTGTXXdSk=
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1kcToz-009SZy-7p; Tue, 10 Nov 2020 13:36:29 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org
+Cc: James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        kernel-team@android.com
+Subject: [PATCH v2 3/9] KVM: arm64: Add AArch32 mapping annotation
+Date: Tue, 10 Nov 2020 13:36:13 +0000
+Message-Id: <20201110133619.451157-4-maz@kernel.org>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201110133619.451157-1-maz@kernel.org>
+References: <20201110133619.451157-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+ linux-arm-kernel@lists.infradead.org, james.morse@arm.com,
+ julien.thierry.kdev@gmail.com, suzuki.poulose@arm.com,
+ kernel-team@android.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+In order to deal with the few AArch32 system registers that map to
+only a particular half of their AArch64 counterpart (such as DFAR
+and IFAR being colocated in FAR_EL1), let's add an optional annotation
+to the sysreg descriptor structure, indicating whether a register
+maps to the upper or lower 32bits of a register.
+
+Nothing is using these annotation yet.
+
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/kvm/sys_regs.h | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/arch/arm64/kvm/sys_regs.h b/arch/arm64/kvm/sys_regs.h
+index 5a6fc30f5989..259864c3c76b 100644
+--- a/arch/arm64/kvm/sys_regs.h
++++ b/arch/arm64/kvm/sys_regs.h
+@@ -27,6 +27,12 @@ struct sys_reg_desc {
+ 	/* Sysreg string for debug */
+ 	const char *name;
+ 
++	enum {
++		AA32_ZEROHIGH,
++		AA32_LO,
++		AA32_HI,
++	} aarch32_map;
++
+ 	/* MRS/MSR instruction which accesses it. */
+ 	u8	Op0;
+ 	u8	Op1;
+@@ -153,6 +159,7 @@ const struct sys_reg_desc *find_reg_by_id(u64 id,
+ 					  const struct sys_reg_desc table[],
+ 					  unsigned int num);
+ 
++#define AA32(_x)	.aarch32_map = AA32_##_x
+ #define Op0(_x) 	.Op0 = _x
+ #define Op1(_x) 	.Op1 = _x
+ #define CRn(_x)		.CRn = _x
+
+From patchwork Tue Nov 10 13:36:14 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11894351
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,INCLUDES_PATCH,MAILING_LIST_MULTI,
+	SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT autolearn=unavailable
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 87D6DC55ABD
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:43 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 3A791207D3
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:43 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=kernel.org header.i=@kernel.org
+ header.b="Ecz89znh"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732079AbgKJNgg (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 10 Nov 2020 08:36:36 -0500
+Received: from mail.kernel.org ([198.145.29.99]:49154 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730983AbgKJNgc (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 10 Nov 2020 08:36:32 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id AB15221741;
+        Tue, 10 Nov 2020 13:36:31 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+        s=default; t=1605015391;
+        bh=UnuvpvNqBY49OPvH8MnUgcJPD8InUHyYLFIXIB87S0A=;
+        h=From:To:Cc:Subject:Date:In-Reply-To:References:From;
+        b=Ecz89znhlo9bnfibB2QX+WO+jW6UFVFlJGSwNsX7LBtzFNYnOliKrqg05RyYY2cCk
+         N1sjAQOTHoWVroR2X3h5SMqjCWpOmTmrRJAthNLIWSOwhtgmzVye6xqBg/+7Meia6Y
+         Ka86eW8/Sxjv65fCoMXd0PLzUvz79fTi1xpfwV78=
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1kcToz-009SZy-RY; Tue, 10 Nov 2020 13:36:30 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org
+Cc: James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        kernel-team@android.com
+Subject: [PATCH v2 4/9] KVM: arm64: Map AArch32 cp15 register to AArch64
+ sysregs
+Date: Tue, 10 Nov 2020 13:36:14 +0000
+Message-Id: <20201110133619.451157-5-maz@kernel.org>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201110133619.451157-1-maz@kernel.org>
+References: <20201110133619.451157-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+ linux-arm-kernel@lists.infradead.org, james.morse@arm.com,
+ julien.thierry.kdev@gmail.com, suzuki.poulose@arm.com,
+ kernel-team@android.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Move all the cp15 registers over to their AArch64 counterpart.
+This requires the annotation of a few of them (such as the usual
+DFAR/IFAR vs FAR_EL1), and a new helper that generates mask/shift
+pairs for the various configurations.
+
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/kvm/sys_regs.c | 114 ++++++++++++++++++++++----------------
+ 1 file changed, 66 insertions(+), 48 deletions(-)
+
+diff --git a/arch/arm64/kvm/sys_regs.c b/arch/arm64/kvm/sys_regs.c
+index afdf18d694cb..ab66101c855e 100644
+--- a/arch/arm64/kvm/sys_regs.c
++++ b/arch/arm64/kvm/sys_regs.c
+@@ -128,6 +128,24 @@ static bool access_dcsw(struct kvm_vcpu *vcpu,
+ 	return true;
+ }
+ 
++static void get_access_mask(const struct sys_reg_desc *r, u64 *mask, u64 *shift)
++{
++	switch (r->aarch32_map) {
++	case AA32_LO:
++		*mask = GENMASK_ULL(31, 0);
++		*shift = 0;
++		break;
++	case AA32_HI:
++		*mask = GENMASK_ULL(63, 32);
++		*shift = 32;
++		break;
++	default:
++		*mask = GENMASK_ULL(63, 0);
++		*shift = 0;
++		break;
++	}
++}
++
+ /*
+  * Generic accessor for VM registers. Only called as long as HCR_TVM
+  * is set. If the guest enables the MMU, we stop trapping the VM
+@@ -138,26 +156,21 @@ static bool access_vm_reg(struct kvm_vcpu *vcpu,
+ 			  const struct sys_reg_desc *r)
+ {
+ 	bool was_enabled = vcpu_has_cache_enabled(vcpu);
+-	u64 val;
+-	int reg = r->reg;
++	u64 val, mask, shift;
+ 
+ 	BUG_ON(!p->is_write);
+ 
+-	/* See the 32bit mapping in kvm_host.h */
+-	if (p->is_aarch32)
+-		reg = r->reg / 2;
++	get_access_mask(r, &mask, &shift);
+ 
+-	if (!p->is_aarch32 || !p->is_32bit) {
+-		val = p->regval;
++	if (~mask) {
++		val = vcpu_read_sys_reg(vcpu, r->reg);
++		val &= ~mask;
+ 	} else {
+-		val = vcpu_read_sys_reg(vcpu, reg);
+-		if (r->reg % 2)
+-			val = (p->regval << 32) | (u64)lower_32_bits(val);
+-		else
+-			val = ((u64)upper_32_bits(val) << 32) |
+-				lower_32_bits(p->regval);
++		val = 0;
+ 	}
+-	vcpu_write_sys_reg(vcpu, val, reg);
++
++	val |= (p->regval & (mask >> shift)) << shift;
++	vcpu_write_sys_reg(vcpu, val, r->reg);
+ 
+ 	kvm_toggle_cache(vcpu, was_enabled);
+ 	return true;
+@@ -167,17 +180,13 @@ static bool access_actlr(struct kvm_vcpu *vcpu,
+ 			 struct sys_reg_params *p,
+ 			 const struct sys_reg_desc *r)
+ {
++	u64 mask, shift;
++
+ 	if (p->is_write)
+ 		return ignore_write(vcpu, p);
+ 
+-	p->regval = vcpu_read_sys_reg(vcpu, ACTLR_EL1);
+-
+-	if (p->is_aarch32) {
+-		if (r->Op2 & 2)
+-			p->regval = upper_32_bits(p->regval);
+-		else
+-			p->regval = lower_32_bits(p->regval);
+-	}
++	get_access_mask(r, &mask, &shift);
++	p->regval = (vcpu_read_sys_reg(vcpu, r->reg) & mask) >> shift;
+ 
+ 	return true;
+ }
+@@ -1264,10 +1273,6 @@ static bool access_csselr(struct kvm_vcpu *vcpu, struct sys_reg_params *p,
+ {
+ 	int reg = r->reg;
+ 
+-	/* See the 32bit mapping in kvm_host.h */
+-	if (p->is_aarch32)
+-		reg = r->reg / 2;
+-
+ 	if (p->is_write)
+ 		vcpu_write_sys_reg(vcpu, p->regval, reg);
+ 	else
+@@ -1919,20 +1924,29 @@ static const struct sys_reg_desc cp14_64_regs[] = {
+  */
+ static const struct sys_reg_desc cp15_regs[] = {
+ 	{ Op1( 0), CRn( 0), CRm( 0), Op2( 1), access_ctr },
+-	{ Op1( 0), CRn( 1), CRm( 0), Op2( 0), access_vm_reg, NULL, c1_SCTLR },
+-	{ Op1( 0), CRn( 1), CRm( 0), Op2( 1), access_actlr },
+-	{ Op1( 0), CRn( 1), CRm( 0), Op2( 3), access_actlr },
+-	{ Op1( 0), CRn( 2), CRm( 0), Op2( 0), access_vm_reg, NULL, c2_TTBR0 },
+-	{ Op1( 0), CRn( 2), CRm( 0), Op2( 1), access_vm_reg, NULL, c2_TTBR1 },
+-	{ Op1( 0), CRn( 2), CRm( 0), Op2( 2), access_vm_reg, NULL, c2_TTBCR },
+-	{ Op1( 0), CRn( 2), CRm( 0), Op2( 3), access_vm_reg, NULL, c2_TTBCR2 },
+-	{ Op1( 0), CRn( 3), CRm( 0), Op2( 0), access_vm_reg, NULL, c3_DACR },
+-	{ Op1( 0), CRn( 5), CRm( 0), Op2( 0), access_vm_reg, NULL, c5_DFSR },
+-	{ Op1( 0), CRn( 5), CRm( 0), Op2( 1), access_vm_reg, NULL, c5_IFSR },
+-	{ Op1( 0), CRn( 5), CRm( 1), Op2( 0), access_vm_reg, NULL, c5_ADFSR },
+-	{ Op1( 0), CRn( 5), CRm( 1), Op2( 1), access_vm_reg, NULL, c5_AIFSR },
+-	{ Op1( 0), CRn( 6), CRm( 0), Op2( 0), access_vm_reg, NULL, c6_DFAR },
+-	{ Op1( 0), CRn( 6), CRm( 0), Op2( 2), access_vm_reg, NULL, c6_IFAR },
++	{ Op1( 0), CRn( 1), CRm( 0), Op2( 0), access_vm_reg, NULL, SCTLR_EL1 },
++	/* ACTLR */
++	{ AA32(LO), Op1( 0), CRn( 1), CRm( 0), Op2( 1), access_actlr, NULL, ACTLR_EL1 },
++	/* ACTLR2 */
++	{ AA32(HI), Op1( 0), CRn( 1), CRm( 0), Op2( 3), access_actlr, NULL, ACTLR_EL1 },
++	{ Op1( 0), CRn( 2), CRm( 0), Op2( 0), access_vm_reg, NULL, TTBR0_EL1 },
++	{ Op1( 0), CRn( 2), CRm( 0), Op2( 1), access_vm_reg, NULL, TTBR1_EL1 },
++	/* TTBCR */
++	{ AA32(LO), Op1( 0), CRn( 2), CRm( 0), Op2( 2), access_vm_reg, NULL, TCR_EL1 },
++	/* TTBCR2 */
++	{ AA32(HI), Op1( 0), CRn( 2), CRm( 0), Op2( 3), access_vm_reg, NULL, TCR_EL1 },
++	{ Op1( 0), CRn( 3), CRm( 0), Op2( 0), access_vm_reg, NULL, DACR32_EL2 },
++	/* DFSR */
++	{ Op1( 0), CRn( 5), CRm( 0), Op2( 0), access_vm_reg, NULL, ESR_EL1 },
++	{ Op1( 0), CRn( 5), CRm( 0), Op2( 1), access_vm_reg, NULL, IFSR32_EL2 },
++	/* ADFSR */
++	{ Op1( 0), CRn( 5), CRm( 1), Op2( 0), access_vm_reg, NULL, AFSR0_EL1 },
++	/* AIFSR */
++	{ Op1( 0), CRn( 5), CRm( 1), Op2( 1), access_vm_reg, NULL, AFSR1_EL1 },
++	/* DFAR */
++	{ AA32(LO), Op1( 0), CRn( 6), CRm( 0), Op2( 0), access_vm_reg, NULL, FAR_EL1 },
++	/* IFAR */
++	{ AA32(HI), Op1( 0), CRn( 6), CRm( 0), Op2( 2), access_vm_reg, NULL, FAR_EL1 },
+ 
+ 	/*
+ 	 * DC{C,I,CI}SW operations:
+@@ -1958,15 +1972,19 @@ static const struct sys_reg_desc cp15_regs[] = {
+ 	{ Op1( 0), CRn( 9), CRm(14), Op2( 2), access_pminten },
+ 	{ Op1( 0), CRn( 9), CRm(14), Op2( 3), access_pmovs },
+ 
+-	{ Op1( 0), CRn(10), CRm( 2), Op2( 0), access_vm_reg, NULL, c10_PRRR },
+-	{ Op1( 0), CRn(10), CRm( 2), Op2( 1), access_vm_reg, NULL, c10_NMRR },
+-	{ Op1( 0), CRn(10), CRm( 3), Op2( 0), access_vm_reg, NULL, c10_AMAIR0 },
+-	{ Op1( 0), CRn(10), CRm( 3), Op2( 1), access_vm_reg, NULL, c10_AMAIR1 },
++	/* PRRR/MAIR0 */
++	{ AA32(LO), Op1( 0), CRn(10), CRm( 2), Op2( 0), access_vm_reg, NULL, MAIR_EL1 },
++	/* NMRR/MAIR1 */
++	{ AA32(HI), Op1( 0), CRn(10), CRm( 2), Op2( 1), access_vm_reg, NULL, MAIR_EL1 },
++	/* AMAIR0 */
++	{ AA32(LO), Op1( 0), CRn(10), CRm( 3), Op2( 0), access_vm_reg, NULL, AMAIR_EL1 },
++	/* AMAIR1 */
++	{ AA32(HI), Op1( 0), CRn(10), CRm( 3), Op2( 1), access_vm_reg, NULL, AMAIR_EL1 },
+ 
+ 	/* ICC_SRE */
+ 	{ Op1( 0), CRn(12), CRm(12), Op2( 5), access_gic_sre },
+ 
+-	{ Op1( 0), CRn(13), CRm( 0), Op2( 1), access_vm_reg, NULL, c13_CID },
++	{ Op1( 0), CRn(13), CRm( 0), Op2( 1), access_vm_reg, NULL, CONTEXTIDR_EL1 },
+ 
+ 	/* Arch Tmers */
+ 	{ SYS_DESC(SYS_AARCH32_CNTP_TVAL), access_arch_timer },
+@@ -2041,14 +2059,14 @@ static const struct sys_reg_desc cp15_regs[] = {
+ 
+ 	{ Op1(1), CRn( 0), CRm( 0), Op2(0), access_ccsidr },
+ 	{ Op1(1), CRn( 0), CRm( 0), Op2(1), access_clidr },
+-	{ Op1(2), CRn( 0), CRm( 0), Op2(0), access_csselr, NULL, c0_CSSELR },
++	{ Op1(2), CRn( 0), CRm( 0), Op2(0), access_csselr, NULL, CSSELR_EL1 },
+ };
+ 
+ static const struct sys_reg_desc cp15_64_regs[] = {
+-	{ Op1( 0), CRn( 0), CRm( 2), Op2( 0), access_vm_reg, NULL, c2_TTBR0 },
++	{ Op1( 0), CRn( 0), CRm( 2), Op2( 0), access_vm_reg, NULL, TTBR0_EL1 },
+ 	{ Op1( 0), CRn( 0), CRm( 9), Op2( 0), access_pmu_evcntr },
+ 	{ Op1( 0), CRn( 0), CRm(12), Op2( 0), access_gic_sgi }, /* ICC_SGI1R */
+-	{ Op1( 1), CRn( 0), CRm( 2), Op2( 0), access_vm_reg, NULL, c2_TTBR1 },
++	{ Op1( 1), CRn( 0), CRm( 2), Op2( 0), access_vm_reg, NULL, TTBR1_EL1 },
+ 	{ Op1( 1), CRn( 0), CRm(12), Op2( 0), access_gic_sgi }, /* ICC_ASGI1R */
+ 	{ Op1( 2), CRn( 0), CRm(12), Op2( 0), access_gic_sgi }, /* ICC_SGI0R */
+ 	{ SYS_DESC(SYS_AARCH32_CNTP_CVAL),    access_arch_timer },
+
+From patchwork Tue Nov 10 13:36:15 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11894345
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,INCLUDES_PATCH,MAILING_LIST_MULTI,
+	SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id D0D30C55ABD
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:40 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 6E02E207E8
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:40 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=kernel.org header.i=@kernel.org
+ header.b="QyWyVf+W"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732195AbgKJNgj (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 10 Nov 2020 08:36:39 -0500
+Received: from mail.kernel.org ([198.145.29.99]:49192 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731929AbgKJNgd (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 10 Nov 2020 08:36:33 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id 3885820825;
+        Tue, 10 Nov 2020 13:36:32 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+        s=default; t=1605015392;
+        bh=hcplEBibrUZSHZ2b4qhORY9gMip9pS7Z0zY5ZHBatSQ=;
+        h=From:To:Cc:Subject:Date:In-Reply-To:References:From;
+        b=QyWyVf+Wz3G7abw49FhZCk2ouwkikQkLKVPFmEZn0W38oDB4dczAbE6yOYUxXChXG
+         R/Fr1s3CmoH3wUVX05wayueLuCrVyTAek2ilX8M4S5bA+os1B2IQVoFpBj/EPqBvOd
+         jrjdalAJU8GkH3qbdSMEWC/I8sAW+PwJMycxAMAU=
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1kcTp0-009SZy-EA; Tue, 10 Nov 2020 13:36:30 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org
+Cc: James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        kernel-team@android.com
+Subject: [PATCH v2 5/9] KVM: arm64: Map AArch32 cp14 register to AArch64
+ sysregs
+Date: Tue, 10 Nov 2020 13:36:15 +0000
+Message-Id: <20201110133619.451157-6-maz@kernel.org>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201110133619.451157-1-maz@kernel.org>
+References: <20201110133619.451157-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+ linux-arm-kernel@lists.infradead.org, james.morse@arm.com,
+ julien.thierry.kdev@gmail.com, suzuki.poulose@arm.com,
+ kernel-team@android.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Similarly to what has been done on the cp15 front, repaint the
+debug registers to use their AArch64 counterparts. This results
+in some simplification as we can remove the 32bit-specific
+accessors.
+
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/include/asm/kvm_host.h |   8 ---
+ arch/arm64/kvm/sys_regs.c         | 109 ++++++++++--------------------
+ 2 files changed, 37 insertions(+), 80 deletions(-)
+
+diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
+index c905c3fcaaa0..0d023e4f80a0 100644
+--- a/arch/arm64/include/asm/kvm_host.h
++++ b/arch/arm64/include/asm/kvm_host.h
+@@ -555,14 +555,6 @@ static inline bool __vcpu_write_sys_reg_to_cpu(u64 val, int reg)
+ 	return true;
+ }
+ 
+-/*
+- * CP14 and CP15 live in the same array, as they are backed by the
+- * same system registers.
+- */
+-#define CPx_BIAS		IS_ENABLED(CONFIG_CPU_BIG_ENDIAN)
+-
+-#define vcpu_cp14(v,r)		((v)->arch.ctxt.copro[(r) ^ CPx_BIAS])
+-
+ struct kvm_vm_stat {
+ 	ulong remote_tlb_flush;
+ };
+diff --git a/arch/arm64/kvm/sys_regs.c b/arch/arm64/kvm/sys_regs.c
+index ab66101c855e..660ff6c18b2e 100644
+--- a/arch/arm64/kvm/sys_regs.c
++++ b/arch/arm64/kvm/sys_regs.c
+@@ -366,26 +366,30 @@ static bool trap_debug_regs(struct kvm_vcpu *vcpu,
+  */
+ static void reg_to_dbg(struct kvm_vcpu *vcpu,
+ 		       struct sys_reg_params *p,
++		       const struct sys_reg_desc *rd,
+ 		       u64 *dbg_reg)
+ {
+-	u64 val = p->regval;
++	u64 mask, shift, val;
+ 
+-	if (p->is_32bit) {
+-		val &= 0xffffffffUL;
+-		val |= ((*dbg_reg >> 32) << 32);
+-	}
++	get_access_mask(rd, &mask, &shift);
+ 
++	val = *dbg_reg;
++	val &= ~mask;
++	val |= (p->regval & (mask >> shift)) << shift;
+ 	*dbg_reg = val;
++
+ 	vcpu->arch.flags |= KVM_ARM64_DEBUG_DIRTY;
+ }
+ 
+ static void dbg_to_reg(struct kvm_vcpu *vcpu,
+ 		       struct sys_reg_params *p,
++		       const struct sys_reg_desc *rd,
+ 		       u64 *dbg_reg)
+ {
+-	p->regval = *dbg_reg;
+-	if (p->is_32bit)
+-		p->regval &= 0xffffffffUL;
++	u64 mask, shift;
++
++	get_access_mask(rd, &mask, &shift);
++	p->regval = (*dbg_reg & mask) >> shift;
+ }
+ 
+ static bool trap_bvr(struct kvm_vcpu *vcpu,
+@@ -395,9 +399,9 @@ static bool trap_bvr(struct kvm_vcpu *vcpu,
+ 	u64 *dbg_reg = &vcpu->arch.vcpu_debug_state.dbg_bvr[rd->reg];
+ 
+ 	if (p->is_write)
+-		reg_to_dbg(vcpu, p, dbg_reg);
++		reg_to_dbg(vcpu, p, rd, dbg_reg);
+ 	else
+-		dbg_to_reg(vcpu, p, dbg_reg);
++		dbg_to_reg(vcpu, p, rd, dbg_reg);
+ 
+ 	trace_trap_reg(__func__, rd->reg, p->is_write, *dbg_reg);
+ 
+@@ -437,9 +441,9 @@ static bool trap_bcr(struct kvm_vcpu *vcpu,
+ 	u64 *dbg_reg = &vcpu->arch.vcpu_debug_state.dbg_bcr[rd->reg];
+ 
+ 	if (p->is_write)
+-		reg_to_dbg(vcpu, p, dbg_reg);
++		reg_to_dbg(vcpu, p, rd, dbg_reg);
+ 	else
+-		dbg_to_reg(vcpu, p, dbg_reg);
++		dbg_to_reg(vcpu, p, rd, dbg_reg);
+ 
+ 	trace_trap_reg(__func__, rd->reg, p->is_write, *dbg_reg);
+ 
+@@ -480,9 +484,9 @@ static bool trap_wvr(struct kvm_vcpu *vcpu,
+ 	u64 *dbg_reg = &vcpu->arch.vcpu_debug_state.dbg_wvr[rd->reg];
+ 
+ 	if (p->is_write)
+-		reg_to_dbg(vcpu, p, dbg_reg);
++		reg_to_dbg(vcpu, p, rd, dbg_reg);
+ 	else
+-		dbg_to_reg(vcpu, p, dbg_reg);
++		dbg_to_reg(vcpu, p, rd, dbg_reg);
+ 
+ 	trace_trap_reg(__func__, rd->reg, p->is_write,
+ 		vcpu->arch.vcpu_debug_state.dbg_wvr[rd->reg]);
+@@ -523,9 +527,9 @@ static bool trap_wcr(struct kvm_vcpu *vcpu,
+ 	u64 *dbg_reg = &vcpu->arch.vcpu_debug_state.dbg_wcr[rd->reg];
+ 
+ 	if (p->is_write)
+-		reg_to_dbg(vcpu, p, dbg_reg);
++		reg_to_dbg(vcpu, p, rd, dbg_reg);
+ 	else
+-		dbg_to_reg(vcpu, p, dbg_reg);
++		dbg_to_reg(vcpu, p, rd, dbg_reg);
+ 
+ 	trace_trap_reg(__func__, rd->reg, p->is_write, *dbg_reg);
+ 
+@@ -1744,66 +1748,27 @@ static bool trap_dbgidr(struct kvm_vcpu *vcpu,
+ 	}
+ }
+ 
+-static bool trap_debug32(struct kvm_vcpu *vcpu,
+-			 struct sys_reg_params *p,
+-			 const struct sys_reg_desc *r)
+-{
+-	if (p->is_write) {
+-		vcpu_cp14(vcpu, r->reg) = p->regval;
+-		vcpu->arch.flags |= KVM_ARM64_DEBUG_DIRTY;
+-	} else {
+-		p->regval = vcpu_cp14(vcpu, r->reg);
+-	}
+-
+-	return true;
+-}
+-
+-/* AArch32 debug register mappings
++/*
++ * AArch32 debug register mappings
+  *
+  * AArch32 DBGBVRn is mapped to DBGBVRn_EL1[31:0]
+  * AArch32 DBGBXVRn is mapped to DBGBVRn_EL1[63:32]
+  *
+- * All control registers and watchpoint value registers are mapped to
+- * the lower 32 bits of their AArch64 equivalents. We share the trap
+- * handlers with the above AArch64 code which checks what mode the
+- * system is in.
++ * None of the other registers share their location, so treat them as
++ * if they were 64bit.
+  */
+-
+-static bool trap_xvr(struct kvm_vcpu *vcpu,
+-		     struct sys_reg_params *p,
+-		     const struct sys_reg_desc *rd)
+-{
+-	u64 *dbg_reg = &vcpu->arch.vcpu_debug_state.dbg_bvr[rd->reg];
+-
+-	if (p->is_write) {
+-		u64 val = *dbg_reg;
+-
+-		val &= 0xffffffffUL;
+-		val |= p->regval << 32;
+-		*dbg_reg = val;
+-
+-		vcpu->arch.flags |= KVM_ARM64_DEBUG_DIRTY;
+-	} else {
+-		p->regval = *dbg_reg >> 32;
+-	}
+-
+-	trace_trap_reg(__func__, rd->reg, p->is_write, *dbg_reg);
+-
+-	return true;
+-}
+-
+-#define DBG_BCR_BVR_WCR_WVR(n)						\
+-	/* DBGBVRn */							\
+-	{ Op1( 0), CRn( 0), CRm((n)), Op2( 4), trap_bvr, NULL, n }, 	\
+-	/* DBGBCRn */							\
+-	{ Op1( 0), CRn( 0), CRm((n)), Op2( 5), trap_bcr, NULL, n },	\
+-	/* DBGWVRn */							\
+-	{ Op1( 0), CRn( 0), CRm((n)), Op2( 6), trap_wvr, NULL, n },	\
+-	/* DBGWCRn */							\
++#define DBG_BCR_BVR_WCR_WVR(n)						      \
++	/* DBGBVRn */							      \
++	{ AA32(LO), Op1( 0), CRn( 0), CRm((n)), Op2( 4), trap_bvr, NULL, n }, \
++	/* DBGBCRn */							      \
++	{ Op1( 0), CRn( 0), CRm((n)), Op2( 5), trap_bcr, NULL, n },	      \
++	/* DBGWVRn */							      \
++	{ Op1( 0), CRn( 0), CRm((n)), Op2( 6), trap_wvr, NULL, n },	      \
++	/* DBGWCRn */							      \
+ 	{ Op1( 0), CRn( 0), CRm((n)), Op2( 7), trap_wcr, NULL, n }
+ 
+-#define DBGBXVR(n)							\
+-	{ Op1( 0), CRn( 1), CRm((n)), Op2( 1), trap_xvr, NULL, n }
++#define DBGBXVR(n)							      \
++	{ AA32(HI), Op1( 0), CRn( 1), CRm((n)), Op2( 1), trap_bvr, NULL, n }
+ 
+ /*
+  * Trapped cp14 registers. We generally ignore most of the external
+@@ -1821,9 +1786,9 @@ static const struct sys_reg_desc cp14_regs[] = {
+ 	{ Op1( 0), CRn( 0), CRm( 1), Op2( 0), trap_raz_wi },
+ 	DBG_BCR_BVR_WCR_WVR(1),
+ 	/* DBGDCCINT */
+-	{ Op1( 0), CRn( 0), CRm( 2), Op2( 0), trap_debug32, NULL, cp14_DBGDCCINT },
++	{ Op1( 0), CRn( 0), CRm( 2), Op2( 0), trap_debug_regs, NULL, MDCCINT_EL1 },
+ 	/* DBGDSCRext */
+-	{ Op1( 0), CRn( 0), CRm( 2), Op2( 2), trap_debug32, NULL, cp14_DBGDSCRext },
++	{ Op1( 0), CRn( 0), CRm( 2), Op2( 2), trap_debug_regs, NULL, MDSCR_EL1 },
+ 	DBG_BCR_BVR_WCR_WVR(2),
+ 	/* DBGDTR[RT]Xint */
+ 	{ Op1( 0), CRn( 0), CRm( 3), Op2( 0), trap_raz_wi },
+@@ -1838,7 +1803,7 @@ static const struct sys_reg_desc cp14_regs[] = {
+ 	{ Op1( 0), CRn( 0), CRm( 6), Op2( 2), trap_raz_wi },
+ 	DBG_BCR_BVR_WCR_WVR(6),
+ 	/* DBGVCR */
+-	{ Op1( 0), CRn( 0), CRm( 7), Op2( 0), trap_debug32, NULL, cp14_DBGVCR },
++	{ Op1( 0), CRn( 0), CRm( 7), Op2( 0), trap_debug_regs, NULL, DBGVCR32_EL2 },
+ 	DBG_BCR_BVR_WCR_WVR(7),
+ 	DBG_BCR_BVR_WCR_WVR(8),
+ 	DBG_BCR_BVR_WCR_WVR(9),
+
+From patchwork Tue Nov 10 13:36:16 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11894349
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,INCLUDES_PATCH,MAILING_LIST_MULTI,
+	SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id EDE88C56201
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:38 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 84515207E8
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:38 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=kernel.org header.i=@kernel.org
+ header.b="ilrAfHlY"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732147AbgKJNgh (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 10 Nov 2020 08:36:37 -0500
+Received: from mail.kernel.org ([198.145.29.99]:49120 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1731962AbgKJNgd (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 10 Nov 2020 08:36:33 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id C94FB20867;
+        Tue, 10 Nov 2020 13:36:32 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+        s=default; t=1605015392;
+        bh=eLjJK1buVxDAyag6pR/7LJkBKLx1jTibzLVMjABw4/w=;
+        h=From:To:Cc:Subject:Date:In-Reply-To:References:From;
+        b=ilrAfHlYmiJd6UNVlIB2dAZKJsCOjnNosLaznePEZ1Yi2mOXfBpQ/NqAb9pmuQQCw
+         g29gEV4bEJ7IABjw9cXcfZRjxpWs8L5bbioiNillz28aIE6qqj57Ye7wyOLe0+0P/3
+         ERnvkqGEJCHB4xZU818XHi7h59WpCrIj/HRdrZso=
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1kcTp1-009SZy-2V; Tue, 10 Nov 2020 13:36:31 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org
+Cc: James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        kernel-team@android.com
+Subject: [PATCH v2 6/9] KVM: arm64: Drop is_32bit trap attribute
+Date: Tue, 10 Nov 2020 13:36:16 +0000
+Message-Id: <20201110133619.451157-7-maz@kernel.org>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201110133619.451157-1-maz@kernel.org>
+References: <20201110133619.451157-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+ linux-arm-kernel@lists.infradead.org, james.morse@arm.com,
+ julien.thierry.kdev@gmail.com, suzuki.poulose@arm.com,
+ kernel-team@android.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The is_32bit attribute is now completely unused, drop it.
+
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/kvm/sys_regs.c        | 3 ---
+ arch/arm64/kvm/sys_regs.h        | 1 -
+ arch/arm64/kvm/vgic-sys-reg-v3.c | 2 --
+ 3 files changed, 6 deletions(-)
+
+diff --git a/arch/arm64/kvm/sys_regs.c b/arch/arm64/kvm/sys_regs.c
+index 660ff6c18b2e..a4726cdbe16f 100644
+--- a/arch/arm64/kvm/sys_regs.c
++++ b/arch/arm64/kvm/sys_regs.c
+@@ -2176,7 +2176,6 @@ static int kvm_handle_cp_64(struct kvm_vcpu *vcpu,
+ 	int Rt2 = (esr >> 10) & 0x1f;
+ 
+ 	params.is_aarch32 = true;
+-	params.is_32bit = false;
+ 	params.CRm = (esr >> 1) & 0xf;
+ 	params.is_write = ((esr & 1) == 0);
+ 
+@@ -2227,7 +2226,6 @@ static int kvm_handle_cp_32(struct kvm_vcpu *vcpu,
+ 	int Rt  = kvm_vcpu_sys_get_rt(vcpu);
+ 
+ 	params.is_aarch32 = true;
+-	params.is_32bit = true;
+ 	params.CRm = (esr >> 1) & 0xf;
+ 	params.regval = vcpu_get_reg(vcpu, Rt);
+ 	params.is_write = ((esr & 1) == 0);
+@@ -2322,7 +2320,6 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
+ 	trace_kvm_handle_sys_reg(esr);
+ 
+ 	params.is_aarch32 = false;
+-	params.is_32bit = false;
+ 	params.Op0 = (esr >> 20) & 3;
+ 	params.Op1 = (esr >> 14) & 0x7;
+ 	params.CRn = (esr >> 10) & 0xf;
+diff --git a/arch/arm64/kvm/sys_regs.h b/arch/arm64/kvm/sys_regs.h
+index 259864c3c76b..8c4958d6b5ce 100644
+--- a/arch/arm64/kvm/sys_regs.h
++++ b/arch/arm64/kvm/sys_regs.h
+@@ -20,7 +20,6 @@ struct sys_reg_params {
+ 	u64	regval;
+ 	bool	is_write;
+ 	bool	is_aarch32;
+-	bool	is_32bit;	/* Only valid if is_aarch32 is true */
+ };
+ 
+ struct sys_reg_desc {
+diff --git a/arch/arm64/kvm/vgic-sys-reg-v3.c b/arch/arm64/kvm/vgic-sys-reg-v3.c
+index 2f92bdcb1188..806d6701a7da 100644
+--- a/arch/arm64/kvm/vgic-sys-reg-v3.c
++++ b/arch/arm64/kvm/vgic-sys-reg-v3.c
+@@ -269,7 +269,6 @@ int vgic_v3_has_cpu_sysregs_attr(struct kvm_vcpu *vcpu, bool is_write, u64 id,
+ 	params.regval = *reg;
+ 	params.is_write = is_write;
+ 	params.is_aarch32 = false;
+-	params.is_32bit = false;
+ 
+ 	if (find_reg_by_id(sysreg, &params, gic_v3_icc_reg_descs,
+ 			      ARRAY_SIZE(gic_v3_icc_reg_descs)))
+@@ -289,7 +288,6 @@ int vgic_v3_cpu_sysregs_uaccess(struct kvm_vcpu *vcpu, bool is_write, u64 id,
+ 		params.regval = *reg;
+ 	params.is_write = is_write;
+ 	params.is_aarch32 = false;
+-	params.is_32bit = false;
+ 
+ 	r = find_reg_by_id(sysreg, &params, gic_v3_icc_reg_descs,
+ 			   ARRAY_SIZE(gic_v3_icc_reg_descs));
+
+From patchwork Tue Nov 10 13:36:17 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11894353
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,INCLUDES_PATCH,MAILING_LIST_MULTI,
+	SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id EC9D9C4742C
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:42 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 953D8207E8
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:42 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=kernel.org header.i=@kernel.org
+ header.b="Wn801BR8"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732176AbgKJNgi (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 10 Nov 2020 08:36:38 -0500
+Received: from mail.kernel.org ([198.145.29.99]:49154 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1732008AbgKJNge (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 10 Nov 2020 08:36:34 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id 5FF61206B6;
+        Tue, 10 Nov 2020 13:36:33 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+        s=default; t=1605015393;
+        bh=F6UTokbEUm+r2riVY/hfuov0ojGU0GoZmSLdv6//ATA=;
+        h=From:To:Cc:Subject:Date:In-Reply-To:References:From;
+        b=Wn801BR8JR9wYJ4fczv4XxmmjHMC0eRzNTMOAicZf6MX1Zajjb5tG9Ducy8CgO4iR
+         LdM9hvWMtKwGEwcOalk1sdRPXtzupiEikaIZ5QZ/U3T0UKkLLef1JU1ZJ/0m6gmuc5
+         T8ghtWThQ4HOllWhshm4RlbZMs0OrWt2gGrHEghg=
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1kcTp1-009SZy-Jk; Tue, 10 Nov 2020 13:36:31 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org
+Cc: James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        kernel-team@android.com
+Subject: [PATCH v2 7/9] KVM: arm64: Drop is_aarch32 trap attribute
+Date: Tue, 10 Nov 2020 13:36:17 +0000
+Message-Id: <20201110133619.451157-8-maz@kernel.org>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201110133619.451157-1-maz@kernel.org>
+References: <20201110133619.451157-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+ linux-arm-kernel@lists.infradead.org, james.morse@arm.com,
+ julien.thierry.kdev@gmail.com, suzuki.poulose@arm.com,
+ kernel-team@android.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+is_aarch32 is only used once, and can be trivially replaced by
+testing Op0 instead. Drop it.
+
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/kvm/sys_regs.c        | 7 ++-----
+ arch/arm64/kvm/sys_regs.h        | 1 -
+ arch/arm64/kvm/vgic-sys-reg-v3.c | 2 --
+ 3 files changed, 2 insertions(+), 8 deletions(-)
+
+diff --git a/arch/arm64/kvm/sys_regs.c b/arch/arm64/kvm/sys_regs.c
+index a4726cdbe16f..64fdfb64d791 100644
+--- a/arch/arm64/kvm/sys_regs.c
++++ b/arch/arm64/kvm/sys_regs.c
+@@ -213,7 +213,7 @@ static bool access_gic_sgi(struct kvm_vcpu *vcpu,
+ 	 * equivalent to ICC_SGI0R_EL1, as there is no "alternative" secure
+ 	 * group.
+ 	 */
+-	if (p->is_aarch32) {
++	if (p->Op0 == 0) {		/* AArch32 */
+ 		switch (p->Op1) {
+ 		default:		/* Keep GCC quiet */
+ 		case 0:			/* ICC_SGI1R */
+@@ -224,7 +224,7 @@ static bool access_gic_sgi(struct kvm_vcpu *vcpu,
+ 			g1 = false;
+ 			break;
+ 		}
+-	} else {
++	} else {			/* AArch64 */
+ 		switch (p->Op2) {
+ 		default:		/* Keep GCC quiet */
+ 		case 5:			/* ICC_SGI1R_EL1 */
+@@ -2175,7 +2175,6 @@ static int kvm_handle_cp_64(struct kvm_vcpu *vcpu,
+ 	int Rt = kvm_vcpu_sys_get_rt(vcpu);
+ 	int Rt2 = (esr >> 10) & 0x1f;
+ 
+-	params.is_aarch32 = true;
+ 	params.CRm = (esr >> 1) & 0xf;
+ 	params.is_write = ((esr & 1) == 0);
+ 
+@@ -2225,7 +2224,6 @@ static int kvm_handle_cp_32(struct kvm_vcpu *vcpu,
+ 	u32 esr = kvm_vcpu_get_esr(vcpu);
+ 	int Rt  = kvm_vcpu_sys_get_rt(vcpu);
+ 
+-	params.is_aarch32 = true;
+ 	params.CRm = (esr >> 1) & 0xf;
+ 	params.regval = vcpu_get_reg(vcpu, Rt);
+ 	params.is_write = ((esr & 1) == 0);
+@@ -2319,7 +2317,6 @@ int kvm_handle_sys_reg(struct kvm_vcpu *vcpu)
+ 
+ 	trace_kvm_handle_sys_reg(esr);
+ 
+-	params.is_aarch32 = false;
+ 	params.Op0 = (esr >> 20) & 3;
+ 	params.Op1 = (esr >> 14) & 0x7;
+ 	params.CRn = (esr >> 10) & 0xf;
+diff --git a/arch/arm64/kvm/sys_regs.h b/arch/arm64/kvm/sys_regs.h
+index 8c4958d6b5ce..416153b593a6 100644
+--- a/arch/arm64/kvm/sys_regs.h
++++ b/arch/arm64/kvm/sys_regs.h
+@@ -19,7 +19,6 @@ struct sys_reg_params {
+ 	u8	Op2;
+ 	u64	regval;
+ 	bool	is_write;
+-	bool	is_aarch32;
+ };
+ 
+ struct sys_reg_desc {
+diff --git a/arch/arm64/kvm/vgic-sys-reg-v3.c b/arch/arm64/kvm/vgic-sys-reg-v3.c
+index 806d6701a7da..07d5271e9f05 100644
+--- a/arch/arm64/kvm/vgic-sys-reg-v3.c
++++ b/arch/arm64/kvm/vgic-sys-reg-v3.c
+@@ -268,7 +268,6 @@ int vgic_v3_has_cpu_sysregs_attr(struct kvm_vcpu *vcpu, bool is_write, u64 id,
+ 
+ 	params.regval = *reg;
+ 	params.is_write = is_write;
+-	params.is_aarch32 = false;
+ 
+ 	if (find_reg_by_id(sysreg, &params, gic_v3_icc_reg_descs,
+ 			      ARRAY_SIZE(gic_v3_icc_reg_descs)))
+@@ -287,7 +286,6 @@ int vgic_v3_cpu_sysregs_uaccess(struct kvm_vcpu *vcpu, bool is_write, u64 id,
+ 	if (is_write)
+ 		params.regval = *reg;
+ 	params.is_write = is_write;
+-	params.is_aarch32 = false;
+ 
+ 	r = find_reg_by_id(sysreg, &params, gic_v3_icc_reg_descs,
+ 			   ARRAY_SIZE(gic_v3_icc_reg_descs));
+
+From patchwork Tue Nov 10 13:36:18 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11894341
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,INCLUDES_PATCH,MAILING_LIST_MULTI,
+	SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 861ACC56202
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:41 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 31032207E8
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:41 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=kernel.org header.i=@kernel.org
+ header.b="ih2uiva/"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1732166AbgKJNgj (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 10 Nov 2020 08:36:39 -0500
+Received: from mail.kernel.org ([198.145.29.99]:49192 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1732036AbgKJNge (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 10 Nov 2020 08:36:34 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id 0873020797;
+        Tue, 10 Nov 2020 13:36:34 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+        s=default; t=1605015394;
+        bh=oEJ26RwAVCuQCGt/s5ti5ysXVRlvv3yQD7m3Uv3qvgs=;
+        h=From:To:Cc:Subject:Date:In-Reply-To:References:From;
+        b=ih2uiva/j21mG9p+sqVSaUKNG4MzdGBunyOsJpwqXV2WWSMopnjVySAggRyFastWD
+         QHD4xmDCb80dxRj+K2TiCrZFBoAykMlHZrXGx3Vh7136YdG4XFohValRT5NgmlJBh6
+         dZ4dHQq2mZZcA6GgRyG78lpZl9jmWTL5ecUFHTwU=
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1kcTp2-009SZy-6h; Tue, 10 Nov 2020 13:36:32 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org
+Cc: James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        kernel-team@android.com
+Subject: [PATCH v2 8/9] KVM: arm64: Drop legacy copro shadow register
+Date: Tue, 10 Nov 2020 13:36:18 +0000
+Message-Id: <20201110133619.451157-9-maz@kernel.org>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201110133619.451157-1-maz@kernel.org>
+References: <20201110133619.451157-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+ linux-arm-kernel@lists.infradead.org, james.morse@arm.com,
+ julien.thierry.kdev@gmail.com, suzuki.poulose@arm.com,
+ kernel-team@android.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Finally remove one of the biggest 32bit legacy: the copro shadow
+mapping. We won't missit.
+
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/include/asm/kvm_host.h | 48 +------------------------------
+ 1 file changed, 1 insertion(+), 47 deletions(-)
+
+diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
+index 0d023e4f80a0..c527f9567713 100644
+--- a/arch/arm64/include/asm/kvm_host.h
++++ b/arch/arm64/include/asm/kvm_host.h
+@@ -201,49 +201,6 @@ enum vcpu_sysreg {
+ 	NR_SYS_REGS	/* Nothing after this line! */
+ };
+ 
+-/* 32bit mapping */
+-#define c0_MPIDR	(MPIDR_EL1 * 2)	/* MultiProcessor ID Register */
+-#define c0_CSSELR	(CSSELR_EL1 * 2)/* Cache Size Selection Register */
+-#define c1_SCTLR	(SCTLR_EL1 * 2)	/* System Control Register */
+-#define c1_ACTLR	(ACTLR_EL1 * 2)	/* Auxiliary Control Register */
+-#define c1_CPACR	(CPACR_EL1 * 2)	/* Coprocessor Access Control */
+-#define c2_TTBR0	(TTBR0_EL1 * 2)	/* Translation Table Base Register 0 */
+-#define c2_TTBR0_high	(c2_TTBR0 + 1)	/* TTBR0 top 32 bits */
+-#define c2_TTBR1	(TTBR1_EL1 * 2)	/* Translation Table Base Register 1 */
+-#define c2_TTBR1_high	(c2_TTBR1 + 1)	/* TTBR1 top 32 bits */
+-#define c2_TTBCR	(TCR_EL1 * 2)	/* Translation Table Base Control R. */
+-#define c2_TTBCR2	(c2_TTBCR + 1)	/* Translation Table Base Control R. 2 */
+-#define c3_DACR		(DACR32_EL2 * 2)/* Domain Access Control Register */
+-#define c5_DFSR		(ESR_EL1 * 2)	/* Data Fault Status Register */
+-#define c5_IFSR		(IFSR32_EL2 * 2)/* Instruction Fault Status Register */
+-#define c5_ADFSR	(AFSR0_EL1 * 2)	/* Auxiliary Data Fault Status R */
+-#define c5_AIFSR	(AFSR1_EL1 * 2)	/* Auxiliary Instr Fault Status R */
+-#define c6_DFAR		(FAR_EL1 * 2)	/* Data Fault Address Register */
+-#define c6_IFAR		(c6_DFAR + 1)	/* Instruction Fault Address Register */
+-#define c7_PAR		(PAR_EL1 * 2)	/* Physical Address Register */
+-#define c7_PAR_high	(c7_PAR + 1)	/* PAR top 32 bits */
+-#define c10_PRRR	(MAIR_EL1 * 2)	/* Primary Region Remap Register */
+-#define c10_NMRR	(c10_PRRR + 1)	/* Normal Memory Remap Register */
+-#define c12_VBAR	(VBAR_EL1 * 2)	/* Vector Base Address Register */
+-#define c13_CID		(CONTEXTIDR_EL1 * 2)	/* Context ID Register */
+-#define c13_TID_URW	(TPIDR_EL0 * 2)	/* Thread ID, User R/W */
+-#define c13_TID_URO	(TPIDRRO_EL0 * 2)/* Thread ID, User R/O */
+-#define c13_TID_PRIV	(TPIDR_EL1 * 2)	/* Thread ID, Privileged */
+-#define c10_AMAIR0	(AMAIR_EL1 * 2)	/* Aux Memory Attr Indirection Reg */
+-#define c10_AMAIR1	(c10_AMAIR0 + 1)/* Aux Memory Attr Indirection Reg */
+-#define c14_CNTKCTL	(CNTKCTL_EL1 * 2) /* Timer Control Register (PL1) */
+-
+-#define cp14_DBGDSCRext	(MDSCR_EL1 * 2)
+-#define cp14_DBGBCR0	(DBGBCR0_EL1 * 2)
+-#define cp14_DBGBVR0	(DBGBVR0_EL1 * 2)
+-#define cp14_DBGBXVR0	(cp14_DBGBVR0 + 1)
+-#define cp14_DBGWCR0	(DBGWCR0_EL1 * 2)
+-#define cp14_DBGWVR0	(DBGWVR0_EL1 * 2)
+-#define cp14_DBGDCCINT	(MDCCINT_EL1 * 2)
+-#define cp14_DBGVCR	(DBGVCR32_EL2 * 2)
+-
+-#define NR_COPRO_REGS	(NR_SYS_REGS * 2)
+-
+ struct kvm_cpu_context {
+ 	struct user_pt_regs regs;	/* sp = sp_el0 */
+ 
+@@ -254,10 +211,7 @@ struct kvm_cpu_context {
+ 
+ 	struct user_fpsimd_state fp_regs;
+ 
+-	union {
+-		u64 sys_regs[NR_SYS_REGS];
+-		u32 copro[NR_COPRO_REGS];
+-	};
++	u64 sys_regs[NR_SYS_REGS];
+ 
+ 	struct kvm_vcpu *__hyp_running_vcpu;
+ };
+
+From patchwork Tue Nov 10 13:36:19 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 11894355
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,INCLUDES_PATCH,MAILING_LIST_MULTI,
+	SIGNED_OFF_BY,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id EF13AC388F7
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:45 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 9BFB620797
+	for <kvm@archiver.kernel.org>; Tue, 10 Nov 2020 13:36:45 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=kernel.org header.i=@kernel.org
+ header.b="O6qbaBQ8"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1731962AbgKJNgp (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 10 Nov 2020 08:36:45 -0500
+Received: from mail.kernel.org ([198.145.29.99]:49120 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1730750AbgKJNgf (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 10 Nov 2020 08:36:35 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id AD8B620809;
+        Tue, 10 Nov 2020 13:36:34 +0000 (UTC)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=kernel.org;
+        s=default; t=1605015394;
+        bh=2eV54eTlv+uuoGYKqX4qrJwamNweELI+6T+g/GLxlC0=;
+        h=From:To:Cc:Subject:Date:In-Reply-To:References:From;
+        b=O6qbaBQ8vM6K283bJ1c6a47YjptftEey1kzn0LEGjagjtEOeQkpWkB/V79EbbaKqT
+         SQwcCZd+hViS4I/dt/sGA/qE0xcSWtircuKQgLXETv4lhkpXw1E5hrUVu4+pfb1ca1
+         B1dV5HOJuoD1IcpAB/Wv/N92gDAGzGhOQUUbmRCM=
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1kcTp2-009SZy-Qv; Tue, 10 Nov 2020 13:36:33 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org
+Cc: James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        kernel-team@android.com
+Subject: [PATCH v2 9/9] KVM: arm64: Drop kvm_coproc.h
+Date: Tue, 10 Nov 2020 13:36:19 +0000
+Message-Id: <20201110133619.451157-10-maz@kernel.org>
+X-Mailer: git-send-email 2.28.0
+In-Reply-To: <20201110133619.451157-1-maz@kernel.org>
+References: <20201110133619.451157-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+ linux-arm-kernel@lists.infradead.org, james.morse@arm.com,
+ julien.thierry.kdev@gmail.com, suzuki.poulose@arm.com,
+ kernel-team@android.com
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+kvm_coproc.h used to serve as a compatibility layer for the files
+shared between the 32 and 64 bit ports.
+
+Another one bites the dust...
+
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/include/asm/kvm_coproc.h | 38 -----------------------------
+ arch/arm64/include/asm/kvm_host.h   | 17 +++++++++++++
+ arch/arm64/kvm/arm.c                |  3 +--
+ arch/arm64/kvm/guest.c              |  1 -
+ arch/arm64/kvm/handle_exit.c        |  1 -
+ arch/arm64/kvm/reset.c              |  1 -
+ arch/arm64/kvm/sys_regs.c           |  1 -
+ 7 files changed, 18 insertions(+), 44 deletions(-)
+ delete mode 100644 arch/arm64/include/asm/kvm_coproc.h
+
+diff --git a/arch/arm64/include/asm/kvm_coproc.h b/arch/arm64/include/asm/kvm_coproc.h
+deleted file mode 100644
+index d6bb40122fdb..000000000000
+--- a/arch/arm64/include/asm/kvm_coproc.h
++++ /dev/null
+@@ -1,38 +0,0 @@
+-/* SPDX-License-Identifier: GPL-2.0-only */
+-/*
+- * Copyright (C) 2012,2013 - ARM Ltd
+- * Author: Marc Zyngier <marc.zyngier@arm.com>
+- *
+- * Derived from arch/arm/include/asm/kvm_coproc.h
+- * Copyright (C) 2012 Rusty Russell IBM Corporation
+- */
+-
+-#ifndef __ARM64_KVM_COPROC_H__
+-#define __ARM64_KVM_COPROC_H__
+-
+-#include <linux/kvm_host.h>
+-
+-void kvm_reset_sys_regs(struct kvm_vcpu *vcpu);
+-
+-struct kvm_sys_reg_table {
+-	const struct sys_reg_desc *table;
+-	size_t num;
+-};
+-
+-int kvm_handle_cp14_load_store(struct kvm_vcpu *vcpu);
+-int kvm_handle_cp14_32(struct kvm_vcpu *vcpu);
+-int kvm_handle_cp14_64(struct kvm_vcpu *vcpu);
+-int kvm_handle_cp15_32(struct kvm_vcpu *vcpu);
+-int kvm_handle_cp15_64(struct kvm_vcpu *vcpu);
+-int kvm_handle_sys_reg(struct kvm_vcpu *vcpu);
+-
+-#define kvm_coproc_table_init kvm_sys_reg_table_init
+-void kvm_sys_reg_table_init(void);
+-
+-struct kvm_one_reg;
+-int kvm_arm_copy_sys_reg_indices(struct kvm_vcpu *vcpu, u64 __user *uindices);
+-int kvm_arm_sys_reg_get_reg(struct kvm_vcpu *vcpu, const struct kvm_one_reg *);
+-int kvm_arm_sys_reg_set_reg(struct kvm_vcpu *vcpu, const struct kvm_one_reg *);
+-unsigned long kvm_arm_num_sys_reg_descs(struct kvm_vcpu *vcpu);
+-
+-#endif /* __ARM64_KVM_COPROC_H__ */
+diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
+index c527f9567713..709f892f7a14 100644
+--- a/arch/arm64/include/asm/kvm_host.h
++++ b/arch/arm64/include/asm/kvm_host.h
+@@ -533,6 +533,12 @@ unsigned long kvm_arm_num_regs(struct kvm_vcpu *vcpu);
+ int kvm_arm_copy_reg_indices(struct kvm_vcpu *vcpu, u64 __user *indices);
+ int kvm_arm_get_reg(struct kvm_vcpu *vcpu, const struct kvm_one_reg *reg);
+ int kvm_arm_set_reg(struct kvm_vcpu *vcpu, const struct kvm_one_reg *reg);
++
++unsigned long kvm_arm_num_sys_reg_descs(struct kvm_vcpu *vcpu);
++int kvm_arm_copy_sys_reg_indices(struct kvm_vcpu *vcpu, u64 __user *uindices);
++int kvm_arm_sys_reg_get_reg(struct kvm_vcpu *vcpu, const struct kvm_one_reg *);
++int kvm_arm_sys_reg_set_reg(struct kvm_vcpu *vcpu, const struct kvm_one_reg *);
++
+ int __kvm_arm_vcpu_get_events(struct kvm_vcpu *vcpu,
+ 			      struct kvm_vcpu_events *events);
+ 
+@@ -595,6 +601,17 @@ void kvm_mmu_wp_memory_region(struct kvm *kvm, int slot);
+ int handle_exit(struct kvm_vcpu *vcpu, int exception_index);
+ void handle_exit_early(struct kvm_vcpu *vcpu, int exception_index);
+ 
++int kvm_handle_cp14_load_store(struct kvm_vcpu *vcpu);
++int kvm_handle_cp14_32(struct kvm_vcpu *vcpu);
++int kvm_handle_cp14_64(struct kvm_vcpu *vcpu);
++int kvm_handle_cp15_32(struct kvm_vcpu *vcpu);
++int kvm_handle_cp15_64(struct kvm_vcpu *vcpu);
++int kvm_handle_sys_reg(struct kvm_vcpu *vcpu);
++
++void kvm_reset_sys_regs(struct kvm_vcpu *vcpu);
++
++void kvm_sys_reg_table_init(void);
++
+ /* MMIO helpers */
+ void kvm_mmio_write_buf(void *buf, unsigned int len, unsigned long data);
+ unsigned long kvm_mmio_read_buf(const void *buf, unsigned int len);
+diff --git a/arch/arm64/kvm/arm.c b/arch/arm64/kvm/arm.c
+index 5750ec34960e..9d69d2bf6943 100644
+--- a/arch/arm64/kvm/arm.c
++++ b/arch/arm64/kvm/arm.c
+@@ -35,7 +35,6 @@
+ #include <asm/kvm_asm.h>
+ #include <asm/kvm_mmu.h>
+ #include <asm/kvm_emulate.h>
+-#include <asm/kvm_coproc.h>
+ #include <asm/sections.h>
+ 
+ #include <kvm/arm_hypercalls.h>
+@@ -1525,7 +1524,7 @@ static int init_subsystems(void)
+ 		goto out;
+ 
+ 	kvm_perf_init();
+-	kvm_coproc_table_init();
++	kvm_sys_reg_table_init();
+ 
+ out:
+ 	on_each_cpu(_kvm_arch_hardware_disable, NULL, 1);
+diff --git a/arch/arm64/kvm/guest.c b/arch/arm64/kvm/guest.c
+index 3f23f7478d2a..9bbd30e62799 100644
+--- a/arch/arm64/kvm/guest.c
++++ b/arch/arm64/kvm/guest.c
+@@ -24,7 +24,6 @@
+ #include <asm/fpsimd.h>
+ #include <asm/kvm.h>
+ #include <asm/kvm_emulate.h>
+-#include <asm/kvm_coproc.h>
+ #include <asm/sigcontext.h>
+ 
+ #include "trace.h"
+diff --git a/arch/arm64/kvm/handle_exit.c b/arch/arm64/kvm/handle_exit.c
+index f79137ee4274..cebe39f3b1b6 100644
+--- a/arch/arm64/kvm/handle_exit.c
++++ b/arch/arm64/kvm/handle_exit.c
+@@ -14,7 +14,6 @@
+ #include <asm/esr.h>
+ #include <asm/exception.h>
+ #include <asm/kvm_asm.h>
+-#include <asm/kvm_coproc.h>
+ #include <asm/kvm_emulate.h>
+ #include <asm/kvm_mmu.h>
+ #include <asm/debug-monitors.h>
+diff --git a/arch/arm64/kvm/reset.c b/arch/arm64/kvm/reset.c
+index f32490229a4c..74ce92a4988c 100644
+--- a/arch/arm64/kvm/reset.c
++++ b/arch/arm64/kvm/reset.c
+@@ -25,7 +25,6 @@
+ #include <asm/ptrace.h>
+ #include <asm/kvm_arm.h>
+ #include <asm/kvm_asm.h>
+-#include <asm/kvm_coproc.h>
+ #include <asm/kvm_emulate.h>
+ #include <asm/kvm_mmu.h>
+ #include <asm/virt.h>
+diff --git a/arch/arm64/kvm/sys_regs.c b/arch/arm64/kvm/sys_regs.c
+index 64fdfb64d791..d2e1d745f067 100644
+--- a/arch/arm64/kvm/sys_regs.c
++++ b/arch/arm64/kvm/sys_regs.c
+@@ -20,7 +20,6 @@
+ #include <asm/debug-monitors.h>
+ #include <asm/esr.h>
+ #include <asm/kvm_arm.h>
+-#include <asm/kvm_coproc.h>
+ #include <asm/kvm_emulate.h>
+ #include <asm/kvm_hyp.h>
+ #include <asm/kvm_mmu.h>
