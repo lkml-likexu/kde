@@ -1,0 +1,116 @@
+From patchwork Thu Nov 12 13:03:38 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 11900139
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-8.3 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_SANE_2 autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id BC58DC388F7
+	for <kvm@archiver.kernel.org>; Thu, 12 Nov 2020 13:03:46 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 30A4122201
+	for <kvm@archiver.kernel.org>; Thu, 12 Nov 2020 13:03:46 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (2048-bit key) header.d=infradead.org header.i=@infradead.org
+ header.b="OznJhtF0"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1728254AbgKLNDp (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 12 Nov 2020 08:03:45 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:45826 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1728134AbgKLNDo (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 12 Nov 2020 08:03:44 -0500
+Received: from merlin.infradead.org (merlin.infradead.org
+ [IPv6:2001:8b0:10b:1231::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 92E5EC0613D1
+        for <kvm@vger.kernel.org>; Thu, 12 Nov 2020 05:03:44 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=merlin.20170209;
+ h=Mime-Version:Content-Type:Date:Cc:To:
+        From:Subject:Message-ID:Sender:Reply-To:Content-Transfer-Encoding:Content-ID:
+        Content-Description:In-Reply-To:References;
+        bh=Ain4p74aeMuMv/rK1nTwcANb7HDsGwcGYCFm+acwIPs=;
+ b=OznJhtF0JIUSvFlS3eDVIkPmPf
+        APRItYNW4qkDjfWQeEI2wdUY1OHHYkG016G1rOWFGnZKwMw6BJxHAsiA24eNREtp0yXh7C5SAcYN/
+        kK4mGvn99tQ9nlgg1kQNw8ZsNsGcymYdmfuEczixD2LitVMKb3zd4zcrtcODXWgvwLLwXATofd1CH
+        wov2ZJIkqiQXSxUB5M7KrjGyow1R7CjC8ygkx7pmob13U6hhYocRgauxtUHgl7WIUJSsci7QEWUAL
+        BjA/9F72fJjEOPltwZbKVP812jFeaOBt6anZpNzxR/fbAcOqoc1Q6c2mF6ELOE8Td/qPS64EQ5GEh
+        HGl87orA==;
+Received: from 54-240-197-238.amazon.com ([54.240.197.238]
+ helo=u3832b3a9db3152.ant.amazon.com)
+        by merlin.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kdCGK-0006gt-0a; Thu, 12 Nov 2020 13:03:40 +0000
+Message-ID: <62918f65ec78f8990278a6a0db0567968fa23e49.camel@infradead.org>
+Subject: [RFC] Further hack request_interrupt_window handling to work around
+ kvm_cpu_has_interrupt() nesting breakage
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm <kvm@vger.kernel.org>
+Cc: "Sironi, Filippo" <sironi@amazon.de>,
+        "Raslan, KarimAllah" <karahmed@amazon.de>
+Date: Thu, 12 Nov 2020 13:03:38 +0000
+X-Mailer: Evolution 3.28.5-0ubuntu0.18.04.2 
+Mime-Version: 1.0
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ merlin.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+In kvm_cpu_has_interrupt() we see the following FIXME:
+
+	/*
+	 * FIXME: interrupt.injected represents an interrupt that it's
+	 * side-effects have already been applied (e.g. bit from IRR
+	 * already moved to ISR). Therefore, it is incorrect to rely
+	 * on interrupt.injected to know if there is a pending
+	 * interrupt in the user-mode LAPIC.
+	 * This leads to nVMX/nSVM not be able to distinguish
+	 * if it should exit from L2 to L1 on EXTERNAL_INTERRUPT on
+	 * pending interrupt or should re-inject an injected
+	 * interrupt.
+	 */
+
+I'm using nested VMX for testing, while I add split-irqchip support to
+my VMM. I see the vCPU lock up when attempting to deliver an interrupt.
+
+What seems to happen is that request_interrupt_window is set, causing
+an immediate vmexit because an IRQ *can* be delivered. But then
+kvm_vcpu_ready_for_interrupt_injection() returns false, because
+kvm_cpu_has_interrupt() is true.
+
+Because that returns false, the kernel just continues looping in
+vcpu_run(), constantly vmexiting and going right back in.
+
+This utterly naïve hack makes my L2 guest boot properly, by not
+enabling the irq window when we were going to ignore the exit anyway.
+Is there a better fix?
+
+I must also confess I'm working on a slightly older kernel in L1, and
+have forward-ported to a more recent tree without actually testing
+because from inspection it looks like exactly the same issue still
+exists.
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 397f599b20e5..e23f0c8b4a16 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -8830,7 +8830,10 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+ 		}
+ 
+ 		inject_pending_event(vcpu, &req_immediate_exit);
+-		if (req_int_win)
++		/* Don't enable the interrupt window for userspace if
++		 * kvm_cpu_has_interrupt() is set and we'd never actually
++		 * exit with ready_for_interrupt_window set anyway. */
++		if (req_int_win && !kvm_cpu_has_interrupt(vcpu)
+ 			kvm_x86_ops.enable_irq_window(vcpu);
+ 
+ 		if (kvm_lapic_enabled(vcpu)) {
