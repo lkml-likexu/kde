@@ -1,0 +1,136 @@
+From patchwork Fri Nov 20 10:47:36 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 11920045
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-20.8 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,MENTIONS_GIT_HOSTING,
+	SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED autolearn=unavailable autolearn_force=no
+	version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 8F108C63777
+	for <kvm@archiver.kernel.org>; Fri, 20 Nov 2020 10:48:06 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 31F6E22255
+	for <kvm@archiver.kernel.org>; Fri, 20 Nov 2020 10:48:06 +0000 (UTC)
+Authentication-Results: mail.kernel.org;
+	dkim=pass (1024-bit key) header.d=redhat.com header.i=@redhat.com
+ header.b="cXkKSbgm"
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727327AbgKTKrx (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 20 Nov 2020 05:47:53 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:37887 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S1726460AbgKTKrw (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Fri, 20 Nov 2020 05:47:52 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1605869270;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding;
+        bh=FWeqzBmZlLWAnJm9w9KD07ccv+2odS4qEQoYooXswuk=;
+        b=cXkKSbgmjG6ii2sVCxbDNQVsJWAsKtm6eOOIpyMOq67WZVdsP4BhDJnPw+blN0ZLQZ+ld0
+        bMawmSVwXYWNiomh7rt25XLZ5MIM9ej86nOpPhppKvJP1AW8OYFz+WTSb00O+XtJfynKtd
+        94JUYi9jX50rJVOFim6PHR2jBMvR7dM=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-141-z5gMOlHWMvOuFb6u_w9ZmA-1; Fri, 20 Nov 2020 05:47:47 -0500
+X-MC-Unique: z5gMOlHWMvOuFb6u_w9ZmA-1
+Received: from smtp.corp.redhat.com (int-mx01.intmail.prod.int.phx2.redhat.com
+ [10.5.11.11])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id CA5A9801B1C;
+        Fri, 20 Nov 2020 10:47:45 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-114-22.ams2.redhat.com
+ [10.36.114.22])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 0495F1F0;
+        Fri, 20 Nov 2020 10:47:36 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: netdev@vger.kernel.org
+Cc: Sergio Lopez <slp@redhat.com>,
+        "David S. Miller" <davem@davemloft.net>,
+        Stefano Garzarella <sgarzare@redhat.com>,
+        Jia He <justin.he@arm.com>, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org,
+        Stefan Hajnoczi <stefanha@redhat.com>,
+        virtualization@lists.linux-foundation.org,
+        Jakub Kicinski <kuba@kernel.org>
+Subject: [PATCH net] vsock/virtio: discard packets only when socket is really
+ closed
+Date: Fri, 20 Nov 2020 11:47:36 +0100
+Message-Id: <20201120104736.73749-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.11
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Starting from commit 8692cefc433f ("virtio_vsock: Fix race condition
+in virtio_transport_recv_pkt"), we discard packets in
+virtio_transport_recv_pkt() if the socket has been released.
+
+When the socket is connected, we schedule a delayed work to wait the
+RST packet from the other peer, also if SHUTDOWN_MASK is set in
+sk->sk_shutdown.
+This is done to complete the virtio-vsock shutdown algorithm, releasing
+the port assigned to the socket definitively only when the other peer
+has consumed all the packets.
+
+If we discard the RST packet received, the socket will be closed only
+when the VSOCK_CLOSE_TIMEOUT is reached.
+
+Sergio discovered the issue while running ab(1) HTTP benchmark using
+libkrun [1] and observing a latency increase with that commit.
+
+To avoid this issue, we discard packet only if the socket is really
+closed (SOCK_DONE flag is set).
+We also set SOCK_DONE in virtio_transport_release() when we don't need
+to wait any packets from the other peer (we didn't schedule the delayed
+work). In this case we remove the socket from the vsock lists, releasing
+the port assigned.
+
+[1] https://github.com/containers/libkrun
+
+Fixes: 8692cefc433f ("virtio_vsock: Fix race condition in virtio_transport_recv_pkt")
+Cc: justin.he@arm.com
+Reported-by: Sergio Lopez <slp@redhat.com>
+Tested-by: Sergio Lopez <slp@redhat.com>
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+ net/vmw_vsock/virtio_transport_common.c | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/net/vmw_vsock/virtio_transport_common.c b/net/vmw_vsock/virtio_transport_common.c
+index 0edda1edf988..5956939eebb7 100644
+--- a/net/vmw_vsock/virtio_transport_common.c
++++ b/net/vmw_vsock/virtio_transport_common.c
+@@ -841,8 +841,10 @@ void virtio_transport_release(struct vsock_sock *vsk)
+ 		virtio_transport_free_pkt(pkt);
+ 	}
+ 
+-	if (remove_sock)
++	if (remove_sock) {
++		sock_set_flag(sk, SOCK_DONE);
+ 		vsock_remove_sock(vsk);
++	}
+ }
+ EXPORT_SYMBOL_GPL(virtio_transport_release);
+ 
+@@ -1132,8 +1134,8 @@ void virtio_transport_recv_pkt(struct virtio_transport *t,
+ 
+ 	lock_sock(sk);
+ 
+-	/* Check if sk has been released before lock_sock */
+-	if (sk->sk_shutdown == SHUTDOWN_MASK) {
++	/* Check if sk has been closed before lock_sock */
++	if (sock_flag(sk, SOCK_DONE)) {
+ 		(void)virtio_transport_reset_no_sock(t, pkt);
+ 		release_sock(sk);
+ 		sock_put(sk);
