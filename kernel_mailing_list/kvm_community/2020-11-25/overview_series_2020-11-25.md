@@ -76,6 +76,7 @@ X-Mailing-List: kvm@vger.kernel.org
 The only caller can use accel_available("kvm") instead.
 
 Signed-off-by: Eduardo Habkost <ehabkost@redhat.com>
+Reviewed-by: Cornelia Huck <cohuck@redhat.com>
 ---
 Cc: Markus Armbruster <armbru@redhat.com>
 Cc: qemu-devel@nongnu.org

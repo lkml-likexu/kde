@@ -345,6 +345,7 @@ Tested: compiles
 Fixes: 02c00b3a2f7e ("kvm: x86/mmu: Allocate and free TDP MMU roots")
 Reported-by: Zdenek Kaspar <zkaspar82@gmail.com>
 Signed-off-by: Ben Gardon <bgardon@google.com>
+Tested-by: Zdenek Kaspar <zkaspar82@gmail.com>
 ---
  arch/x86/kvm/mmu/tdp_mmu.c | 10 ++++++++++
  1 file changed, 10 insertions(+)
@@ -357,7 +358,7 @@ Signed-off-by: Ben Gardon <bgardon@google.com>
 Content-Type: text/plain; charset="utf-8"
 MIME-Version: 1.0
 Content-Transfer-Encoding: 7bit
-X-Patchwork-Submitter: "Luck, Tony" <tony.luck@intel.com>
+X-Patchwork-Submitter: Tony Luck <tony.luck@intel.com>
 X-Patchwork-Id: 11895921
 Return-Path: <kvm-owner@kernel.org>
 X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on

@@ -414,6 +414,96 @@ Signed-off-by: Qinglang Miao <miaoqinglang@huawei.com>
  1 file changed, 6 insertions(+), 3 deletions(-)
 
 ```
+#### [PATCH v2 01/22] x86/fpu/xstate: Modify area init helper prototypes to access all the possible areas
+##### From: "Chang S. Bae" <chang.seok.bae@intel.com>
+
+```c
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: "Chang S. Bae" <chang.seok.bae@intel.com>
+X-Patchwork-Id: 11919221
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id BC27FC388F9
+	for <kvm@archiver.kernel.org>; Thu, 19 Nov 2020 23:38:11 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 781C5208FE
+	for <kvm@archiver.kernel.org>; Thu, 19 Nov 2020 23:38:11 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1726784AbgKSXhB (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 19 Nov 2020 18:37:01 -0500
+Received: from mga03.intel.com ([134.134.136.65]:10765 "EHLO mga03.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1726494AbgKSXhB (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 19 Nov 2020 18:37:01 -0500
+IronPort-SDR: 
+ WuOZs6RvB5nnMBhLJWpTObQQ3pgoVUhRuwrG6VAO/Z+hc6sO2kuvfLY9iYQ6Nr1DiplOXmQULC
+ v+uhdXckqVnA==
+X-IronPort-AV: E=McAfee;i="6000,8403,9810"; a="171481778"
+X-IronPort-AV: E=Sophos;i="5.78,354,1599548400";
+   d="scan'208";a="171481778"
+X-Amp-Result: SKIPPED(no attachment in message)
+X-Amp-File-Uploaded: False
+Received: from fmsmga001.fm.intel.com ([10.253.24.23])
+  by orsmga103.jf.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 19 Nov 2020 15:36:59 -0800
+IronPort-SDR: 
+ ESl+b9rggjpkQNWq+chDwRJjrviOXvUCj4KHSlE2lP/WXa2MnbTgBp2mB3BP0DEAu6vcrN7HaZ
+ z+POcxQOzhuA==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.78,354,1599548400";
+   d="scan'208";a="431392184"
+Received: from chang-linux-3.sc.intel.com ([172.25.66.175])
+  by fmsmga001.fm.intel.com with ESMTP; 19 Nov 2020 15:36:59 -0800
+From: "Chang S. Bae" <chang.seok.bae@intel.com>
+To: tglx@linutronix.de, mingo@kernel.org, bp@suse.de, luto@kernel.org,
+        x86@kernel.org
+Cc: len.brown@intel.com, dave.hansen@intel.com, jing2.liu@intel.com,
+        ravi.v.shankar@intel.com, linux-kernel@vger.kernel.org,
+        chang.seok.bae@intel.com, kvm@vger.kernel.org
+Subject: [PATCH v2 01/22] x86/fpu/xstate: Modify area init helper prototypes
+ to access all the possible areas
+Date: Thu, 19 Nov 2020 15:32:36 -0800
+Message-Id: <20201119233257.2939-2-chang.seok.bae@intel.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201119233257.2939-1-chang.seok.bae@intel.com>
+References: <20201119233257.2939-1-chang.seok.bae@intel.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The xstate infrastructure is not flexible to support dynamic areas in
+task->fpu. Change the fpstate_init() prototype to access task->fpu
+directly. It treats a null pointer as indicating init_fpstate, as this
+initial data does not belong to any task. For the compacted format,
+fpstate_init_xstate() now accepts the state component bitmap to configure
+XCOMP_BV.
+
+No functional change.
+
+Signed-off-by: Chang S. Bae <chang.seok.bae@intel.com>
+Reviewed-by: Len Brown <len.brown@intel.com>
+Cc: x86@kernel.org
+Cc: linux-kernel@vger.kernel.org
+Cc: kvm@vger.kernel.org
+---
+ arch/x86/include/asm/fpu/internal.h |  6 +++---
+ arch/x86/kernel/fpu/core.c          | 14 +++++++++++---
+ arch/x86/kernel/fpu/init.c          |  2 +-
+ arch/x86/kernel/fpu/regset.c        |  2 +-
+ arch/x86/kernel/fpu/xstate.c        |  3 +--
+ arch/x86/kvm/x86.c                  |  2 +-
+ 6 files changed, 18 insertions(+), 11 deletions(-)
+
+```
 #### [PATCH] vfio iommu type1: Bypass the vma permission check in vfio_pin_pages_remote()
 ##### From: Jia He <justin.he@arm.com>
 
@@ -421,7 +511,7 @@ Signed-off-by: Qinglang Miao <miaoqinglang@huawei.com>
 Content-Type: text/plain; charset="utf-8"
 MIME-Version: 1.0
 Content-Transfer-Encoding: 7bit
-X-Patchwork-Submitter: Jia He <justin.he@arm.com>
+X-Patchwork-Submitter: Justin He <justin.he@arm.com>
 X-Patchwork-Id: 11917591
 Return-Path: <kvm-owner@kernel.org>
 X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on

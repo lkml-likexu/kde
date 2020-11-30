@@ -141,7 +141,7 @@ From patchwork Wed Nov 18 11:21:36 2020
 Content-Type: text/plain; charset="utf-8"
 MIME-Version: 1.0
 Content-Transfer-Encoding: 7bit
-X-Patchwork-Submitter: Eric Auger <eric.auger@redhat.com>
+X-Patchwork-Submitter: Auger Eric <eric.auger@redhat.com>
 X-Patchwork-Id: 11914835
 Return-Path: <kvm-owner@kernel.org>
 X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on

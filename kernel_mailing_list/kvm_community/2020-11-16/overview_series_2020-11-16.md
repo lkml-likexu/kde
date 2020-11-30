@@ -803,7 +803,7 @@ Signed-off-by: Sean Christopherson <sean.j.christopherson@intel.com>
 Content-Type: text/plain; charset="utf-8"
 MIME-Version: 1.0
 Content-Transfer-Encoding: 7bit
-X-Patchwork-Submitter: Eric Auger <eric.auger@redhat.com>
+X-Patchwork-Submitter: Auger Eric <eric.auger@redhat.com>
 X-Patchwork-Id: 11908169
 Return-Path: <kvm-owner@kernel.org>
 X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
@@ -916,7 +916,7 @@ v11 -> v12:
 Content-Type: text/plain; charset="utf-8"
 MIME-Version: 1.0
 Content-Transfer-Encoding: 7bit
-X-Patchwork-Submitter: Eric Auger <eric.auger@redhat.com>
+X-Patchwork-Submitter: Auger Eric <eric.auger@redhat.com>
 X-Patchwork-Id: 11908243
 Return-Path: <kvm-owner@kernel.org>
 X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
@@ -998,6 +998,7 @@ PASID table.
 Signed-off-by: Jacob Pan <jacob.jun.pan@linux.intel.com>
 Signed-off-by: Liu, Yi L <yi.l.liu@linux.intel.com>
 Signed-off-by: Eric Auger <eric.auger@redhat.com>
+Reported-by: kernel test robot <lkp@intel.com>
 ---
 v11 -> v12:
 - use iommu_uapi_set_pasid_table
@@ -1541,6 +1542,7 @@ the 'src' parameter.
 Replace 'dst' description with 'src' description.
 
 Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+Acked-by: Jason Wang <jasowang@redhat.com>
 ---
  drivers/vhost/vringh.c | 6 +++---
  1 file changed, 3 insertions(+), 3 deletions(-)

@@ -127,6 +127,7 @@ the right decisions.
 Signed-off-by: Christian Borntraeger <borntraeger@de.ibm.com>
 Acked-by: Heiko Carstens <hca@linux.ibm.com>
 Acked-by: Janosch Frank <frankja@linux.ibm.com>
+Acked-by: Cornelia Huck <cohuck@redhat.com>
 ---
  arch/s390/kvm/guestdbg.c  |  8 ++++----
  arch/s390/kvm/intercept.c |  2 +-
@@ -458,6 +459,8 @@ s390. Let's add test bit functions, so we don't need to copy code to
 test query bits.
 
 Signed-off-by: Janosch Frank <frankja@linux.ibm.com>
+Reviewed-by: Cornelia Huck <cohuck@redhat.com>
+Reviewed-by: Thomas Huth <thuth@redhat.com>
 ---
  lib/s390x/asm/bitops.h   | 16 ++++++++++++++++
  lib/s390x/asm/facility.h |  3 ++-

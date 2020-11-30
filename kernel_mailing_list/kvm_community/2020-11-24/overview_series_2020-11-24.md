@@ -456,6 +456,7 @@ vfio_ap_private.h header file defining the public interfaces for the
 vfio_ap device driver.
 
 Signed-off-by: Tony Krowiak <akrowiak@linux.ibm.com>
+Reviewed-by: Halil Pasic <pasic@linux.ibm.com>
 ---
  drivers/s390/crypto/vfio_ap_drv.c     | 45 ++-----------------------
  drivers/s390/crypto/vfio_ap_ops.c     | 47 +++++++++++++++++++++++++--

@@ -234,6 +234,7 @@ already set to 0 isn't).
 Fixes: e1026237f9067 ("KVM: arm64: Set CSV2 for guests on hardware unaffected by Spectre-v2")
 Reported-by: Peng Liang <liangpeng10@huawei.com>
 Signed-off-by: Marc Zyngier <maz@kernel.org>
+Acked-by: Will Deacon <will@kernel.org>
 ---
  arch/arm64/include/asm/kvm_host.h |  2 ++
  arch/arm64/kvm/arm.c              | 16 ++++++++++++

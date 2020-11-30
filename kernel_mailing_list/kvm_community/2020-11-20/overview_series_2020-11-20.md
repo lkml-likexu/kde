@@ -138,6 +138,7 @@ provide this callback, so a clue is given that this same loop
 may be encountered in a similar situation.
 
 Signed-off-by: Eric Farman <farman@linux.ibm.com>
+Reviewed-by: Cornelia Huck <cohuck@redhat.com>
 ---
  drivers/vfio/mdev/mdev_core.c |  4 ++++
  drivers/vfio/mdev/vfio_mdev.c | 10 ++++++++++
@@ -474,6 +475,7 @@ Cc: justin.he@arm.com
 Reported-by: Sergio Lopez <slp@redhat.com>
 Tested-by: Sergio Lopez <slp@redhat.com>
 Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+Acked-by: Jia He <justin.he@arm.com>
 ---
  net/vmw_vsock/virtio_transport_common.c | 8 +++++---
  1 file changed, 5 insertions(+), 3 deletions(-)
