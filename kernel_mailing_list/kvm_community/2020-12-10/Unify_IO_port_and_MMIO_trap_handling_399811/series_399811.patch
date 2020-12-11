@@ -1,0 +1,3810 @@
+From patchwork Thu Dec 10 14:28:48 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11966013
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 7DE05C4167B
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:29:47 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id F1D0522EBE
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:29:45 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2390310AbgLJT3Q (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 14:29:16 -0500
+Received: from foss.arm.com ([217.140.110.172]:44772 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390263AbgLJOaJ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:30:09 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 43F3531B;
+        Thu, 10 Dec 2020 06:29:23 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 288143F718;
+        Thu, 10 Dec 2020 06:29:22 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 01/21] ioport: Remove ioport__setup_arch()
+Date: Thu, 10 Dec 2020 14:28:48 +0000
+Message-Id: <20201210142908.169597-2-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Since x86 had a special need for registering tons of special I/O ports,
+we had an ioport__setup_arch() callback, to allow each architecture
+to do the same. As it turns out no one uses it beside x86, so we remove
+that unnecessary abstraction.
+
+The generic function was registered via a device_base_init() call, so
+we just do the same for the x86 specific function only, and can remove
+the unneeded ioport__setup_arch().
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ arm/ioport.c         |  5 -----
+ include/kvm/ioport.h |  1 -
+ ioport.c             | 28 ----------------------------
+ mips/kvm.c           |  5 -----
+ powerpc/ioport.c     |  6 ------
+ x86/ioport.c         | 25 ++++++++++++++++++++++++-
+ 6 files changed, 24 insertions(+), 46 deletions(-)
+
+diff --git a/arm/ioport.c b/arm/ioport.c
+index 2f0feb9a..24092c9d 100644
+--- a/arm/ioport.c
++++ b/arm/ioport.c
+@@ -1,11 +1,6 @@
+ #include "kvm/ioport.h"
+ #include "kvm/irq.h"
+ 
+-int ioport__setup_arch(struct kvm *kvm)
+-{
+-	return 0;
+-}
+-
+ void ioport__map_irq(u8 *irq)
+ {
+ 	*irq = irq__alloc_line();
+diff --git a/include/kvm/ioport.h b/include/kvm/ioport.h
+index 039633f7..d0213541 100644
+--- a/include/kvm/ioport.h
++++ b/include/kvm/ioport.h
+@@ -35,7 +35,6 @@ struct ioport_operations {
+ 							    enum irq_type));
+ };
+ 
+-int ioport__setup_arch(struct kvm *kvm);
+ void ioport__map_irq(u8 *irq);
+ 
+ int __must_check ioport__register(struct kvm *kvm, u16 port, struct ioport_operations *ops,
+diff --git a/ioport.c b/ioport.c
+index 844a832d..667e8386 100644
+--- a/ioport.c
++++ b/ioport.c
+@@ -158,21 +158,6 @@ int ioport__unregister(struct kvm *kvm, u16 port)
+ 	return 0;
+ }
+ 
+-static void ioport__unregister_all(void)
+-{
+-	struct ioport *entry;
+-	struct rb_node *rb;
+-	struct rb_int_node *rb_node;
+-
+-	rb = rb_first(&ioport_tree);
+-	while (rb) {
+-		rb_node = rb_int(rb);
+-		entry = ioport_node(rb_node);
+-		ioport_unregister(&ioport_tree, entry);
+-		rb = rb_first(&ioport_tree);
+-	}
+-}
+-
+ static const char *to_direction(int direction)
+ {
+ 	if (direction == KVM_EXIT_IO_IN)
+@@ -220,16 +205,3 @@ out:
+ 
+ 	return !kvm->cfg.ioport_debug;
+ }
+-
+-int ioport__init(struct kvm *kvm)
+-{
+-	return ioport__setup_arch(kvm);
+-}
+-dev_base_init(ioport__init);
+-
+-int ioport__exit(struct kvm *kvm)
+-{
+-	ioport__unregister_all();
+-	return 0;
+-}
+-dev_base_exit(ioport__exit);
+diff --git a/mips/kvm.c b/mips/kvm.c
+index 26355930..e110e5d5 100644
+--- a/mips/kvm.c
++++ b/mips/kvm.c
+@@ -100,11 +100,6 @@ void kvm__irq_trigger(struct kvm *kvm, int irq)
+ 		die_perror("KVM_IRQ_LINE ioctl");
+ }
+ 
+-int ioport__setup_arch(struct kvm *kvm)
+-{
+-	return 0;
+-}
+-
+ bool kvm__arch_cpu_supports_vm(void)
+ {
+ 	return true;
+diff --git a/powerpc/ioport.c b/powerpc/ioport.c
+index 0c188b61..a5cff4ee 100644
+--- a/powerpc/ioport.c
++++ b/powerpc/ioport.c
+@@ -12,12 +12,6 @@
+ 
+ #include <stdlib.h>
+ 
+-int ioport__setup_arch(struct kvm *kvm)
+-{
+-	/* PPC has no legacy ioports to set up */
+-	return 0;
+-}
+-
+ void ioport__map_irq(u8 *irq)
+ {
+ }
+diff --git a/x86/ioport.c b/x86/ioport.c
+index 7ad7b8f3..8c5c7699 100644
+--- a/x86/ioport.c
++++ b/x86/ioport.c
+@@ -69,7 +69,7 @@ void ioport__map_irq(u8 *irq)
+ {
+ }
+ 
+-int ioport__setup_arch(struct kvm *kvm)
++static int ioport__setup_arch(struct kvm *kvm)
+ {
+ 	int r;
+ 
+@@ -150,3 +150,26 @@ int ioport__setup_arch(struct kvm *kvm)
+ 
+ 	return 0;
+ }
++dev_base_init(ioport__setup_arch);
++
++static int ioport__remove_arch(struct kvm *kvm)
++{
++	ioport__unregister(kvm, 0x510);
++	ioport__unregister(kvm, 0x402);
++	ioport__unregister(kvm, 0x03D5);
++	ioport__unregister(kvm, 0x03D4);
++	ioport__unregister(kvm, 0x0378);
++	ioport__unregister(kvm, 0x0278);
++	ioport__unregister(kvm, 0x00F0);
++	ioport__unregister(kvm, 0x00ED);
++	ioport__unregister(kvm, IOPORT_DBG);
++	ioport__unregister(kvm, 0x00C0);
++	ioport__unregister(kvm, 0x00A0);
++	ioport__unregister(kvm, 0x0092);
++	ioport__unregister(kvm, 0x0040);
++	ioport__unregister(kvm, 0x0020);
++	ioport__unregister(kvm, 0x0000);
++
++	return 0;
++}
++dev_base_exit(ioport__remove_arch);
+
+From patchwork Thu Dec 10 14:28:49 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11966011
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 56CC5C433FE
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:29:17 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 0994722EBE
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:29:16 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2390301AbgLJT3K (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 14:29:10 -0500
+Received: from foss.arm.com ([217.140.110.172]:44788 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390264AbgLJOaK (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:30:10 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 928F71396;
+        Thu, 10 Dec 2020 06:29:24 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 772623F718;
+        Thu, 10 Dec 2020 06:29:23 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 02/21] hw/serial: Use device abstraction for FDT
+ generator function
+Date: Thu, 10 Dec 2020 14:28:49 +0000
+Message-Id: <20201210142908.169597-3-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+At the moment we use the .generate_fdt_node member of the ioport ops
+structure to store the function pointer for the FDT node generator
+function. ioport__register() will then put a wrapper and this pointer
+into the device header.
+The serial device is the only device making use of this special ioport
+feature, so let's move this over to using the device header directly.
+
+This will allow us to get rid of this .generate_fdt_node member in the
+ops and simplify the code.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ hw/serial.c       | 49 +++++++++++++++++++++++++++++++++++++----------
+ include/kvm/kvm.h |  2 ++
+ 2 files changed, 41 insertions(+), 10 deletions(-)
+
+diff --git a/hw/serial.c b/hw/serial.c
+index 13c4663e..b0465d99 100644
+--- a/hw/serial.c
++++ b/hw/serial.c
+@@ -23,6 +23,7 @@
+ #define UART_IIR_TYPE_BITS	0xc0
+ 
+ struct serial8250_device {
++	struct device_header	dev_hdr;
+ 	struct mutex		mutex;
+ 	u8			id;
+ 
+@@ -53,9 +54,20 @@ struct serial8250_device {
+ 	.msr			= UART_MSR_DCD | UART_MSR_DSR | UART_MSR_CTS, \
+ 	.mcr			= UART_MCR_OUT2,
+ 
++#ifdef CONFIG_HAS_LIBFDT
++static
++void serial8250_generate_fdt_node(void *fdt, struct device_header *dev_hdr,
++				  fdt_irq_fn irq_fn);
++#else
++#define serial8250_generate_fdt_node	NULL
++#endif
+ static struct serial8250_device devices[] = {
+ 	/* ttyS0 */
+ 	[0]	= {
++		.dev_hdr = {
++			.bus_type	= DEVICE_BUS_IOPORT,
++			.data		= serial8250_generate_fdt_node,
++		},
+ 		.mutex			= MUTEX_INITIALIZER,
+ 
+ 		.id			= 0,
+@@ -66,6 +78,10 @@ static struct serial8250_device devices[] = {
+ 	},
+ 	/* ttyS1 */
+ 	[1]	= {
++		.dev_hdr = {
++			.bus_type	= DEVICE_BUS_IOPORT,
++			.data		= serial8250_generate_fdt_node,
++		},
+ 		.mutex			= MUTEX_INITIALIZER,
+ 
+ 		.id			= 1,
+@@ -76,6 +92,10 @@ static struct serial8250_device devices[] = {
+ 	},
+ 	/* ttyS2 */
+ 	[2]	= {
++		.dev_hdr = {
++			.bus_type	= DEVICE_BUS_IOPORT,
++			.data		= serial8250_generate_fdt_node,
++		},
+ 		.mutex			= MUTEX_INITIALIZER,
+ 
+ 		.id			= 2,
+@@ -86,6 +106,10 @@ static struct serial8250_device devices[] = {
+ 	},
+ 	/* ttyS3 */
+ 	[3]	= {
++		.dev_hdr = {
++			.bus_type	= DEVICE_BUS_IOPORT,
++			.data		= serial8250_generate_fdt_node,
++		},
+ 		.mutex			= MUTEX_INITIALIZER,
+ 
+ 		.id			= 3,
+@@ -371,13 +395,14 @@ char *fdt_stdout_path = NULL;
+ 
+ #define DEVICE_NAME_MAX_LEN 32
+ static
+-void serial8250_generate_fdt_node(struct ioport *ioport, void *fdt,
+-				  void (*generate_irq_prop)(void *fdt,
+-							    u8 irq,
+-							    enum irq_type))
++void serial8250_generate_fdt_node(void *fdt, struct device_header *dev_hdr,
++				  fdt_irq_fn irq_fn)
+ {
+ 	char dev_name[DEVICE_NAME_MAX_LEN];
+-	struct serial8250_device *dev = ioport->priv;
++	struct serial8250_device *dev = container_of(dev_hdr,
++						     struct serial8250_device,
++						     dev_hdr);
++
+ 	u64 addr = KVM_IOPORT_AREA + dev->iobase;
+ 	u64 reg_prop[] = {
+ 		cpu_to_fdt64(addr),
+@@ -395,24 +420,26 @@ void serial8250_generate_fdt_node(struct ioport *ioport, void *fdt,
+ 	_FDT(fdt_begin_node(fdt, dev_name));
+ 	_FDT(fdt_property_string(fdt, "compatible", "ns16550a"));
+ 	_FDT(fdt_property(fdt, "reg", reg_prop, sizeof(reg_prop)));
+-	generate_irq_prop(fdt, dev->irq, IRQ_TYPE_LEVEL_HIGH);
++	irq_fn(fdt, dev->irq, IRQ_TYPE_LEVEL_HIGH);
+ 	_FDT(fdt_property_cell(fdt, "clock-frequency", 1843200));
+ 	_FDT(fdt_end_node(fdt));
+ }
+-#else
+-#define serial8250_generate_fdt_node	NULL
+ #endif
+ 
+ static struct ioport_operations serial8250_ops = {
+ 	.io_in			= serial8250_in,
+ 	.io_out			= serial8250_out,
+-	.generate_fdt_node	= serial8250_generate_fdt_node,
+ };
+ 
+-static int serial8250__device_init(struct kvm *kvm, struct serial8250_device *dev)
++static int serial8250__device_init(struct kvm *kvm,
++				   struct serial8250_device *dev)
+ {
+ 	int r;
+ 
++	r = device__register(&dev->dev_hdr);
++	if (r < 0)
++		return r;
++
+ 	ioport__map_irq(&dev->irq);
+ 	r = ioport__register(kvm, dev->iobase, &serial8250_ops, 8, dev);
+ 
+@@ -438,6 +465,7 @@ cleanup:
+ 		struct serial8250_device *dev = &devices[j];
+ 
+ 		ioport__unregister(kvm, dev->iobase);
++		device__unregister(&dev->dev_hdr);
+ 	}
+ 
+ 	return r;
+@@ -455,6 +483,7 @@ int serial8250__exit(struct kvm *kvm)
+ 		r = ioport__unregister(kvm, dev->iobase);
+ 		if (r < 0)
+ 			return r;
++		device__unregister(&dev->dev_hdr);
+ 	}
+ 
+ 	return 0;
+diff --git a/include/kvm/kvm.h b/include/kvm/kvm.h
+index 53373b08..ee99c28e 100644
+--- a/include/kvm/kvm.h
++++ b/include/kvm/kvm.h
+@@ -31,6 +31,8 @@
+ 	.name = #ext,			\
+ 	.code = ext
+ 
++typedef void (*fdt_irq_fn)(void *fdt, u8 irq, enum irq_type);
++
+ enum {
+ 	KVM_VMSTATE_RUNNING,
+ 	KVM_VMSTATE_PAUSED,
+
+From patchwork Thu Dec 10 14:28:50 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11966009
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id C4E1EC4167B
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:28:51 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 7FFFF22D74
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:28:51 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1727833AbgLJOaT (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 09:30:19 -0500
+Received: from foss.arm.com ([217.140.110.172]:44802 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390266AbgLJOaL (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:30:11 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id DF9EA139F;
+        Thu, 10 Dec 2020 06:29:25 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ C62683F718;
+        Thu, 10 Dec 2020 06:29:24 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 03/21] ioport: Retire .generate_fdt_node functionality
+Date: Thu, 10 Dec 2020 14:28:50 +0000
+Message-Id: <20201210142908.169597-4-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The ioport routines support a special way of registering FDT node
+generator functions. There is no reason to have this separate from the
+already existing way via the device header.
+
+Now that the only user of this special ioport variety has been
+transferred, we can retire this code, to simplify ioport handling.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ include/kvm/ioport.h |  4 ----
+ ioport.c             | 34 ----------------------------------
+ 2 files changed, 38 deletions(-)
+
+diff --git a/include/kvm/ioport.h b/include/kvm/ioport.h
+index d0213541..a61038e2 100644
+--- a/include/kvm/ioport.h
++++ b/include/kvm/ioport.h
+@@ -29,10 +29,6 @@ struct ioport {
+ struct ioport_operations {
+ 	bool (*io_in)(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size);
+ 	bool (*io_out)(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size);
+-	void (*generate_fdt_node)(struct ioport *ioport, void *fdt,
+-				  void (*generate_irq_prop)(void *fdt,
+-							    u8 irq,
+-							    enum irq_type));
+ };
+ 
+ void ioport__map_irq(u8 *irq);
+diff --git a/ioport.c b/ioport.c
+index 667e8386..b98836d3 100644
+--- a/ioport.c
++++ b/ioport.c
+@@ -56,7 +56,6 @@ static struct ioport *ioport_get(struct rb_root *root, u64 addr)
+ /* Called with ioport_lock held. */
+ static void ioport_unregister(struct rb_root *root, struct ioport *data)
+ {
+-	device__unregister(&data->dev_hdr);
+ 	ioport_remove(root, data);
+ 	free(data);
+ }
+@@ -70,30 +69,6 @@ static void ioport_put(struct rb_root *root, struct ioport *data)
+ 	mutex_unlock(&ioport_lock);
+ }
+ 
+-#ifdef CONFIG_HAS_LIBFDT
+-static void generate_ioport_fdt_node(void *fdt,
+-				     struct device_header *dev_hdr,
+-				     void (*generate_irq_prop)(void *fdt,
+-							       u8 irq,
+-							       enum irq_type))
+-{
+-	struct ioport *ioport = container_of(dev_hdr, struct ioport, dev_hdr);
+-	struct ioport_operations *ops = ioport->ops;
+-
+-	if (ops->generate_fdt_node)
+-		ops->generate_fdt_node(ioport, fdt, generate_irq_prop);
+-}
+-#else
+-static void generate_ioport_fdt_node(void *fdt,
+-				     struct device_header *dev_hdr,
+-				     void (*generate_irq_prop)(void *fdt,
+-							       u8 irq,
+-							       enum irq_type))
+-{
+-	die("Unable to generate device tree nodes without libfdt\n");
+-}
+-#endif
+-
+ int ioport__register(struct kvm *kvm, u16 port, struct ioport_operations *ops, int count, void *param)
+ {
+ 	struct ioport *entry;
+@@ -107,10 +82,6 @@ int ioport__register(struct kvm *kvm, u16 port, struct ioport_operations *ops, i
+ 		.node		= RB_INT_INIT(port, port + count),
+ 		.ops		= ops,
+ 		.priv		= param,
+-		.dev_hdr	= (struct device_header) {
+-			.bus_type	= DEVICE_BUS_IOPORT,
+-			.data		= generate_ioport_fdt_node,
+-		},
+ 		/*
+ 		 * Start from 0 because ioport__unregister() doesn't decrement
+ 		 * the reference count.
+@@ -123,15 +94,10 @@ int ioport__register(struct kvm *kvm, u16 port, struct ioport_operations *ops, i
+ 	r = ioport_insert(&ioport_tree, entry);
+ 	if (r < 0)
+ 		goto out_free;
+-	r = device__register(&entry->dev_hdr);
+-	if (r < 0)
+-		goto out_remove;
+ 	mutex_unlock(&ioport_lock);
+ 
+ 	return port;
+ 
+-out_remove:
+-	ioport_remove(&ioport_tree, entry);
+ out_free:
+ 	free(entry);
+ 	mutex_unlock(&ioport_lock);
+
+From patchwork Thu Dec 10 14:28:51 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11964931
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.9 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,UNWANTED_LANGUAGE_BODY,
+	URIBL_BLOCKED,USER_AGENT_GIT autolearn=unavailable autolearn_force=no
+	version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 90A6EC0018C
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 14:30:35 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 3FF0623E54
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 14:30:35 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2390279AbgLJOaU (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 09:30:20 -0500
+Received: from foss.arm.com ([217.140.110.172]:44814 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1732915AbgLJOaN (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:30:13 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 5393413D5;
+        Thu, 10 Dec 2020 06:29:27 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 1ECCE3F718;
+        Thu, 10 Dec 2020 06:29:26 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 04/21] mmio: Extend handling to include ioport
+ emulation
+Date: Thu, 10 Dec 2020 14:28:51 +0000
+Message-Id: <20201210142908.169597-5-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+In their core functionality MMIO and I/O port traps are not really
+different, yet we still have two totally separate code paths for
+handling them. Devices need to decide on one conduit or need to provide
+different handler functions for each of them.
+
+Extend the existing MMIO emulation to also cover ioport handlers.
+This just adds another RB tree root for holding the I/O port handlers,
+but otherwise uses the same tree population and lookup code.
+"ioport" or "mmio" just become a flag in the registration function.
+Provide wrappers to not break existing users, and allow an easy
+transition for the existing ioport handlers.
+
+This also means that ioport handlers now can use the same emulation
+callback prototype as MMIO handlers, which means we have to migrate them
+over. To allow a smooth transition, we hook up the new I/O emulate
+function to the end of the existing ioport emulation code.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ include/kvm/kvm.h | 42 +++++++++++++++++++++++++++++----
+ ioport.c          |  4 ++--
+ mmio.c            | 59 +++++++++++++++++++++++++++++++++++++++--------
+ 3 files changed, 89 insertions(+), 16 deletions(-)
+
+diff --git a/include/kvm/kvm.h b/include/kvm/kvm.h
+index ee99c28e..14f9d58b 100644
+--- a/include/kvm/kvm.h
++++ b/include/kvm/kvm.h
+@@ -27,10 +27,16 @@
+ #define PAGE_SIZE (sysconf(_SC_PAGE_SIZE))
+ #endif
+ 
++#define IOTRAP_BUS_MASK		0xf
++#define IOTRAP_COALESCE		(1U << 4)
++
+ #define DEFINE_KVM_EXT(ext)		\
+ 	.name = #ext,			\
+ 	.code = ext
+ 
++struct kvm_cpu;
++typedef void (*mmio_handler_fn)(struct kvm_cpu *vcpu, u64 addr, u8 *data,
++				u32 len, u8 is_write, void *ptr);
+ typedef void (*fdt_irq_fn)(void *fdt, u8 irq, enum irq_type);
+ 
+ enum {
+@@ -113,6 +119,8 @@ void kvm__irq_line(struct kvm *kvm, int irq, int level);
+ void kvm__irq_trigger(struct kvm *kvm, int irq);
+ bool kvm__emulate_io(struct kvm_cpu *vcpu, u16 port, void *data, int direction, int size, u32 count);
+ bool kvm__emulate_mmio(struct kvm_cpu *vcpu, u64 phys_addr, u8 *data, u32 len, u8 is_write);
++bool kvm__emulate_pio(struct kvm_cpu *vcpu, u16 port, void *data,
++		      int direction, int size, u32 count);
+ int kvm__destroy_mem(struct kvm *kvm, u64 guest_phys, u64 size, void *userspace_addr);
+ int kvm__register_mem(struct kvm *kvm, u64 guest_phys, u64 size, void *userspace_addr,
+ 		      enum kvm_mem_type type);
+@@ -136,10 +144,36 @@ static inline int kvm__reserve_mem(struct kvm *kvm, u64 guest_phys, u64 size)
+ 				 KVM_MEM_TYPE_RESERVED);
+ }
+ 
+-int __must_check kvm__register_mmio(struct kvm *kvm, u64 phys_addr, u64 phys_addr_len, bool coalesce,
+-				    void (*mmio_fn)(struct kvm_cpu *vcpu, u64 addr, u8 *data, u32 len, u8 is_write, void *ptr),
+-				    void *ptr);
+-bool kvm__deregister_mmio(struct kvm *kvm, u64 phys_addr);
++int __must_check kvm__register_iotrap(struct kvm *kvm, u64 phys_addr, u64 len,
++				      mmio_handler_fn mmio_fn, void *ptr,
++				      unsigned int flags);
++
++static inline
++int __must_check kvm__register_mmio(struct kvm *kvm, u64 phys_addr,
++				    u64 phys_addr_len, bool coalesce,
++				    mmio_handler_fn mmio_fn, void *ptr)
++{
++	return kvm__register_iotrap(kvm, phys_addr, phys_addr_len, mmio_fn, ptr,
++			DEVICE_BUS_MMIO | (coalesce ? IOTRAP_COALESCE : 0));
++}
++static inline
++int __must_check kvm__register_pio(struct kvm *kvm, u16 port, u16 len,
++				   mmio_handler_fn mmio_fn, void *ptr)
++{
++	return kvm__register_iotrap(kvm, port, len, mmio_fn, ptr,
++				    DEVICE_BUS_IOPORT);
++}
++
++bool kvm__deregister_iotrap(struct kvm *kvm, u64 phys_addr, unsigned int flags);
++static inline bool kvm__deregister_mmio(struct kvm *kvm, u64 phys_addr)
++{
++	return kvm__deregister_iotrap(kvm, phys_addr, DEVICE_BUS_MMIO);
++}
++static inline bool kvm__deregister_pio(struct kvm *kvm, u16 port)
++{
++	return kvm__deregister_iotrap(kvm, port, DEVICE_BUS_IOPORT);
++}
++
+ void kvm__reboot(struct kvm *kvm);
+ void kvm__pause(struct kvm *kvm);
+ void kvm__continue(struct kvm *kvm);
+diff --git a/ioport.c b/ioport.c
+index b98836d3..204d8103 100644
+--- a/ioport.c
++++ b/ioport.c
+@@ -147,7 +147,8 @@ bool kvm__emulate_io(struct kvm_cpu *vcpu, u16 port, void *data, int direction,
+ 
+ 	entry = ioport_get(&ioport_tree, port);
+ 	if (!entry)
+-		goto out;
++		return kvm__emulate_pio(vcpu, port, data, direction,
++					size, count);
+ 
+ 	ops	= entry->ops;
+ 
+@@ -162,7 +163,6 @@ bool kvm__emulate_io(struct kvm_cpu *vcpu, u16 port, void *data, int direction,
+ 
+ 	ioport_put(&ioport_tree, entry);
+ 
+-out:
+ 	if (ret)
+ 		return true;
+ 
+diff --git a/mmio.c b/mmio.c
+index cd141cd3..4cce1901 100644
+--- a/mmio.c
++++ b/mmio.c
+@@ -19,13 +19,14 @@ static DEFINE_MUTEX(mmio_lock);
+ 
+ struct mmio_mapping {
+ 	struct rb_int_node	node;
+-	void			(*mmio_fn)(struct kvm_cpu *vcpu, u64 addr, u8 *data, u32 len, u8 is_write, void *ptr);
++	mmio_handler_fn		mmio_fn;
+ 	void			*ptr;
+ 	u32			refcount;
+ 	bool			remove;
+ };
+ 
+ static struct rb_root mmio_tree = RB_ROOT;
++static struct rb_root pio_tree = RB_ROOT;
+ 
+ static struct mmio_mapping *mmio_search(struct rb_root *root, u64 addr, u64 len)
+ {
+@@ -103,9 +104,9 @@ static void mmio_put(struct kvm *kvm, struct rb_root *root, struct mmio_mapping
+ 	mutex_unlock(&mmio_lock);
+ }
+ 
+-int kvm__register_mmio(struct kvm *kvm, u64 phys_addr, u64 phys_addr_len, bool coalesce,
+-		       void (*mmio_fn)(struct kvm_cpu *vcpu, u64 addr, u8 *data, u32 len, u8 is_write, void *ptr),
+-			void *ptr)
++int kvm__register_iotrap(struct kvm *kvm, u64 phys_addr, u64 phys_addr_len,
++			 mmio_handler_fn mmio_fn, void *ptr,
++			 unsigned int flags)
+ {
+ 	struct mmio_mapping *mmio;
+ 	struct kvm_coalesced_mmio_zone zone;
+@@ -127,7 +128,7 @@ int kvm__register_mmio(struct kvm *kvm, u64 phys_addr, u64 phys_addr_len, bool c
+ 		.remove		= false,
+ 	};
+ 
+-	if (coalesce) {
++	if (flags & IOTRAP_COALESCE) {
+ 		zone = (struct kvm_coalesced_mmio_zone) {
+ 			.addr	= phys_addr,
+ 			.size	= phys_addr_len,
+@@ -139,18 +140,27 @@ int kvm__register_mmio(struct kvm *kvm, u64 phys_addr, u64 phys_addr_len, bool c
+ 		}
+ 	}
+ 	mutex_lock(&mmio_lock);
+-	ret = mmio_insert(&mmio_tree, mmio);
++	if ((flags & IOTRAP_BUS_MASK) == DEVICE_BUS_IOPORT)
++		ret = mmio_insert(&pio_tree, mmio);
++	else
++		ret = mmio_insert(&mmio_tree, mmio);
+ 	mutex_unlock(&mmio_lock);
+ 
+ 	return ret;
+ }
+ 
+-bool kvm__deregister_mmio(struct kvm *kvm, u64 phys_addr)
++bool kvm__deregister_iotrap(struct kvm *kvm, u64 phys_addr, unsigned int flags)
+ {
+ 	struct mmio_mapping *mmio;
++	struct rb_root *tree;
++
++	if ((flags & IOTRAP_BUS_MASK) == DEVICE_BUS_IOPORT)
++		tree = &pio_tree;
++	else
++		tree = &mmio_tree;
+ 
+ 	mutex_lock(&mmio_lock);
+-	mmio = mmio_search_single(&mmio_tree, phys_addr);
++	mmio = mmio_search_single(tree, phys_addr);
+ 	if (mmio == NULL) {
+ 		mutex_unlock(&mmio_lock);
+ 		return false;
+@@ -167,7 +177,7 @@ bool kvm__deregister_mmio(struct kvm *kvm, u64 phys_addr)
+ 	 * called mmio_put(). This will trigger use-after-free errors on VCPU0.
+ 	 */
+ 	if (mmio->refcount == 0)
+-		mmio_deregister(kvm, &mmio_tree, mmio);
++		mmio_deregister(kvm, tree, mmio);
+ 	else
+ 		mmio->remove = true;
+ 	mutex_unlock(&mmio_lock);
+@@ -175,7 +185,8 @@ bool kvm__deregister_mmio(struct kvm *kvm, u64 phys_addr)
+ 	return true;
+ }
+ 
+-bool kvm__emulate_mmio(struct kvm_cpu *vcpu, u64 phys_addr, u8 *data, u32 len, u8 is_write)
++bool kvm__emulate_mmio(struct kvm_cpu *vcpu, u64 phys_addr, u8 *data,
++		       u32 len, u8 is_write)
+ {
+ 	struct mmio_mapping *mmio;
+ 
+@@ -194,3 +205,31 @@ bool kvm__emulate_mmio(struct kvm_cpu *vcpu, u64 phys_addr, u8 *data, u32 len, u
+ out:
+ 	return true;
+ }
++
++bool kvm__emulate_pio(struct kvm_cpu *vcpu, u16 port, void *data,
++		     int direction, int size, u32 count)
++{
++	struct mmio_mapping *mmio;
++	bool is_write = direction == KVM_EXIT_IO_OUT;
++
++	mmio = mmio_get(&pio_tree, port, size);
++	if (!mmio) {
++		if (vcpu->kvm->cfg.ioport_debug) {
++			fprintf(stderr, "IO error: %s port=%x, size=%d, count=%u\n",
++				to_direction(direction), port, size, count);
++
++			return false;
++		}
++		return true;
++	}
++
++	while (count--) {
++		mmio->mmio_fn(vcpu, port, data, size, is_write, mmio->ptr);
++
++		data += size;
++	}
++
++	mmio_put(vcpu->kvm, &pio_tree, mmio);
++
++	return true;
++}
+
+From patchwork Thu Dec 10 14:28:52 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965965
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 17197C1B0E3
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:09:04 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C3EBF23D56
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:09:03 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404232AbgLJTJB (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 14:09:01 -0500
+Received: from foss.arm.com ([217.140.110.172]:45076 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390463AbgLJObA (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:00 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 9FD451435;
+        Thu, 10 Dec 2020 06:29:28 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 8638C3F718;
+        Thu, 10 Dec 2020 06:29:27 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 05/21] hw/i8042: Clean up data types
+Date: Thu, 10 Dec 2020 14:28:52 +0000
+Message-Id: <20201210142908.169597-6-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The i8042 is clearly an 8-bit era device, so there is little room for
+32-bit registers.
+Clean up the data types used.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ hw/i8042.c | 20 ++++++++++----------
+ 1 file changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/hw/i8042.c b/hw/i8042.c
+index 37a99a2d..36ee183f 100644
+--- a/hw/i8042.c
++++ b/hw/i8042.c
+@@ -64,11 +64,11 @@
+ struct kbd_state {
+ 	struct kvm		*kvm;
+ 
+-	char			kq[QUEUE_SIZE];	/* Keyboard queue */
++	u8			kq[QUEUE_SIZE];	/* Keyboard queue */
+ 	int			kread, kwrite;	/* Indexes into the queue */
+ 	int			kcount;		/* number of elements in queue */
+ 
+-	char			mq[QUEUE_SIZE];
++	u8			mq[QUEUE_SIZE];
+ 	int			mread, mwrite;
+ 	int			mcount;
+ 
+@@ -173,9 +173,9 @@ static void kbd_write_command(struct kvm *kvm, u8 val)
+ /*
+  * Called when the OS reads from port 0x60 (PS/2 data)
+  */
+-static u32 kbd_read_data(void)
++static u8 kbd_read_data(void)
+ {
+-	u32 ret;
++	u8 ret;
+ 	int i;
+ 
+ 	if (state.kcount != 0) {
+@@ -202,9 +202,9 @@ static u32 kbd_read_data(void)
+ /*
+  * Called when the OS read from port 0x64, the command port
+  */
+-static u32 kbd_read_status(void)
++static u8 kbd_read_status(void)
+ {
+-	return (u32)state.status;
++	return state.status;
+ }
+ 
+ /*
+@@ -212,7 +212,7 @@ static u32 kbd_read_status(void)
+  * Things written here are generally arguments to commands previously
+  * written to port 0x64 and stored in state.write_cmd
+  */
+-static void kbd_write_data(u32 val)
++static void kbd_write_data(u8 val)
+ {
+ 	switch (state.write_cmd) {
+ 	case I8042_CMD_CTL_WCTR:
+@@ -304,8 +304,8 @@ static bool kbd_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *
+ 		break;
+ 	}
+ 	case I8042_DATA_REG: {
+-		u32 value = kbd_read_data();
+-		ioport__write32(data, value);
++		u8 value = kbd_read_data();
++		ioport__write8(data, value);
+ 		break;
+ 	}
+ 	case I8042_PORT_B_REG: {
+@@ -328,7 +328,7 @@ static bool kbd_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void
+ 		break;
+ 	}
+ 	case I8042_DATA_REG: {
+-		u32 value = ioport__read32(data);
++		u8 value = ioport__read8(data);
+ 		kbd_write_data(value);
+ 		break;
+ 	}
+
+From patchwork Thu Dec 10 14:28:53 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965959
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id B3612C4167B
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:09:03 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 6552323D56
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:09:03 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2393286AbgLJTIT (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 14:08:19 -0500
+Received: from foss.arm.com ([217.140.110.172]:45082 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390464AbgLJObA (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:00 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id EC68E143B;
+        Thu, 10 Dec 2020 06:29:29 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ D2F143F718;
+        Thu, 10 Dec 2020 06:29:28 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 06/21] hw/i8042: Refactor trap handler
+Date: Thu, 10 Dec 2020 14:28:53 +0000
+Message-Id: <20201210142908.169597-7-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+With the planned retirement of the special ioport emulation code, we
+need to provide an emulation function compatible with the MMIO
+prototype.
+
+Adjust the trap handler to use that new function, and provide shims to
+implement the old ioport interface, for now.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ hw/i8042.c | 68 +++++++++++++++++++++++++++---------------------------
+ 1 file changed, 34 insertions(+), 34 deletions(-)
+
+diff --git a/hw/i8042.c b/hw/i8042.c
+index 36ee183f..eb1f9d28 100644
+--- a/hw/i8042.c
++++ b/hw/i8042.c
+@@ -292,52 +292,52 @@ static void kbd_reset(void)
+ 	};
+ }
+ 
+-/*
+- * Called when the OS has written to one of the keyboard's ports (0x60 or 0x64)
+- */
+-static bool kbd_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
++static void kbd_io(struct kvm_cpu *vcpu, u64 addr, u8 *data, u32 len,
++		   u8 is_write, void *ptr)
+ {
+-	switch (port) {
+-	case I8042_COMMAND_REG: {
+-		u8 value = kbd_read_status();
+-		ioport__write8(data, value);
++	u8 value;
++
++	if (is_write)
++		value = ioport__read8(data);
++
++	switch (addr) {
++	case I8042_COMMAND_REG:
++		if (is_write)
++			kbd_write_command(vcpu->kvm, value);
++		else
++			value = kbd_read_status();
+ 		break;
+-	}
+-	case I8042_DATA_REG: {
+-		u8 value = kbd_read_data();
+-		ioport__write8(data, value);
++	case I8042_DATA_REG:
++		if (is_write)
++			kbd_write_data(value);
++		else
++			value = kbd_read_data();
+ 		break;
+-	}
+-	case I8042_PORT_B_REG: {
+-		ioport__write8(data, 0x20);
++	case I8042_PORT_B_REG:
++		if (!is_write)
++			value = 0x20;
+ 		break;
+-	}
+ 	default:
+-		return false;
++		return;
+ 	}
+ 
++	if (!is_write)
++		ioport__write8(data, value);
++}
++
++/*
++ * Called when the OS has written to one of the keyboard's ports (0x60 or 0x64)
++ */
++static bool kbd_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
++{
++	kbd_io(vcpu, port, data, size, false, NULL);
++
+ 	return true;
+ }
+ 
+ static bool kbd_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+ {
+-	switch (port) {
+-	case I8042_COMMAND_REG: {
+-		u8 value = ioport__read8(data);
+-		kbd_write_command(vcpu->kvm, value);
+-		break;
+-	}
+-	case I8042_DATA_REG: {
+-		u8 value = ioport__read8(data);
+-		kbd_write_data(value);
+-		break;
+-	}
+-	case I8042_PORT_B_REG: {
+-		break;
+-	}
+-	default:
+-		return false;
+-	}
++	kbd_io(vcpu, port, data, size, true, NULL);
+ 
+ 	return true;
+ }
+
+From patchwork Thu Dec 10 14:28:54 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965961
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 8A7C3C4361B
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:09:03 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 4E3D623C18
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:09:03 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2393294AbgLJTIT (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 14:08:19 -0500
+Received: from foss.arm.com ([217.140.110.172]:45080 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390461AbgLJObA (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:00 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 455FA1474;
+        Thu, 10 Dec 2020 06:29:31 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 2BA443F718;
+        Thu, 10 Dec 2020 06:29:30 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 07/21] hw/i8042: Switch to new trap handlers
+Date: Thu, 10 Dec 2020 14:28:54 +0000
+Message-Id: <20201210142908.169597-8-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Now that the PC keyboard has a trap handler adhering to the MMIO fault
+handler prototype, let's switch over to the joint registration routine.
+
+This allows us to get rid of the ioport shim routines.
+
+Make the kbd_init() function static on the way.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ hw/i8042.c          | 30 ++++--------------------------
+ include/kvm/i8042.h |  1 -
+ 2 files changed, 4 insertions(+), 27 deletions(-)
+
+diff --git a/hw/i8042.c b/hw/i8042.c
+index eb1f9d28..91d79dc4 100644
+--- a/hw/i8042.c
++++ b/hw/i8042.c
+@@ -325,40 +325,18 @@ static void kbd_io(struct kvm_cpu *vcpu, u64 addr, u8 *data, u32 len,
+ 		ioport__write8(data, value);
+ }
+ 
+-/*
+- * Called when the OS has written to one of the keyboard's ports (0x60 or 0x64)
+- */
+-static bool kbd_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+-{
+-	kbd_io(vcpu, port, data, size, false, NULL);
+-
+-	return true;
+-}
+-
+-static bool kbd_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+-{
+-	kbd_io(vcpu, port, data, size, true, NULL);
+-
+-	return true;
+-}
+-
+-static struct ioport_operations kbd_ops = {
+-	.io_in		= kbd_in,
+-	.io_out		= kbd_out,
+-};
+-
+-int kbd__init(struct kvm *kvm)
++static int kbd__init(struct kvm *kvm)
+ {
+ 	int r;
+ 
+ 	kbd_reset();
+ 	state.kvm = kvm;
+-	r = ioport__register(kvm, I8042_DATA_REG, &kbd_ops, 2, NULL);
++	r = kvm__register_pio(kvm, I8042_DATA_REG, 2, kbd_io, NULL);
+ 	if (r < 0)
+ 		return r;
+-	r = ioport__register(kvm, I8042_COMMAND_REG, &kbd_ops, 2, NULL);
++	r = kvm__register_pio(kvm, I8042_COMMAND_REG, 2, kbd_io, NULL);
+ 	if (r < 0) {
+-		ioport__unregister(kvm, I8042_DATA_REG);
++		kvm__deregister_pio(kvm, I8042_DATA_REG);
+ 		return r;
+ 	}
+ 
+diff --git a/include/kvm/i8042.h b/include/kvm/i8042.h
+index 3b4ab688..cd4ae6bb 100644
+--- a/include/kvm/i8042.h
++++ b/include/kvm/i8042.h
+@@ -7,6 +7,5 @@ struct kvm;
+ 
+ void mouse_queue(u8 c);
+ void kbd_queue(u8 c);
+-int kbd__init(struct kvm *kvm);
+ 
+ #endif
+
+From patchwork Thu Dec 10 14:28:55 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965967
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id B9FB1C0018C
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:09:03 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 87AB123D9A
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:09:03 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2393280AbgLJTIT (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 14:08:19 -0500
+Received: from foss.arm.com ([217.140.110.172]:45078 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2389019AbgLJObA (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:00 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 9201F1477;
+        Thu, 10 Dec 2020 06:29:32 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 788D23F718;
+        Thu, 10 Dec 2020 06:29:31 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 08/21] x86/ioport: Refactor trap handlers
+Date: Thu, 10 Dec 2020 14:28:55 +0000
+Message-Id: <20201210142908.169597-9-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+With the planned retirement of the special ioport emulation code, we
+need to provide emulation functions compatible with the MMIO
+prototype.
+
+Adjust the trap handlers to use that new function, and provide shims to
+implement the old ioport interface, for now.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ x86/ioport.c | 30 ++++++++++++++++++++++++++----
+ 1 file changed, 26 insertions(+), 4 deletions(-)
+
+diff --git a/x86/ioport.c b/x86/ioport.c
+index 8c5c7699..932da20a 100644
+--- a/x86/ioport.c
++++ b/x86/ioport.c
+@@ -3,8 +3,14 @@
+ #include <stdlib.h>
+ #include <stdio.h>
+ 
++static void dummy_mmio(struct kvm_cpu *vcpu, u64 addr, u8 *data, u32 len,
++		       u8 is_write, void *ptr)
++{
++}
++
+ static bool debug_io_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+ {
++	dummy_mmio(vcpu, port, data, size, true, NULL);
+ 	return 0;
+ }
+ 
+@@ -12,15 +18,23 @@ static struct ioport_operations debug_ops = {
+ 	.io_out		= debug_io_out,
+ };
+ 
+-static bool seabios_debug_io_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
++static void seabios_debug_mmio(struct kvm_cpu *vcpu, u64 addr, u8 *data,
++			       u32 len, u8 is_write, void *ptr)
+ {
+ 	char ch;
+ 
++	if (!is_write)
++		return;
++
+ 	ch = ioport__read8(data);
+ 
+ 	putchar(ch);
++}
+ 
+-	return true;
++static bool seabios_debug_io_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
++{
++	seabios_debug_mmio(vcpu, port, data, size, true, NULL);
++	return 0;
+ }
+ 
+ static struct ioport_operations seabios_debug_ops = {
+@@ -29,11 +43,13 @@ static struct ioport_operations seabios_debug_ops = {
+ 
+ static bool dummy_io_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+ {
++	dummy_mmio(vcpu, port, data, size, false, NULL);
+ 	return true;
+ }
+ 
+ static bool dummy_io_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+ {
++	dummy_mmio(vcpu, port, data, size, true, NULL);
+ 	return true;
+ }
+ 
+@@ -50,13 +66,19 @@ static struct ioport_operations dummy_write_only_ioport_ops = {
+  * The "fast A20 gate"
+  */
+ 
+-static bool ps2_control_a_io_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
++static void ps2_control_mmio(struct kvm_cpu *vcpu, u64 addr, u8 *data, u32 len,
++			     u8 is_write, void *ptr)
+ {
+ 	/*
+ 	 * A20 is always enabled.
+ 	 */
+-	ioport__write8(data, 0x02);
++	if (!is_write)
++		ioport__write8(data, 0x02);
++}
+ 
++static bool ps2_control_a_io_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
++{
++	ps2_control_mmio(vcpu, port, data, size, false, NULL);
+ 	return true;
+ }
+ 
+
+From patchwork Thu Dec 10 14:28:56 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965969
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.9 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,UNWANTED_LANGUAGE_BODY,
+	URIBL_BLOCKED,USER_AGENT_GIT autolearn=unavailable autolearn_force=no
+	version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 0BE74C4361B
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:10:35 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id B5F0C23D56
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:10:34 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404243AbgLJTJC (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 14:09:02 -0500
+Received: from foss.arm.com ([217.140.110.172]:45084 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390462AbgLJObA (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:00 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id E00551478;
+        Thu, 10 Dec 2020 06:29:33 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ C54463F718;
+        Thu, 10 Dec 2020 06:29:32 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 09/21] x86/ioport: Switch to new trap handlers
+Date: Thu, 10 Dec 2020 14:28:56 +0000
+Message-Id: <20201210142908.169597-10-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Now that the x86 I/O ports have trap handlers adhering to the MMIO fault
+handler prototype, let's switch over to the joint registration routine.
+
+This allows us to get rid of the ioport shim routines.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ x86/ioport.c | 113 ++++++++++++++-------------------------------------
+ 1 file changed, 30 insertions(+), 83 deletions(-)
+
+diff --git a/x86/ioport.c b/x86/ioport.c
+index 932da20a..87955da1 100644
+--- a/x86/ioport.c
++++ b/x86/ioport.c
+@@ -8,16 +8,6 @@ static void dummy_mmio(struct kvm_cpu *vcpu, u64 addr, u8 *data, u32 len,
+ {
+ }
+ 
+-static bool debug_io_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+-{
+-	dummy_mmio(vcpu, port, data, size, true, NULL);
+-	return 0;
+-}
+-
+-static struct ioport_operations debug_ops = {
+-	.io_out		= debug_io_out,
+-};
+-
+ static void seabios_debug_mmio(struct kvm_cpu *vcpu, u64 addr, u8 *data,
+ 			       u32 len, u8 is_write, void *ptr)
+ {
+@@ -31,37 +21,6 @@ static void seabios_debug_mmio(struct kvm_cpu *vcpu, u64 addr, u8 *data,
+ 	putchar(ch);
+ }
+ 
+-static bool seabios_debug_io_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+-{
+-	seabios_debug_mmio(vcpu, port, data, size, true, NULL);
+-	return 0;
+-}
+-
+-static struct ioport_operations seabios_debug_ops = {
+-	.io_out		= seabios_debug_io_out,
+-};
+-
+-static bool dummy_io_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+-{
+-	dummy_mmio(vcpu, port, data, size, false, NULL);
+-	return true;
+-}
+-
+-static bool dummy_io_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+-{
+-	dummy_mmio(vcpu, port, data, size, true, NULL);
+-	return true;
+-}
+-
+-static struct ioport_operations dummy_read_write_ioport_ops = {
+-	.io_in		= dummy_io_in,
+-	.io_out		= dummy_io_out,
+-};
+-
+-static struct ioport_operations dummy_write_only_ioport_ops = {
+-	.io_out		= dummy_io_out,
+-};
+-
+ /*
+  * The "fast A20 gate"
+  */
+@@ -76,17 +35,6 @@ static void ps2_control_mmio(struct kvm_cpu *vcpu, u64 addr, u8 *data, u32 len,
+ 		ioport__write8(data, 0x02);
+ }
+ 
+-static bool ps2_control_a_io_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+-{
+-	ps2_control_mmio(vcpu, port, data, size, false, NULL);
+-	return true;
+-}
+-
+-static struct ioport_operations ps2_control_a_ops = {
+-	.io_in		= ps2_control_a_io_in,
+-	.io_out		= dummy_io_out,
+-};
+-
+ void ioport__map_irq(u8 *irq)
+ {
+ }
+@@ -98,75 +46,75 @@ static int ioport__setup_arch(struct kvm *kvm)
+ 	/* Legacy ioport setup */
+ 
+ 	/* 0000 - 001F - DMA1 controller */
+-	r = ioport__register(kvm, 0x0000, &dummy_read_write_ioport_ops, 32, NULL);
++	r = kvm__register_pio(kvm, 0x0000, 32, dummy_mmio, NULL);
+ 	if (r < 0)
+ 		return r;
+ 
+ 	/* 0x0020 - 0x003F - 8259A PIC 1 */
+-	r = ioport__register(kvm, 0x0020, &dummy_read_write_ioport_ops, 2, NULL);
++	r = kvm__register_pio(kvm, 0x0020, 2, dummy_mmio, NULL);
+ 	if (r < 0)
+ 		return r;
+ 
+ 	/* PORT 0040-005F - PIT - PROGRAMMABLE INTERVAL TIMER (8253, 8254) */
+-	r = ioport__register(kvm, 0x0040, &dummy_read_write_ioport_ops, 4, NULL);
++	r = kvm__register_pio(kvm, 0x0040, 4, dummy_mmio, NULL);
+ 	if (r < 0)
+ 		return r;
+ 
+ 	/* 0092 - PS/2 system control port A */
+-	r = ioport__register(kvm, 0x0092, &ps2_control_a_ops, 1, NULL);
++	r = kvm__register_pio(kvm, 0x0092, 1, ps2_control_mmio, NULL);
+ 	if (r < 0)
+ 		return r;
+ 
+ 	/* 0x00A0 - 0x00AF - 8259A PIC 2 */
+-	r = ioport__register(kvm, 0x00A0, &dummy_read_write_ioport_ops, 2, NULL);
++	r = kvm__register_pio(kvm, 0x00A0, 2, dummy_mmio, NULL);
+ 	if (r < 0)
+ 		return r;
+ 
+ 	/* 00C0 - 001F - DMA2 controller */
+-	r = ioport__register(kvm, 0x00C0, &dummy_read_write_ioport_ops, 32, NULL);
++	r = kvm__register_pio(kvm, 0x00c0, 32, dummy_mmio, NULL);
+ 	if (r < 0)
+ 		return r;
+ 
+ 	/* PORT 00E0-00EF are 'motherboard specific' so we use them for our
+ 	   internal debugging purposes.  */
+-	r = ioport__register(kvm, IOPORT_DBG, &debug_ops, 1, NULL);
++	r = kvm__register_pio(kvm, IOPORT_DBG, 1, dummy_mmio, NULL);
+ 	if (r < 0)
+ 		return r;
+ 
+ 	/* PORT 00ED - DUMMY PORT FOR DELAY??? */
+-	r = ioport__register(kvm, 0x00ED, &dummy_write_only_ioport_ops, 1, NULL);
++	r = kvm__register_pio(kvm, 0x00ed, 1, dummy_mmio, NULL);
+ 	if (r < 0)
+ 		return r;
+ 
+ 	/* 0x00F0 - 0x00FF - Math co-processor */
+-	r = ioport__register(kvm, 0x00F0, &dummy_write_only_ioport_ops, 2, NULL);
++	r = kvm__register_pio(kvm, 0x00f0, 2, dummy_mmio, NULL);
+ 	if (r < 0)
+ 		return r;
+ 
+ 	/* PORT 0278-027A - PARALLEL PRINTER PORT (usually LPT1, sometimes LPT2) */
+-	r = ioport__register(kvm, 0x0278, &dummy_read_write_ioport_ops, 3, NULL);
++	r = kvm__register_pio(kvm, 0x0278, 3, dummy_mmio, NULL);
+ 	if (r < 0)
+ 		return r;
+ 
+ 	/* PORT 0378-037A - PARALLEL PRINTER PORT (usually LPT2, sometimes LPT3) */
+-	r = ioport__register(kvm, 0x0378, &dummy_read_write_ioport_ops, 3, NULL);
++	r = kvm__register_pio(kvm, 0x0378, 3, dummy_mmio, NULL);
+ 	if (r < 0)
+ 		return r;
+ 
+ 	/* PORT 03D4-03D5 - COLOR VIDEO - CRT CONTROL REGISTERS */
+-	r = ioport__register(kvm, 0x03D4, &dummy_read_write_ioport_ops, 1, NULL);
++	r = kvm__register_pio(kvm, 0x03d4, 1, dummy_mmio, NULL);
+ 	if (r < 0)
+ 		return r;
+-	r = ioport__register(kvm, 0x03D5, &dummy_write_only_ioport_ops, 1, NULL);
++	r = kvm__register_pio(kvm, 0x03d5, 1, dummy_mmio, NULL);
+ 	if (r < 0)
+ 		return r;
+ 
+-	r = ioport__register(kvm, 0x402, &seabios_debug_ops, 1, NULL);
++	r = kvm__register_pio(kvm, 0x0402, 1, seabios_debug_mmio, NULL);
+ 	if (r < 0)
+ 		return r;
+ 
+ 	/* 0510 - QEMU BIOS configuration register */
+-	r = ioport__register(kvm, 0x510, &dummy_read_write_ioport_ops, 2, NULL);
++	r = kvm__register_pio(kvm, 0x0510, 2, dummy_mmio, NULL);
+ 	if (r < 0)
+ 		return r;
+ 
+@@ -176,22 +124,21 @@ dev_base_init(ioport__setup_arch);
+ 
+ static int ioport__remove_arch(struct kvm *kvm)
+ {
+-	ioport__unregister(kvm, 0x510);
+-	ioport__unregister(kvm, 0x402);
+-	ioport__unregister(kvm, 0x03D5);
+-	ioport__unregister(kvm, 0x03D4);
+-	ioport__unregister(kvm, 0x0378);
+-	ioport__unregister(kvm, 0x0278);
+-	ioport__unregister(kvm, 0x00F0);
+-	ioport__unregister(kvm, 0x00ED);
+-	ioport__unregister(kvm, IOPORT_DBG);
+-	ioport__unregister(kvm, 0x00C0);
+-	ioport__unregister(kvm, 0x00A0);
+-	ioport__unregister(kvm, 0x0092);
+-	ioport__unregister(kvm, 0x0040);
+-	ioport__unregister(kvm, 0x0020);
+-	ioport__unregister(kvm, 0x0000);
+-
++	kvm__deregister_pio(kvm, 0x510);
++	kvm__deregister_pio(kvm, 0x402);
++	kvm__deregister_pio(kvm, 0x3d5);
++	kvm__deregister_pio(kvm, 0x3d4);
++	kvm__deregister_pio(kvm, 0x378);
++	kvm__deregister_pio(kvm, 0x278);
++	kvm__deregister_pio(kvm, 0x0f0);
++	kvm__deregister_pio(kvm, 0x0ed);
++	kvm__deregister_pio(kvm, IOPORT_DBG);
++	kvm__deregister_pio(kvm, 0x0c0);
++	kvm__deregister_pio(kvm, 0x0a0);
++	kvm__deregister_pio(kvm, 0x092);
++	kvm__deregister_pio(kvm, 0x040);
++	kvm__deregister_pio(kvm, 0x020);
++	kvm__deregister_pio(kvm, 0x000);
+ 	return 0;
+ }
+ dev_base_exit(ioport__remove_arch);
+
+From patchwork Thu Dec 10 14:28:57 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965979
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 74A65C433FE
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:11:34 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 3BB6723D9A
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:11:34 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2393365AbgLJTKh (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 14:10:37 -0500
+Received: from foss.arm.com ([217.140.110.172]:45088 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390465AbgLJObA (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:00 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 39190147A;
+        Thu, 10 Dec 2020 06:29:35 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 1F3853F718;
+        Thu, 10 Dec 2020 06:29:34 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 10/21] hw/rtc: Refactor trap handlers
+Date: Thu, 10 Dec 2020 14:28:57 +0000
+Message-Id: <20201210142908.169597-11-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+With the planned retirement of the special ioport emulation code, we
+need to provide emulation functions compatible with the MMIO prototype.
+
+Merge the two different trap handlers into one function, checking for
+read/write and data/index register inside.
+Adjust the trap handlers to use that new function, and provide shims to
+implement the old ioport interface, for now.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ hw/rtc.c | 70 ++++++++++++++++++++++++++++----------------------------
+ 1 file changed, 35 insertions(+), 35 deletions(-)
+
+diff --git a/hw/rtc.c b/hw/rtc.c
+index 5483879f..664d4cb0 100644
+--- a/hw/rtc.c
++++ b/hw/rtc.c
+@@ -42,11 +42,37 @@ static inline unsigned char bin2bcd(unsigned val)
+ 	return ((val / 10) << 4) + val % 10;
+ }
+ 
+-static bool cmos_ram_data_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
++static void cmos_ram_io(struct kvm_cpu *vcpu, u64 addr, u8 *data,
++			u32 len, u8 is_write, void *ptr)
+ {
+ 	struct tm *tm;
+ 	time_t ti;
+ 
++	if (is_write) {
++		if (addr == 0x70) {	/* index register */
++			u8 value = ioport__read8(data);
++
++			vcpu->kvm->nmi_disabled	= value & (1UL << 7);
++			rtc.cmos_idx		= value & ~(1UL << 7);
++
++			return;
++		}
++
++		switch (rtc.cmos_idx) {
++		case RTC_REG_C:
++		case RTC_REG_D:
++			/* Read-only */
++			break;
++		default:
++			rtc.cmos_data[rtc.cmos_idx] = ioport__read8(data);
++			break;
++		}
++		return;
++	}
++
++	if (addr == 0x70)
++		return;
++
+ 	time(&ti);
+ 
+ 	tm = gmtime(&ti);
+@@ -92,42 +118,23 @@ static bool cmos_ram_data_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 po
+ 		ioport__write8(data, rtc.cmos_data[rtc.cmos_idx]);
+ 		break;
+ 	}
+-
+-	return true;
+ }
+ 
+-static bool cmos_ram_data_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
++static bool cmos_ram_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+ {
+-	switch (rtc.cmos_idx) {
+-	case RTC_REG_C:
+-	case RTC_REG_D:
+-		/* Read-only */
+-		break;
+-	default:
+-		rtc.cmos_data[rtc.cmos_idx] = ioport__read8(data);
+-		break;
+-	}
+-
++	cmos_ram_io(vcpu, port, data, size, false, NULL);
+ 	return true;
+ }
+ 
+-static struct ioport_operations cmos_ram_data_ioport_ops = {
+-	.io_out		= cmos_ram_data_out,
+-	.io_in		= cmos_ram_data_in,
+-};
+-
+-static bool cmos_ram_index_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
++static bool cmos_ram_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+ {
+-	u8 value = ioport__read8(data);
+-
+-	vcpu->kvm->nmi_disabled	= value & (1UL << 7);
+-	rtc.cmos_idx		= value & ~(1UL << 7);
+-
++	cmos_ram_io(vcpu, port, data, size, true, NULL);
+ 	return true;
+ }
+ 
+-static struct ioport_operations cmos_ram_index_ioport_ops = {
+-	.io_out		= cmos_ram_index_out,
++static struct ioport_operations cmos_ram_ioport_ops = {
++	.io_out		= cmos_ram_out,
++	.io_in		= cmos_ram_in,
+ };
+ 
+ #ifdef CONFIG_HAS_LIBFDT
+@@ -162,21 +169,15 @@ int rtc__init(struct kvm *kvm)
+ 		return r;
+ 
+ 	/* PORT 0070-007F - CMOS RAM/RTC (REAL TIME CLOCK) */
+-	r = ioport__register(kvm, 0x0070, &cmos_ram_index_ioport_ops, 1, NULL);
++	r = ioport__register(kvm, 0x0070, &cmos_ram_ioport_ops, 2, NULL);
+ 	if (r < 0)
+ 		goto out_device;
+ 
+-	r = ioport__register(kvm, 0x0071, &cmos_ram_data_ioport_ops, 1, NULL);
+-	if (r < 0)
+-		goto out_ioport;
+-
+ 	/* Set the VRT bit in Register D to indicate valid RAM and time */
+ 	rtc.cmos_data[RTC_REG_D] = RTC_REG_D_VRT;
+ 
+ 	return r;
+ 
+-out_ioport:
+-	ioport__unregister(kvm, 0x0070);
+ out_device:
+ 	device__unregister(&rtc_dev_hdr);
+ 
+@@ -188,7 +189,6 @@ int rtc__exit(struct kvm *kvm)
+ {
+ 	/* PORT 0070-007F - CMOS RAM/RTC (REAL TIME CLOCK) */
+ 	ioport__unregister(kvm, 0x0070);
+-	ioport__unregister(kvm, 0x0071);
+ 
+ 	return 0;
+ }
+
+From patchwork Thu Dec 10 14:28:58 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965963
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id C7F1AC433FE
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:09:03 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 9E8C623C18
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:09:03 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2393252AbgLJTIT (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 14:08:19 -0500
+Received: from foss.arm.com ([217.140.110.172]:45086 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2389170AbgLJObA (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:00 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 8675F1500;
+        Thu, 10 Dec 2020 06:29:36 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 6C49E3F718;
+        Thu, 10 Dec 2020 06:29:35 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 11/21] hw/rtc: Switch to new trap handler
+Date: Thu, 10 Dec 2020 14:28:58 +0000
+Message-Id: <20201210142908.169597-12-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Now that the RTC device has a trap handler adhering to the MMIO fault
+handler prototype, let's switch over to the joint registration routine.
+
+This allows us to get rid of the ioport shim routines.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ hw/rtc.c | 21 ++-------------------
+ 1 file changed, 2 insertions(+), 19 deletions(-)
+
+diff --git a/hw/rtc.c b/hw/rtc.c
+index 664d4cb0..ee4c9102 100644
+--- a/hw/rtc.c
++++ b/hw/rtc.c
+@@ -120,23 +120,6 @@ static void cmos_ram_io(struct kvm_cpu *vcpu, u64 addr, u8 *data,
+ 	}
+ }
+ 
+-static bool cmos_ram_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+-{
+-	cmos_ram_io(vcpu, port, data, size, false, NULL);
+-	return true;
+-}
+-
+-static bool cmos_ram_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+-{
+-	cmos_ram_io(vcpu, port, data, size, true, NULL);
+-	return true;
+-}
+-
+-static struct ioport_operations cmos_ram_ioport_ops = {
+-	.io_out		= cmos_ram_out,
+-	.io_in		= cmos_ram_in,
+-};
+-
+ #ifdef CONFIG_HAS_LIBFDT
+ static void generate_rtc_fdt_node(void *fdt,
+ 				  struct device_header *dev_hdr,
+@@ -169,7 +152,7 @@ int rtc__init(struct kvm *kvm)
+ 		return r;
+ 
+ 	/* PORT 0070-007F - CMOS RAM/RTC (REAL TIME CLOCK) */
+-	r = ioport__register(kvm, 0x0070, &cmos_ram_ioport_ops, 2, NULL);
++	r = kvm__register_pio(kvm, 0x0070, 2, cmos_ram_io, NULL);
+ 	if (r < 0)
+ 		goto out_device;
+ 
+@@ -188,7 +171,7 @@ dev_init(rtc__init);
+ int rtc__exit(struct kvm *kvm)
+ {
+ 	/* PORT 0070-007F - CMOS RAM/RTC (REAL TIME CLOCK) */
+-	ioport__unregister(kvm, 0x0070);
++	kvm__deregister_pio(kvm, 0x0070);
+ 
+ 	return 0;
+ }
+
+From patchwork Thu Dec 10 14:28:59 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965957
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT autolearn=ham
+	autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 2F2FEC2BB40
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:08:33 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id ECA9B23DB3
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:08:32 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404038AbgLJTI0 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 14:08:26 -0500
+Received: from foss.arm.com ([217.140.110.172]:45090 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390460AbgLJObA (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:00 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id D38071480;
+        Thu, 10 Dec 2020 06:29:37 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ B9FC43F718;
+        Thu, 10 Dec 2020 06:29:36 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 12/21] hw/vesa: Switch trap handling to use MMIO
+ handler
+Date: Thu, 10 Dec 2020 14:28:59 +0000
+Message-Id: <20201210142908.169597-13-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+To be able to use the VESA device with the new generic I/O trap handler,
+we need to use the different MMIO handler callback routine.
+
+Replace the existing dummy in and out handlers with a joint dummy
+MMIO handler, and register this using the new registration function.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ hw/vesa.c | 19 +++++--------------
+ 1 file changed, 5 insertions(+), 14 deletions(-)
+
+diff --git a/hw/vesa.c b/hw/vesa.c
+index 8659a002..7f82cdb4 100644
+--- a/hw/vesa.c
++++ b/hw/vesa.c
+@@ -43,21 +43,11 @@ static struct framebuffer vesafb = {
+ 	.mem_size	= VESA_MEM_SIZE,
+ };
+ 
+-static bool vesa_pci_io_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
++static void vesa_pci_io(struct kvm_cpu *vcpu, u64 addr, u8 *data, u32 len,
++		        u8 is_write, void *ptr)
+ {
+-	return true;
+ }
+ 
+-static bool vesa_pci_io_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+-{
+-	return true;
+-}
+-
+-static struct ioport_operations vesa_io_ops = {
+-	.io_in			= vesa_pci_io_in,
+-	.io_out			= vesa_pci_io_out,
+-};
+-
+ static int vesa__bar_activate(struct kvm *kvm, struct pci_device_header *pci_hdr,
+ 			      int bar_num, void *data)
+ {
+@@ -82,7 +72,8 @@ struct framebuffer *vesa__init(struct kvm *kvm)
+ 	BUILD_BUG_ON(VESA_MEM_SIZE < VESA_BPP/8 * VESA_WIDTH * VESA_HEIGHT);
+ 
+ 	vesa_base_addr = pci_get_io_port_block(PCI_IO_SIZE);
+-	r = ioport__register(kvm, vesa_base_addr, &vesa_io_ops, PCI_IO_SIZE, NULL);
++	r = kvm__register_pio(kvm, vesa_base_addr, PCI_IO_SIZE, vesa_pci_io,
++			      NULL);
+ 	if (r < 0)
+ 		goto out_error;
+ 
+@@ -116,7 +107,7 @@ unmap_dev:
+ unregister_device:
+ 	device__unregister(&vesa_device);
+ unregister_ioport:
+-	ioport__unregister(kvm, vesa_base_addr);
++	kvm__deregister_pio(kvm, vesa_base_addr);
+ out_error:
+ 	return ERR_PTR(r);
+ }
+
+From patchwork Thu Dec 10 14:29:00 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965955
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.9 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,UNWANTED_LANGUAGE_BODY,
+	URIBL_BLOCKED,USER_AGENT_GIT autolearn=unavailable autolearn_force=no
+	version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id BE02AC0018C
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:08:32 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 7B02523C18
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:08:32 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2393245AbgLJTGx (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 14:06:53 -0500
+Received: from foss.arm.com ([217.140.110.172]:45100 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390474AbgLJObE (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:04 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 2BD1B1529;
+        Thu, 10 Dec 2020 06:29:39 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 129E33F718;
+        Thu, 10 Dec 2020 06:29:37 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 13/21] hw/serial: Refactor trap handler
+Date: Thu, 10 Dec 2020 14:29:00 +0000
+Message-Id: <20201210142908.169597-14-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+With the planned retirement of the special ioport emulation code, we
+need to provide an emulation function compatible with the MMIO prototype.
+
+Adjust the trap handler to use that new function, and provide shims to
+implement the old ioport interface, for now.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ hw/serial.c | 97 +++++++++++++++++++++++++++++++++++------------------
+ 1 file changed, 65 insertions(+), 32 deletions(-)
+
+diff --git a/hw/serial.c b/hw/serial.c
+index b0465d99..2907089c 100644
+--- a/hw/serial.c
++++ b/hw/serial.c
+@@ -242,36 +242,31 @@ void serial8250__inject_sysrq(struct kvm *kvm, char sysrq)
+ 	sysrq_pending = sysrq;
+ }
+ 
+-static bool serial8250_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port,
+-			   void *data, int size)
++static bool serial8250_out(struct serial8250_device *dev, struct kvm_cpu *vcpu,
++			   u16 offset, u8 data)
+ {
+-	struct serial8250_device *dev = ioport->priv;
+-	u16 offset;
+ 	bool ret = true;
+-	char *addr = data;
+ 
+ 	mutex_lock(&dev->mutex);
+ 
+-	offset = port - dev->iobase;
+-
+ 	switch (offset) {
+ 	case UART_TX:
+ 		if (dev->lcr & UART_LCR_DLAB) {
+-			dev->dll = ioport__read8(data);
++			dev->dll = data;
+ 			break;
+ 		}
+ 
+ 		/* Loopback mode */
+ 		if (dev->mcr & UART_MCR_LOOP) {
+ 			if (dev->rxcnt < FIFO_LEN) {
+-				dev->rxbuf[dev->rxcnt++] = *addr;
++				dev->rxbuf[dev->rxcnt++] = data;
+ 				dev->lsr |= UART_LSR_DR;
+ 			}
+ 			break;
+ 		}
+ 
+ 		if (dev->txcnt < FIFO_LEN) {
+-			dev->txbuf[dev->txcnt++] = *addr;
++			dev->txbuf[dev->txcnt++] = data;
+ 			dev->lsr &= ~UART_LSR_TEMT;
+ 			if (dev->txcnt == FIFO_LEN / 2)
+ 				dev->lsr &= ~UART_LSR_THRE;
+@@ -283,18 +278,18 @@ static bool serial8250_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port
+ 		break;
+ 	case UART_IER:
+ 		if (!(dev->lcr & UART_LCR_DLAB))
+-			dev->ier = ioport__read8(data) & 0x0f;
++			dev->ier = data & 0x0f;
+ 		else
+-			dev->dlm = ioport__read8(data);
++			dev->dlm = data;
+ 		break;
+ 	case UART_FCR:
+-		dev->fcr = ioport__read8(data);
++		dev->fcr = data;
+ 		break;
+ 	case UART_LCR:
+-		dev->lcr = ioport__read8(data);
++		dev->lcr = data;
+ 		break;
+ 	case UART_MCR:
+-		dev->mcr = ioport__read8(data);
++		dev->mcr = data;
+ 		break;
+ 	case UART_LSR:
+ 		/* Factory test */
+@@ -303,7 +298,7 @@ static bool serial8250_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port
+ 		/* Not used */
+ 		break;
+ 	case UART_SCR:
+-		dev->scr = ioport__read8(data);
++		dev->scr = data;
+ 		break;
+ 	default:
+ 		ret = false;
+@@ -336,46 +331,43 @@ static void serial8250_rx(struct serial8250_device *dev, void *data)
+ 	}
+ }
+ 
+-static bool serial8250_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
++static bool serial8250_in(struct serial8250_device *dev, struct kvm_cpu *vcpu,
++			  u16 offset, u8 *data)
+ {
+-	struct serial8250_device *dev = ioport->priv;
+-	u16 offset;
+ 	bool ret = true;
+ 
+ 	mutex_lock(&dev->mutex);
+ 
+-	offset = port - dev->iobase;
+-
+ 	switch (offset) {
+ 	case UART_RX:
+ 		if (dev->lcr & UART_LCR_DLAB)
+-			ioport__write8(data, dev->dll);
++			*data = dev->dll;
+ 		else
+ 			serial8250_rx(dev, data);
+ 		break;
+ 	case UART_IER:
+ 		if (dev->lcr & UART_LCR_DLAB)
+-			ioport__write8(data, dev->dlm);
++			*data = dev->dlm;
+ 		else
+-			ioport__write8(data, dev->ier);
++			*data = dev->ier;
+ 		break;
+ 	case UART_IIR:
+-		ioport__write8(data, dev->iir | UART_IIR_TYPE_BITS);
++		*data = dev->iir | UART_IIR_TYPE_BITS;
+ 		break;
+ 	case UART_LCR:
+-		ioport__write8(data, dev->lcr);
++		*data = dev->lcr;
+ 		break;
+ 	case UART_MCR:
+-		ioport__write8(data, dev->mcr);
++		*data = dev->mcr;
+ 		break;
+ 	case UART_LSR:
+-		ioport__write8(data, dev->lsr);
++		*data = dev->lsr;
+ 		break;
+ 	case UART_MSR:
+-		ioport__write8(data, dev->msr);
++		*data = dev->msr;
+ 		break;
+ 	case UART_SCR:
+-		ioport__write8(data, dev->scr);
++		*data = dev->scr;
+ 		break;
+ 	default:
+ 		ret = false;
+@@ -389,6 +381,47 @@ static bool serial8250_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port,
+ 	return ret;
+ }
+ 
++static void serial8250_mmio(struct kvm_cpu *vcpu, u64 addr, u8 *data, u32 len,
++			    u8 is_write, void *ptr)
++{
++	struct serial8250_device *dev = ptr;
++	u8 value = 0;
++
++	if (is_write) {
++		 value = *data;
++
++		serial8250_out(dev, vcpu, addr - dev->iobase, value);
++	} else {
++		if (serial8250_in(dev, vcpu, addr - dev->iobase, &value))
++			*data = value;
++	}
++}
++
++static bool serial8250_ioport_out(struct ioport *ioport, struct kvm_cpu *vcpu,
++				  u16 port, void *data, int size)
++{
++	struct serial8250_device *dev = ioport->priv;
++	u8 value = ioport__read8(data);
++
++	serial8250_mmio(vcpu, port, &value, 1, true, dev);
++
++	return true;
++}
++
++static bool serial8250_ioport_in(struct ioport *ioport, struct kvm_cpu *vcpu,
++				 u16 port, void *data, int size)
++{
++	struct serial8250_device *dev = ioport->priv;
++	u8 value = 0;
++
++
++	serial8250_mmio(vcpu, port, &value, 1, false, dev);
++
++	ioport__write8(data, value);
++
++	return true;
++}
++
+ #ifdef CONFIG_HAS_LIBFDT
+ 
+ char *fdt_stdout_path = NULL;
+@@ -427,8 +460,8 @@ void serial8250_generate_fdt_node(void *fdt, struct device_header *dev_hdr,
+ #endif
+ 
+ static struct ioport_operations serial8250_ops = {
+-	.io_in			= serial8250_in,
+-	.io_out			= serial8250_out,
++	.io_in			= serial8250_ioport_in,
++	.io_out			= serial8250_ioport_out,
+ };
+ 
+ static int serial8250__device_init(struct kvm *kvm,
+
+From patchwork Thu Dec 10 14:29:01 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965941
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 8AB8FC2BB40
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:05:00 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 5A95323440
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:05:00 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1729160AbgLJObT (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 09:31:19 -0500
+Received: from foss.arm.com ([217.140.110.172]:45102 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390473AbgLJObD (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:03 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 7919A152B;
+        Thu, 10 Dec 2020 06:29:40 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 5F6B13F718;
+        Thu, 10 Dec 2020 06:29:39 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 14/21] hw/serial: Switch to new trap handlers
+Date: Thu, 10 Dec 2020 14:29:01 +0000
+Message-Id: <20201210142908.169597-15-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Now that the serial device has a trap handler adhering to the MMIO fault
+handler prototype, let's switch over to the joint registration routine.
+
+This allows us to get rid of the ioport shim routines.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ hw/serial.c | 36 +++---------------------------------
+ 1 file changed, 3 insertions(+), 33 deletions(-)
+
+diff --git a/hw/serial.c b/hw/serial.c
+index 2907089c..d840eebc 100644
+--- a/hw/serial.c
++++ b/hw/serial.c
+@@ -397,31 +397,6 @@ static void serial8250_mmio(struct kvm_cpu *vcpu, u64 addr, u8 *data, u32 len,
+ 	}
+ }
+ 
+-static bool serial8250_ioport_out(struct ioport *ioport, struct kvm_cpu *vcpu,
+-				  u16 port, void *data, int size)
+-{
+-	struct serial8250_device *dev = ioport->priv;
+-	u8 value = ioport__read8(data);
+-
+-	serial8250_mmio(vcpu, port, &value, 1, true, dev);
+-
+-	return true;
+-}
+-
+-static bool serial8250_ioport_in(struct ioport *ioport, struct kvm_cpu *vcpu,
+-				 u16 port, void *data, int size)
+-{
+-	struct serial8250_device *dev = ioport->priv;
+-	u8 value = 0;
+-
+-
+-	serial8250_mmio(vcpu, port, &value, 1, false, dev);
+-
+-	ioport__write8(data, value);
+-
+-	return true;
+-}
+-
+ #ifdef CONFIG_HAS_LIBFDT
+ 
+ char *fdt_stdout_path = NULL;
+@@ -459,11 +434,6 @@ void serial8250_generate_fdt_node(void *fdt, struct device_header *dev_hdr,
+ }
+ #endif
+ 
+-static struct ioport_operations serial8250_ops = {
+-	.io_in			= serial8250_ioport_in,
+-	.io_out			= serial8250_ioport_out,
+-};
+-
+ static int serial8250__device_init(struct kvm *kvm,
+ 				   struct serial8250_device *dev)
+ {
+@@ -474,7 +444,7 @@ static int serial8250__device_init(struct kvm *kvm,
+ 		return r;
+ 
+ 	ioport__map_irq(&dev->irq);
+-	r = ioport__register(kvm, dev->iobase, &serial8250_ops, 8, dev);
++	r = kvm__register_pio(kvm, dev->iobase, 8, serial8250_mmio, dev);
+ 
+ 	return r;
+ }
+@@ -497,7 +467,7 @@ cleanup:
+ 	for (j = 0; j <= i; j++) {
+ 		struct serial8250_device *dev = &devices[j];
+ 
+-		ioport__unregister(kvm, dev->iobase);
++		kvm__deregister_pio(kvm, dev->iobase);
+ 		device__unregister(&dev->dev_hdr);
+ 	}
+ 
+@@ -513,7 +483,7 @@ int serial8250__exit(struct kvm *kvm)
+ 	for (i = 0; i < ARRAY_SIZE(devices); i++) {
+ 		struct serial8250_device *dev = &devices[i];
+ 
+-		r = ioport__unregister(kvm, dev->iobase);
++		r = kvm__deregister_pio(kvm, dev->iobase);
+ 		if (r < 0)
+ 			return r;
+ 		device__unregister(&dev->dev_hdr);
+
+From patchwork Thu Dec 10 14:29:02 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965923
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 2C1E6C0018C
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 18:56:46 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id CB68B23E23
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 18:56:45 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2390508AbgLJObf (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 09:31:35 -0500
+Received: from foss.arm.com ([217.140.110.172]:45084 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390494AbgLJOb0 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:26 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id C8BD9152D;
+        Thu, 10 Dec 2020 06:29:41 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ ACA5C3F718;
+        Thu, 10 Dec 2020 06:29:40 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 15/21] vfio: Refactor ioport trap handler
+Date: Thu, 10 Dec 2020 14:29:02 +0000
+Message-Id: <20201210142908.169597-16-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+With the planned retirement of the special ioport emulation code, we
+need to provide an emulation function compatible with the MMIO prototype.
+
+Adjust the I/O port trap handler to use that new function, and provide
+shims to implement the old ioport interface, for now.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ vfio/core.c | 51 ++++++++++++++++++++++++++++++++++++---------------
+ 1 file changed, 36 insertions(+), 15 deletions(-)
+
+diff --git a/vfio/core.c b/vfio/core.c
+index 0b45e78b..f55f1f87 100644
+--- a/vfio/core.c
++++ b/vfio/core.c
+@@ -81,15 +81,12 @@ out_free_buf:
+ 	return ret;
+ }
+ 
+-static bool vfio_ioport_in(struct ioport *ioport, struct kvm_cpu *vcpu,
+-			   u16 port, void *data, int len)
++static bool _vfio_ioport_in(struct vfio_region *region, u32 offset,
++			    void *data, int len)
+ {
+-	u32 val;
+-	ssize_t nr;
+-	struct vfio_region *region = ioport->priv;
+ 	struct vfio_device *vdev = region->vdev;
+-
+-	u32 offset = port - region->port_base;
++	ssize_t nr;
++	u32 val;
+ 
+ 	if (!(region->info.flags & VFIO_REGION_INFO_FLAG_READ))
+ 		return false;
+@@ -97,7 +94,7 @@ static bool vfio_ioport_in(struct ioport *ioport, struct kvm_cpu *vcpu,
+ 	nr = pread(vdev->fd, &val, len, region->info.offset + offset);
+ 	if (nr != len) {
+ 		vfio_dev_err(vdev, "could not read %d bytes from I/O port 0x%x\n",
+-			     len, port);
++			     len, offset);
+ 		return false;
+ 	}
+ 
+@@ -118,15 +115,13 @@ static bool vfio_ioport_in(struct ioport *ioport, struct kvm_cpu *vcpu,
+ 	return true;
+ }
+ 
+-static bool vfio_ioport_out(struct ioport *ioport, struct kvm_cpu *vcpu,
+-			    u16 port, void *data, int len)
++static bool _vfio_ioport_out(struct vfio_region *region, u32 offset,
++			     void *data, int len)
+ {
+-	u32 val;
+-	ssize_t nr;
+-	struct vfio_region *region = ioport->priv;
+ 	struct vfio_device *vdev = region->vdev;
++	ssize_t nr;
++	u32 val;
+ 
+-	u32 offset = port - region->port_base;
+ 
+ 	if (!(region->info.flags & VFIO_REGION_INFO_FLAG_WRITE))
+ 		return false;
+@@ -148,11 +143,37 @@ static bool vfio_ioport_out(struct ioport *ioport, struct kvm_cpu *vcpu,
+ 	nr = pwrite(vdev->fd, &val, len, region->info.offset + offset);
+ 	if (nr != len)
+ 		vfio_dev_err(vdev, "could not write %d bytes to I/O port 0x%x",
+-			     len, port);
++			     len, offset);
+ 
+ 	return nr == len;
+ }
+ 
++static void vfio_ioport_mmio(struct kvm_cpu *vcpu, u64 addr, u8 *data, u32 len,
++			     u8 is_write, void *ptr)
++{
++	struct vfio_region *region = ptr;
++	u32 offset = addr - region->port_base;
++
++	if (is_write)
++		_vfio_ioport_out(region, offset, data, len);
++	else
++		_vfio_ioport_in(region, offset, data, len);
++}
++
++static bool vfio_ioport_out(struct ioport *ioport, struct kvm_cpu *vcpu,
++			    u16 port, void *data, int len)
++{
++	vfio_ioport_mmio(vcpu, port, data, len, true, ioport->priv);
++	return true;
++}
++
++static bool vfio_ioport_in(struct ioport *ioport, struct kvm_cpu *vcpu,
++			   u16 port, void *data, int len)
++{
++	vfio_ioport_mmio(vcpu, port, data, len, false, ioport->priv);
++	return true;
++}
++
+ static struct ioport_operations vfio_ioport_ops = {
+ 	.io_in	= vfio_ioport_in,
+ 	.io_out	= vfio_ioport_out,
+
+From patchwork Thu Dec 10 14:29:03 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965933
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.9 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,UNWANTED_LANGUAGE_BODY,
+	URIBL_BLOCKED,USER_AGENT_GIT autolearn=unavailable autolearn_force=no
+	version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 040D8C4361B
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:05:00 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C6A1F2388B
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:04:59 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2391414AbgLJTEs (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 14:04:48 -0500
+Received: from foss.arm.com ([217.140.110.172]:45076 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390491AbgLJObZ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:25 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 20C92152F;
+        Thu, 10 Dec 2020 06:29:43 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 079D23F718;
+        Thu, 10 Dec 2020 06:29:41 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 16/21] vfio: Switch to new ioport trap handlers
+Date: Thu, 10 Dec 2020 14:29:03 +0000
+Message-Id: <20201210142908.169597-17-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Now that the vfio device has a trap handler adhering to the MMIO fault
+handler prototype, let's switch over to the joint registration routine.
+
+This allows us to get rid of the ioport shim routines.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ vfio/core.c | 29 ++++++-----------------------
+ 1 file changed, 6 insertions(+), 23 deletions(-)
+
+diff --git a/vfio/core.c b/vfio/core.c
+index f55f1f87..10919101 100644
+--- a/vfio/core.c
++++ b/vfio/core.c
+@@ -160,25 +160,6 @@ static void vfio_ioport_mmio(struct kvm_cpu *vcpu, u64 addr, u8 *data, u32 len,
+ 		_vfio_ioport_in(region, offset, data, len);
+ }
+ 
+-static bool vfio_ioport_out(struct ioport *ioport, struct kvm_cpu *vcpu,
+-			    u16 port, void *data, int len)
+-{
+-	vfio_ioport_mmio(vcpu, port, data, len, true, ioport->priv);
+-	return true;
+-}
+-
+-static bool vfio_ioport_in(struct ioport *ioport, struct kvm_cpu *vcpu,
+-			   u16 port, void *data, int len)
+-{
+-	vfio_ioport_mmio(vcpu, port, data, len, false, ioport->priv);
+-	return true;
+-}
+-
+-static struct ioport_operations vfio_ioport_ops = {
+-	.io_in	= vfio_ioport_in,
+-	.io_out	= vfio_ioport_out,
+-};
+-
+ static void vfio_mmio_access(struct kvm_cpu *vcpu, u64 addr, u8 *data, u32 len,
+ 			     u8 is_write, void *ptr)
+ {
+@@ -223,9 +204,11 @@ static int vfio_setup_trap_region(struct kvm *kvm, struct vfio_device *vdev,
+ 				  struct vfio_region *region)
+ {
+ 	if (region->is_ioport) {
+-		int port = ioport__register(kvm, region->port_base,
+-					   &vfio_ioport_ops, region->info.size,
+-					   region);
++		int port;
++
++		port = kvm__register_pio(kvm, region->port_base,
++					 region->info.size, vfio_ioport_mmio,
++					 region);
+ 		if (port < 0)
+ 			return port;
+ 		return 0;
+@@ -292,7 +275,7 @@ void vfio_unmap_region(struct kvm *kvm, struct vfio_region *region)
+ 		munmap(region->host_addr, region->info.size);
+ 		region->host_addr = NULL;
+ 	} else if (region->is_ioport) {
+-		ioport__unregister(kvm, region->port_base);
++		kvm__deregister_pio(kvm, region->port_base);
+ 	} else {
+ 		kvm__deregister_mmio(kvm, region->guest_phys_addr);
+ 	}
+
+From patchwork Thu Dec 10 14:29:04 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965939
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.9 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,UNWANTED_LANGUAGE_BODY,
+	USER_AGENT_GIT autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 51EDBC1B0E3
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:05:00 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 1F6E62388B
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:05:00 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2393139AbgLJTEu (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 14:04:50 -0500
+Received: from foss.arm.com ([217.140.110.172]:45102 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390487AbgLJObZ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:25 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 6DBD51516;
+        Thu, 10 Dec 2020 06:29:44 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 5444B3F718;
+        Thu, 10 Dec 2020 06:29:43 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 17/21] virtio: Switch trap handling to use MMIO
+ handler
+Date: Thu, 10 Dec 2020 14:29:04 +0000
+Message-Id: <20201210142908.169597-18-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+With the planned retirement of the special ioport emulation code, we
+need to provide an emulation function compatible with the MMIO prototype.
+
+Adjust the existing MMIO callback routine to automatically determine
+the region this trap came through, and call the existing I/O handlers.
+Register the ioport region using the new registration function.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ virtio/pci.c | 42 ++++++++++--------------------------------
+ 1 file changed, 10 insertions(+), 32 deletions(-)
+
+diff --git a/virtio/pci.c b/virtio/pci.c
+index 6eea6c68..49d3f4d5 100644
+--- a/virtio/pci.c
++++ b/virtio/pci.c
+@@ -178,15 +178,6 @@ static bool virtio_pci__data_in(struct kvm_cpu *vcpu, struct virtio_device *vdev
+ 	return ret;
+ }
+ 
+-static bool virtio_pci__io_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+-{
+-	struct virtio_device *vdev = ioport->priv;
+-	struct virtio_pci *vpci = vdev->virtio;
+-	unsigned long offset = port - virtio_pci__port_addr(vpci);
+-
+-	return virtio_pci__data_in(vcpu, vdev, offset, data, size);
+-}
+-
+ static void update_msix_map(struct virtio_pci *vpci,
+ 			    struct msix_table *msix_entry, u32 vecnum)
+ {
+@@ -334,20 +325,6 @@ static bool virtio_pci__data_out(struct kvm_cpu *vcpu, struct virtio_device *vde
+ 	return ret;
+ }
+ 
+-static bool virtio_pci__io_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+-{
+-	struct virtio_device *vdev = ioport->priv;
+-	struct virtio_pci *vpci = vdev->virtio;
+-	unsigned long offset = port - virtio_pci__port_addr(vpci);
+-
+-	return virtio_pci__data_out(vcpu, vdev, offset, data, size);
+-}
+-
+-static struct ioport_operations virtio_pci__io_ops = {
+-	.io_in	= virtio_pci__io_in,
+-	.io_out	= virtio_pci__io_out,
+-};
+-
+ static void virtio_pci__msix_mmio_callback(struct kvm_cpu *vcpu,
+ 					   u64 addr, u8 *data, u32 len,
+ 					   u8 is_write, void *ptr)
+@@ -455,12 +432,15 @@ static void virtio_pci__io_mmio_callback(struct kvm_cpu *vcpu,
+ {
+ 	struct virtio_device *vdev = ptr;
+ 	struct virtio_pci *vpci = vdev->virtio;
+-	u32 mmio_addr = virtio_pci__mmio_addr(vpci);
++	u32 base_addr = virtio_pci__mmio_addr(vpci);
++
++	if (addr < base_addr || addr >= base_addr + PCI_IO_SIZE)
++		base_addr = virtio_pci__port_addr(vpci);
+ 
+ 	if (!is_write)
+-		virtio_pci__data_in(vcpu, vdev, addr - mmio_addr, data, len);
++		virtio_pci__data_in(vcpu, vdev, addr - base_addr, data, len);
+ 	else
+-		virtio_pci__data_out(vcpu, vdev, addr - mmio_addr, data, len);
++		virtio_pci__data_out(vcpu, vdev, addr - base_addr, data, len);
+ }
+ 
+ static int virtio_pci__bar_activate(struct kvm *kvm,
+@@ -478,10 +458,8 @@ static int virtio_pci__bar_activate(struct kvm *kvm,
+ 
+ 	switch (bar_num) {
+ 	case 0:
+-		r = ioport__register(kvm, bar_addr, &virtio_pci__io_ops,
+-				     bar_size, vdev);
+-		if (r > 0)
+-			r = 0;
++		r = kvm__register_pio(kvm, bar_addr, bar_size,
++				      virtio_pci__io_mmio_callback, vdev);
+ 		break;
+ 	case 1:
+ 		r =  kvm__register_mmio(kvm, bar_addr, bar_size, false,
+@@ -510,7 +488,7 @@ static int virtio_pci__bar_deactivate(struct kvm *kvm,
+ 
+ 	switch (bar_num) {
+ 	case 0:
+-		r = ioport__unregister(kvm, bar_addr);
++		r = kvm__deregister_pio(kvm, bar_addr);
+ 		break;
+ 	case 1:
+ 	case 2:
+@@ -625,7 +603,7 @@ int virtio_pci__exit(struct kvm *kvm, struct virtio_device *vdev)
+ 	virtio_pci__reset(kvm, vdev);
+ 	kvm__deregister_mmio(kvm, virtio_pci__mmio_addr(vpci));
+ 	kvm__deregister_mmio(kvm, virtio_pci__msix_io_addr(vpci));
+-	ioport__unregister(kvm, virtio_pci__port_addr(vpci));
++	kvm__deregister_pio(kvm, virtio_pci__port_addr(vpci));
+ 
+ 	return 0;
+ }
+
+From patchwork Thu Dec 10 14:29:05 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965937
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 35EAFC0018C
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:05:00 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 0930223440
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:05:00 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2390723AbgLJTEs (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 14:04:48 -0500
+Received: from foss.arm.com ([217.140.110.172]:45088 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390493AbgLJObZ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:25 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id BA8681534;
+        Thu, 10 Dec 2020 06:29:45 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ A123C3F718;
+        Thu, 10 Dec 2020 06:29:44 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 18/21] pci: Switch trap handling to use MMIO handler
+Date: Thu, 10 Dec 2020 14:29:05 +0000
+Message-Id: <20201210142908.169597-19-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+With the planned retirement of the special ioport emulation code, we
+need to provide an emulation function compatible with the MMIO prototype.
+
+Merge the existing _in and _out handlers to adhere to that MMIO
+interface, and register these using the new registration function.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ pci.c | 82 +++++++++++++++++------------------------------------------
+ 1 file changed, 24 insertions(+), 58 deletions(-)
+
+diff --git a/pci.c b/pci.c
+index 2e2c0270..d6da79e0 100644
+--- a/pci.c
++++ b/pci.c
+@@ -87,29 +87,16 @@ static void *pci_config_address_ptr(u16 port)
+ 	return base + offset;
+ }
+ 
+-static bool pci_config_address_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
++static void pci_config_address_mmio(struct kvm_cpu *vcpu, u64 addr, u8 *data,
++				    u32 len, u8 is_write, void *ptr)
+ {
+-	void *p = pci_config_address_ptr(port);
++	void *p = pci_config_address_ptr(addr);
+ 
+-	memcpy(p, data, size);
+-
+-	return true;
+-}
+-
+-static bool pci_config_address_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+-{
+-	void *p = pci_config_address_ptr(port);
+-
+-	memcpy(data, p, size);
+-
+-	return true;
++	if (is_write)
++		memcpy(p, data, len);
++	else
++		memcpy(data, p, len);
+ }
+-
+-static struct ioport_operations pci_config_address_ops = {
+-	.io_in	= pci_config_address_in,
+-	.io_out	= pci_config_address_out,
+-};
+-
+ static bool pci_device_exists(u8 bus_number, u8 device_number, u8 function_number)
+ {
+ 	union pci_config_address pci_config_address;
+@@ -125,49 +112,27 @@ static bool pci_device_exists(u8 bus_number, u8 device_number, u8 function_numbe
+ 	return !IS_ERR_OR_NULL(device__find_dev(DEVICE_BUS_PCI, device_number));
+ }
+ 
+-static bool pci_config_data_out(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
+-{
+-	union pci_config_address pci_config_address;
+-
+-	if (size > 4)
+-		size = 4;
+-
+-	pci_config_address.w = ioport__read32(&pci_config_address_bits);
+-	/*
+-	 * If someone accesses PCI configuration space offsets that are not
+-	 * aligned to 4 bytes, it uses ioports to signify that.
+-	 */
+-	pci_config_address.reg_offset = port - PCI_CONFIG_DATA;
+-
+-	pci__config_wr(vcpu->kvm, pci_config_address, data, size);
+-
+-	return true;
+-}
+-
+-static bool pci_config_data_in(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size)
++static void pci_config_data_mmio(struct kvm_cpu *vcpu, u64 addr, u8 *data,
++				 u32 len, u8 is_write, void *kvm)
+ {
+ 	union pci_config_address pci_config_address;
+ 
+-	if (size > 4)
+-		size = 4;
++	if (len > 4)
++		len = 4;
+ 
+ 	pci_config_address.w = ioport__read32(&pci_config_address_bits);
+ 	/*
+ 	 * If someone accesses PCI configuration space offsets that are not
+ 	 * aligned to 4 bytes, it uses ioports to signify that.
+ 	 */
+-	pci_config_address.reg_offset = port - PCI_CONFIG_DATA;
++	pci_config_address.reg_offset = addr - PCI_CONFIG_DATA;
+ 
+-	pci__config_rd(vcpu->kvm, pci_config_address, data, size);
+-
+-	return true;
++	if (is_write)
++		pci__config_wr(vcpu->kvm, pci_config_address, data, len);
++	else
++		pci__config_rd(vcpu->kvm, pci_config_address, data, len);
+ }
+ 
+-static struct ioport_operations pci_config_data_ops = {
+-	.io_in	= pci_config_data_in,
+-	.io_out	= pci_config_data_out,
+-};
+-
+ static int pci_activate_bar(struct kvm *kvm, struct pci_device_header *pci_hdr,
+ 			    int bar_num)
+ {
+@@ -512,11 +477,12 @@ int pci__init(struct kvm *kvm)
+ {
+ 	int r;
+ 
+-	r = ioport__register(kvm, PCI_CONFIG_DATA + 0, &pci_config_data_ops, 4, NULL);
++	r = kvm__register_pio(kvm, PCI_CONFIG_DATA, 4,
++				 pci_config_data_mmio, NULL);
+ 	if (r < 0)
+ 		return r;
+-
+-	r = ioport__register(kvm, PCI_CONFIG_ADDRESS + 0, &pci_config_address_ops, 4, NULL);
++	r = kvm__register_pio(kvm, PCI_CONFIG_ADDRESS, 4,
++				 pci_config_address_mmio, NULL);
+ 	if (r < 0)
+ 		goto err_unregister_data;
+ 
+@@ -528,17 +494,17 @@ int pci__init(struct kvm *kvm)
+ 	return 0;
+ 
+ err_unregister_addr:
+-	ioport__unregister(kvm, PCI_CONFIG_ADDRESS);
++	kvm__deregister_pio(kvm, PCI_CONFIG_ADDRESS);
+ err_unregister_data:
+-	ioport__unregister(kvm, PCI_CONFIG_DATA);
++	kvm__deregister_pio(kvm, PCI_CONFIG_DATA);
+ 	return r;
+ }
+ dev_base_init(pci__init);
+ 
+ int pci__exit(struct kvm *kvm)
+ {
+-	ioport__unregister(kvm, PCI_CONFIG_DATA);
+-	ioport__unregister(kvm, PCI_CONFIG_ADDRESS);
++	kvm__deregister_pio(kvm, PCI_CONFIG_DATA);
++	kvm__deregister_pio(kvm, PCI_CONFIG_ADDRESS);
+ 
+ 	return 0;
+ }
+
+From patchwork Thu Dec 10 14:29:06 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965943
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 1C478C4167B
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:05:00 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id E124E23C18
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:04:59 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2393133AbgLJTEs (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 14:04:48 -0500
+Received: from foss.arm.com ([217.140.110.172]:45080 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390486AbgLJObZ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:25 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 1321F153B;
+        Thu, 10 Dec 2020 06:29:47 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ EDFEE3F718;
+        Thu, 10 Dec 2020 06:29:45 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 19/21] Remove ioport specific routines
+Date: Thu, 10 Dec 2020 14:29:06 +0000
+Message-Id: <20201210142908.169597-20-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Now that all users of the dedicated ioport trap handler interface are
+gone, we can retire the code associated with it.
+
+This removes ioport.c and ioport.h, along with removing prototypes from
+other header files.
+
+This also transfers the responsibility for port I/O trap handling
+entirely into the new routine in mmio.c.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ Makefile             |   1 -
+ include/kvm/ioport.h |  20 -----
+ include/kvm/kvm.h    |   2 -
+ ioport.c             | 173 -------------------------------------------
+ mmio.c               |   2 +-
+ 5 files changed, 1 insertion(+), 197 deletions(-)
+ delete mode 100644 ioport.c
+
+diff --git a/Makefile b/Makefile
+index 35bb1182..94ff5da6 100644
+--- a/Makefile
++++ b/Makefile
+@@ -56,7 +56,6 @@ OBJS	+= framebuffer.o
+ OBJS	+= guest_compat.o
+ OBJS	+= hw/rtc.o
+ OBJS	+= hw/serial.o
+-OBJS	+= ioport.o
+ OBJS	+= irq.o
+ OBJS	+= kvm-cpu.o
+ OBJS	+= kvm.o
+diff --git a/include/kvm/ioport.h b/include/kvm/ioport.h
+index a61038e2..38636553 100644
+--- a/include/kvm/ioport.h
++++ b/include/kvm/ioport.h
+@@ -17,28 +17,8 @@
+ 
+ struct kvm;
+ 
+-struct ioport {
+-	struct rb_int_node		node;
+-	struct ioport_operations	*ops;
+-	void				*priv;
+-	struct device_header		dev_hdr;
+-	u32				refcount;
+-	bool				remove;
+-};
+-
+-struct ioport_operations {
+-	bool (*io_in)(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size);
+-	bool (*io_out)(struct ioport *ioport, struct kvm_cpu *vcpu, u16 port, void *data, int size);
+-};
+-
+ void ioport__map_irq(u8 *irq);
+ 
+-int __must_check ioport__register(struct kvm *kvm, u16 port, struct ioport_operations *ops,
+-				  int count, void *param);
+-int ioport__unregister(struct kvm *kvm, u16 port);
+-int ioport__init(struct kvm *kvm);
+-int ioport__exit(struct kvm *kvm);
+-
+ static inline u8 ioport__read8(u8 *data)
+ {
+ 	return *data;
+diff --git a/include/kvm/kvm.h b/include/kvm/kvm.h
+index 14f9d58b..e70f8ef6 100644
+--- a/include/kvm/kvm.h
++++ b/include/kvm/kvm.h
+@@ -119,8 +119,6 @@ void kvm__irq_line(struct kvm *kvm, int irq, int level);
+ void kvm__irq_trigger(struct kvm *kvm, int irq);
+ bool kvm__emulate_io(struct kvm_cpu *vcpu, u16 port, void *data, int direction, int size, u32 count);
+ bool kvm__emulate_mmio(struct kvm_cpu *vcpu, u64 phys_addr, u8 *data, u32 len, u8 is_write);
+-bool kvm__emulate_pio(struct kvm_cpu *vcpu, u16 port, void *data,
+-		      int direction, int size, u32 count);
+ int kvm__destroy_mem(struct kvm *kvm, u64 guest_phys, u64 size, void *userspace_addr);
+ int kvm__register_mem(struct kvm *kvm, u64 guest_phys, u64 size, void *userspace_addr,
+ 		      enum kvm_mem_type type);
+diff --git a/ioport.c b/ioport.c
+deleted file mode 100644
+index 204d8103..00000000
+--- a/ioport.c
++++ /dev/null
+@@ -1,173 +0,0 @@
+-#include "kvm/ioport.h"
+-
+-#include "kvm/kvm.h"
+-#include "kvm/util.h"
+-#include "kvm/rbtree-interval.h"
+-#include "kvm/mutex.h"
+-
+-#include <linux/kvm.h>	/* for KVM_EXIT_* */
+-#include <linux/types.h>
+-
+-#include <stdbool.h>
+-#include <limits.h>
+-#include <stdlib.h>
+-#include <stdio.h>
+-
+-#define ioport_node(n) rb_entry(n, struct ioport, node)
+-
+-static DEFINE_MUTEX(ioport_lock);
+-
+-static struct rb_root		ioport_tree = RB_ROOT;
+-
+-static struct ioport *ioport_search(struct rb_root *root, u64 addr)
+-{
+-	struct rb_int_node *node;
+-
+-	node = rb_int_search_single(root, addr);
+-	if (node == NULL)
+-		return NULL;
+-
+-	return ioport_node(node);
+-}
+-
+-static int ioport_insert(struct rb_root *root, struct ioport *data)
+-{
+-	return rb_int_insert(root, &data->node);
+-}
+-
+-static void ioport_remove(struct rb_root *root, struct ioport *data)
+-{
+-	rb_int_erase(root, &data->node);
+-}
+-
+-static struct ioport *ioport_get(struct rb_root *root, u64 addr)
+-{
+-	struct ioport *ioport;
+-
+-	mutex_lock(&ioport_lock);
+-	ioport = ioport_search(root, addr);
+-	if (ioport)
+-		ioport->refcount++;
+-	mutex_unlock(&ioport_lock);
+-
+-	return ioport;
+-}
+-
+-/* Called with ioport_lock held. */
+-static void ioport_unregister(struct rb_root *root, struct ioport *data)
+-{
+-	ioport_remove(root, data);
+-	free(data);
+-}
+-
+-static void ioport_put(struct rb_root *root, struct ioport *data)
+-{
+-	mutex_lock(&ioport_lock);
+-	data->refcount--;
+-	if (data->remove && data->refcount == 0)
+-		ioport_unregister(root, data);
+-	mutex_unlock(&ioport_lock);
+-}
+-
+-int ioport__register(struct kvm *kvm, u16 port, struct ioport_operations *ops, int count, void *param)
+-{
+-	struct ioport *entry;
+-	int r;
+-
+-	entry = malloc(sizeof(*entry));
+-	if (entry == NULL)
+-		return -ENOMEM;
+-
+-	*entry = (struct ioport) {
+-		.node		= RB_INT_INIT(port, port + count),
+-		.ops		= ops,
+-		.priv		= param,
+-		/*
+-		 * Start from 0 because ioport__unregister() doesn't decrement
+-		 * the reference count.
+-		 */
+-		.refcount	= 0,
+-		.remove		= false,
+-	};
+-
+-	mutex_lock(&ioport_lock);
+-	r = ioport_insert(&ioport_tree, entry);
+-	if (r < 0)
+-		goto out_free;
+-	mutex_unlock(&ioport_lock);
+-
+-	return port;
+-
+-out_free:
+-	free(entry);
+-	mutex_unlock(&ioport_lock);
+-	return r;
+-}
+-
+-int ioport__unregister(struct kvm *kvm, u16 port)
+-{
+-	struct ioport *entry;
+-
+-	mutex_lock(&ioport_lock);
+-	entry = ioport_search(&ioport_tree, port);
+-	if (!entry) {
+-		mutex_unlock(&ioport_lock);
+-		return -ENOENT;
+-	}
+-	/* The same reasoning from kvm__deregister_mmio() applies. */
+-	if (entry->refcount == 0)
+-		ioport_unregister(&ioport_tree, entry);
+-	else
+-		entry->remove = true;
+-	mutex_unlock(&ioport_lock);
+-
+-	return 0;
+-}
+-
+-static const char *to_direction(int direction)
+-{
+-	if (direction == KVM_EXIT_IO_IN)
+-		return "IN";
+-	else
+-		return "OUT";
+-}
+-
+-static void ioport_error(u16 port, void *data, int direction, int size, u32 count)
+-{
+-	fprintf(stderr, "IO error: %s port=%x, size=%d, count=%u\n", to_direction(direction), port, size, count);
+-}
+-
+-bool kvm__emulate_io(struct kvm_cpu *vcpu, u16 port, void *data, int direction, int size, u32 count)
+-{
+-	struct ioport_operations *ops;
+-	bool ret = false;
+-	struct ioport *entry;
+-	void *ptr = data;
+-	struct kvm *kvm = vcpu->kvm;
+-
+-	entry = ioport_get(&ioport_tree, port);
+-	if (!entry)
+-		return kvm__emulate_pio(vcpu, port, data, direction,
+-					size, count);
+-
+-	ops	= entry->ops;
+-
+-	while (count--) {
+-		if (direction == KVM_EXIT_IO_IN && ops->io_in)
+-				ret = ops->io_in(entry, vcpu, port, ptr, size);
+-		else if (direction == KVM_EXIT_IO_OUT && ops->io_out)
+-				ret = ops->io_out(entry, vcpu, port, ptr, size);
+-
+-		ptr += size;
+-	}
+-
+-	ioport_put(&ioport_tree, entry);
+-
+-	if (ret)
+-		return true;
+-
+-	if (kvm->cfg.ioport_debug)
+-		ioport_error(port, data, direction, size, count);
+-
+-	return !kvm->cfg.ioport_debug;
+-}
+diff --git a/mmio.c b/mmio.c
+index 4cce1901..5249af39 100644
+--- a/mmio.c
++++ b/mmio.c
+@@ -206,7 +206,7 @@ out:
+ 	return true;
+ }
+ 
+-bool kvm__emulate_pio(struct kvm_cpu *vcpu, u16 port, void *data,
++bool kvm__emulate_io(struct kvm_cpu *vcpu, u16 port, void *data,
+ 		     int direction, int size, u32 count)
+ {
+ 	struct mmio_mapping *mmio;
+
+From patchwork Thu Dec 10 14:29:07 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965931
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 59798C4167B
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:02:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 07F6923DC4
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:02:57 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2393188AbgLJS5v (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 13:57:51 -0500
+Received: from foss.arm.com ([217.140.110.172]:45082 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390492AbgLJOb0 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:26 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 604841570;
+        Thu, 10 Dec 2020 06:29:48 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 471133F718;
+        Thu, 10 Dec 2020 06:29:47 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 20/21] hw/serial: ARM/arm64: Use MMIO at higher
+ addresses
+Date: Thu, 10 Dec 2020 14:29:07 +0000
+Message-Id: <20201210142908.169597-21-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Using the UART devices at their legacy I/O addresses as set by IBM in
+1981 was a kludge we used for simplicity on ARM platforms as well.
+However this imposes problems due to their missing alignment and overlap
+with the PCI I/O address space.
+
+Now that we can switch a device easily between using ioports and MMIO,
+let's move the UARTs out of the first 4K of memory on ARM platforms.
+
+That should be transparent for well behaved guests, since the change is
+naturally reflected in the device tree. Even "earlycon" keeps working,
+as the stdout-path property is adjusted automatically.
+
+People providing direct earlycon parameters via the command line need to
+adjust it to: "earlycon=uart,mmio,0x1000000".
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ hw/serial.c | 52 ++++++++++++++++++++++++++++++++++++----------------
+ 1 file changed, 36 insertions(+), 16 deletions(-)
+
+diff --git a/hw/serial.c b/hw/serial.c
+index d840eebc..00fb3aa8 100644
+--- a/hw/serial.c
++++ b/hw/serial.c
+@@ -13,6 +13,24 @@
+ 
+ #include <pthread.h>
+ 
++#if defined(CONFIG_ARM) || defined(CONFIG_ARM64)
++#define serial_iobase(nr)	(0x1000000 + (nr) * 0x1000)
++#define serial_irq(nr)		(32 + (nr))
++#define SERIAL8250_BUS_TYPE	DEVICE_BUS_MMIO
++#else
++#define serial_iobase_0		0x3f8
++#define serial_iobase_1		0x2f8
++#define serial_iobase_2		0x3e8
++#define serial_iobase_3		0x2e8
++#define serial_irq_0		4
++#define serial_irq_1		3
++#define serial_irq_2		4
++#define serial_irq_3		3
++#define serial_iobase(nr)	serial_iobase_##nr
++#define serial_irq(nr)		serial_irq_##nr
++#define SERIAL8250_BUS_TYPE	DEVICE_BUS_IOPORT
++#endif
++
+ /*
+  * This fakes a U6_16550A. The fifo len needs to be 64 as the kernel
+  * expects that for autodetection.
+@@ -27,7 +45,7 @@ struct serial8250_device {
+ 	struct mutex		mutex;
+ 	u8			id;
+ 
+-	u16			iobase;
++	u32			iobase;
+ 	u8			irq;
+ 	u8			irq_state;
+ 	int			txcnt;
+@@ -65,56 +83,56 @@ static struct serial8250_device devices[] = {
+ 	/* ttyS0 */
+ 	[0]	= {
+ 		.dev_hdr = {
+-			.bus_type	= DEVICE_BUS_IOPORT,
++			.bus_type	= SERIAL8250_BUS_TYPE,
+ 			.data		= serial8250_generate_fdt_node,
+ 		},
+ 		.mutex			= MUTEX_INITIALIZER,
+ 
+ 		.id			= 0,
+-		.iobase			= 0x3f8,
+-		.irq			= 4,
++		.iobase			= serial_iobase(0),
++		.irq			= serial_irq(0),
+ 
+ 		SERIAL_REGS_SETTING
+ 	},
+ 	/* ttyS1 */
+ 	[1]	= {
+ 		.dev_hdr = {
+-			.bus_type	= DEVICE_BUS_IOPORT,
++			.bus_type	= SERIAL8250_BUS_TYPE,
+ 			.data		= serial8250_generate_fdt_node,
+ 		},
+ 		.mutex			= MUTEX_INITIALIZER,
+ 
+ 		.id			= 1,
+-		.iobase			= 0x2f8,
+-		.irq			= 3,
++		.iobase			= serial_iobase(1),
++		.irq			= serial_irq(1),
+ 
+ 		SERIAL_REGS_SETTING
+ 	},
+ 	/* ttyS2 */
+ 	[2]	= {
+ 		.dev_hdr = {
+-			.bus_type	= DEVICE_BUS_IOPORT,
++			.bus_type	= SERIAL8250_BUS_TYPE,
+ 			.data		= serial8250_generate_fdt_node,
+ 		},
+ 		.mutex			= MUTEX_INITIALIZER,
+ 
+ 		.id			= 2,
+-		.iobase			= 0x3e8,
+-		.irq			= 4,
++		.iobase			= serial_iobase(2),
++		.irq			= serial_irq(2),
+ 
+ 		SERIAL_REGS_SETTING
+ 	},
+ 	/* ttyS3 */
+ 	[3]	= {
+ 		.dev_hdr = {
+-			.bus_type	= DEVICE_BUS_IOPORT,
++			.bus_type	= SERIAL8250_BUS_TYPE,
+ 			.data		= serial8250_generate_fdt_node,
+ 		},
+ 		.mutex			= MUTEX_INITIALIZER,
+ 
+ 		.id			= 3,
+-		.iobase			= 0x2e8,
+-		.irq			= 3,
++		.iobase			= serial_iobase(3),
++		.irq			= serial_irq(3),
+ 
+ 		SERIAL_REGS_SETTING
+ 	},
+@@ -444,7 +462,8 @@ static int serial8250__device_init(struct kvm *kvm,
+ 		return r;
+ 
+ 	ioport__map_irq(&dev->irq);
+-	r = kvm__register_pio(kvm, dev->iobase, 8, serial8250_mmio, dev);
++	r = kvm__register_iotrap(kvm, dev->iobase, 8, serial8250_mmio, dev,
++				 SERIAL8250_BUS_TYPE);
+ 
+ 	return r;
+ }
+@@ -467,7 +486,7 @@ cleanup:
+ 	for (j = 0; j <= i; j++) {
+ 		struct serial8250_device *dev = &devices[j];
+ 
+-		kvm__deregister_pio(kvm, dev->iobase);
++		kvm__deregister_iotrap(kvm, dev->iobase, SERIAL8250_BUS_TYPE);
+ 		device__unregister(&dev->dev_hdr);
+ 	}
+ 
+@@ -483,7 +502,8 @@ int serial8250__exit(struct kvm *kvm)
+ 	for (i = 0; i < ARRAY_SIZE(devices); i++) {
+ 		struct serial8250_device *dev = &devices[i];
+ 
+-		r = kvm__deregister_pio(kvm, dev->iobase);
++		r = kvm__deregister_iotrap(kvm, dev->iobase,
++					   SERIAL8250_BUS_TYPE);
+ 		if (r < 0)
+ 			return r;
+ 		device__unregister(&dev->dev_hdr);
+
+From patchwork Thu Dec 10 14:29:08 2020
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Andre Przywara <andre.przywara@arm.com>
+X-Patchwork-Id: 11965935
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id E996CC433FE
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:04:59 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id B04EC23440
+	for <kvm@archiver.kernel.org>; Thu, 10 Dec 2020 19:04:59 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2390479AbgLJTEi (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Thu, 10 Dec 2020 14:04:38 -0500
+Received: from foss.arm.com ([217.140.110.172]:45078 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S2390489AbgLJObZ (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Thu, 10 Dec 2020 09:31:25 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id AD01A1595;
+        Thu, 10 Dec 2020 06:29:49 -0800 (PST)
+Received: from donnerap.arm.com (donnerap.cambridge.arm.com [10.1.195.35])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 93AC63F718;
+        Thu, 10 Dec 2020 06:29:48 -0800 (PST)
+From: Andre Przywara <andre.przywara@arm.com>
+To: Will Deacon <will@kernel.org>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>
+Cc: kvm@vger.kernel.org, kvmarm@lists.cs.columbia.edu,
+        linux-arm-kernel@lists.infradead.org,
+        Alexandru Elisei <alexandru.elisei@arm.com>,
+        Marc Zyngier <maz@kernel.org>
+Subject: [PATCH kvmtool 21/21] hw/rtc: ARM/arm64: Use MMIO at higher addresses
+Date: Thu, 10 Dec 2020 14:29:08 +0000
+Message-Id: <20201210142908.169597-22-andre.przywara@arm.com>
+X-Mailer: git-send-email 2.17.1
+In-Reply-To: <20201210142908.169597-1-andre.przywara@arm.com>
+References: <20201210142908.169597-1-andre.przywara@arm.com>
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Using the RTC device at its legacy I/O address as set by IBM in 1981
+was a kludge we used for simplicity on ARM platforms as well.
+However this imposes problems due to their missing alignment and overlap
+with the PCI I/O address space.
+
+Now that we can switch a device easily between using ioports and
+MMIO, let's move the RTC out of the first 4K of memory on ARM platforms.
+
+That should be transparent for well behaved guests, since the change is
+naturally reflected in the device tree.
+
+Signed-off-by: Andre Przywara <andre.przywara@arm.com>
+---
+ hw/rtc.c | 24 ++++++++++++++++--------
+ 1 file changed, 16 insertions(+), 8 deletions(-)
+
+diff --git a/hw/rtc.c b/hw/rtc.c
+index ee4c9102..bdb88f0f 100644
+--- a/hw/rtc.c
++++ b/hw/rtc.c
+@@ -5,6 +5,15 @@
+ 
+ #include <time.h>
+ 
++#if defined(CONFIG_ARM) || defined(CONFIG_ARM64)
++#define RTC_BUS_TYPE		DEVICE_BUS_MMIO
++#define RTC_BASE_ADDRESS	0x1010000
++#else
++/* PORT 0070-007F - CMOS RAM/RTC (REAL TIME CLOCK) */
++#define RTC_BUS_TYPE		DEVICE_BUS_IOPORT
++#define RTC_BASE_ADDRESS	0x70
++#endif
++
+ /*
+  * MC146818 RTC registers
+  */
+@@ -49,7 +58,7 @@ static void cmos_ram_io(struct kvm_cpu *vcpu, u64 addr, u8 *data,
+ 	time_t ti;
+ 
+ 	if (is_write) {
+-		if (addr == 0x70) {	/* index register */
++		if (addr == RTC_BASE_ADDRESS) {	/* index register */
+ 			u8 value = ioport__read8(data);
+ 
+ 			vcpu->kvm->nmi_disabled	= value & (1UL << 7);
+@@ -70,7 +79,7 @@ static void cmos_ram_io(struct kvm_cpu *vcpu, u64 addr, u8 *data,
+ 		return;
+ 	}
+ 
+-	if (addr == 0x70)
++	if (addr == RTC_BASE_ADDRESS)	/* index register is write-only */
+ 		return;
+ 
+ 	time(&ti);
+@@ -127,7 +136,7 @@ static void generate_rtc_fdt_node(void *fdt,
+ 							    u8 irq,
+ 							    enum irq_type))
+ {
+-	u64 reg_prop[2] = { cpu_to_fdt64(0x70), cpu_to_fdt64(2) };
++	u64 reg_prop[2] = { cpu_to_fdt64(RTC_BASE_ADDRESS), cpu_to_fdt64(2) };
+ 
+ 	_FDT(fdt_begin_node(fdt, "rtc"));
+ 	_FDT(fdt_property_string(fdt, "compatible", "motorola,mc146818"));
+@@ -139,7 +148,7 @@ static void generate_rtc_fdt_node(void *fdt,
+ #endif
+ 
+ struct device_header rtc_dev_hdr = {
+-	.bus_type = DEVICE_BUS_IOPORT,
++	.bus_type = RTC_BUS_TYPE,
+ 	.data = generate_rtc_fdt_node,
+ };
+ 
+@@ -151,8 +160,8 @@ int rtc__init(struct kvm *kvm)
+ 	if (r < 0)
+ 		return r;
+ 
+-	/* PORT 0070-007F - CMOS RAM/RTC (REAL TIME CLOCK) */
+-	r = kvm__register_pio(kvm, 0x0070, 2, cmos_ram_io, NULL);
++	r = kvm__register_iotrap(kvm, RTC_BASE_ADDRESS, 2, cmos_ram_io, NULL,
++				 RTC_BUS_TYPE);
+ 	if (r < 0)
+ 		goto out_device;
+ 
+@@ -170,8 +179,7 @@ dev_init(rtc__init);
+ 
+ int rtc__exit(struct kvm *kvm)
+ {
+-	/* PORT 0070-007F - CMOS RAM/RTC (REAL TIME CLOCK) */
+-	kvm__deregister_pio(kvm, 0x0070);
++	kvm__deregister_iotrap(kvm, RTC_BASE_ADDRESS, RTC_BUS_TYPE);
+ 
+ 	return 0;
+ }
