@@ -1,0 +1,3807 @@
+From patchwork Mon Jan 11 19:57:10 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 12011635
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-18.8 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 0ABAFC43331
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:59:39 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id D247D22BF3
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:59:38 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2391468AbhAKT7M (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 11 Jan 2021 14:59:12 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:52200 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S2391460AbhAKT7J (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Jan 2021 14:59:09 -0500
+Received: from casper.infradead.org (casper.infradead.org
+ [IPv6:2001:8b0:10b:1236::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 5FA13C0617B9
+        for <kvm@vger.kernel.org>; Mon, 11 Jan 2021 11:58:11 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=casper.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=jn9vB4nTR5tbpnMqolft0PXhkvxxJugyPZVztcv18zg=;
+ b=BO+nzdyBTb/qcWOkJhs8UuXdHK
+        O2/RjdenMBxbDe6HQgQQDO06Y9VFvpGMSoGg2C6ZvL/BijH/P2e1sCF49qvGFcLAnHeBI63K19vsv
+        s0AsZXBp1Ck9NfU7Jw00oeFa35SzdwS3pI0Xw+Cltsra0tFxWQamkaQL+5iNlurV4o/Lpovbzh4vO
+        Vs3jbJUOU18cxG/HEg0vVjH4NSScu1mHRCS7azT4++nuGEzSDsxvBWmkBV/z8nM97MR50EPvdjlj1
+        sEFfZJvj7UYYcVgqqDZykJnXOrvvK9EGgm1br6JdvI4z5E60SOhO4rUxJbCv0zgtCiVdl8Nfz7YSL
+        NH6mKQKw==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by casper.infradead.org with esmtpsa (Exim 4.94 #2 (Red Hat Linux))
+        id 1kz3Jf-003kSW-Rr; Mon, 11 Jan 2021 19:57:37 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.94 #2 (Red Hat
+ Linux))
+        id 1kz3Jf-0001HO-Dd; Mon, 11 Jan 2021 19:57:27 +0000
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Ankur Arora <ankur.a.arora@oracle.com>,
+        Joao Martins <joao.m.martins@oracle.com>,
+        Boris Ostrovsky <boris.ostrovsky@oracle.com>,
+        Sean Christopherson <seanjc@google.com>, graf@amazon.com,
+        iaslan@amazon.de, pdurrant@amazon.com, aagch@amazon.com,
+        fandree@amazon.com, hch@infradead.org
+Subject: [PATCH v5 01/16] KVM: x86/xen: fix Xen hypercall page msr handling
+Date: Mon, 11 Jan 2021 19:57:10 +0000
+Message-Id: <20210111195725.4601-2-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210111195725.4601-1-dwmw2@infradead.org>
+References: <20210111195725.4601-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ casper.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joao Martins <joao.m.martins@oracle.com>
+
+Xen usually places its MSR at 0x40000000 or 0x40000200 depending on
+whether it is running in viridian mode or not. Note that this is not
+ABI guaranteed, so it is possible for Xen to advertise the MSR some
+place else.
+
+Given the way xen_hvm_config() is handled, if the former address is
+selected, this will conflict with Hyper-V's MSR
+(HV_X64_MSR_GUEST_OS_ID) which unconditionally uses the same address.
+
+Given that the MSR location is arbitrary, move the xen_hvm_config()
+handling to the top of kvm_set_msr_common() before falling through.
+
+Signed-off-by: Joao Martins <joao.m.martins@oracle.com>
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/kvm/x86.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index a480804ae27a..c0c3a904080f 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -3007,6 +3007,9 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 	u32 msr = msr_info->index;
+ 	u64 data = msr_info->data;
+ 
++	if (msr && msr == vcpu->kvm->arch.xen_hvm_config.msr)
++		return xen_hvm_config(vcpu, data);
++
+ 	switch (msr) {
+ 	case MSR_AMD64_NB_CFG:
+ 	case MSR_IA32_UCODE_WRITE:
+@@ -3294,8 +3297,6 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 		vcpu->arch.msr_misc_features_enables = data;
+ 		break;
+ 	default:
+-		if (msr && (msr == vcpu->kvm->arch.xen_hvm_config.msr))
+-			return xen_hvm_config(vcpu, data);
+ 		if (kvm_pmu_is_valid_msr(vcpu, msr))
+ 			return kvm_pmu_set_msr(vcpu, msr_info);
+ 		return KVM_MSR_RET_INVALID;
+
+From patchwork Mon Jan 11 19:57:11 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 12011623
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-18.8 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id F2EEAC433E6
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:58:56 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id A1BA922CB8
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:58:56 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2404009AbhAKT6z (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 11 Jan 2021 14:58:55 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:52206 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S2391404AbhAKT6x (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Jan 2021 14:58:53 -0500
+Received: from merlin.infradead.org (merlin.infradead.org
+ [IPv6:2001:8b0:10b:1231::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 60B20C061795
+        for <kvm@vger.kernel.org>; Mon, 11 Jan 2021 11:57:33 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=merlin.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        Content-Type:MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:
+        To:From:Reply-To:Content-ID:Content-Description;
+        bh=GfUJtbDUWRAhRtuoGsCRP1QD8cugYuIbOUfm7589cNE=;
+ b=1Of03pTeCBfufd6Bv4ZSWxBmj6
+        ZbUE5CaafqiVMGZhpUSotJTBgArYPZrXxU8knhMya5RxgoddOOFHvNcCSFrgpZ4SqbDXmbCSTBwMq
+        6hEHKNojieolXMU5az2uJ0b+z/NuaG6A2k6s/IYESbrq5hJ8lz7VjWuVkcsqWycBpwwdfQkktsyoo
+        vLv6IAfSi7HRxEm1Vfm8G7176/duO3WUT5vSnZEgzh2ciDA9n5/F5EicoDP0hYxrqy1b03Stu4OQF
+        6dNUcR2No9BEo87Jx1BvsWWmtRhe1DRe6MxlUOuKDDEwXgxtBsSnuPIxWkrlJjCJ1kCSuMuRFTpNH
+        aznZUWjQ==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by merlin.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kz3Jg-0001h1-Hk; Mon, 11 Jan 2021 19:57:29 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.94 #2 (Red Hat
+ Linux))
+        id 1kz3Jf-0001HQ-EV; Mon, 11 Jan 2021 19:57:27 +0000
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Ankur Arora <ankur.a.arora@oracle.com>,
+        Joao Martins <joao.m.martins@oracle.com>,
+        Boris Ostrovsky <boris.ostrovsky@oracle.com>,
+        Sean Christopherson <seanjc@google.com>, graf@amazon.com,
+        iaslan@amazon.de, pdurrant@amazon.com, aagch@amazon.com,
+        fandree@amazon.com, hch@infradead.org
+Subject: [PATCH v5 02/16] KVM: x86/xen: intercept xen hypercalls if enabled
+Date: Mon, 11 Jan 2021 19:57:11 +0000
+Message-Id: <20210111195725.4601-3-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210111195725.4601-1-dwmw2@infradead.org>
+References: <20210111195725.4601-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ merlin.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joao Martins <joao.m.martins@oracle.com>
+
+Add a new exit reason for emulator to handle Xen hypercalls.
+
+Since this means KVM owns the ABI, dispense with the facility for the
+VMM to provide its own copy of the hypercall pages; just fill them in
+directly using VMCALL/VMMCALL as we do for the Hyper-V hypercall page.
+
+This behaviour is enabled by a new INTERCEPT_HCALL flag in the
+KVM_XEN_HVM_CONFIG ioctl structure, and advertised by the same flag
+being returned from the KVM_CAP_XEN_HVM check.
+
+Add a test case and shift xen_hvm_config() to the nascent xen.c while
+we're at it.
+
+Signed-off-by: Joao Martins <joao.m.martins@oracle.com>
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/include/asm/kvm_host.h               |   6 +
+ arch/x86/kvm/Makefile                         |   2 +-
+ arch/x86/kvm/trace.h                          |  36 +++++
+ arch/x86/kvm/x86.c                            |  47 +++---
+ arch/x86/kvm/xen.c                            | 140 ++++++++++++++++++
+ arch/x86/kvm/xen.h                            |  21 +++
+ include/uapi/linux/kvm.h                      |  20 +++
+ tools/testing/selftests/kvm/Makefile          |   2 +
+ tools/testing/selftests/kvm/lib/kvm_util.c    |   1 +
+ .../selftests/kvm/x86_64/xen_vmcall_test.c    | 123 +++++++++++++++
+ 10 files changed, 368 insertions(+), 30 deletions(-)
+ create mode 100644 arch/x86/kvm/xen.c
+ create mode 100644 arch/x86/kvm/xen.h
+ create mode 100644 tools/testing/selftests/kvm/x86_64/xen_vmcall_test.c
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 3d6616f6f6ef..cf2af8efebe8 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -520,6 +520,11 @@ struct kvm_vcpu_hv {
+ 	cpumask_t tlb_flush;
+ };
+ 
++/* Xen HVM per vcpu emulation context */
++struct kvm_vcpu_xen {
++	u64 hypercall_rip;
++};
++
+ struct kvm_vcpu_arch {
+ 	/*
+ 	 * rip and regs accesses must go through
+@@ -718,6 +723,7 @@ struct kvm_vcpu_arch {
+ 	unsigned long singlestep_rip;
+ 
+ 	struct kvm_vcpu_hv hyperv;
++	struct kvm_vcpu_xen xen;
+ 
+ 	cpumask_var_t wbinvd_dirty_mask;
+ 
+diff --git a/arch/x86/kvm/Makefile b/arch/x86/kvm/Makefile
+index 4bd14ab01323..a50041235530 100644
+--- a/arch/x86/kvm/Makefile
++++ b/arch/x86/kvm/Makefile
+@@ -14,7 +14,7 @@ kvm-y			+= $(KVM)/kvm_main.o $(KVM)/coalesced_mmio.o \
+ 				$(KVM)/dirty_ring.o
+ kvm-$(CONFIG_KVM_ASYNC_PF)	+= $(KVM)/async_pf.o
+ 
+-kvm-y			+= x86.o emulate.o i8259.o irq.o lapic.o \
++kvm-y			+= x86.o emulate.o i8259.o irq.o lapic.o xen.o \
+ 			   i8254.o ioapic.o irq_comm.o cpuid.o pmu.o mtrr.o \
+ 			   hyperv.o debugfs.o mmu/mmu.o mmu/page_track.o \
+ 			   mmu/spte.o mmu/tdp_iter.o mmu/tdp_mmu.o
+diff --git a/arch/x86/kvm/trace.h b/arch/x86/kvm/trace.h
+index 2de30c20bc26..4527d0fd2d99 100644
+--- a/arch/x86/kvm/trace.h
++++ b/arch/x86/kvm/trace.h
+@@ -92,6 +92,42 @@ TRACE_EVENT(kvm_hv_hypercall,
+ 		  __entry->outgpa)
+ );
+ 
++/*
++ * Tracepoint for Xen hypercall.
++ */
++TRACE_EVENT(kvm_xen_hypercall,
++	TP_PROTO(unsigned long nr, unsigned long a0, unsigned long a1,
++		 unsigned long a2, unsigned long a3, unsigned long a4,
++		 unsigned long a5),
++	    TP_ARGS(nr, a0, a1, a2, a3, a4, a5),
++
++	TP_STRUCT__entry(
++		__field(unsigned long, nr)
++		__field(unsigned long, a0)
++		__field(unsigned long, a1)
++		__field(unsigned long, a2)
++		__field(unsigned long, a3)
++		__field(unsigned long, a4)
++		__field(unsigned long, a5)
++	),
++
++	TP_fast_assign(
++		__entry->nr = nr;
++		__entry->a0 = a0;
++		__entry->a1 = a1;
++		__entry->a2 = a2;
++		__entry->a3 = a3;
++		__entry->a4 = a4;
++		__entry->a4 = a5;
++	),
++
++	TP_printk("nr 0x%lx a0 0x%lx a1 0x%lx a2 0x%lx a3 0x%lx a4 0x%lx a5 %lx",
++		  __entry->nr, __entry->a0, __entry->a1,  __entry->a2,
++		  __entry->a3, __entry->a4, __entry->a5)
++);
++
++
++
+ /*
+  * Tracepoint for PIO.
+  */
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index c0c3a904080f..4e6b8c4d7824 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -29,6 +29,7 @@
+ #include "pmu.h"
+ #include "hyperv.h"
+ #include "lapic.h"
++#include "xen.h"
+ 
+ #include <linux/clocksource.h>
+ #include <linux/interrupt.h>
+@@ -2848,32 +2849,6 @@ static int set_msr_mce(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 	return 0;
+ }
+ 
+-static int xen_hvm_config(struct kvm_vcpu *vcpu, u64 data)
+-{
+-	struct kvm *kvm = vcpu->kvm;
+-	int lm = is_long_mode(vcpu);
+-	u8 *blob_addr = lm ? (u8 *)(long)kvm->arch.xen_hvm_config.blob_addr_64
+-		: (u8 *)(long)kvm->arch.xen_hvm_config.blob_addr_32;
+-	u8 blob_size = lm ? kvm->arch.xen_hvm_config.blob_size_64
+-		: kvm->arch.xen_hvm_config.blob_size_32;
+-	u32 page_num = data & ~PAGE_MASK;
+-	u64 page_addr = data & PAGE_MASK;
+-	u8 *page;
+-
+-	if (page_num >= blob_size)
+-		return 1;
+-
+-	page = memdup_user(blob_addr + (page_num * PAGE_SIZE), PAGE_SIZE);
+-	if (IS_ERR(page))
+-		return PTR_ERR(page);
+-
+-	if (kvm_vcpu_write_guest(vcpu, page_addr, page, PAGE_SIZE)) {
+-		kfree(page);
+-		return 1;
+-	}
+-	return 0;
+-}
+-
+ static inline bool kvm_pv_async_pf_enabled(struct kvm_vcpu *vcpu)
+ {
+ 	u64 mask = KVM_ASYNC_PF_ENABLED | KVM_ASYNC_PF_DELIVERY_AS_INT;
+@@ -3008,7 +2983,7 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 	u64 data = msr_info->data;
+ 
+ 	if (msr && msr == vcpu->kvm->arch.xen_hvm_config.msr)
+-		return xen_hvm_config(vcpu, data);
++		return kvm_xen_hvm_config(vcpu, data);
+ 
+ 	switch (msr) {
+ 	case MSR_AMD64_NB_CFG:
+@@ -3730,7 +3705,6 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
+ 	case KVM_CAP_PIT2:
+ 	case KVM_CAP_PIT_STATE2:
+ 	case KVM_CAP_SET_IDENTITY_MAP_ADDR:
+-	case KVM_CAP_XEN_HVM:
+ 	case KVM_CAP_VCPU_EVENTS:
+ 	case KVM_CAP_HYPERV:
+ 	case KVM_CAP_HYPERV_VAPIC:
+@@ -3770,6 +3744,10 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
+ 	case KVM_CAP_ENFORCE_PV_FEATURE_CPUID:
+ 		r = 1;
+ 		break;
++	case KVM_CAP_XEN_HVM:
++		r = KVM_XEN_HVM_CONFIG_HYPERCALL_MSR |
++		    KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL;
++		break;
+ 	case KVM_CAP_SYNC_REGS:
+ 		r = KVM_SYNC_X86_VALID_FIELDS;
+ 		break;
+@@ -5626,7 +5604,15 @@ long kvm_arch_vm_ioctl(struct file *filp,
+ 		if (copy_from_user(&xhc, argp, sizeof(xhc)))
+ 			goto out;
+ 		r = -EINVAL;
+-		if (xhc.flags)
++		if (xhc.flags & ~KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL)
++			goto out;
++		/*
++		 * With hypercall interception the kernel generates its own
++		 * hypercall page so it must not be provided.
++		 */
++		if ((xhc.flags & KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL) &&
++		    (xhc.blob_addr_32 || xhc.blob_addr_64 ||
++		     xhc.blob_size_32 || xhc.blob_size_64))
+ 			goto out;
+ 		memcpy(&kvm->arch.xen_hvm_config, &xhc, sizeof(xhc));
+ 		r = 0;
+@@ -8102,6 +8088,9 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
+ 	unsigned long nr, a0, a1, a2, a3, ret;
+ 	int op_64_bit;
+ 
++	if (kvm_xen_hypercall_enabled(vcpu->kvm))
++		return kvm_xen_hypercall(vcpu);
++
+ 	if (kvm_hv_hypercall_enabled(vcpu->kvm))
+ 		return kvm_hv_hypercall(vcpu);
+ 
+diff --git a/arch/x86/kvm/xen.c b/arch/x86/kvm/xen.c
+new file mode 100644
+index 000000000000..b76d121a86c0
+--- /dev/null
++++ b/arch/x86/kvm/xen.c
+@@ -0,0 +1,140 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright © 2019 Oracle and/or its affiliates. All rights reserved.
++ * Copyright © 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
++ *
++ * KVM Xen emulation
++ */
++
++#include "x86.h"
++#include "xen.h"
++
++#include <linux/kvm_host.h>
++
++#include <trace/events/kvm.h>
++
++#include "trace.h"
++
++int kvm_xen_hvm_config(struct kvm_vcpu *vcpu, u64 data)
++{
++	struct kvm *kvm = vcpu->kvm;
++	u32 page_num = data & ~PAGE_MASK;
++	u64 page_addr = data & PAGE_MASK;
++
++	/*
++	 * If Xen hypercall intercept is enabled, fill the hypercall
++	 * page with VMCALL/VMMCALL instructions since that's what
++	 * we catch. Else the VMM has provided the hypercall pages
++	 * with instructions of its own choosing, so use those.
++	 */
++	if (kvm_xen_hypercall_enabled(kvm)) {
++		u8 instructions[32];
++		int i;
++
++		if (page_num)
++			return 1;
++
++		/* mov imm32, %eax */
++		instructions[0] = 0xb8;
++
++		/* vmcall / vmmcall */
++		kvm_x86_ops.patch_hypercall(vcpu, instructions + 5);
++
++		/* ret */
++		instructions[8] = 0xc3;
++
++		/* int3 to pad */
++		memset(instructions + 9, 0xcc, sizeof(instructions) - 9);
++
++		for (i = 0; i < PAGE_SIZE / sizeof(instructions); i++) {
++			*(u32 *)&instructions[1] = i;
++			if (kvm_vcpu_write_guest(vcpu,
++						 page_addr + (i * sizeof(instructions)),
++						 instructions, sizeof(instructions)))
++				return 1;
++		}
++	} else {
++		int lm = is_long_mode(vcpu);
++		u8 *blob_addr = lm ? (u8 *)(long)kvm->arch.xen_hvm_config.blob_addr_64
++				   : (u8 *)(long)kvm->arch.xen_hvm_config.blob_addr_32;
++		u8 blob_size = lm ? kvm->arch.xen_hvm_config.blob_size_64
++				  : kvm->arch.xen_hvm_config.blob_size_32;
++		u8 *page;
++
++		if (page_num >= blob_size)
++			return 1;
++
++		page = memdup_user(blob_addr + (page_num * PAGE_SIZE), PAGE_SIZE);
++		if (IS_ERR(page))
++			return PTR_ERR(page);
++
++		if (kvm_vcpu_write_guest(vcpu, page_addr, page, PAGE_SIZE)) {
++			kfree(page);
++			return 1;
++		}
++	}
++	return 0;
++}
++
++static int kvm_xen_hypercall_set_result(struct kvm_vcpu *vcpu, u64 result)
++{
++	kvm_rax_write(vcpu, result);
++	return kvm_skip_emulated_instruction(vcpu);
++}
++
++static int kvm_xen_hypercall_complete_userspace(struct kvm_vcpu *vcpu)
++{
++	struct kvm_run *run = vcpu->run;
++
++	if (unlikely(!kvm_is_linear_rip(vcpu, vcpu->arch.xen.hypercall_rip)))
++		return 1;
++
++	return kvm_xen_hypercall_set_result(vcpu, run->xen.u.hcall.result);
++}
++
++int kvm_xen_hypercall(struct kvm_vcpu *vcpu)
++{
++	bool longmode;
++	u64 input, params[6];
++
++	input = (u64)kvm_register_read(vcpu, VCPU_REGS_RAX);
++
++	longmode = is_64_bit_mode(vcpu);
++	if (!longmode) {
++		params[0] = (u32)kvm_rbx_read(vcpu);
++		params[1] = (u32)kvm_rcx_read(vcpu);
++		params[2] = (u32)kvm_rdx_read(vcpu);
++		params[3] = (u32)kvm_rsi_read(vcpu);
++		params[4] = (u32)kvm_rdi_read(vcpu);
++		params[5] = (u32)kvm_rbp_read(vcpu);
++	}
++#ifdef CONFIG_X86_64
++	else {
++		params[0] = (u64)kvm_rdi_read(vcpu);
++		params[1] = (u64)kvm_rsi_read(vcpu);
++		params[2] = (u64)kvm_rdx_read(vcpu);
++		params[3] = (u64)kvm_r10_read(vcpu);
++		params[4] = (u64)kvm_r8_read(vcpu);
++		params[5] = (u64)kvm_r9_read(vcpu);
++	}
++#endif
++	trace_kvm_xen_hypercall(input, params[0], params[1], params[2],
++				params[3], params[4], params[5]);
++
++	vcpu->run->exit_reason = KVM_EXIT_XEN;
++	vcpu->run->xen.type = KVM_EXIT_XEN_HCALL;
++	vcpu->run->xen.u.hcall.longmode = longmode;
++	vcpu->run->xen.u.hcall.cpl = kvm_x86_ops.get_cpl(vcpu);
++	vcpu->run->xen.u.hcall.input = input;
++	vcpu->run->xen.u.hcall.params[0] = params[0];
++	vcpu->run->xen.u.hcall.params[1] = params[1];
++	vcpu->run->xen.u.hcall.params[2] = params[2];
++	vcpu->run->xen.u.hcall.params[3] = params[3];
++	vcpu->run->xen.u.hcall.params[4] = params[4];
++	vcpu->run->xen.u.hcall.params[5] = params[5];
++	vcpu->arch.xen.hypercall_rip = kvm_get_linear_rip(vcpu);
++	vcpu->arch.complete_userspace_io =
++		kvm_xen_hypercall_complete_userspace;
++
++	return 0;
++}
+diff --git a/arch/x86/kvm/xen.h b/arch/x86/kvm/xen.h
+new file mode 100644
+index 000000000000..81e12f716d2e
+--- /dev/null
++++ b/arch/x86/kvm/xen.h
+@@ -0,0 +1,21 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Copyright © 2019 Oracle and/or its affiliates. All rights reserved.
++ * Copyright © 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
++ *
++ * KVM Xen emulation
++ */
++
++#ifndef __ARCH_X86_KVM_XEN_H__
++#define __ARCH_X86_KVM_XEN_H__
++
++int kvm_xen_hypercall(struct kvm_vcpu *vcpu);
++int kvm_xen_hvm_config(struct kvm_vcpu *vcpu, u64 data);
++
++static inline bool kvm_xen_hypercall_enabled(struct kvm *kvm)
++{
++	return kvm->arch.xen_hvm_config.flags &
++		KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL;
++}
++
++#endif /* __ARCH_X86_KVM_XEN_H__ */
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index 374c67875cdb..9eee81bcd0e0 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -216,6 +216,20 @@ struct kvm_hyperv_exit {
+ 	} u;
+ };
+ 
++struct kvm_xen_exit {
++#define KVM_EXIT_XEN_HCALL          1
++	__u32 type;
++	union {
++		struct {
++			__u32 longmode;
++			__u32 cpl;
++			__u64 input;
++			__u64 result;
++			__u64 params[6];
++		} hcall;
++	} u;
++};
++
+ #define KVM_S390_GET_SKEYS_NONE   1
+ #define KVM_S390_SKEYS_MAX        1048576
+ 
+@@ -252,6 +266,7 @@ struct kvm_hyperv_exit {
+ #define KVM_EXIT_X86_WRMSR        30
+ #define KVM_EXIT_DIRTY_RING_FULL  31
+ #define KVM_EXIT_AP_RESET_HOLD    32
++#define KVM_EXIT_XEN              33
+ 
+ /* For KVM_EXIT_INTERNAL_ERROR */
+ /* Emulate instruction failed. */
+@@ -428,6 +443,8 @@ struct kvm_run {
+ 			__u32 index; /* kernel -> user */
+ 			__u64 data; /* kernel <-> user */
+ 		} msr;
++		/* KVM_EXIT_XEN */
++		struct kvm_xen_exit xen;
+ 		/* Fix the size of the union. */
+ 		char padding[256];
+ 	};
+@@ -1131,6 +1148,9 @@ struct kvm_x86_mce {
+ #endif
+ 
+ #ifdef KVM_CAP_XEN_HVM
++#define KVM_XEN_HVM_CONFIG_HYPERCALL_MSR	(1 << 0)
++#define KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL	(1 << 1)
++
+ struct kvm_xen_hvm_config {
+ 	__u32 flags;
+ 	__u32 msr;
+diff --git a/tools/testing/selftests/kvm/Makefile b/tools/testing/selftests/kvm/Makefile
+index fe41c6a0fa67..44a4128b4061 100644
+--- a/tools/testing/selftests/kvm/Makefile
++++ b/tools/testing/selftests/kvm/Makefile
+@@ -59,6 +59,8 @@ TEST_GEN_PROGS_x86_64 += x86_64/vmx_tsc_adjust_test
+ TEST_GEN_PROGS_x86_64 += x86_64/xss_msr_test
+ TEST_GEN_PROGS_x86_64 += x86_64/debug_regs
+ TEST_GEN_PROGS_x86_64 += x86_64/tsc_msrs_test
++TEST_GEN_PROGS_x86_64 += x86_64/user_msr_test
++TEST_GEN_PROGS_x86_64 += x86_64/xen_vmcall_test
+ TEST_GEN_PROGS_x86_64 += demand_paging_test
+ TEST_GEN_PROGS_x86_64 += dirty_log_test
+ TEST_GEN_PROGS_x86_64 += dirty_log_perf_test
+diff --git a/tools/testing/selftests/kvm/lib/kvm_util.c b/tools/testing/selftests/kvm/lib/kvm_util.c
+index fa5a90e6c6f0..d787cb802b4a 100644
+--- a/tools/testing/selftests/kvm/lib/kvm_util.c
++++ b/tools/testing/selftests/kvm/lib/kvm_util.c
+@@ -1801,6 +1801,7 @@ static struct exit_reason {
+ 	{KVM_EXIT_DIRTY_RING_FULL, "DIRTY_RING_FULL"},
+ 	{KVM_EXIT_X86_RDMSR, "RDMSR"},
+ 	{KVM_EXIT_X86_WRMSR, "WRMSR"},
++	{KVM_EXIT_XEN, "XEN"},
+ #ifdef KVM_EXIT_MEMORY_NOT_PRESENT
+ 	{KVM_EXIT_MEMORY_NOT_PRESENT, "MEMORY_NOT_PRESENT"},
+ #endif
+diff --git a/tools/testing/selftests/kvm/x86_64/xen_vmcall_test.c b/tools/testing/selftests/kvm/x86_64/xen_vmcall_test.c
+new file mode 100644
+index 000000000000..3f1dd93626e5
+--- /dev/null
++++ b/tools/testing/selftests/kvm/x86_64/xen_vmcall_test.c
+@@ -0,0 +1,123 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * svm_vmcall_test
++ *
++ * Copyright © 2020 Amazon.com, Inc. or its affiliates.
++ *
++ * Userspace hypercall testing
++ */
++
++#include "test_util.h"
++#include "kvm_util.h"
++#include "processor.h"
++
++#define VCPU_ID		5
++
++#define HCALL_REGION_GPA	0xc0000000ULL
++#define HCALL_REGION_SLOT	10
++
++static struct kvm_vm *vm;
++
++#define INPUTVALUE 17
++#define ARGVALUE(x) (0xdeadbeef5a5a0000UL + x)
++#define RETVALUE 0xcafef00dfbfbffffUL
++
++#define XEN_HYPERCALL_MSR 0x40000000
++
++static void guest_code(void)
++{
++	unsigned long rax = INPUTVALUE;
++	unsigned long rdi = ARGVALUE(1);
++	unsigned long rsi = ARGVALUE(2);
++	unsigned long rdx = ARGVALUE(3);
++	register unsigned long r10 __asm__("r10") = ARGVALUE(4);
++	register unsigned long r8 __asm__("r8") = ARGVALUE(5);
++	register unsigned long r9 __asm__("r9") = ARGVALUE(6);
++
++	/* First a direct invocation of 'vmcall' */
++	__asm__ __volatile__("vmcall" :
++			     "=a"(rax) :
++			     "a"(rax), "D"(rdi), "S"(rsi), "d"(rdx),
++			     "r"(r10), "r"(r8), "r"(r9));
++	GUEST_ASSERT(rax == RETVALUE);
++
++	/* Now fill in the hypercall page */
++	__asm__ __volatile__("wrmsr" : : "c" (XEN_HYPERCALL_MSR),
++			     "a" (HCALL_REGION_GPA & 0xffffffff),
++			     "d" (HCALL_REGION_GPA >> 32));
++
++	/* And invoke the same hypercall that way */
++	__asm__ __volatile__("call *%1" : "=a"(rax) :
++			     "r"(HCALL_REGION_GPA + INPUTVALUE * 32),
++			     "a"(rax), "D"(rdi), "S"(rsi), "d"(rdx),
++			     "r"(r10), "r"(r8), "r"(r9));
++	GUEST_ASSERT(rax == RETVALUE);
++
++	GUEST_DONE();
++}
++
++int main(int argc, char *argv[])
++{
++	if (!(kvm_check_cap(KVM_CAP_XEN_HVM) &
++	      KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL) ) {
++		print_skip("KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL not available");
++		exit(KSFT_SKIP);
++	}
++
++	vm = vm_create_default(VCPU_ID, 0, (void *) guest_code);
++	vcpu_set_cpuid(vm, VCPU_ID, kvm_get_supported_cpuid());
++
++	struct kvm_xen_hvm_config hvmc = {
++		.flags = KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL,
++		.msr = XEN_HYPERCALL_MSR,
++	};
++	vm_ioctl(vm, KVM_XEN_HVM_CONFIG, &hvmc);
++
++	/* Map a region for the hypercall page */
++	vm_userspace_mem_region_add(vm, VM_MEM_SRC_ANONYMOUS,
++                                    HCALL_REGION_GPA, HCALL_REGION_SLOT,
++				    getpagesize(), 0);
++	virt_map(vm, HCALL_REGION_GPA, HCALL_REGION_GPA, 1, 0);
++
++	for (;;) {
++		volatile struct kvm_run *run = vcpu_state(vm, VCPU_ID);
++		struct ucall uc;
++
++		vcpu_run(vm, VCPU_ID);
++
++		if (run->exit_reason == KVM_EXIT_XEN) {
++			ASSERT_EQ(run->xen.type, KVM_EXIT_XEN_HCALL);
++			ASSERT_EQ(run->xen.u.hcall.cpl, 0);
++			ASSERT_EQ(run->xen.u.hcall.longmode, 1);
++			ASSERT_EQ(run->xen.u.hcall.input, INPUTVALUE);
++			ASSERT_EQ(run->xen.u.hcall.params[0], ARGVALUE(1));
++			ASSERT_EQ(run->xen.u.hcall.params[1], ARGVALUE(2));
++			ASSERT_EQ(run->xen.u.hcall.params[2], ARGVALUE(3));
++			ASSERT_EQ(run->xen.u.hcall.params[3], ARGVALUE(4));
++			ASSERT_EQ(run->xen.u.hcall.params[4], ARGVALUE(5));
++			ASSERT_EQ(run->xen.u.hcall.params[5], ARGVALUE(6));
++			run->xen.u.hcall.result = RETVALUE;
++			continue;
++		}
++
++		TEST_ASSERT(run->exit_reason == KVM_EXIT_IO,
++			    "Got exit_reason other than KVM_EXIT_IO: %u (%s)\n",
++			    run->exit_reason,
++			    exit_reason_str(run->exit_reason));
++
++		switch (get_ucall(vm, VCPU_ID, &uc)) {
++		case UCALL_ABORT:
++			TEST_FAIL("%s", (const char *)uc.args[0]);
++			/* NOT REACHED */
++		case UCALL_SYNC:
++			break;
++		case UCALL_DONE:
++			goto done;
++		default:
++			TEST_FAIL("Unknown ucall 0x%lx.", uc.cmd);
++		}
++	}
++done:
++	kvm_vm_free(vm);
++	return 0;
++}
+
+From patchwork Mon Jan 11 19:57:12 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 12011613
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-18.8 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id C602FC433E9
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:58:22 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 8B02422CB1
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:58:22 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2391390AbhAKT6O (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 11 Jan 2021 14:58:14 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:52050 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S2391378AbhAKT6N (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Jan 2021 14:58:13 -0500
+Received: from merlin.infradead.org (merlin.infradead.org
+ [IPv6:2001:8b0:10b:1231::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 6F7F3C0617A2
+        for <kvm@vger.kernel.org>; Mon, 11 Jan 2021 11:57:33 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=merlin.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=DbomEl/wA7I8yvYafwa6fpPKm5fC2uvDH4uSum5rBiw=;
+ b=UM7UwXssxuGXiKqytTfwh0BJLc
+        jdRScGIKhMtjqUpqOfi67FfUqA3vcIEb5BQcbsp+BLxdv3HLRu0tTQWucJFVKLbSlYMhDNqrQ2pd7
+        fRzcSfcl4vBChSt3x3lipZiaOFhe57Bek53B5+XGOSsRdszrRVde+ZLwiN1SymJmhYk2E2AExV83f
+        qSKrKHK11GdioYUPcWED7pPAUlwAqa9fNv0ymmDAsj10CUWM+r+wwc/3u0ql0iNdJ4xrCxQAgOvgl
+        pfHhX7IPw8KSgiIPSGbK9Pclh3UeD2lT4goIZSEtdUzgSmxQokf7MFhuSFBsjho7CiHMkqgGCe+1C
+        yQ4blpzA==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by merlin.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kz3Jg-0001h3-IT; Mon, 11 Jan 2021 19:57:28 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.94 #2 (Red Hat
+ Linux))
+        id 1kz3Jf-0001HS-Fm; Mon, 11 Jan 2021 19:57:27 +0000
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Ankur Arora <ankur.a.arora@oracle.com>,
+        Joao Martins <joao.m.martins@oracle.com>,
+        Boris Ostrovsky <boris.ostrovsky@oracle.com>,
+        Sean Christopherson <seanjc@google.com>, graf@amazon.com,
+        iaslan@amazon.de, pdurrant@amazon.com, aagch@amazon.com,
+        fandree@amazon.com, hch@infradead.org
+Subject: [PATCH v5 03/16] KVM: x86/xen: Fix coexistence of Xen and Hyper-V
+ hypercalls
+Date: Mon, 11 Jan 2021 19:57:12 +0000
+Message-Id: <20210111195725.4601-4-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210111195725.4601-1-dwmw2@infradead.org>
+References: <20210111195725.4601-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ merlin.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+Disambiguate Xen vs. Hyper-V calls by adding 'orl $0x80000000, %eax'
+at the start of the Hyper-V hypercall page when Xen hypercalls are
+also enabled.
+
+That bit is reserved in the Hyper-V ABI, and those hypercall numbers
+will never be used by Xen (because it does precisely the same trick).
+
+Switch to using kvm_vcpu_write_guest() while we're at it, instead of
+open-coding it.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/kvm/hyperv.c                         | 40 ++++++++++++++-----
+ arch/x86/kvm/xen.c                            |  6 +++
+ .../selftests/kvm/x86_64/xen_vmcall_test.c    | 39 +++++++++++++++---
+ 3 files changed, 68 insertions(+), 17 deletions(-)
+
+diff --git a/arch/x86/kvm/hyperv.c b/arch/x86/kvm/hyperv.c
+index 922c69dcca4d..5f4487bb7849 100644
+--- a/arch/x86/kvm/hyperv.c
++++ b/arch/x86/kvm/hyperv.c
+@@ -23,6 +23,7 @@
+ #include "ioapic.h"
+ #include "cpuid.h"
+ #include "hyperv.h"
++#include "xen.h"
+ 
+ #include <linux/cpu.h>
+ #include <linux/kvm_host.h>
+@@ -1139,9 +1140,9 @@ static int kvm_hv_set_msr_pw(struct kvm_vcpu *vcpu, u32 msr, u64 data,
+ 			hv->hv_hypercall &= ~HV_X64_MSR_HYPERCALL_ENABLE;
+ 		break;
+ 	case HV_X64_MSR_HYPERCALL: {
+-		u64 gfn;
+-		unsigned long addr;
+-		u8 instructions[4];
++		u8 instructions[9];
++		int i = 0;
++		u64 addr;
+ 
+ 		/* if guest os id is not set hypercall should remain disabled */
+ 		if (!hv->hv_guest_os_id)
+@@ -1150,16 +1151,33 @@ static int kvm_hv_set_msr_pw(struct kvm_vcpu *vcpu, u32 msr, u64 data,
+ 			hv->hv_hypercall = data;
+ 			break;
+ 		}
+-		gfn = data >> HV_X64_MSR_HYPERCALL_PAGE_ADDRESS_SHIFT;
+-		addr = gfn_to_hva(kvm, gfn);
+-		if (kvm_is_error_hva(addr))
+-			return 1;
+-		kvm_x86_ops.patch_hypercall(vcpu, instructions);
+-		((unsigned char *)instructions)[3] = 0xc3; /* ret */
+-		if (__copy_to_user((void __user *)addr, instructions, 4))
++
++		/*
++		 * If Xen and Hyper-V hypercalls are both enabled, disambiguate
++		 * the same way Xen itself does, by setting the bit 31 of EAX
++		 * which is RsvdZ in the 32-bit Hyper-V hypercall ABI and just
++		 * going to be clobbered on 64-bit.
++		 */
++		if (kvm_xen_hypercall_enabled(kvm)) {
++			/* orl $0x80000000, %eax */
++			instructions[i++] = 0x0d;
++			instructions[i++] = 0x00;
++			instructions[i++] = 0x00;
++			instructions[i++] = 0x00;
++			instructions[i++] = 0x80;
++		}
++
++		/* vmcall/vmmcall */
++		kvm_x86_ops.patch_hypercall(vcpu, instructions + i);
++		i += 3;
++
++		/* ret */
++		((unsigned char *)instructions)[i++] = 0xc3;
++
++		addr = data & HV_X64_MSR_HYPERCALL_PAGE_ADDRESS_MASK;
++		if (kvm_vcpu_write_guest(vcpu, addr, instructions, i))
+ 			return 1;
+ 		hv->hv_hypercall = data;
+-		mark_page_dirty(kvm, gfn);
+ 		break;
+ 	}
+ 	case HV_X64_MSR_REFERENCE_TSC:
+diff --git a/arch/x86/kvm/xen.c b/arch/x86/kvm/xen.c
+index b76d121a86c0..503935d8212e 100644
+--- a/arch/x86/kvm/xen.c
++++ b/arch/x86/kvm/xen.c
+@@ -8,6 +8,7 @@
+ 
+ #include "x86.h"
+ #include "xen.h"
++#include "hyperv.h"
+ 
+ #include <linux/kvm_host.h>
+ 
+@@ -99,6 +100,11 @@ int kvm_xen_hypercall(struct kvm_vcpu *vcpu)
+ 
+ 	input = (u64)kvm_register_read(vcpu, VCPU_REGS_RAX);
+ 
++	/* Hyper-V hypercalls get bit 31 set in EAX */
++	if ((input & 0x80000000) &&
++	    kvm_hv_hypercall_enabled(vcpu->kvm))
++		return kvm_hv_hypercall(vcpu);
++
+ 	longmode = is_64_bit_mode(vcpu);
+ 	if (!longmode) {
+ 		params[0] = (u32)kvm_rbx_read(vcpu);
+diff --git a/tools/testing/selftests/kvm/x86_64/xen_vmcall_test.c b/tools/testing/selftests/kvm/x86_64/xen_vmcall_test.c
+index 3f1dd93626e5..24f279e1a66b 100644
+--- a/tools/testing/selftests/kvm/x86_64/xen_vmcall_test.c
++++ b/tools/testing/selftests/kvm/x86_64/xen_vmcall_test.c
+@@ -15,6 +15,7 @@
+ 
+ #define HCALL_REGION_GPA	0xc0000000ULL
+ #define HCALL_REGION_SLOT	10
++#define PAGE_SIZE		4096
+ 
+ static struct kvm_vm *vm;
+ 
+@@ -22,7 +23,12 @@ static struct kvm_vm *vm;
+ #define ARGVALUE(x) (0xdeadbeef5a5a0000UL + x)
+ #define RETVALUE 0xcafef00dfbfbffffUL
+ 
+-#define XEN_HYPERCALL_MSR 0x40000000
++#define XEN_HYPERCALL_MSR	0x40000200
++#define HV_GUEST_OS_ID_MSR	0x40000000
++#define HV_HYPERCALL_MSR	0x40000001
++
++#define HVCALL_SIGNAL_EVENT		0x005d
++#define HV_STATUS_INVALID_ALIGNMENT	4
+ 
+ static void guest_code(void)
+ {
+@@ -30,6 +36,7 @@ static void guest_code(void)
+ 	unsigned long rdi = ARGVALUE(1);
+ 	unsigned long rsi = ARGVALUE(2);
+ 	unsigned long rdx = ARGVALUE(3);
++	unsigned long rcx;
+ 	register unsigned long r10 __asm__("r10") = ARGVALUE(4);
+ 	register unsigned long r8 __asm__("r8") = ARGVALUE(5);
+ 	register unsigned long r9 __asm__("r9") = ARGVALUE(6);
+@@ -41,18 +48,38 @@ static void guest_code(void)
+ 			     "r"(r10), "r"(r8), "r"(r9));
+ 	GUEST_ASSERT(rax == RETVALUE);
+ 
+-	/* Now fill in the hypercall page */
++	/* Fill in the Xen hypercall page */
+ 	__asm__ __volatile__("wrmsr" : : "c" (XEN_HYPERCALL_MSR),
+ 			     "a" (HCALL_REGION_GPA & 0xffffffff),
+ 			     "d" (HCALL_REGION_GPA >> 32));
+ 
+-	/* And invoke the same hypercall that way */
++	/* Set Hyper-V Guest OS ID */
++	__asm__ __volatile__("wrmsr" : : "c" (HV_GUEST_OS_ID_MSR),
++			     "a" (0x5a), "d" (0));
++
++	/* Hyper-V hypercall page */
++	u64 msrval = HCALL_REGION_GPA + PAGE_SIZE + 1;
++	__asm__ __volatile__("wrmsr" : : "c" (HV_HYPERCALL_MSR),
++			     "a" (msrval & 0xffffffff),
++			     "d" (msrval >> 32));
++
++	/* Invoke a Xen hypercall */
+ 	__asm__ __volatile__("call *%1" : "=a"(rax) :
+ 			     "r"(HCALL_REGION_GPA + INPUTVALUE * 32),
+ 			     "a"(rax), "D"(rdi), "S"(rsi), "d"(rdx),
+ 			     "r"(r10), "r"(r8), "r"(r9));
+ 	GUEST_ASSERT(rax == RETVALUE);
+ 
++	/* Invoke a Hyper-V hypercall */
++	rax = 0;
++	rcx = HVCALL_SIGNAL_EVENT;	/* code */
++	rdx = 0x5a5a5a5a;		/* ingpa (badly aligned) */
++	__asm__ __volatile__("call *%1" : "=a"(rax) :
++			     "r"(HCALL_REGION_GPA + PAGE_SIZE),
++			     "a"(rax), "c"(rcx), "d"(rdx),
++			     "r"(r8));
++	GUEST_ASSERT(rax == HV_STATUS_INVALID_ALIGNMENT);
++
+ 	GUEST_DONE();
+ }
+ 
+@@ -73,11 +100,11 @@ int main(int argc, char *argv[])
+ 	};
+ 	vm_ioctl(vm, KVM_XEN_HVM_CONFIG, &hvmc);
+ 
+-	/* Map a region for the hypercall page */
++	/* Map a region for the hypercall pages */
+ 	vm_userspace_mem_region_add(vm, VM_MEM_SRC_ANONYMOUS,
+                                     HCALL_REGION_GPA, HCALL_REGION_SLOT,
+-				    getpagesize(), 0);
+-	virt_map(vm, HCALL_REGION_GPA, HCALL_REGION_GPA, 1, 0);
++				    2 * getpagesize(), 0);
++	virt_map(vm, HCALL_REGION_GPA, HCALL_REGION_GPA, 2, 0);
+ 
+ 	for (;;) {
+ 		volatile struct kvm_run *run = vcpu_state(vm, VCPU_ID);
+
+From patchwork Mon Jan 11 19:57:13 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 12011621
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-18.8 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 14D5CC43381
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:58:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C52A522CB3
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:58:57 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2391419AbhAKT6y (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 11 Jan 2021 14:58:54 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:52198 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S2391402AbhAKT6x (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Jan 2021 14:58:53 -0500
+Received: from merlin.infradead.org (merlin.infradead.org
+ [IPv6:2001:8b0:10b:1231::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 845FCC0617A5
+        for <kvm@vger.kernel.org>; Mon, 11 Jan 2021 11:57:33 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=merlin.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=w5nOpMx5/jgKliwp2IcY2IIBdFqwxK6hESaqOZsVbdQ=;
+ b=if1jztLtTFkfmHqX1CBr0sHgyc
+        EONze21sKd+H1sflhB1RoAJT4VIngUj80vC7l7E/YfnbOzKDddVoAogTjHgaXKbj+zG+2EhPMCgMB
+        G8d4NXvKz3rcCYLdfMtU02kuzVCkQFBEUDhF/NRtQ82zW5BxLFkDvh7gTjCUCeK72DRZDbRnR/YEy
+        f+yy0ombj8M4z7AUyJ0lLlnHcaIukQX0nu/iGmAnJFA9jfRddwLK7slZK4Y5mVrslH/I/cUuwnJYc
+        kiIbstplIR4lLBxTMkz2mZI9M/QB4yLCqJHeMI6Pb2K4Bip55wfc/20wVkAI4/Q9EGHkKP1mLUKgN
+        IuRnEaXA==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by merlin.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kz3Jg-0001h4-J1; Mon, 11 Jan 2021 19:57:29 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.94 #2 (Red Hat
+ Linux))
+        id 1kz3Jf-0001HU-Ge; Mon, 11 Jan 2021 19:57:27 +0000
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Ankur Arora <ankur.a.arora@oracle.com>,
+        Joao Martins <joao.m.martins@oracle.com>,
+        Boris Ostrovsky <boris.ostrovsky@oracle.com>,
+        Sean Christopherson <seanjc@google.com>, graf@amazon.com,
+        iaslan@amazon.de, pdurrant@amazon.com, aagch@amazon.com,
+        fandree@amazon.com, hch@infradead.org
+Subject: [PATCH v5 04/16] KVM: x86/xen: add
+ KVM_XEN_HVM_SET_ATTR/KVM_XEN_HVM_GET_ATTR
+Date: Mon, 11 Jan 2021 19:57:13 +0000
+Message-Id: <20210111195725.4601-5-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210111195725.4601-1-dwmw2@infradead.org>
+References: <20210111195725.4601-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ merlin.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joao Martins <joao.m.martins@oracle.com>
+
+This will be used to set up shared info pages etc.
+
+Signed-off-by: Joao Martins <joao.m.martins@oracle.com>
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/kvm/x86.c       | 20 ++++++++++++++++++++
+ arch/x86/kvm/xen.c       | 24 ++++++++++++++++++++++++
+ arch/x86/kvm/xen.h       |  2 ++
+ include/uapi/linux/kvm.h | 11 +++++++++++
+ 4 files changed, 57 insertions(+)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 4e6b8c4d7824..fd0a4ff1157e 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -5618,6 +5618,26 @@ long kvm_arch_vm_ioctl(struct file *filp,
+ 		r = 0;
+ 		break;
+ 	}
++	case KVM_XEN_HVM_GET_ATTR: {
++		struct kvm_xen_hvm_attr xha;
++
++		r = -EFAULT;
++		if (copy_from_user(&xha, argp, sizeof(xha)))
++			goto out;
++		r = kvm_xen_hvm_get_attr(kvm, &xha);
++		if (!r && copy_to_user(argp, &xha, sizeof(xha)))
++			r = -EFAULT;
++		break;
++	}
++	case KVM_XEN_HVM_SET_ATTR: {
++		struct kvm_xen_hvm_attr xha;
++
++		r = -EFAULT;
++		if (copy_from_user(&xha, argp, sizeof(xha)))
++			goto out;
++		r = kvm_xen_hvm_set_attr(kvm, &xha);
++		break;
++	}
+ 	case KVM_SET_CLOCK: {
+ 		struct kvm_clock_data user_ns;
+ 		u64 now_ns;
+diff --git a/arch/x86/kvm/xen.c b/arch/x86/kvm/xen.c
+index 503935d8212e..c0b2c67e0235 100644
+--- a/arch/x86/kvm/xen.c
++++ b/arch/x86/kvm/xen.c
+@@ -16,6 +16,30 @@
+ 
+ #include "trace.h"
+ 
++int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
++{
++	int r = -ENOENT;
++
++	switch (data->type) {
++	default:
++		break;
++	}
++
++	return r;
++}
++
++int kvm_xen_hvm_get_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
++{
++	int r = -ENOENT;
++
++	switch (data->type) {
++	default:
++		break;
++	}
++
++	return r;
++}
++
+ int kvm_xen_hvm_config(struct kvm_vcpu *vcpu, u64 data)
+ {
+ 	struct kvm *kvm = vcpu->kvm;
+diff --git a/arch/x86/kvm/xen.h b/arch/x86/kvm/xen.h
+index 81e12f716d2e..d06b5afcc1f2 100644
+--- a/arch/x86/kvm/xen.h
++++ b/arch/x86/kvm/xen.h
+@@ -9,6 +9,8 @@
+ #ifndef __ARCH_X86_KVM_XEN_H__
+ #define __ARCH_X86_KVM_XEN_H__
+ 
++int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data);
++int kvm_xen_hvm_get_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data);
+ int kvm_xen_hypercall(struct kvm_vcpu *vcpu);
+ int kvm_xen_hvm_config(struct kvm_vcpu *vcpu, u64 data);
+ 
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index 9eee81bcd0e0..31d4eb100efd 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -1585,6 +1585,17 @@ struct kvm_pv_cmd {
+ /* Available with KVM_CAP_DIRTY_LOG_RING */
+ #define KVM_RESET_DIRTY_RINGS		_IO(KVMIO, 0xc7)
+ 
++#define KVM_XEN_HVM_GET_ATTR	_IOWR(KVMIO, 0xc8, struct kvm_xen_hvm_attr)
++#define KVM_XEN_HVM_SET_ATTR	_IOW(KVMIO,  0xc9, struct kvm_xen_hvm_attr)
++
++struct kvm_xen_hvm_attr {
++	__u16 type;
++	__u16 pad[3];
++	union {
++		__u64 pad[4];
++	} u;
++};
++
+ /* Secure Encrypted Virtualization command */
+ enum sev_cmd_id {
+ 	/* Guest initialization commands */
+
+From patchwork Mon Jan 11 19:57:14 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 12011625
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-18.8 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id BF993C433DB
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:59:37 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 7345422CBE
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:59:37 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2391413AbhAKT6y (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 11 Jan 2021 14:58:54 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:52202 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S2391280AbhAKT6x (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Jan 2021 14:58:53 -0500
+Received: from merlin.infradead.org (merlin.infradead.org
+ [IPv6:2001:8b0:10b:1231::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 8B14DC0617A6
+        for <kvm@vger.kernel.org>; Mon, 11 Jan 2021 11:57:33 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=merlin.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=fM/Edm8ws3OR84ugO2auApPCSjtZhOaO3u6TKN/TtAM=;
+ b=J2J0UI0KIi7PIGNa2gJTlFMB2o
+        MhzAfZaeL1WpfEpNHgDf+QJmnPFJUoJDW+FyLQ36XMHOW4ZvJPenQSgz/Ofn09pbMj/sMoAOhz1b5
+        peYM91Q70ABZJNaX8KU6MdIs/oReTi7MYi22f4D9wrKCBmc7nLprsXqc71FAZ3qr6Jj1dIPn8SK2I
+        ElM7fpmMFtxMabAXXePKcnw6UPIDyglPIG1Y1wexyDFiGALY6mS8CHNyC/xG/lAn0zImnhwdXPX8h
+        Zpu+XokFBvBHvj5rAsC7gVb8ZEvMk8Gx51JJaskgTmEq05tiya6QU84acIn3di1IDscX0OYrUaw6L
+        F0H7iQtw==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by merlin.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kz3Jg-0001h5-Js; Mon, 11 Jan 2021 19:57:29 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.94 #2 (Red Hat
+ Linux))
+        id 1kz3Jf-0001Ha-HU; Mon, 11 Jan 2021 19:57:27 +0000
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Ankur Arora <ankur.a.arora@oracle.com>,
+        Joao Martins <joao.m.martins@oracle.com>,
+        Boris Ostrovsky <boris.ostrovsky@oracle.com>,
+        Sean Christopherson <seanjc@google.com>, graf@amazon.com,
+        iaslan@amazon.de, pdurrant@amazon.com, aagch@amazon.com,
+        fandree@amazon.com, hch@infradead.org
+Subject: [PATCH v5 05/16] KVM: x86/xen: latch long_mode when hypercall page is
+ set up
+Date: Mon, 11 Jan 2021 19:57:14 +0000
+Message-Id: <20210111195725.4601-6-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210111195725.4601-1-dwmw2@infradead.org>
+References: <20210111195725.4601-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ merlin.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/include/asm/kvm_host.h |  6 ++++++
+ arch/x86/kvm/xen.c              | 16 +++++++++++++++-
+ include/uapi/linux/kvm.h        |  3 +++
+ 3 files changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index cf2af8efebe8..4ca6e060b578 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -894,6 +894,11 @@ struct msr_bitmap_range {
+ 	unsigned long *bitmap;
+ };
+ 
++/* Xen emulation context */
++struct kvm_xen {
++	bool long_mode;
++};
++
+ enum kvm_irqchip_mode {
+ 	KVM_IRQCHIP_NONE,
+ 	KVM_IRQCHIP_KERNEL,       /* created with KVM_CREATE_IRQCHIP */
+@@ -973,6 +978,7 @@ struct kvm_arch {
+ 	struct hlist_head mask_notifier_list;
+ 
+ 	struct kvm_hv hyperv;
++	struct kvm_xen xen;
+ 
+ 	#ifdef CONFIG_KVM_MMU_AUDIT
+ 	int audit_point;
+diff --git a/arch/x86/kvm/xen.c b/arch/x86/kvm/xen.c
+index c0b2c67e0235..52cb9e465542 100644
+--- a/arch/x86/kvm/xen.c
++++ b/arch/x86/kvm/xen.c
+@@ -21,6 +21,13 @@ int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ 	int r = -ENOENT;
+ 
+ 	switch (data->type) {
++	case KVM_XEN_ATTR_TYPE_LONG_MODE:
++		if (!IS_ENABLED(CONFIG_64BIT) && data->u.long_mode)
++			return -EINVAL;
++
++		kvm->arch.xen.long_mode = !!data->u.long_mode;
++		r = 0;
++		break;
+ 	default:
+ 		break;
+ 	}
+@@ -33,6 +40,10 @@ int kvm_xen_hvm_get_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ 	int r = -ENOENT;
+ 
+ 	switch (data->type) {
++	case KVM_XEN_ATTR_TYPE_LONG_MODE:
++		data->u.long_mode = kvm->arch.xen.long_mode;
++		r = 0;
++		break;
+ 	default:
+ 		break;
+ 	}
+@@ -45,6 +56,10 @@ int kvm_xen_hvm_config(struct kvm_vcpu *vcpu, u64 data)
+ 	struct kvm *kvm = vcpu->kvm;
+ 	u32 page_num = data & ~PAGE_MASK;
+ 	u64 page_addr = data & PAGE_MASK;
++	bool lm = is_long_mode(vcpu);
++
++	/* Latch long_mode for shared_info pages etc. */
++	vcpu->kvm->arch.xen.long_mode = lm;
+ 
+ 	/*
+ 	 * If Xen hypercall intercept is enabled, fill the hypercall
+@@ -79,7 +94,6 @@ int kvm_xen_hvm_config(struct kvm_vcpu *vcpu, u64 data)
+ 				return 1;
+ 		}
+ 	} else {
+-		int lm = is_long_mode(vcpu);
+ 		u8 *blob_addr = lm ? (u8 *)(long)kvm->arch.xen_hvm_config.blob_addr_64
+ 				   : (u8 *)(long)kvm->arch.xen_hvm_config.blob_addr_32;
+ 		u8 blob_size = lm ? kvm->arch.xen_hvm_config.blob_size_64
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index 31d4eb100efd..3293866d5ee1 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -1592,10 +1592,13 @@ struct kvm_xen_hvm_attr {
+ 	__u16 type;
+ 	__u16 pad[3];
+ 	union {
++		__u8 long_mode;
+ 		__u64 pad[4];
+ 	} u;
+ };
+ 
++#define KVM_XEN_ATTR_TYPE_LONG_MODE		0x0
++
+ /* Secure Encrypted Virtualization command */
+ enum sev_cmd_id {
+ 	/* Guest initialization commands */
+
+From patchwork Mon Jan 11 19:57:15 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 12011609
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-18.8 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id A8A31C433E6
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:58:22 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 680BA22CBE
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:58:22 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2391393AbhAKT6O (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 11 Jan 2021 14:58:14 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:52056 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S2391379AbhAKT6N (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Jan 2021 14:58:13 -0500
+Received: from merlin.infradead.org (merlin.infradead.org
+ [IPv6:2001:8b0:10b:1231::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 76B79C0617A3
+        for <kvm@vger.kernel.org>; Mon, 11 Jan 2021 11:57:33 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=merlin.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=RS+RfrioTQjzStJdTZKjWLCu7R7I1go12LkxDEA+lqY=;
+ b=a4QQXugVKdp3SoEoxJBYutG9i+
+        WsoDnzod1DK7+akskQIfV9a9pn/aeDbgAkjGu8jZhXJ3jXLLeQu0Aov/M03lp6UCAZTGe4DDrKZ+W
+        O6rk79UlfVhoMOivuEPedeVxDmMywYlszh1/NZPNB3qXCAjtBlv1e9Yw1bUFdgQwCjNVGlN9jD+pO
+        SXzVbqYTWywvDZcfpjTice5qAd8t7k9BK/qQwYucLUvoA4Cc5k6LyquGod/tglUtIWwB++b3AVG/g
+        /uI8QwvyzszG1USVbHoziemFUwytOcIqfuWauzEHa0QCKxnoHD5FgSHFlpPZtUjB5a/4JrPT+5A3i
+        HFMUMRgg==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by merlin.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kz3Jg-0001h6-KX; Mon, 11 Jan 2021 19:57:28 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.94 #2 (Red Hat
+ Linux))
+        id 1kz3Jf-0001Hd-IF; Mon, 11 Jan 2021 19:57:27 +0000
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Ankur Arora <ankur.a.arora@oracle.com>,
+        Joao Martins <joao.m.martins@oracle.com>,
+        Boris Ostrovsky <boris.ostrovsky@oracle.com>,
+        Sean Christopherson <seanjc@google.com>, graf@amazon.com,
+        iaslan@amazon.de, pdurrant@amazon.com, aagch@amazon.com,
+        fandree@amazon.com, hch@infradead.org
+Subject: [PATCH v5 06/16] KVM: x86/xen: add definitions of compat_shared_info,
+ compat_vcpu_info
+Date: Mon, 11 Jan 2021 19:57:15 +0000
+Message-Id: <20210111195725.4601-7-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210111195725.4601-1-dwmw2@infradead.org>
+References: <20210111195725.4601-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ merlin.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+There aren't a lot of differences for the things that the kernel needs
+to care about, but there are a few.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/kvm/xen.h | 36 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 36 insertions(+)
+
+diff --git a/arch/x86/kvm/xen.h b/arch/x86/kvm/xen.h
+index d06b5afcc1f2..317c1325dade 100644
+--- a/arch/x86/kvm/xen.h
++++ b/arch/x86/kvm/xen.h
+@@ -20,4 +20,40 @@ static inline bool kvm_xen_hypercall_enabled(struct kvm *kvm)
+ 		KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL;
+ }
+ 
++
++/* 32-bit compatibility definitions, also used natively in 32-bit build */
++#include <asm/pvclock-abi.h>
++#include <asm/xen/interface.h>
++
++struct compat_arch_vcpu_info {
++	unsigned int cr2;
++	unsigned int pad[5];
++};
++
++struct compat_vcpu_info {
++        uint8_t evtchn_upcall_pending;
++        uint8_t evtchn_upcall_mask;
++        uint32_t evtchn_pending_sel;
++        struct compat_arch_vcpu_info arch;
++        struct pvclock_vcpu_time_info time;
++}; /* 64 bytes (x86) */
++
++struct compat_arch_shared_info {
++	unsigned int max_pfn;
++	unsigned int pfn_to_mfn_frame_list_list;
++	unsigned int nmi_reason;
++	unsigned int p2m_cr3;
++	unsigned int p2m_vaddr;
++	unsigned int p2m_generation;
++	uint32_t wc_sec_hi;
++};
++
++struct compat_shared_info {
++	struct compat_vcpu_info vcpu_info[MAX_VIRT_CPUS];
++	uint32_t evtchn_pending[32];
++	uint32_t evtchn_mask[32];
++	struct pvclock_wall_clock wc;
++	struct compat_arch_shared_info arch;
++};
++
+ #endif /* __ARCH_X86_KVM_XEN_H__ */
+
+From patchwork Mon Jan 11 19:57:16 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 12011631
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-18.8 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 1E934C433E9
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:59:38 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C909422CB8
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:59:37 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2391441AbhAKT7C (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 11 Jan 2021 14:59:02 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:52214 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S2391410AbhAKT6y (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Jan 2021 14:58:54 -0500
+Received: from casper.infradead.org (casper.infradead.org
+ [IPv6:2001:8b0:10b:1236::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id A0DD6C0617B0
+        for <kvm@vger.kernel.org>; Mon, 11 Jan 2021 11:58:05 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=casper.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=zZYF6HZ593Y02NYMIT5Gf57IZChy0zihNZ4vVw7s6M4=;
+ b=eUoaaEwINxuR25FK0NdX8JkUxv
+        RMW3Y5rHTxu/z63BPH9hdtq4tqiUDNRVyZiDdDD7cAgbQFCokoGwaqaPMjooF63QHmLQJJSB3hpPW
+        aWE3iZPDMp1o7HYDgXRi/KEAaBLlcgYV/Ckg+wXBKIBa07V3yqOlrWICjo84g/Qmev9smaP1CGBB0
+        JuUSHphjbXj9ZBOR7N+HfvARWheZ6+WwzwvKTitn9LVVz6YTHKMxkK7eRRdMT1sLese66SNvgaZu3
+        UZlbhHi5qga3fz3nWnpzHolFgFM9rYomop01IbeuheOWFSSu+WURpyjQKSb5qISNsdsqRqBTpvxqh
+        7SXc6phA==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by casper.infradead.org with esmtpsa (Exim 4.94 #2 (Red Hat Linux))
+        id 1kz3Jf-003kSX-Vj; Mon, 11 Jan 2021 19:57:37 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.94 #2 (Red Hat
+ Linux))
+        id 1kz3Jf-0001Hg-Iz; Mon, 11 Jan 2021 19:57:27 +0000
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Ankur Arora <ankur.a.arora@oracle.com>,
+        Joao Martins <joao.m.martins@oracle.com>,
+        Boris Ostrovsky <boris.ostrovsky@oracle.com>,
+        Sean Christopherson <seanjc@google.com>, graf@amazon.com,
+        iaslan@amazon.de, pdurrant@amazon.com, aagch@amazon.com,
+        fandree@amazon.com, hch@infradead.org
+Subject: [PATCH v5 07/16] KVM: x86/xen: register shared_info page
+Date: Mon, 11 Jan 2021 19:57:16 +0000
+Message-Id: <20210111195725.4601-8-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210111195725.4601-1-dwmw2@infradead.org>
+References: <20210111195725.4601-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ casper.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joao Martins <joao.m.martins@oracle.com>
+
+We add a new ioctl, XEN_HVM_SHARED_INFO, to allow hypervisor
+to know where the guest's shared info page is.
+
+Signed-off-by: Joao Martins <joao.m.martins@oracle.com>
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/include/asm/kvm_host.h |  2 ++
+ arch/x86/kvm/xen.c              | 27 +++++++++++++++++++++++++++
+ include/uapi/linux/kvm.h        |  4 ++++
+ 3 files changed, 33 insertions(+)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 4ca6e060b578..07ae5887afa1 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -897,6 +897,8 @@ struct msr_bitmap_range {
+ /* Xen emulation context */
+ struct kvm_xen {
+ 	bool long_mode;
++	bool shinfo_set;
++	struct gfn_to_hva_cache shinfo_cache;
+ };
+ 
+ enum kvm_irqchip_mode {
+diff --git a/arch/x86/kvm/xen.c b/arch/x86/kvm/xen.c
+index 52cb9e465542..9dd9c42842b8 100644
+--- a/arch/x86/kvm/xen.c
++++ b/arch/x86/kvm/xen.c
+@@ -13,9 +13,23 @@
+ #include <linux/kvm_host.h>
+ 
+ #include <trace/events/kvm.h>
++#include <xen/interface/xen.h>
+ 
+ #include "trace.h"
+ 
++static int kvm_xen_shared_info_init(struct kvm *kvm, gfn_t gfn)
++{
++	int ret;
++
++	ret = kvm_gfn_to_hva_cache_init(kvm, &kvm->arch.xen.shinfo_cache,
++					gfn_to_gpa(gfn), PAGE_SIZE);
++	if (ret)
++		return ret;
++
++	kvm->arch.xen.shinfo_set = true;
++	return 0;
++}
++
+ int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ {
+ 	int r = -ENOENT;
+@@ -28,6 +42,11 @@ int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ 		kvm->arch.xen.long_mode = !!data->u.long_mode;
+ 		r = 0;
+ 		break;
++
++	case KVM_XEN_ATTR_TYPE_SHARED_INFO:
++		r = kvm_xen_shared_info_init(kvm, data->u.shared_info.gfn);
++		break;
++
+ 	default:
+ 		break;
+ 	}
+@@ -44,6 +63,14 @@ int kvm_xen_hvm_get_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ 		data->u.long_mode = kvm->arch.xen.long_mode;
+ 		r = 0;
+ 		break;
++
++	case KVM_XEN_ATTR_TYPE_SHARED_INFO:
++		if (kvm->arch.xen.shinfo_set) {
++			data->u.shared_info.gfn = gpa_to_gfn(kvm->arch.xen.shinfo_cache.gpa);
++			r = 0;
++		}
++		break;
++
+ 	default:
+ 		break;
+ 	}
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index 3293866d5ee1..0c04bb6eda09 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -1593,11 +1593,15 @@ struct kvm_xen_hvm_attr {
+ 	__u16 pad[3];
+ 	union {
+ 		__u8 long_mode;
++		struct {
++			__u64 gfn;
++		} shared_info;
+ 		__u64 pad[4];
+ 	} u;
+ };
+ 
+ #define KVM_XEN_ATTR_TYPE_LONG_MODE		0x0
++#define KVM_XEN_ATTR_TYPE_SHARED_INFO		0x1
+ 
+ /* Secure Encrypted Virtualization command */
+ enum sev_cmd_id {
+
+From patchwork Mon Jan 11 19:57:17 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 12011633
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-18.8 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 829BDC4332B
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:59:38 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 55FAE22CB3
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:59:38 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2391447AbhAKT7D (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 11 Jan 2021 14:59:03 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:52210 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S2391407AbhAKT6y (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Jan 2021 14:58:54 -0500
+Received: from casper.infradead.org (casper.infradead.org
+ [IPv6:2001:8b0:10b:1236::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 9CEF1C0617AA
+        for <kvm@vger.kernel.org>; Mon, 11 Jan 2021 11:57:59 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=casper.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=3ElwfAXENPX7CyKGBaZk7F240zhQf8i1c0BS1eDVtMU=;
+ b=fhgP/mYxI/loLxIouteTRSmFwu
+        HRQl8iqN330n8Q1FOFFlmDXExIUU1H3Bz4d0yU/HKQjqOS9GBDcHUMhe/D7pT8fytnT9+C5uzk2Kt
+        sZxvd4AdWoqkMD7Fa5idnjSvVUJPvpj8wkPWJuIAyt1eKCfiWQZ69omj+1FKBXQniaJIb1qSQ1/5G
+        gA27ByTdnCWIl1Cwk6nhAzNs08v3BgQXvZ6R8qpATdyPg3Jcx98wJJm8/BbPdZHwQrGTAC42CqbB4
+        JMVVADTZx/BLylKaQwuDtVN54LWCGKu3GbjzGNKqRbk/9ggaKArWHwb3ArjGIBRam48KbzQyiHX5x
+        Q9/sLyiA==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by casper.infradead.org with esmtpsa (Exim 4.94 #2 (Red Hat Linux))
+        id 1kz3Jf-003kSY-WE; Mon, 11 Jan 2021 19:57:36 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.94 #2 (Red Hat
+ Linux))
+        id 1kz3Jf-0001Hj-Jh; Mon, 11 Jan 2021 19:57:27 +0000
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Ankur Arora <ankur.a.arora@oracle.com>,
+        Joao Martins <joao.m.martins@oracle.com>,
+        Boris Ostrovsky <boris.ostrovsky@oracle.com>,
+        Sean Christopherson <seanjc@google.com>, graf@amazon.com,
+        iaslan@amazon.de, pdurrant@amazon.com, aagch@amazon.com,
+        fandree@amazon.com, hch@infradead.org
+Subject: [PATCH v5 08/16] xen: add wc_sec_hi to struct shared_info
+Date: Mon, 11 Jan 2021 19:57:17 +0000
+Message-Id: <20210111195725.4601-9-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210111195725.4601-1-dwmw2@infradead.org>
+References: <20210111195725.4601-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ casper.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+Xen added this in 2015 (Xen 4.6). On x86_64 and Arm it fills what was
+previously a 32-bit hole in the generic shared_info structure; on
+i386 it had to go at the end of struct arch_shared_info.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/include/asm/xen/interface.h | 3 +++
+ include/xen/interface/xen.h          | 4 +++-
+ 2 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/xen/interface.h b/arch/x86/include/asm/xen/interface.h
+index 9139b3e86316..baca0b00ef76 100644
+--- a/arch/x86/include/asm/xen/interface.h
++++ b/arch/x86/include/asm/xen/interface.h
+@@ -182,6 +182,9 @@ struct arch_shared_info {
+ 	unsigned long p2m_cr3;		/* cr3 value of the p2m address space */
+ 	unsigned long p2m_vaddr;	/* virtual address of the p2m list */
+ 	unsigned long p2m_generation;	/* generation count of p2m mapping */
++#ifdef CONFIG_X86_32
++	uint32_t wc_sec_hi;
++#endif
+ };
+ #endif	/* !__ASSEMBLY__ */
+ 
+diff --git a/include/xen/interface/xen.h b/include/xen/interface/xen.h
+index 8bfb242f433e..5ee37a296481 100644
+--- a/include/xen/interface/xen.h
++++ b/include/xen/interface/xen.h
+@@ -598,7 +598,9 @@ struct shared_info {
+ 	 * their gettimeofday() syscall on this wallclock-base value.
+ 	 */
+ 	struct pvclock_wall_clock wc;
+-
++#ifndef CONFIG_X86_32
++	uint32_t wc_sec_hi;
++#endif
+ 	struct arch_shared_info arch;
+ 
+ };
+
+From patchwork Mon Jan 11 19:57:18 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 12011611
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-18.8 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id D8C67C43381
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:58:22 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id AAF3C22D00
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:58:22 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2391387AbhAKT6O (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 11 Jan 2021 14:58:14 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:52044 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S2390052AbhAKT6N (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Jan 2021 14:58:13 -0500
+Received: from merlin.infradead.org (merlin.infradead.org
+ [IPv6:2001:8b0:10b:1231::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 5F546C061786
+        for <kvm@vger.kernel.org>; Mon, 11 Jan 2021 11:57:33 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=merlin.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=d9XnHRRw32bis0FEs4oWJD3nnQ6CJO3uyeP5ug69dVE=;
+ b=DIgG1a8qlBSNUj7MfhkiWYolbI
+        p8BvML8m8+PStGtbiJezDgd3IPSb7AFYstzMfbwZZiPnhPPQ4xmm464hl5B3wP7X7Zn88snmcU1Xo
+        dyywNiE0SZHDDHYxG7nWCyEtSSZWwNv5nrYwm6BjKFZ5zkLt4CESqIRjzGuIRlWITsWhkNJiUgjjq
+        QYT+QxIKSrJsWu4aRuHbKLwgpJJaN7qfQ2c7xM0LPqLkKlP5FQosVzKjjHxJwZHvMm4Va7Kcd5kmE
+        9rfM1qGgkXv4tUVjvyXZYAix9MPgwZ/lw19ckzCPrTy3btT0in0MNAV8OgMW16jvSOEXHPWsiUwhu
+        jSyG2nSQ==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by merlin.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kz3Jg-0001h8-N8; Mon, 11 Jan 2021 19:57:29 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.94 #2 (Red Hat
+ Linux))
+        id 1kz3Jf-0001Hm-KP; Mon, 11 Jan 2021 19:57:27 +0000
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Ankur Arora <ankur.a.arora@oracle.com>,
+        Joao Martins <joao.m.martins@oracle.com>,
+        Boris Ostrovsky <boris.ostrovsky@oracle.com>,
+        Sean Christopherson <seanjc@google.com>, graf@amazon.com,
+        iaslan@amazon.de, pdurrant@amazon.com, aagch@amazon.com,
+        fandree@amazon.com, hch@infradead.org
+Subject: [PATCH v5 09/16] KVM: x86/xen: update wallclock region
+Date: Mon, 11 Jan 2021 19:57:18 +0000
+Message-Id: <20210111195725.4601-10-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210111195725.4601-1-dwmw2@infradead.org>
+References: <20210111195725.4601-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ merlin.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joao Martins <joao.m.martins@oracle.com>
+
+Wallclock on Xen is written in the shared_info page.
+
+To that purpose, export kvm_write_wall_clock() and pass on the GPA of
+its location to populate the shared_info wall clock data.
+
+Signed-off-by: Joao Martins <joao.m.martins@oracle.com>
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/kvm/x86.c | 17 ++++++++++++-----
+ arch/x86/kvm/x86.h |  1 +
+ arch/x86/kvm/xen.c | 28 +++++++++++++++++++++++++++-
+ 3 files changed, 40 insertions(+), 6 deletions(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index fd0a4ff1157e..0cdebdcaa4c2 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -1927,15 +1927,14 @@ static s64 get_kvmclock_base_ns(void)
+ }
+ #endif
+ 
+-static void kvm_write_wall_clock(struct kvm *kvm, gpa_t wall_clock)
++void kvm_write_wall_clock(struct kvm *kvm, gpa_t wall_clock, int sec_hi_ofs)
+ {
+ 	int version;
+ 	int r;
+ 	struct pvclock_wall_clock wc;
++	u32 wc_sec_hi;
+ 	u64 wall_nsec;
+ 
+-	kvm->arch.wall_clock = wall_clock;
+-
+ 	if (!wall_clock)
+ 		return;
+ 
+@@ -1964,6 +1963,12 @@ static void kvm_write_wall_clock(struct kvm *kvm, gpa_t wall_clock)
+ 
+ 	kvm_write_guest(kvm, wall_clock, &wc, sizeof(wc));
+ 
++	if (sec_hi_ofs) {
++		wc_sec_hi = wall_nsec >> 32;
++		kvm_write_guest(kvm, wall_clock + sec_hi_ofs,
++				&wc_sec_hi, sizeof(wc_sec_hi));
++	}
++
+ 	version++;
+ 	kvm_write_guest(kvm, wall_clock, &version, sizeof(version));
+ }
+@@ -3121,13 +3126,15 @@ int kvm_set_msr_common(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
+ 		if (!guest_pv_has(vcpu, KVM_FEATURE_CLOCKSOURCE2))
+ 			return 1;
+ 
+-		kvm_write_wall_clock(vcpu->kvm, data);
++		vcpu->kvm->arch.wall_clock = data;
++		kvm_write_wall_clock(vcpu->kvm, data, 0);
+ 		break;
+ 	case MSR_KVM_WALL_CLOCK:
+ 		if (!guest_pv_has(vcpu, KVM_FEATURE_CLOCKSOURCE))
+ 			return 1;
+ 
+-		kvm_write_wall_clock(vcpu->kvm, data);
++		vcpu->kvm->arch.wall_clock = data;
++		kvm_write_wall_clock(vcpu->kvm, data, 0);
+ 		break;
+ 	case MSR_KVM_SYSTEM_TIME_NEW:
+ 		if (!guest_pv_has(vcpu, KVM_FEATURE_CLOCKSOURCE2))
+diff --git a/arch/x86/kvm/x86.h b/arch/x86/kvm/x86.h
+index c5ee0f5ce0f1..8982a7bf2041 100644
+--- a/arch/x86/kvm/x86.h
++++ b/arch/x86/kvm/x86.h
+@@ -247,6 +247,7 @@ static inline bool kvm_vcpu_latch_init(struct kvm_vcpu *vcpu)
+ 	return is_smm(vcpu) || kvm_x86_ops.apic_init_signal_blocked(vcpu);
+ }
+ 
++void kvm_write_wall_clock(struct kvm *kvm, gpa_t wall_clock, int sec_hi_ofs);
+ void kvm_inject_realmode_interrupt(struct kvm_vcpu *vcpu, int irq, int inc_eip);
+ 
+ void kvm_write_tsc(struct kvm_vcpu *vcpu, struct msr_data *msr);
+diff --git a/arch/x86/kvm/xen.c b/arch/x86/kvm/xen.c
+index 9dd9c42842b8..e5117a611737 100644
+--- a/arch/x86/kvm/xen.c
++++ b/arch/x86/kvm/xen.c
+@@ -19,14 +19,40 @@
+ 
+ static int kvm_xen_shared_info_init(struct kvm *kvm, gfn_t gfn)
+ {
++	gpa_t gpa = gfn_to_gpa(gfn);
++	int wc_ofs, sec_hi_ofs;
+ 	int ret;
+ 
+ 	ret = kvm_gfn_to_hva_cache_init(kvm, &kvm->arch.xen.shinfo_cache,
+-					gfn_to_gpa(gfn), PAGE_SIZE);
++					gpa, PAGE_SIZE);
+ 	if (ret)
+ 		return ret;
+ 
+ 	kvm->arch.xen.shinfo_set = true;
++
++	/* Paranoia checks on the 32-bit struct layout */
++	BUILD_BUG_ON(offsetof(struct compat_shared_info, wc) != 0x900);
++	BUILD_BUG_ON(offsetof(struct compat_shared_info, arch.wc_sec_hi) != 0x924);
++	BUILD_BUG_ON(offsetof(struct pvclock_vcpu_time_info, version) != 0);
++
++	/* 32-bit location by default */
++	wc_ofs = offsetof(struct compat_shared_info, wc);
++	sec_hi_ofs = offsetof(struct compat_shared_info, arch.wc_sec_hi);
++
++#ifdef CONFIG_X86_64
++	/* Paranoia checks on the 64-bit struct layout */
++	BUILD_BUG_ON(offsetof(struct shared_info, wc) != 0xc00);
++	BUILD_BUG_ON(offsetof(struct shared_info, wc_sec_hi) != 0xc0c);
++
++	if (kvm->arch.xen.long_mode) {
++		wc_ofs = offsetof(struct shared_info, wc);
++		sec_hi_ofs = offsetof(struct shared_info, wc_sec_hi);
++	}
++#endif
++
++	kvm_write_wall_clock(kvm, gpa + wc_ofs, sec_hi_ofs - wc_ofs);
++	kvm_make_all_cpus_request(kvm, KVM_REQ_MASTERCLOCK_UPDATE);
++
+ 	return 0;
+ }
+ 
+
+From patchwork Mon Jan 11 19:57:19 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 12011607
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-18.8 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 892BFC433E0
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:58:22 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 4393622CB3
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:58:22 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2391396AbhAKT6P (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 11 Jan 2021 14:58:15 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:52048 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S2391377AbhAKT6N (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Jan 2021 14:58:13 -0500
+Received: from merlin.infradead.org (merlin.infradead.org
+ [IPv6:2001:8b0:10b:1231::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 68DF9C06179F
+        for <kvm@vger.kernel.org>; Mon, 11 Jan 2021 11:57:33 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=merlin.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=cCxJxylhdPJxP9NvV6aGcy+ZFbUDaJSF1lHjG6wnXMc=;
+ b=R+JyKb7gv+WhzniJZTRhocdCGO
+        KhsXcJput5c7GEqaWiDeTrdeLuvgD6eRa+spETCP4dBo3j8AzujVcTiq8EfgKBHBMrBiamyQgKh5P
+        NEURPHemzTiaYxiX9Ez957krHFEnvbQLNAz2HG9o3hDqtJ2ISsC/HXdNXLJijXe4+bOsGUNX1wyuL
+        5IPKCNJWWf3mzPdBoHNwjTfcZAYlkvGu2Ixu2KxgiSXbLsKgi36aXgcx5T4Qq5w4H96b2sMJPk1Cv
+        Cv28FXmna7BM+O4xnW4l+kZnuTswLJLTyH1WZT/cRU3XmkmX/RvUJiwmBFFkfUzy+4lhMfYOJOX8r
+        4Cb6stvg==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by merlin.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kz3Jg-0001hC-NV; Mon, 11 Jan 2021 19:57:29 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.94 #2 (Red Hat
+ Linux))
+        id 1kz3Jf-0001Hp-L9; Mon, 11 Jan 2021 19:57:27 +0000
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Ankur Arora <ankur.a.arora@oracle.com>,
+        Joao Martins <joao.m.martins@oracle.com>,
+        Boris Ostrovsky <boris.ostrovsky@oracle.com>,
+        Sean Christopherson <seanjc@google.com>, graf@amazon.com,
+        iaslan@amazon.de, pdurrant@amazon.com, aagch@amazon.com,
+        fandree@amazon.com, hch@infradead.org
+Subject: [PATCH v5 10/16] KVM: x86/xen: register vcpu info
+Date: Mon, 11 Jan 2021 19:57:19 +0000
+Message-Id: <20210111195725.4601-11-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210111195725.4601-1-dwmw2@infradead.org>
+References: <20210111195725.4601-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ merlin.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joao Martins <joao.m.martins@oracle.com>
+
+The vcpu info supersedes the per vcpu area of the shared info page and
+the guest vcpus will use this instead.
+
+Signed-off-by: Joao Martins <joao.m.martins@oracle.com>
+Signed-off-by: Ankur Arora <ankur.a.arora@oracle.com>
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/include/asm/kvm_host.h |  2 ++
+ arch/x86/kvm/xen.c              | 30 ++++++++++++++++++++++++++++++
+ include/uapi/linux/kvm.h        |  5 +++++
+ 3 files changed, 37 insertions(+)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 07ae5887afa1..421d082d772d 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -523,6 +523,8 @@ struct kvm_vcpu_hv {
+ /* Xen HVM per vcpu emulation context */
+ struct kvm_vcpu_xen {
+ 	u64 hypercall_rip;
++	bool vcpu_info_set;
++	struct gfn_to_hva_cache vcpu_info_cache;
+ };
+ 
+ struct kvm_vcpu_arch {
+diff --git a/arch/x86/kvm/xen.c b/arch/x86/kvm/xen.c
+index e5117a611737..4bc72e0b9928 100644
+--- a/arch/x86/kvm/xen.c
++++ b/arch/x86/kvm/xen.c
+@@ -58,6 +58,7 @@ static int kvm_xen_shared_info_init(struct kvm *kvm, gfn_t gfn)
+ 
+ int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ {
++	struct kvm_vcpu *v;
+ 	int r = -ENOENT;
+ 
+ 	switch (data->type) {
+@@ -73,6 +74,23 @@ int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ 		r = kvm_xen_shared_info_init(kvm, data->u.shared_info.gfn);
+ 		break;
+ 
++	case KVM_XEN_ATTR_TYPE_VCPU_INFO:
++		v = kvm_get_vcpu_by_id(kvm, data->u.vcpu_attr.vcpu_id);
++		if (!v)
++			return -EINVAL;
++
++		/* No compat necessary here. */
++		BUILD_BUG_ON(sizeof(struct vcpu_info) !=
++			     sizeof(struct compat_vcpu_info));
++		r = kvm_gfn_to_hva_cache_init(kvm, &v->arch.xen.vcpu_info_cache,
++					      data->u.vcpu_attr.gpa,
++					      sizeof(struct vcpu_info));
++		if (r)
++			return r;
++
++		v->arch.xen.vcpu_info_set = true;
++		break;
++
+ 	default:
+ 		break;
+ 	}
+@@ -83,6 +101,7 @@ int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ int kvm_xen_hvm_get_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ {
+ 	int r = -ENOENT;
++	struct kvm_vcpu *v;
+ 
+ 	switch (data->type) {
+ 	case KVM_XEN_ATTR_TYPE_LONG_MODE:
+@@ -97,6 +116,17 @@ int kvm_xen_hvm_get_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ 		}
+ 		break;
+ 
++	case KVM_XEN_ATTR_TYPE_VCPU_INFO:
++		v = kvm_get_vcpu_by_id(kvm, data->u.vcpu_attr.vcpu_id);
++		if (!v)
++			return -EINVAL;
++
++		if (v->arch.xen.vcpu_info_set) {
++			data->u.vcpu_attr.gpa = v->arch.xen.vcpu_info_cache.gpa;
++			r = 0;
++		}
++		break;
++
+ 	default:
+ 		break;
+ 	}
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index 0c04bb6eda09..5ab0063d109a 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -1596,12 +1596,17 @@ struct kvm_xen_hvm_attr {
+ 		struct {
+ 			__u64 gfn;
+ 		} shared_info;
++		struct {
++			__u32 vcpu_id;
++			__u64 gpa;
++		} vcpu_attr;
+ 		__u64 pad[4];
+ 	} u;
+ };
+ 
+ #define KVM_XEN_ATTR_TYPE_LONG_MODE		0x0
+ #define KVM_XEN_ATTR_TYPE_SHARED_INFO		0x1
++#define KVM_XEN_ATTR_TYPE_VCPU_INFO		0x2
+ 
+ /* Secure Encrypted Virtualization command */
+ enum sev_cmd_id {
+
+From patchwork Mon Jan 11 19:57:20 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 12011617
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-18.8 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id C3B44C433E0
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:58:55 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 83BF122CB8
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:58:55 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2391416AbhAKT6y (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 11 Jan 2021 14:58:54 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:52200 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S2391403AbhAKT6x (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Jan 2021 14:58:53 -0500
+Received: from merlin.infradead.org (merlin.infradead.org
+ [IPv6:2001:8b0:10b:1231::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 7DBD5C0617A4
+        for <kvm@vger.kernel.org>; Mon, 11 Jan 2021 11:57:33 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=merlin.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=6QErgEowePiOolvHKrizd38afd5YtXjzuRhz+kdhDa8=;
+ b=xxH1XWTb+rGOzb8TBbDVVEeam7
+        CXEO8chOLpswRaKrN4B+JdV61oihAXoEhMuAij36N/4x6Gk/uqxHLRwC6y4hIurcz6Xf8SBs6DXXQ
+        x3wpp7jvgBpibLbDwZYygTCmIRlWBMqK7KDDTNM25KXIXKGo75Gea/xG9J8IDjqX2SMb1C1U+8wPL
+        PEuN5JcMHesyLNFNe7Hr0eUP1X6RNzw1lajlo74A6X7NRC2jts66e4wM7hhEpX2qVN0BXKAXamO6l
+        VKwn3C3A8x39w79NpG0eh9PP0v2YWeG7RKcEH1D2gRH2I0cgMDf51I1WJoOIE5roxZqYt8XGDzWX7
+        t25zdX1g==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by merlin.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kz3Jg-0001hF-O8; Mon, 11 Jan 2021 19:57:30 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.94 #2 (Red Hat
+ Linux))
+        id 1kz3Jf-0001Hs-Ls; Mon, 11 Jan 2021 19:57:27 +0000
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Ankur Arora <ankur.a.arora@oracle.com>,
+        Joao Martins <joao.m.martins@oracle.com>,
+        Boris Ostrovsky <boris.ostrovsky@oracle.com>,
+        Sean Christopherson <seanjc@google.com>, graf@amazon.com,
+        iaslan@amazon.de, pdurrant@amazon.com, aagch@amazon.com,
+        fandree@amazon.com, hch@infradead.org
+Subject: [PATCH v5 11/16] KVM: x86/xen: setup pvclock updates
+Date: Mon, 11 Jan 2021 19:57:20 +0000
+Message-Id: <20210111195725.4601-12-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210111195725.4601-1-dwmw2@infradead.org>
+References: <20210111195725.4601-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ merlin.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joao Martins <joao.m.martins@oracle.com>
+
+Parameterise kvm_setup_pvclock_page() a little bit so that it can be
+invoked for different gfn_to_hva_cache structures, and with different
+offsets. Then we can invoke it for the normal KVM pvclock and also for
+the Xen one in the vcpu_info.
+
+Signed-off-by: Joao Martins <joao.m.martins@oracle.com>
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/kvm/x86.c | 31 ++++++++++++++++++-------------
+ arch/x86/kvm/xen.c |  4 ++++
+ 2 files changed, 22 insertions(+), 13 deletions(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 0cdebdcaa4c2..af4490c20d63 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -2588,13 +2588,15 @@ u64 get_kvmclock_ns(struct kvm *kvm)
+ 	return ret;
+ }
+ 
+-static void kvm_setup_pvclock_page(struct kvm_vcpu *v)
++static void kvm_setup_pvclock_page(struct kvm_vcpu *v,
++				   struct gfn_to_hva_cache *cache,
++				   unsigned int offset)
+ {
+ 	struct kvm_vcpu_arch *vcpu = &v->arch;
+ 	struct pvclock_vcpu_time_info guest_hv_clock;
+ 
+-	if (unlikely(kvm_read_guest_cached(v->kvm, &vcpu->pv_time,
+-		&guest_hv_clock, sizeof(guest_hv_clock))))
++	if (unlikely(kvm_read_guest_offset_cached(v->kvm, cache,
++		&guest_hv_clock, offset, sizeof(guest_hv_clock))))
+ 		return;
+ 
+ 	/* This VCPU is paused, but it's legal for a guest to read another
+@@ -2617,9 +2619,9 @@ static void kvm_setup_pvclock_page(struct kvm_vcpu *v)
+ 		++guest_hv_clock.version;  /* first time write, random junk */
+ 
+ 	vcpu->hv_clock.version = guest_hv_clock.version + 1;
+-	kvm_write_guest_cached(v->kvm, &vcpu->pv_time,
+-				&vcpu->hv_clock,
+-				sizeof(vcpu->hv_clock.version));
++	kvm_write_guest_offset_cached(v->kvm, cache,
++				      &vcpu->hv_clock, offset,
++				      sizeof(vcpu->hv_clock.version));
+ 
+ 	smp_wmb();
+ 
+@@ -2633,16 +2635,16 @@ static void kvm_setup_pvclock_page(struct kvm_vcpu *v)
+ 
+ 	trace_kvm_pvclock_update(v->vcpu_id, &vcpu->hv_clock);
+ 
+-	kvm_write_guest_cached(v->kvm, &vcpu->pv_time,
+-				&vcpu->hv_clock,
+-				sizeof(vcpu->hv_clock));
++	kvm_write_guest_offset_cached(v->kvm, cache,
++				      &vcpu->hv_clock, offset,
++				      sizeof(vcpu->hv_clock));
+ 
+ 	smp_wmb();
+ 
+ 	vcpu->hv_clock.version++;
+-	kvm_write_guest_cached(v->kvm, &vcpu->pv_time,
+-				&vcpu->hv_clock,
+-				sizeof(vcpu->hv_clock.version));
++	kvm_write_guest_offset_cached(v->kvm, cache,
++				     &vcpu->hv_clock, offset,
++				     sizeof(vcpu->hv_clock.version));
+ }
+ 
+ static int kvm_guest_time_update(struct kvm_vcpu *v)
+@@ -2729,7 +2731,10 @@ static int kvm_guest_time_update(struct kvm_vcpu *v)
+ 	vcpu->hv_clock.flags = pvclock_flags;
+ 
+ 	if (vcpu->pv_time_enabled)
+-		kvm_setup_pvclock_page(v);
++		kvm_setup_pvclock_page(v, &vcpu->pv_time, 0);
++	if (vcpu->xen.vcpu_info_set)
++		kvm_setup_pvclock_page(v, &vcpu->xen.vcpu_info_cache,
++				       offsetof(struct compat_vcpu_info, time));
+ 	if (v == kvm_get_vcpu(v->kvm, 0))
+ 		kvm_hv_setup_tsc_page(v->kvm, &vcpu->hv_clock);
+ 	return 0;
+diff --git a/arch/x86/kvm/xen.c b/arch/x86/kvm/xen.c
+index 4bc72e0b9928..d2055b60fdc1 100644
+--- a/arch/x86/kvm/xen.c
++++ b/arch/x86/kvm/xen.c
+@@ -82,6 +82,9 @@ int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ 		/* No compat necessary here. */
+ 		BUILD_BUG_ON(sizeof(struct vcpu_info) !=
+ 			     sizeof(struct compat_vcpu_info));
++		BUILD_BUG_ON(offsetof(struct vcpu_info, time) !=
++			     offsetof(struct compat_vcpu_info, time));
++
+ 		r = kvm_gfn_to_hva_cache_init(kvm, &v->arch.xen.vcpu_info_cache,
+ 					      data->u.vcpu_attr.gpa,
+ 					      sizeof(struct vcpu_info));
+@@ -89,6 +92,7 @@ int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ 			return r;
+ 
+ 		v->arch.xen.vcpu_info_set = true;
++		kvm_make_request(KVM_REQ_CLOCK_UPDATE, v);
+ 		break;
+ 
+ 	default:
+
+From patchwork Mon Jan 11 19:57:21 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 12011627
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,
+	UNWANTED_LANGUAGE_BODY,USER_AGENT_GIT autolearn=ham autolearn_force=no
+	version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 4CB51C433E6
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:59:38 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 015F922C7E
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:59:37 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2391445AbhAKT7C (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 11 Jan 2021 14:59:02 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:52208 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S2391406AbhAKT6y (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Jan 2021 14:58:54 -0500
+Received: from casper.infradead.org (casper.infradead.org
+ [IPv6:2001:8b0:10b:1236::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 9778DC0617A9
+        for <kvm@vger.kernel.org>; Mon, 11 Jan 2021 11:57:58 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=casper.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=pDVVgagejnyvOgl3F+23LlzBAD55IHXrLcXMQ3eH38I=;
+ b=uD6oLTv7m7Yk4nJzZSPHsHzvZN
+        e0sYchIa4Mf6jmZieACqWYGp2AF0bYGqJ8ymEhnLzFHXfJ4i1iy43JlkMBE+Z7hCB2f4xFKgb/pYE
+        h5cVGNf1tEmr7r8YHjjpBjLUbD20/pE106UOZpSLPdjnmCLlmwvdNmylsdLXa0ut6SehL00/Uk9dX
+        SKmehasomRr7nFPjA7Afkne2k/c6xGR2Z9amajhL61x8sHNKL70m1B/JEKmSX9FUj3EuXvrVd5xdq
+        GCd3iNRohC7iERARZuLAFxl9y480rgYwG4VI+vobTBNcmtMASGnUCuBuC/X/SuHFHbhB46iI67lo+
+        TUSVYb5A==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by casper.infradead.org with esmtpsa (Exim 4.94 #2 (Red Hat Linux))
+        id 1kz3Jg-003kSZ-3C; Mon, 11 Jan 2021 19:57:37 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.94 #2 (Red Hat
+ Linux))
+        id 1kz3Jf-0001Hv-Mc; Mon, 11 Jan 2021 19:57:27 +0000
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Ankur Arora <ankur.a.arora@oracle.com>,
+        Joao Martins <joao.m.martins@oracle.com>,
+        Boris Ostrovsky <boris.ostrovsky@oracle.com>,
+        Sean Christopherson <seanjc@google.com>, graf@amazon.com,
+        iaslan@amazon.de, pdurrant@amazon.com, aagch@amazon.com,
+        fandree@amazon.com, hch@infradead.org
+Subject: [PATCH v5 12/16] KVM: x86/xen: register vcpu time info region
+Date: Mon, 11 Jan 2021 19:57:21 +0000
+Message-Id: <20210111195725.4601-13-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210111195725.4601-1-dwmw2@infradead.org>
+References: <20210111195725.4601-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ casper.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joao Martins <joao.m.martins@oracle.com>
+
+Allow the Xen emulated guest the ability to register secondary
+vcpu time information. On Xen guests this is used in order to be
+mapped to userspace and hence allow vdso gettimeofday to work.
+
+In doing so, move kvm_xen_set_pvclock_page() logic to
+kvm_xen_update_vcpu_time() and have the former a top-level
+function which updates primary vcpu time info (in struct vcpu_info)
+and secondary one.
+
+Signed-off-by: Joao Martins <joao.m.martins@oracle.com>
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/include/asm/kvm_host.h |  2 ++
+ arch/x86/kvm/x86.c              |  2 ++
+ arch/x86/kvm/xen.c              | 26 ++++++++++++++++++++++++++
+ include/uapi/linux/kvm.h        |  1 +
+ 4 files changed, 31 insertions(+)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 421d082d772d..cd65bd43fc5f 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -524,7 +524,9 @@ struct kvm_vcpu_hv {
+ struct kvm_vcpu_xen {
+ 	u64 hypercall_rip;
+ 	bool vcpu_info_set;
++	bool vcpu_time_info_set;
+ 	struct gfn_to_hva_cache vcpu_info_cache;
++	struct gfn_to_hva_cache vcpu_time_info_cache;
+ };
+ 
+ struct kvm_vcpu_arch {
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index af4490c20d63..1cf503d559eb 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -2735,6 +2735,8 @@ static int kvm_guest_time_update(struct kvm_vcpu *v)
+ 	if (vcpu->xen.vcpu_info_set)
+ 		kvm_setup_pvclock_page(v, &vcpu->xen.vcpu_info_cache,
+ 				       offsetof(struct compat_vcpu_info, time));
++	if (vcpu->xen.vcpu_time_info_set)
++		kvm_setup_pvclock_page(v, &vcpu->xen.vcpu_time_info_cache, 0);
+ 	if (v == kvm_get_vcpu(v->kvm, 0))
+ 		kvm_hv_setup_tsc_page(v->kvm, &vcpu->hv_clock);
+ 	return 0;
+diff --git a/arch/x86/kvm/xen.c b/arch/x86/kvm/xen.c
+index d2055b60fdc1..1cca46effec8 100644
+--- a/arch/x86/kvm/xen.c
++++ b/arch/x86/kvm/xen.c
+@@ -95,6 +95,21 @@ int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ 		kvm_make_request(KVM_REQ_CLOCK_UPDATE, v);
+ 		break;
+ 
++	case KVM_XEN_ATTR_TYPE_VCPU_TIME_INFO:
++		v = kvm_get_vcpu_by_id(kvm, data->u.vcpu_attr.vcpu_id);
++		if (!v)
++			return -EINVAL;
++
++		r = kvm_gfn_to_hva_cache_init(kvm, &v->arch.xen.vcpu_time_info_cache,
++					      data->u.vcpu_attr.gpa,
++					      sizeof(struct pvclock_vcpu_time_info));
++		if (r)
++			return r;
++
++		v->arch.xen.vcpu_time_info_set = true;
++		kvm_make_request(KVM_REQ_CLOCK_UPDATE, v);
++		break;
++
+ 	default:
+ 		break;
+ 	}
+@@ -131,6 +146,17 @@ int kvm_xen_hvm_get_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ 		}
+ 		break;
+ 
++	case KVM_XEN_ATTR_TYPE_VCPU_TIME_INFO:
++		v = kvm_get_vcpu_by_id(kvm, data->u.vcpu_attr.vcpu_id);
++		if (!v)
++			return -EINVAL;
++
++		if (v->arch.xen.vcpu_time_info_set) {
++			data->u.vcpu_attr.gpa = v->arch.xen.vcpu_time_info_cache.gpa;
++			r = 0;
++		}
++		break;
++
+ 	default:
+ 		break;
+ 	}
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index 5ab0063d109a..6e91c004ae68 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -1607,6 +1607,7 @@ struct kvm_xen_hvm_attr {
+ #define KVM_XEN_ATTR_TYPE_LONG_MODE		0x0
+ #define KVM_XEN_ATTR_TYPE_SHARED_INFO		0x1
+ #define KVM_XEN_ATTR_TYPE_VCPU_INFO		0x2
++#define KVM_XEN_ATTR_TYPE_VCPU_TIME_INFO	0x3
+ 
+ /* Secure Encrypted Virtualization command */
+ enum sev_cmd_id {
+
+From patchwork Mon Jan 11 19:57:22 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 12011615
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,
+	UNWANTED_LANGUAGE_BODY,USER_AGENT_GIT autolearn=ham autolearn_force=no
+	version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 288A5C4332D
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:58:23 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id D3D4022CB1
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:58:22 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2391384AbhAKT6O (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 11 Jan 2021 14:58:14 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:52046 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S2391324AbhAKT6N (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Jan 2021 14:58:13 -0500
+Received: from merlin.infradead.org (merlin.infradead.org
+ [IPv6:2001:8b0:10b:1231::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 6023EC061794
+        for <kvm@vger.kernel.org>; Mon, 11 Jan 2021 11:57:33 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=merlin.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=1qwNwrIFDu4e0qSxR1YkNf1iRcj1rDIsKqfExd0JJk8=;
+ b=B1Y3erkSC/PBw6OGGoLKrMMTsL
+        ycuNFmxA6ajK5YlW4RkjdAJbcIBRLoILC1HBcKrA4VX2oDCn5mrEwfeUCMBxyHbNe0u79TnpeHNln
+        shjS0upPZyDVPO7Vty/yWzy5O3ioYSYZb1SmJH4lyZnlk7JFw980L4TAe6Y7k5wRikisocoMqh1Of
+        0kbNyrOGXgNYkf410z4TJ8MnWu+r0Ze9Bd5G74CbBpOnBUmaKM5fd+U5cLF0XOaWvqhRVRE/iawyb
+        8Nwn8rJu3FiZ3kSJrJxEIkLCG3uTq0dJvXjgcht1aG31fIvo5tELcPSazeGBMGx1oovlFIDKLBOlw
+        Bm1wYnXg==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by merlin.infradead.org with esmtpsa (Exim 4.92.3 #3 (Red Hat Linux))
+        id 1kz3Jg-0001hI-QG; Mon, 11 Jan 2021 19:57:29 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.94 #2 (Red Hat
+ Linux))
+        id 1kz3Jf-0001Hy-NO; Mon, 11 Jan 2021 19:57:27 +0000
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Ankur Arora <ankur.a.arora@oracle.com>,
+        Joao Martins <joao.m.martins@oracle.com>,
+        Boris Ostrovsky <boris.ostrovsky@oracle.com>,
+        Sean Christopherson <seanjc@google.com>, graf@amazon.com,
+        iaslan@amazon.de, pdurrant@amazon.com, aagch@amazon.com,
+        fandree@amazon.com, hch@infradead.org
+Subject: [PATCH v5 13/16] KVM: x86/xen: register runstate info
+Date: Mon, 11 Jan 2021 19:57:22 +0000
+Message-Id: <20210111195725.4601-14-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210111195725.4601-1-dwmw2@infradead.org>
+References: <20210111195725.4601-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ merlin.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joao Martins <joao.m.martins@oracle.com>
+
+Allow emulator to register vcpu runstates which allow Xen guests
+to use that for steal clock. The 'preempted' state of KVM steal clock
+equates to 'runnable' state, 'running' has similar meanings for both and
+'offline' is used when system admin needs to bring vcpu offline or
+hotplug.
+
+Signed-off-by: Joao Martins <joao.m.martins@oracle.com>
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/include/asm/kvm_host.h |   5 ++
+ arch/x86/kvm/x86.c              |  10 +++
+ arch/x86/kvm/xen.c              | 148 +++++++++++++++++++++++++++++++-
+ arch/x86/kvm/xen.h              |   8 ++
+ include/uapi/linux/kvm.h        |   1 +
+ 5 files changed, 171 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index cd65bd43fc5f..73f285ebb181 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -523,10 +523,15 @@ struct kvm_vcpu_hv {
+ /* Xen HVM per vcpu emulation context */
+ struct kvm_vcpu_xen {
+ 	u64 hypercall_rip;
++	u32 current_runstate;
+ 	bool vcpu_info_set;
+ 	bool vcpu_time_info_set;
++	bool runstate_set;
+ 	struct gfn_to_hva_cache vcpu_info_cache;
+ 	struct gfn_to_hva_cache vcpu_time_info_cache;
++	struct gfn_to_hva_cache runstate_cache;
++	u64 last_steal;
++	u64 last_state_ns;
+ };
+ 
+ struct kvm_vcpu_arch {
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 1cf503d559eb..f3f07b0265fc 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -2946,6 +2946,11 @@ static void record_steal_time(struct kvm_vcpu *vcpu)
+ 	struct kvm_host_map map;
+ 	struct kvm_steal_time *st;
+ 
++	if (vcpu->arch.xen.runstate_set) {
++		kvm_xen_setup_runstate_page(vcpu);
++		return;
++	}
++
+ 	if (!(vcpu->arch.st.msr_val & KVM_MSR_ENABLED))
+ 		return;
+ 
+@@ -3999,6 +4004,11 @@ static void kvm_steal_time_set_preempted(struct kvm_vcpu *vcpu)
+ 	struct kvm_host_map map;
+ 	struct kvm_steal_time *st;
+ 
++	if (vcpu->arch.xen.runstate_set) {
++		kvm_xen_runstate_set_preempted(vcpu);
++		return;
++	}
++
+ 	if (!(vcpu->arch.st.msr_val & KVM_MSR_ENABLED))
+ 		return;
+ 
+diff --git a/arch/x86/kvm/xen.c b/arch/x86/kvm/xen.c
+index 1cca46effec8..17cbb4462b7e 100644
+--- a/arch/x86/kvm/xen.c
++++ b/arch/x86/kvm/xen.c
+@@ -11,9 +11,11 @@
+ #include "hyperv.h"
+ 
+ #include <linux/kvm_host.h>
++#include <linux/sched/stat.h>
+ 
+ #include <trace/events/kvm.h>
+ #include <xen/interface/xen.h>
++#include <xen/interface/vcpu.h>
+ 
+ #include "trace.h"
+ 
+@@ -56,6 +58,124 @@ static int kvm_xen_shared_info_init(struct kvm *kvm, gfn_t gfn)
+ 	return 0;
+ }
+ 
++static void kvm_xen_update_runstate(struct kvm_vcpu *v, int state, u64 steal_ns)
++{
++	struct kvm_vcpu_xen *vcpu_xen = &v->arch.xen;
++	struct vcpu_runstate_info runstate;
++	unsigned int offset = offsetof(struct compat_vcpu_runstate_info, state_entry_time);
++	u64 now, delta;
++
++	BUILD_BUG_ON(sizeof(struct compat_vcpu_runstate_info) != 0x2c);
++
++#ifdef CONFIG_X86_64
++	/*
++	 * The only difference is alignment of uint64_t in 32-bit.
++	 * So the first field 'state' is accessed via *runstate_state
++	 * which is unmodified, while the other fields are accessed
++	 * through 'runstate->' which we tweak here by adding 4.
++	 */
++	BUILD_BUG_ON(offsetof(struct vcpu_runstate_info, state_entry_time) !=
++		     offsetof(struct compat_vcpu_runstate_info, state_entry_time) + 4);
++	BUILD_BUG_ON(offsetof(struct vcpu_runstate_info, time) !=
++		     offsetof(struct compat_vcpu_runstate_info, time) + 4);
++
++	offset = offsetof(struct vcpu_runstate_info, state_entry_time);
++#endif
++	/*
++	 * Although it's called "state_entry_time" and explicitly documented
++	 * as being "the system time at which the VCPU was last scheduled to
++	 * run", Xen just treats it as a counter for HVM domains too.
++	 */
++	if (kvm_read_guest_offset_cached(v->kvm, &v->arch.xen.runstate_cache,
++					 &runstate.state_entry_time, offset,
++					 sizeof(u64) * 5))
++		return;
++
++	runstate.state_entry_time = XEN_RUNSTATE_UPDATE |
++		(runstate.state_entry_time + 1);
++
++	if (kvm_write_guest_offset_cached(v->kvm, &v->arch.xen.runstate_cache,
++					  &runstate.state_entry_time, offset,
++					  sizeof(u64)))
++		return;
++	smp_wmb();
++
++	BUILD_BUG_ON(offsetof(struct vcpu_runstate_info, state) !=
++		     offsetof(struct compat_vcpu_runstate_info, state));
++	BUILD_BUG_ON(sizeof(((struct vcpu_runstate_info *)0)->state) !=
++		     sizeof(((struct compat_vcpu_runstate_info *)0)->state));
++	if (kvm_write_guest_offset_cached(v->kvm, &v->arch.xen.runstate_cache,
++					  &state,
++					  offsetof(struct vcpu_runstate_info, state),
++					  sizeof(runstate.state)))
++		return;
++
++	now = ktime_get_ns();
++	delta = now - vcpu_xen->last_state_ns - steal_ns;
++	runstate.time[vcpu_xen->current_runstate] += delta;
++	if (steal_ns)
++		runstate.time[RUNSTATE_runnable] += steal_ns;
++
++	BUILD_BUG_ON(offsetof(struct vcpu_runstate_info, state_entry_time) !=
++		     offsetof(struct vcpu_runstate_info, time) - sizeof(u64));
++	BUILD_BUG_ON(offsetof(struct compat_vcpu_runstate_info, state_entry_time) !=
++		     offsetof(struct compat_vcpu_runstate_info, time) - sizeof(u64));
++	BUILD_BUG_ON(sizeof(((struct vcpu_runstate_info *)0)->time) !=
++		     sizeof(((struct compat_vcpu_runstate_info *)0)->time));
++	if (kvm_write_guest_offset_cached(v->kvm, &v->arch.xen.runstate_cache,
++					  &runstate.time[0],
++					  offset + sizeof(u64),
++					  sizeof(runstate.time)))
++		return;
++	smp_wmb();
++	vcpu_xen->current_runstate = state;
++	vcpu_xen->last_state_ns = now;
++
++	runstate.state_entry_time &= ~XEN_RUNSTATE_UPDATE;
++	if (kvm_write_guest_offset_cached(v->kvm, &v->arch.xen.runstate_cache,
++					  &runstate.state_entry_time, offset,
++					  sizeof(u64)))
++		return;
++}
++
++void kvm_xen_runstate_set_preempted(struct kvm_vcpu *v)
++{
++	struct kvm_vcpu_xen *vcpu_xen = &v->arch.xen;
++	int new_state;
++
++	BUILD_BUG_ON(sizeof(struct compat_vcpu_runstate_info) != 0x2c);
++	BUILD_BUG_ON(offsetof(struct vcpu_runstate_info, state) !=
++		     offsetof(struct compat_vcpu_runstate_info, state));
++	BUILD_BUG_ON(sizeof(((struct vcpu_runstate_info *)0)->state) !=
++		     sizeof(((struct compat_vcpu_runstate_info *)0)->state));
++
++	if (v->preempted) {
++		new_state = RUNSTATE_runnable;
++	} else {
++		new_state = RUNSTATE_blocked;
++		vcpu_xen->last_steal = current->sched_info.run_delay;
++	}
++
++	kvm_xen_update_runstate(v, new_state, 0);
++}
++
++void kvm_xen_setup_runstate_page(struct kvm_vcpu *v)
++{
++	struct kvm_vcpu_xen *vcpu_xen = &v->arch.xen;
++	u64 steal_time = 0;
++
++	/*
++	 * If the CPU was blocked when it last stopped, presumably
++	 * it became unblocked at some point because it's being run
++	 * again now. The scheduler run_delay is the runnable time,
++	 * to be subtracted from the blocked time.
++	 */
++	if (vcpu_xen->current_runstate == RUNSTATE_blocked)
++		steal_time = current->sched_info.run_delay - vcpu_xen->last_steal;
++
++	kvm_xen_update_runstate(v, RUNSTATE_running, steal_time);
++}
++
+ int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ {
+ 	struct kvm_vcpu *v;
+@@ -78,7 +198,6 @@ int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ 		v = kvm_get_vcpu_by_id(kvm, data->u.vcpu_attr.vcpu_id);
+ 		if (!v)
+ 			return -EINVAL;
+-
+ 		/* No compat necessary here. */
+ 		BUILD_BUG_ON(sizeof(struct vcpu_info) !=
+ 			     sizeof(struct compat_vcpu_info));
+@@ -110,6 +229,22 @@ int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ 		kvm_make_request(KVM_REQ_CLOCK_UPDATE, v);
+ 		break;
+ 
++	case KVM_XEN_ATTR_TYPE_VCPU_RUNSTATE:
++		v = kvm_get_vcpu_by_id(kvm, data->u.vcpu_attr.vcpu_id);
++		if (!v)
++			return -EINVAL;
++
++		r = kvm_gfn_to_hva_cache_init(kvm, &v->arch.xen.runstate_cache,
++					      data->u.vcpu_attr.gpa,
++					      sizeof(struct vcpu_runstate_info));
++		if (r)
++			return r;
++
++		v->arch.xen.runstate_set = true;
++		v->arch.xen.current_runstate = RUNSTATE_blocked;
++		v->arch.xen.last_state_ns = ktime_get_ns();
++		break;
++
+ 	default:
+ 		break;
+ 	}
+@@ -157,6 +292,17 @@ int kvm_xen_hvm_get_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ 		}
+ 		break;
+ 
++	case KVM_XEN_ATTR_TYPE_VCPU_RUNSTATE:
++		v = kvm_get_vcpu_by_id(kvm, data->u.vcpu_attr.vcpu_id);
++		if (!v)
++			return -EINVAL;
++
++		if (v->arch.xen.runstate_set) {
++			data->u.vcpu_attr.gpa = v->arch.xen.runstate_cache.gpa;
++			r = 0;
++		}
++		break;
++
+ 	default:
+ 		break;
+ 	}
+diff --git a/arch/x86/kvm/xen.h b/arch/x86/kvm/xen.h
+index 317c1325dade..407e717476d6 100644
+--- a/arch/x86/kvm/xen.h
++++ b/arch/x86/kvm/xen.h
+@@ -9,6 +9,8 @@
+ #ifndef __ARCH_X86_KVM_XEN_H__
+ #define __ARCH_X86_KVM_XEN_H__
+ 
++void kvm_xen_setup_runstate_page(struct kvm_vcpu *vcpu);
++void kvm_xen_runstate_set_preempted(struct kvm_vcpu *vcpu);
+ int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data);
+ int kvm_xen_hvm_get_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data);
+ int kvm_xen_hypercall(struct kvm_vcpu *vcpu);
+@@ -56,4 +58,10 @@ struct compat_shared_info {
+ 	struct compat_arch_shared_info arch;
+ };
+ 
++struct compat_vcpu_runstate_info {
++    int state;
++    uint64_t state_entry_time;
++    uint64_t time[4];
++} __attribute__((packed));
++
+ #endif /* __ARCH_X86_KVM_XEN_H__ */
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index 6e91c004ae68..0571a7bbb13b 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -1608,6 +1608,7 @@ struct kvm_xen_hvm_attr {
+ #define KVM_XEN_ATTR_TYPE_SHARED_INFO		0x1
+ #define KVM_XEN_ATTR_TYPE_VCPU_INFO		0x2
+ #define KVM_XEN_ATTR_TYPE_VCPU_TIME_INFO	0x3
++#define KVM_XEN_ATTR_TYPE_VCPU_RUNSTATE		0x4
+ 
+ /* Secure Encrypted Virtualization command */
+ enum sev_cmd_id {
+
+From patchwork Mon Jan 11 19:57:23 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 12011639
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-18.8 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 4C38BC43333
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:59:39 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 061912054F
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:59:38 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2391471AbhAKT7M (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 11 Jan 2021 14:59:12 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:52204 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S2391461AbhAKT7J (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Jan 2021 14:59:09 -0500
+Received: from casper.infradead.org (casper.infradead.org
+ [IPv6:2001:8b0:10b:1236::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 0BC1FC06179F
+        for <kvm@vger.kernel.org>; Mon, 11 Jan 2021 11:58:20 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=casper.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        Content-Type:MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:
+        To:From:Reply-To:Content-ID:Content-Description;
+        bh=UZxsZCJj+A96sO4NsFY+p0+ZZOwM+RCEN/D65QmcJVM=;
+ b=CqGDh9+M+4hcOi0D9qStwz7OWD
+        Y3+FDvpLRDO9lTFOrCcHSseR75fvhkk8YHc/y6odWuEqCs5HRHBUoPasuj+glDspVGQkFvtoErCUo
+        BeXUEOWX9mI6ELesB1aIWL2eic1eO6Q+laQFgW04hz1HXSlrazQDf4eqzAflHxNHE+XOI0VXd4pN8
+        dikV3WtHpj/5LmN0REcITAHruNA643dJJtG2MiDYAefW3riSXugM/kuFcINdLFArRiV+sAuCVd6QR
+        2KyaWuWNPHQAaZG5syVuQ0PD7HDBghgyoN2m3xy68nksr32LLRsnFES3XsB28QGK7AfGqNb5ZqxY/
+        6ClFrS2w==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by casper.infradead.org with esmtpsa (Exim 4.94 #2 (Red Hat Linux))
+        id 1kz3Jg-003kSa-56; Mon, 11 Jan 2021 19:57:37 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.94 #2 (Red Hat
+ Linux))
+        id 1kz3Jf-0001I1-OM; Mon, 11 Jan 2021 19:57:27 +0000
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Ankur Arora <ankur.a.arora@oracle.com>,
+        Joao Martins <joao.m.martins@oracle.com>,
+        Boris Ostrovsky <boris.ostrovsky@oracle.com>,
+        Sean Christopherson <seanjc@google.com>, graf@amazon.com,
+        iaslan@amazon.de, pdurrant@amazon.com, aagch@amazon.com,
+        fandree@amazon.com, hch@infradead.org
+Subject: [PATCH v5 14/16] KVM: x86: declare Xen HVM shared info capability and
+ add test case
+Date: Mon, 11 Jan 2021 19:57:23 +0000
+Message-Id: <20210111195725.4601-15-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210111195725.4601-1-dwmw2@infradead.org>
+References: <20210111195725.4601-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ casper.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+Instead of adding a plethora of new KVM_CAP_XEN_FOO capabilities, just
+add bits to the return value of KVM_CAP_XEN_HVM.
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/kvm/x86.c                            |   3 +-
+ include/uapi/linux/kvm.h                      |   3 +
+ tools/testing/selftests/kvm/Makefile          |   1 +
+ .../selftests/kvm/x86_64/xen_shinfo_test.c    | 194 ++++++++++++++++++
+ 4 files changed, 200 insertions(+), 1 deletion(-)
+ create mode 100644 tools/testing/selftests/kvm/x86_64/xen_shinfo_test.c
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index f3f07b0265fc..25ef3b7ad49d 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -3765,7 +3765,8 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
+ 		break;
+ 	case KVM_CAP_XEN_HVM:
+ 		r = KVM_XEN_HVM_CONFIG_HYPERCALL_MSR |
+-		    KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL;
++		    KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL |
++		    KVM_XEN_HVM_CONFIG_SHARED_INFO;
+ 		break;
+ 	case KVM_CAP_SYNC_REGS:
+ 		r = KVM_SYNC_X86_VALID_FIELDS;
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index 0571a7bbb13b..e468f923e7dd 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -1150,6 +1150,7 @@ struct kvm_x86_mce {
+ #ifdef KVM_CAP_XEN_HVM
+ #define KVM_XEN_HVM_CONFIG_HYPERCALL_MSR	(1 << 0)
+ #define KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL	(1 << 1)
++#define KVM_XEN_HVM_CONFIG_SHARED_INFO		(1 << 2)
+ 
+ struct kvm_xen_hvm_config {
+ 	__u32 flags;
+@@ -1585,6 +1586,7 @@ struct kvm_pv_cmd {
+ /* Available with KVM_CAP_DIRTY_LOG_RING */
+ #define KVM_RESET_DIRTY_RINGS		_IO(KVMIO, 0xc7)
+ 
++/* Available with KVM_CAP_XEN_HVM / KVM_XEN_HVM_CONFIG_SHARED_INFO */
+ #define KVM_XEN_HVM_GET_ATTR	_IOWR(KVMIO, 0xc8, struct kvm_xen_hvm_attr)
+ #define KVM_XEN_HVM_SET_ATTR	_IOW(KVMIO,  0xc9, struct kvm_xen_hvm_attr)
+ 
+@@ -1604,6 +1606,7 @@ struct kvm_xen_hvm_attr {
+ 	} u;
+ };
+ 
++/* Available with KVM_CAP_XEN_HVM / KVM_XEN_HVM_CONFIG_SHARED_INFO */
+ #define KVM_XEN_ATTR_TYPE_LONG_MODE		0x0
+ #define KVM_XEN_ATTR_TYPE_SHARED_INFO		0x1
+ #define KVM_XEN_ATTR_TYPE_VCPU_INFO		0x2
+diff --git a/tools/testing/selftests/kvm/Makefile b/tools/testing/selftests/kvm/Makefile
+index 44a4128b4061..0fc29726f777 100644
+--- a/tools/testing/selftests/kvm/Makefile
++++ b/tools/testing/selftests/kvm/Makefile
+@@ -60,6 +60,7 @@ TEST_GEN_PROGS_x86_64 += x86_64/xss_msr_test
+ TEST_GEN_PROGS_x86_64 += x86_64/debug_regs
+ TEST_GEN_PROGS_x86_64 += x86_64/tsc_msrs_test
+ TEST_GEN_PROGS_x86_64 += x86_64/user_msr_test
++TEST_GEN_PROGS_x86_64 += x86_64/xen_shinfo_test
+ TEST_GEN_PROGS_x86_64 += x86_64/xen_vmcall_test
+ TEST_GEN_PROGS_x86_64 += demand_paging_test
+ TEST_GEN_PROGS_x86_64 += dirty_log_test
+diff --git a/tools/testing/selftests/kvm/x86_64/xen_shinfo_test.c b/tools/testing/selftests/kvm/x86_64/xen_shinfo_test.c
+new file mode 100644
+index 000000000000..c8c696a6d41c
+--- /dev/null
++++ b/tools/testing/selftests/kvm/x86_64/xen_shinfo_test.c
+@@ -0,0 +1,194 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * svm_vmcall_test
++ *
++ * Copyright © 2020 Amazon.com, Inc. or its affiliates.
++ *
++ * Xen shared_info / pvclock testing
++ */
++
++#include "test_util.h"
++#include "kvm_util.h"
++#include "processor.h"
++
++#include <stdint.h>
++#include <time.h>
++
++#define VCPU_ID		5
++
++#define SHINFO_REGION_GPA	0xc0000000ULL
++#define SHINFO_REGION_SLOT	10
++#define PAGE_SIZE		4096
++
++#define PVTIME_ADDR	(SHINFO_REGION_GPA + PAGE_SIZE)
++#define RUNSTATE_ADDR	(SHINFO_REGION_GPA + PAGE_SIZE + 0x20)
++
++static struct kvm_vm *vm;
++
++#define XEN_HYPERCALL_MSR	0x40000000
++
++struct pvclock_vcpu_time_info {
++        u32   version;
++        u32   pad0;
++        u64   tsc_timestamp;
++        u64   system_time;
++        u32   tsc_to_system_mul;
++        s8    tsc_shift;
++        u8    flags;
++        u8    pad[2];
++} __attribute__((__packed__)); /* 32 bytes */
++
++struct pvclock_wall_clock {
++        u32   version;
++        u32   sec;
++        u32   nsec;
++} __attribute__((__packed__));
++
++struct vcpu_runstate_info {
++    uint32_t state;
++    uint64_t state_entry_time;
++    uint64_t time[4];
++};
++
++static void guest_code(void)
++{
++	struct vcpu_runstate_info *rs = (void *)RUNSTATE_ADDR;
++
++	/* Scribble on the runstate, just to make sure that... */
++	rs->state = 0x5a;
++
++	GUEST_SYNC(1);
++
++	/* ... it is being set to RUNSTATE_running */
++	GUEST_ASSERT(rs->state == 0);
++	GUEST_DONE();
++}
++
++static int cmp_timespec(struct timespec *a, struct timespec *b)
++{
++	if (a->tv_sec > b->tv_sec)
++		return 1;
++	else if (a->tv_sec < b->tv_sec)
++		return -1;
++	else if (a->tv_nsec > b->tv_nsec)
++		return 1;
++	else if (a->tv_nsec < b->tv_nsec)
++		return -1;
++	else
++		return 0;
++}
++
++int main(int argc, char *argv[])
++{
++	struct timespec min_ts, max_ts, vm_ts;
++
++	if (!(kvm_check_cap(KVM_CAP_XEN_HVM) &
++	      KVM_XEN_HVM_CONFIG_SHARED_INFO) ) {
++		print_skip("KVM_XEN_HVM_CONFIG_SHARED_INFO not available");
++		exit(KSFT_SKIP);
++	}
++
++	clock_gettime(CLOCK_REALTIME, &min_ts);
++
++	vm = vm_create_default(VCPU_ID, 0, (void *) guest_code);
++	vcpu_set_cpuid(vm, VCPU_ID, kvm_get_supported_cpuid());
++
++	/* Map a region for the shared_info page */
++	vm_userspace_mem_region_add(vm, VM_MEM_SRC_ANONYMOUS,
++                                    SHINFO_REGION_GPA, SHINFO_REGION_SLOT,
++				    2 * getpagesize(), 0);
++	virt_map(vm, SHINFO_REGION_GPA, SHINFO_REGION_GPA, 2, 0);
++
++	struct kvm_xen_hvm_attr lm = {
++		.type = KVM_XEN_ATTR_TYPE_LONG_MODE,
++		.u.long_mode = 1,
++	};
++	vm_ioctl(vm, KVM_XEN_HVM_SET_ATTR, &lm);
++
++	struct kvm_xen_hvm_attr ha = {
++		.type = KVM_XEN_ATTR_TYPE_SHARED_INFO,
++		.u.shared_info.gfn = SHINFO_REGION_GPA / PAGE_SIZE,
++	};
++	vm_ioctl(vm, KVM_XEN_HVM_SET_ATTR, &ha);
++
++	struct kvm_xen_hvm_attr vi = {
++		.type = KVM_XEN_ATTR_TYPE_VCPU_INFO,
++		.u.vcpu_attr.vcpu_id = VCPU_ID,
++		.u.vcpu_attr.gpa = SHINFO_REGION_GPA + 40,
++	};
++	vm_ioctl(vm, KVM_XEN_HVM_SET_ATTR, &vi);
++
++	struct kvm_xen_hvm_attr pvclock = {
++		.type = KVM_XEN_ATTR_TYPE_VCPU_TIME_INFO,
++		.u.vcpu_attr.vcpu_id = VCPU_ID,
++		.u.vcpu_attr.gpa = PVTIME_ADDR,
++	};
++	vm_ioctl(vm, KVM_XEN_HVM_SET_ATTR, &pvclock);
++
++	struct kvm_xen_hvm_attr st = {
++		.type = KVM_XEN_ATTR_TYPE_VCPU_RUNSTATE,
++		.u.vcpu_attr.vcpu_id = VCPU_ID,
++		.u.vcpu_attr.gpa = RUNSTATE_ADDR,
++	};
++	vm_ioctl(vm, KVM_XEN_HVM_SET_ATTR, &st);
++
++	for (;;) {
++		volatile struct kvm_run *run = vcpu_state(vm, VCPU_ID);
++		struct ucall uc;
++
++		vcpu_run(vm, VCPU_ID);
++
++		TEST_ASSERT(run->exit_reason == KVM_EXIT_IO,
++			    "Got exit_reason other than KVM_EXIT_IO: %u (%s)\n",
++			    run->exit_reason,
++			    exit_reason_str(run->exit_reason));
++
++		switch (get_ucall(vm, VCPU_ID, &uc)) {
++		case UCALL_ABORT:
++			TEST_FAIL("%s", (const char *)uc.args[0]);
++			/* NOT REACHED */
++		case UCALL_SYNC:
++			break;
++		case UCALL_DONE:
++			goto done;
++		default:
++			TEST_FAIL("Unknown ucall 0x%lx.", uc.cmd);
++		}
++	}
++
++ done:
++	clock_gettime(CLOCK_REALTIME, &max_ts);
++
++	/*
++	 * Just a *really* basic check that things are being put in the
++	 * right place. The actual calculations are much the same for
++	 * Xen as they are for the KVM variants, so no need to check.
++	 */
++	struct pvclock_wall_clock *wc;
++	struct pvclock_vcpu_time_info *ti, *ti2;
++	struct vcpu_runstate_info *rs;
++
++	wc = addr_gva2hva(vm, SHINFO_REGION_GPA + 0xc00);
++	ti = addr_gva2hva(vm, SHINFO_REGION_GPA + 0x40 + 0x20);
++	ti2 = addr_gva2hva(vm, PVTIME_ADDR);
++	rs = addr_gva2hva(vm, RUNSTATE_ADDR);
++
++	vm_ts.tv_sec = wc->sec;
++	vm_ts.tv_nsec = wc->nsec;
++        TEST_ASSERT(wc->version && !(wc->version & 1),
++		    "Bad wallclock version %x", wc->version);
++	TEST_ASSERT(cmp_timespec(&min_ts, &vm_ts) <= 0, "VM time too old");
++	TEST_ASSERT(cmp_timespec(&max_ts, &vm_ts) >= 0, "VM time too new");
++
++	TEST_ASSERT(ti->version && !(ti->version & 1),
++		    "Bad time_info version %x", ti->version);
++	TEST_ASSERT(ti2->version && !(ti2->version & 1),
++		    "Bad time_info version %x", ti->version);
++
++	/* Check for RUNSTATE_blocked */
++	TEST_ASSERT(rs->state == 2, "Not RUNSTATE_blocked");
++	TEST_ASSERT(rs->time[0], "No RUNSTATE_running time");
++	TEST_ASSERT(rs->time[2], "No RUNSTATE_blocked time");
++	kvm_vm_free(vm);
++	return 0;
++}
+
+From patchwork Mon Jan 11 19:57:24 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 12011629
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-18.8 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 5A5F4C43381
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:59:38 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 2C0AE22CB8
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:59:38 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2391438AbhAKT7C (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 11 Jan 2021 14:59:02 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:52212 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S2391408AbhAKT6y (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Jan 2021 14:58:54 -0500
+Received: from casper.infradead.org (casper.infradead.org
+ [IPv6:2001:8b0:10b:1236::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 2CBE5C0617AB
+        for <kvm@vger.kernel.org>; Mon, 11 Jan 2021 11:58:04 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=casper.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=SxxHyJp1kIiUE35hGkdnb2FSmNm2F9LylKJiijXH3f0=;
+ b=YJPgpq1CNU8a01LY4fiSdcATWg
+        MguUU3dlv72CJIkc+Q6py2RialMW7/O6cjbqpUmZuXZryBQ20aTE2t2fOmQxrgEgO5tHae3KBogmN
+        bVhCfK51xJBt2ukZUNZ1dgaTTU9OtTe0hMSToy7vI+OAnQx8Rm3ZLMjPpAu+Ug2IHZ9wgAaBWHc4b
+        w9771sKHhN6lp4+hkRSQ/LSVeQ4j7tufoZh/r6T/7vPNOfI6bptWzfTiJ4lDPy3E27sjhdC0Bp6Jg
+        Pn6pN9r7CiAFMlhc+ydxQ2LKchc5DK6t/hUB0JT/FIyPhtNGB0SgdI5DehQ10b6fcTZTdXHZpQt1i
+        SyfYWxgA==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by casper.infradead.org with esmtpsa (Exim 4.94 #2 (Red Hat Linux))
+        id 1kz3Jg-003kSb-5Y; Mon, 11 Jan 2021 19:57:37 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.94 #2 (Red Hat
+ Linux))
+        id 1kz3Jf-0001I4-PF; Mon, 11 Jan 2021 19:57:27 +0000
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Ankur Arora <ankur.a.arora@oracle.com>,
+        Joao Martins <joao.m.martins@oracle.com>,
+        Boris Ostrovsky <boris.ostrovsky@oracle.com>,
+        Sean Christopherson <seanjc@google.com>, graf@amazon.com,
+        iaslan@amazon.de, pdurrant@amazon.com, aagch@amazon.com,
+        fandree@amazon.com, hch@infradead.org
+Subject: [PATCH v5 15/16] KVM: Add documentation for Xen hypercall and
+ shared_info updates
+Date: Mon, 11 Jan 2021 19:57:24 +0000
+Message-Id: <20210111195725.4601-16-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210111195725.4601-1-dwmw2@infradead.org>
+References: <20210111195725.4601-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ casper.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ Documentation/virt/kvm/api.rst | 124 ++++++++++++++++++++++++++++++++-
+ 1 file changed, 123 insertions(+), 1 deletion(-)
+
+diff --git a/Documentation/virt/kvm/api.rst b/Documentation/virt/kvm/api.rst
+index c136e254b496..911171caeedb 100644
+--- a/Documentation/virt/kvm/api.rst
++++ b/Documentation/virt/kvm/api.rst
+@@ -961,6 +961,13 @@ memory.
+ 	__u8 pad2[30];
+   };
+ 
++If the KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL flag is returned from the
++KVM_CAP_XEN_HVM check, it may be set in the flags field of this ioctl.
++This requests KVM to generate the contents of the hypercall page
++automatically, and also to intercept hypercalls with KVM_EXIT_XEN.
++In this case, all of the blob size and address fields must be zero.
++
++No other flags are currently valid.
+ 
+ 4.29 KVM_GET_CLOCK
+ ------------------
+@@ -4830,6 +4837,71 @@ into user space.
+ If a vCPU is in running state while this ioctl is invoked, the vCPU may
+ experience inconsistent filtering behavior on MSR accesses.
+ 
++4.127 KVM_XEN_HVM_SET_ATTR
++--------------------------
++
++:Capability: KVM_CAP_XEN_HVM / KVM_XEN_HVM_CONFIG_SHARED_INFO
++:Architectures: x86
++:Type: vm ioctl
++:Parameters: struct kvm_xen_hvm_attr
++:Returns: 0 on success, < 0 on error
++
++::
++
++  struct kvm_xen_hvm_attr {
++	__u16 type;
++
++	union {
++		__u8 long_mode;
++		struct {
++			__u64 gfn;
++		} shared_info;
++		struct {
++			__u32 vcpu_id;
++			__u64 gpa;
++		} vcpu_attr;
++		__u64 pad[4];
++	} u;
++  };
++
++type values:
++
++KVM_XEN_ATTR_TYPE_LONG_MODE
++  Sets the ABI mode of the VM to 32-bit or 64-bit (long mode). This
++  determines the layout of the shared info pages exposed to the VM.
++
++KVM_XEN_ATTR_TYPE_SHARED_INFO
++  Sets the guest physical frame number at which the Xen "shared info"
++  page resides. Note that although Xen places vcpu_info for the first
++  32 vCPUs in the shared_info page, KVM does not automatically do so
++  and requires that KVM_XEN_ATTR_TYPE_VCPU_INFO be used explicitly
++  even when the vcpu_info for a given vCPU resides at the "default"
++  location in the shared_info page. This is because KVM is not aware
++  of the Xen CPU id which is used as the index into the vcpu_info[]
++  array, so cannot know the correct default location.
++
++KVM_XEN_ATTR_TYPE_VCPU_INFO
++  Sets the guest physical address of the vcpu_info for a given vCPU.
++
++KVM_XEN_ATTR_TYPE_VCPU_TIME_INFO
++  Sets the guest physical address of an additional pvclock structure
++  for a given vCPU. This is typically used for guest vsyscall support.
++
++KVM_XEN_ATTR_TYPE_VCPU_RUNSTATE
++  Sets the guest physical address of the vcpu_runstate_info for a given
++  vCPU. This is how a Xen guest tracks CPU state such as steal time.
++
++4.128 KVM_XEN_HVM_GET_ATTR
++--------------------------
++
++:Capability: KVM_CAP_XEN_HVM / KVM_XEN_HVM_CONFIG_SHARED_INFO
++:Architectures: x86
++:Type: vm ioctl
++:Parameters: struct kvm_xen_hvm_attr
++:Returns: 0 on success, < 0 on error
++
++Allows Xen VM attributes to be read. For the structure and types,
++see KVM_XEN_HVM_SET_ATTR above.
+ 
+ 5. The kvm_run structure
+ ========================
+@@ -5326,6 +5398,34 @@ wants to write. Once finished processing the event, user space must continue
+ vCPU execution. If the MSR write was unsuccessful, user space also sets the
+ "error" field to "1".
+ 
++::
++
++
++		struct kvm_xen_exit {
++  #define KVM_EXIT_XEN_HCALL          1
++			__u32 type;
++			union {
++				struct {
++					__u32 longmode;
++					__u32 cpl;
++					__u64 input;
++					__u64 result;
++					__u64 params[6];
++				} hcall;
++			} u;
++		};
++		/* KVM_EXIT_XEN */
++                struct kvm_hyperv_exit xen;
++
++Indicates that the VCPU exits into userspace to process some tasks
++related to Xen emulation.
++
++Valid values for 'type' are:
++
++  - KVM_EXIT_XEN_HCALL -- synchronously notify user-space about Xen hypercall.
++    Userspace is expected to place the hypercall result into the appropriate
++    field before invoking KVM_RUN again.
++
+ ::
+ 
+ 		/* Fix the size of the union. */
+@@ -6414,7 +6514,6 @@ guest according to the bits in the KVM_CPUID_FEATURES CPUID leaf
+ (0x40000001). Otherwise, a guest may use the paravirtual features
+ regardless of what has actually been exposed through the CPUID leaf.
+ 
+-
+ 8.29 KVM_CAP_DIRTY_LOG_RING
+ ---------------------------
+ 
+@@ -6501,3 +6600,26 @@ KVM_GET_DIRTY_LOG and KVM_CLEAR_DIRTY_LOG.  After enabling
+ KVM_CAP_DIRTY_LOG_RING with an acceptable dirty ring size, the virtual
+ machine will switch to ring-buffer dirty page tracking and further
+ KVM_GET_DIRTY_LOG or KVM_CLEAR_DIRTY_LOG ioctls will fail.
++
++8.30 KVM_CAP_XEN_HVM
++--------------------
++
++:Architectures: x86
++
++This capability indicates the features that Xen supports for hosting Xen
++PVHVM guests. Valid flags are::
++
++  #define KVM_XEN_HVM_CONFIG_HYPERCALL_MSR	(1 << 0)
++  #define KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL	(1 << 1)
++  #define KVM_XEN_HVM_CONFIG_SHARED_INFO	(1 << 2)
++
++The KVM_XEN_HVM_CONFIG_HYPERCALL_MSR flag indicates that the KVM_XEN_HVM_CONFIG
++ioctl is available, for the guest to set its hypercall page.
++
++If KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL is also set, the same flag may also be
++provided in the flags to KVM_XEN_HVM_CONFIG, without providing hypercall page
++contents, to request that KVM generate hypercall page content automatically
++and also enable interception of guest hypercalls with KVM_EXIT_XEN.
++
++The KVM_XEN_HVM_CONFIG_SHARED_INFO flag indicates the availability of the
++KVM_XEN_HVM_SET_ATTR and KVM_XEN_HVM_GET_ATTR ioctls.
+
+From patchwork Mon Jan 11 19:57:25 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: David Woodhouse <dwmw2@infradead.org>
+X-Patchwork-Id: 12011637
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-18.8 required=3.0 tests=BAYES_00,DKIM_SIGNED,
+	DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id E8F67C4332E
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:59:38 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id AA6C52054F
+	for <kvm@archiver.kernel.org>; Mon, 11 Jan 2021 19:59:38 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S2391464AbhAKT7M (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 11 Jan 2021 14:59:12 -0500
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:52202 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1727096AbhAKT7J (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 11 Jan 2021 14:59:09 -0500
+Received: from casper.infradead.org (casper.infradead.org
+ [IPv6:2001:8b0:10b:1236::1])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 79231C0617B1
+        for <kvm@vger.kernel.org>; Mon, 11 Jan 2021 11:58:07 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/relaxed;
+        d=infradead.org; s=casper.20170209;
+ h=Sender:Content-Transfer-Encoding:
+        MIME-Version:References:In-Reply-To:Message-Id:Date:Subject:Cc:To:From:
+        Reply-To:Content-Type:Content-ID:Content-Description;
+        bh=2aOnV0EieaLWAXhur2vqcCJW2JGY+y9dTkT8sEdYGjg=;
+ b=wYDEFmF9Qaz0aXh1cje7YlNZ5o
+        0c0YTpLDx/H22ZloVSwoYtZBDhUgD3JPsM81tWYX9m8viKP0YJwf/UaAMpg96PF3EGOZ/bgZuyJkf
+        iCrmujrRTAXf3BFoyN2NL8K8fAuwPS7nWZwQQSwrgnqQFx8wF3HHG86r7z1H8geo5tz3KVesi4c1W
+        jFWokWvu1m8UZZqG5kuSSmyTHTYJCjJNk/yjhm5uLlJ9NM2WvFpOMF9VLK0EMsHC8t6PD+ZPVnnf6
+        nhcuTqpqH4oEzp0y4bUOACmkNMpvTb+3EERHop6CPqnycg/DRYs5tpjXM40QOOc6bJfCSj+oAHwas
+        n6MO9q9g==;
+Received: from i7.infradead.org ([2001:8b0:10b:1:21e:67ff:fecb:7a92])
+        by casper.infradead.org with esmtpsa (Exim 4.94 #2 (Red Hat Linux))
+        id 1kz3Jg-003kSc-6k; Mon, 11 Jan 2021 19:57:37 +0000
+Received: from dwoodhou by i7.infradead.org with local (Exim 4.94 #2 (Red Hat
+ Linux))
+        id 1kz3Jf-0001I7-Q7; Mon, 11 Jan 2021 19:57:27 +0000
+From: David Woodhouse <dwmw2@infradead.org>
+To: kvm@vger.kernel.org
+Cc: Paolo Bonzini <pbonzini@redhat.com>,
+        Ankur Arora <ankur.a.arora@oracle.com>,
+        Joao Martins <joao.m.martins@oracle.com>,
+        Boris Ostrovsky <boris.ostrovsky@oracle.com>,
+        Sean Christopherson <seanjc@google.com>, graf@amazon.com,
+        iaslan@amazon.de, pdurrant@amazon.com, aagch@amazon.com,
+        fandree@amazon.com, hch@infradead.org
+Subject: [PATCH v5 16/16] KVM: x86/xen: Add event channel interrupt vector
+ upcall
+Date: Mon, 11 Jan 2021 19:57:25 +0000
+Message-Id: <20210111195725.4601-17-dwmw2@infradead.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210111195725.4601-1-dwmw2@infradead.org>
+References: <20210111195725.4601-1-dwmw2@infradead.org>
+MIME-Version: 1.0
+Sender: David Woodhouse <dwmw2@infradead.org>
+X-SRS-Rewrite: SMTP reverse-path rewritten from <dwmw2@infradead.org> by
+ casper.infradead.org. See http://www.infradead.org/rpr.html
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: David Woodhouse <dwmw@amazon.co.uk>
+
+It turns out that we can't handle event channels *entirely* in userspace
+by delivering them as ExtINT, because KVM is a bit picky about when it
+accepts ExtINT interrupts from a legacy PIC. The in-kernel local APIC
+has to have LVT0 configured in APIC_MODE_EXTINT and unmasked, which
+isn't necessarily the case for Xen guests especially on secondary CPUs.
+
+To cope with this, add kvm_xen_get_interrupt() which checks the
+evtchn_pending_upcall field in the Xen vcpu_info, and delivers the Xen
+upcall vector (configured by KVM_XEN_ATTR_TYPE_UPCALL_VECTOR) if it's
+set regardless of LAPIC LVT0 configuration. This gives us the minimum
+support we need for completely userspace-based implementation of event
+channels.
+
+This does mean that vcpu_enter_guest() needs to check for the
+evtchn_pending_upcall flag being set, because it can't rely on someone
+having set KVM_REQ_EVENT unless we were to add some way for userspace to
+do so manually.
+
+But actually, I don't quite see how that works reliably for interrupts
+injected with KVM_INTERRUPT either. In kvm_vcpu_ioctl_interrupt() the
+KVM_REQ_EVENT request is set once, but that'll get cleared the first time
+through vcpu_enter_guest(). So if the first exit is for something *else*
+without interrupts being enabled yet, won't the KVM_REQ_EVENT request
+have been consumed already and just be lost?
+
+I wonder if my addition of '|| kvm_xen_has_interrupt(vcpu)' should
+actually be '|| kvm_has_injectable_intr(vcpu)' to fix that pre-existing
+bug?
+
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+---
+ arch/x86/include/asm/kvm_host.h |  1 +
+ arch/x86/kvm/irq.c              |  7 +++++
+ arch/x86/kvm/x86.c              |  3 +-
+ arch/x86/kvm/xen.c              | 52 +++++++++++++++++++++++++++++++++
+ arch/x86/kvm/xen.h              |  1 +
+ include/uapi/linux/kvm.h        |  2 ++
+ 6 files changed, 65 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 73f285ebb181..b1cc73a19021 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -907,6 +907,7 @@ struct msr_bitmap_range {
+ struct kvm_xen {
+ 	bool long_mode;
+ 	bool shinfo_set;
++	u8 upcall_vector;
+ 	struct gfn_to_hva_cache shinfo_cache;
+ };
+ 
+diff --git a/arch/x86/kvm/irq.c b/arch/x86/kvm/irq.c
+index 814698e5b152..24668b51b5c8 100644
+--- a/arch/x86/kvm/irq.c
++++ b/arch/x86/kvm/irq.c
+@@ -14,6 +14,7 @@
+ #include "irq.h"
+ #include "i8254.h"
+ #include "x86.h"
++#include "xen.h"
+ 
+ /*
+  * check if there are pending timer events
+@@ -56,6 +57,9 @@ int kvm_cpu_has_extint(struct kvm_vcpu *v)
+ 	if (!lapic_in_kernel(v))
+ 		return v->arch.interrupt.injected;
+ 
++	if (kvm_xen_has_interrupt(v))
++		return 1;
++
+ 	if (!kvm_apic_accept_pic_intr(v))
+ 		return 0;
+ 
+@@ -110,6 +114,9 @@ static int kvm_cpu_get_extint(struct kvm_vcpu *v)
+ 	if (!lapic_in_kernel(v))
+ 		return v->arch.interrupt.nr;
+ 
++	if (kvm_xen_has_interrupt(v))
++		return v->kvm->arch.xen.upcall_vector;
++
+ 	if (irqchip_split(v->kvm)) {
+ 		int vector = v->arch.pending_external_vector;
+ 
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 25ef3b7ad49d..aa3c38fa3f31 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -8950,7 +8950,8 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+ 			kvm_x86_ops.msr_filter_changed(vcpu);
+ 	}
+ 
+-	if (kvm_check_request(KVM_REQ_EVENT, vcpu) || req_int_win) {
++	if (kvm_check_request(KVM_REQ_EVENT, vcpu) || req_int_win ||
++	    kvm_xen_has_interrupt(vcpu)) {
+ 		++vcpu->stat.req_event;
+ 		kvm_apic_accept_events(vcpu);
+ 		if (vcpu->arch.mp_state == KVM_MP_STATE_INIT_RECEIVED) {
+diff --git a/arch/x86/kvm/xen.c b/arch/x86/kvm/xen.c
+index 17cbb4462b7e..4bc9da9fcfb8 100644
+--- a/arch/x86/kvm/xen.c
++++ b/arch/x86/kvm/xen.c
+@@ -176,6 +176,45 @@ void kvm_xen_setup_runstate_page(struct kvm_vcpu *v)
+ 	kvm_xen_update_runstate(v, RUNSTATE_running, steal_time);
+ }
+ 
++int kvm_xen_has_interrupt(struct kvm_vcpu *v)
++{
++	u8 rc = 0;
++
++	/*
++	 * If the global upcall vector (HVMIRQ_callback_vector) is set and
++	 * the vCPU's evtchn_upcall_pending flag is set, the IRQ is pending.
++	 */
++	if (v->arch.xen.vcpu_info_set && v->kvm->arch.xen.upcall_vector) {
++		struct gfn_to_hva_cache *ghc = &v->arch.xen.vcpu_info_cache;
++		struct kvm_memslots *slots = kvm_memslots(v->kvm);
++		unsigned int offset = offsetof(struct vcpu_info, evtchn_upcall_pending);
++
++		/* No need for compat handling here */
++		BUILD_BUG_ON(offsetof(struct vcpu_info, evtchn_upcall_pending) !=
++			     offsetof(struct compat_vcpu_info, evtchn_upcall_pending));
++		BUILD_BUG_ON(sizeof(rc) !=
++			     sizeof(((struct vcpu_info *)0)->evtchn_upcall_pending));
++		BUILD_BUG_ON(sizeof(rc) !=
++			     sizeof(((struct compat_vcpu_info *)0)->evtchn_upcall_pending));
++
++		/*
++		 * For efficiency, this mirrors the checks for using the valid
++		 * cache in kvm_read_guest_offset_cached(), but just uses
++		 * __get_user() instead. And falls back to the slow path.
++		 */
++		if (likely(slots->generation == ghc->generation &&
++			   !kvm_is_error_hva(ghc->hva) && ghc->memslot)) {
++			/* Fast path */
++			__get_user(rc, (u8 __user *)ghc->hva + offset);
++		} else {
++			/* Slow path */
++			kvm_read_guest_offset_cached(v->kvm, ghc, &rc, offset,
++						      sizeof(rc));
++		}
++	}
++	return rc;
++}
++
+ int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ {
+ 	struct kvm_vcpu *v;
+@@ -245,6 +284,14 @@ int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ 		v->arch.xen.last_state_ns = ktime_get_ns();
+ 		break;
+ 
++	case KVM_XEN_ATTR_TYPE_UPCALL_VECTOR:
++		if (data->u.vector < 0x10)
++			return -EINVAL;
++
++		kvm->arch.xen.upcall_vector = data->u.vector;
++		r = 0;
++		break;
++
+ 	default:
+ 		break;
+ 	}
+@@ -303,6 +350,11 @@ int kvm_xen_hvm_get_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data)
+ 		}
+ 		break;
+ 
++	case KVM_XEN_ATTR_TYPE_UPCALL_VECTOR:
++		data->u.vector = kvm->arch.xen.upcall_vector;
++		r = 0;
++		break;
++
+ 	default:
+ 		break;
+ 	}
+diff --git a/arch/x86/kvm/xen.h b/arch/x86/kvm/xen.h
+index 407e717476d6..d64916ac4a12 100644
+--- a/arch/x86/kvm/xen.h
++++ b/arch/x86/kvm/xen.h
+@@ -11,6 +11,7 @@
+ 
+ void kvm_xen_setup_runstate_page(struct kvm_vcpu *vcpu);
+ void kvm_xen_runstate_set_preempted(struct kvm_vcpu *vcpu);
++int kvm_xen_has_interrupt(struct kvm_vcpu *vcpu);
+ int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data);
+ int kvm_xen_hvm_get_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data);
+ int kvm_xen_hypercall(struct kvm_vcpu *vcpu);
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index e468f923e7dd..f814cccc0d00 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -1595,6 +1595,7 @@ struct kvm_xen_hvm_attr {
+ 	__u16 pad[3];
+ 	union {
+ 		__u8 long_mode;
++		__u8 vector;
+ 		struct {
+ 			__u64 gfn;
+ 		} shared_info;
+@@ -1612,6 +1613,7 @@ struct kvm_xen_hvm_attr {
+ #define KVM_XEN_ATTR_TYPE_VCPU_INFO		0x2
+ #define KVM_XEN_ATTR_TYPE_VCPU_TIME_INFO	0x3
+ #define KVM_XEN_ATTR_TYPE_VCPU_RUNSTATE		0x4
++#define KVM_XEN_ATTR_TYPE_UPCALL_VECTOR		0x5
+ 
+ /* Secure Encrypted Virtualization command */
+ enum sev_cmd_id {
