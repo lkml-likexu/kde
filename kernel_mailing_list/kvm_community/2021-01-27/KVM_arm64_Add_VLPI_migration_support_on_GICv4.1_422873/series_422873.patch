@@ -1,0 +1,497 @@
+From patchwork Wed Jan 27 12:13:34 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Shenming Lu <lushenming@huawei.com>
+X-Patchwork-Id: 12049913
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 8139BC433E9
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 12:19:08 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 463DD20795
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 12:19:08 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S237771AbhA0MSu (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 27 Jan 2021 07:18:50 -0500
+Received: from szxga05-in.huawei.com ([45.249.212.191]:12036 "EHLO
+        szxga05-in.huawei.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S237714AbhA0MOz (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 27 Jan 2021 07:14:55 -0500
+Received: from DGGEMS404-HUB.china.huawei.com (unknown [172.30.72.60])
+        by szxga05-in.huawei.com (SkyGuard) with ESMTP id 4DQjCm6jHMzMQjY;
+        Wed, 27 Jan 2021 20:12:36 +0800 (CST)
+Received: from DESKTOP-7FEPK9S.china.huawei.com (10.174.186.182) by
+ DGGEMS404-HUB.china.huawei.com (10.3.19.204) with Microsoft SMTP Server id
+ 14.3.498.0; Wed, 27 Jan 2021 20:13:59 +0800
+From: Shenming Lu <lushenming@huawei.com>
+To: Marc Zyngier <maz@kernel.org>, Eric Auger <eric.auger@redhat.com>,
+        "Will Deacon" <will@kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>,
+        <linux-kernel@vger.kernel.org>
+CC: Alex Williamson <alex.williamson@redhat.com>,
+        Cornelia Huck <cohuck@redhat.com>,
+        Lorenzo Pieralisi <lorenzo.pieralisi@arm.com>,
+        <wanghaibin.wang@huawei.com>, <yuzenghui@huawei.com>,
+        <lushenming@huawei.com>
+Subject: [PATCH v3 1/4] KVM: arm64: GICv4.1: Add function to get VLPI state
+Date: Wed, 27 Jan 2021 20:13:34 +0800
+Message-ID: <20210127121337.1092-2-lushenming@huawei.com>
+X-Mailer: git-send-email 2.27.0.windows.1
+In-Reply-To: <20210127121337.1092-1-lushenming@huawei.com>
+References: <20210127121337.1092-1-lushenming@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.174.186.182]
+X-CFilter-Loop: Reflected
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+With GICv4.1 and the vPE unmapped, which indicates the invalidation
+of any VPT caches associated with the vPE, we can get the VLPI state
+by peeking at the VPT. So we add a function for this.
+
+Signed-off-by: Shenming Lu <lushenming@huawei.com>
+---
+ arch/arm64/kvm/vgic/vgic-v4.c | 19 +++++++++++++++++++
+ arch/arm64/kvm/vgic/vgic.h    |  1 +
+ 2 files changed, 20 insertions(+)
+
+diff --git a/arch/arm64/kvm/vgic/vgic-v4.c b/arch/arm64/kvm/vgic/vgic-v4.c
+index 66508b03094f..ac029ba3d337 100644
+--- a/arch/arm64/kvm/vgic/vgic-v4.c
++++ b/arch/arm64/kvm/vgic/vgic-v4.c
+@@ -203,6 +203,25 @@ void vgic_v4_configure_vsgis(struct kvm *kvm)
+ 	kvm_arm_resume_guest(kvm);
+ }
+ 
++/*
++ * Must be called with GICv4.1 and the vPE unmapped, which
++ * indicates the invalidation of any VPT caches associated
++ * with the vPE, thus we can get the VLPI state by peeking
++ * at the VPT.
++ */
++void vgic_v4_get_vlpi_state(struct vgic_irq *irq, bool *val)
++{
++	struct its_vpe *vpe = &irq->target_vcpu->arch.vgic_cpu.vgic_v3.its_vpe;
++	int mask = BIT(irq->intid % BITS_PER_BYTE);
++	void *va;
++	u8 *ptr;
++
++	va = page_address(vpe->vpt_page);
++	ptr = va + irq->intid / BITS_PER_BYTE;
++
++	*val = !!(*ptr & mask);
++}
++
+ /**
+  * vgic_v4_init - Initialize the GICv4 data structures
+  * @kvm:	Pointer to the VM being initialized
+diff --git a/arch/arm64/kvm/vgic/vgic.h b/arch/arm64/kvm/vgic/vgic.h
+index 64fcd7511110..d8cfd360838c 100644
+--- a/arch/arm64/kvm/vgic/vgic.h
++++ b/arch/arm64/kvm/vgic/vgic.h
+@@ -317,5 +317,6 @@ bool vgic_supports_direct_msis(struct kvm *kvm);
+ int vgic_v4_init(struct kvm *kvm);
+ void vgic_v4_teardown(struct kvm *kvm);
+ void vgic_v4_configure_vsgis(struct kvm *kvm);
++void vgic_v4_get_vlpi_state(struct vgic_irq *irq, bool *val);
+ 
+ #endif
+
+From patchwork Wed Jan 27 12:13:35 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Shenming Lu <lushenming@huawei.com>
+X-Patchwork-Id: 12049915
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 5D31BC433E6
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 12:19:08 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 1BC452078E
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 12:19:08 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S237743AbhA0MSX (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 27 Jan 2021 07:18:23 -0500
+Received: from szxga05-in.huawei.com ([45.249.212.191]:11518 "EHLO
+        szxga05-in.huawei.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S235771AbhA0MPB (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 27 Jan 2021 07:15:01 -0500
+Received: from DGGEMS404-HUB.china.huawei.com (unknown [172.30.72.59])
+        by szxga05-in.huawei.com (SkyGuard) with ESMTP id 4DQjDF3NKpzjDLd;
+        Wed, 27 Jan 2021 20:13:01 +0800 (CST)
+Received: from DESKTOP-7FEPK9S.china.huawei.com (10.174.186.182) by
+ DGGEMS404-HUB.china.huawei.com (10.3.19.204) with Microsoft SMTP Server id
+ 14.3.498.0; Wed, 27 Jan 2021 20:14:04 +0800
+From: Shenming Lu <lushenming@huawei.com>
+To: Marc Zyngier <maz@kernel.org>, Eric Auger <eric.auger@redhat.com>,
+        "Will Deacon" <will@kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>,
+        <linux-kernel@vger.kernel.org>
+CC: Alex Williamson <alex.williamson@redhat.com>,
+        Cornelia Huck <cohuck@redhat.com>,
+        Lorenzo Pieralisi <lorenzo.pieralisi@arm.com>,
+        <wanghaibin.wang@huawei.com>, <yuzenghui@huawei.com>,
+        <lushenming@huawei.com>
+Subject: [PATCH v3 2/4] KVM: arm64: GICv4.1: Try to save hw pending state in
+ save_pending_tables
+Date: Wed, 27 Jan 2021 20:13:35 +0800
+Message-ID: <20210127121337.1092-3-lushenming@huawei.com>
+X-Mailer: git-send-email 2.27.0.windows.1
+In-Reply-To: <20210127121337.1092-1-lushenming@huawei.com>
+References: <20210127121337.1092-1-lushenming@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.174.186.182]
+X-CFilter-Loop: Reflected
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+After pausing all vCPUs and devices capable of interrupting, in order
+to save the information of all interrupts, besides flushing the pending
+states in kvm’s vgic, we also try to flush the states of VLPIs in the
+virtual pending tables into guest RAM, but we need to have GICv4.1 and
+safely unmap the vPEs first.
+
+As for the saving of VSGIs, which needs the vPEs to be mapped and might
+conflict with the saving of VLPIs, but since we will map the vPEs back
+at the end of save_pending_tables and both savings require the kvm->lock
+to be held (only happen serially), it will work fine.
+
+Signed-off-by: Shenming Lu <lushenming@huawei.com>
+---
+ arch/arm64/kvm/vgic/vgic-v3.c | 61 +++++++++++++++++++++++++++++++----
+ 1 file changed, 55 insertions(+), 6 deletions(-)
+
+diff --git a/arch/arm64/kvm/vgic/vgic-v3.c b/arch/arm64/kvm/vgic/vgic-v3.c
+index 52915b342351..06b1162b7a0a 100644
+--- a/arch/arm64/kvm/vgic/vgic-v3.c
++++ b/arch/arm64/kvm/vgic/vgic-v3.c
+@@ -1,6 +1,8 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ 
+ #include <linux/irqchip/arm-gic-v3.h>
++#include <linux/irq.h>
++#include <linux/irqdomain.h>
+ #include <linux/kvm.h>
+ #include <linux/kvm_host.h>
+ #include <kvm/arm_vgic.h>
+@@ -356,6 +358,32 @@ int vgic_v3_lpi_sync_pending_status(struct kvm *kvm, struct vgic_irq *irq)
+ 	return 0;
+ }
+ 
++/*
++ * The deactivation of the doorbell interrupt will trigger the
++ * unmapping of the associated vPE.
++ */
++static void unmap_all_vpes(struct vgic_dist *dist)
++{
++	struct irq_desc *desc;
++	int i;
++
++	for (i = 0; i < dist->its_vm.nr_vpes; i++) {
++		desc = irq_to_desc(dist->its_vm.vpes[i]->irq);
++		irq_domain_deactivate_irq(irq_desc_get_irq_data(desc));
++	}
++}
++
++static void map_all_vpes(struct vgic_dist *dist)
++{
++	struct irq_desc *desc;
++	int i;
++
++	for (i = 0; i < dist->its_vm.nr_vpes; i++) {
++		desc = irq_to_desc(dist->its_vm.vpes[i]->irq);
++		irq_domain_activate_irq(irq_desc_get_irq_data(desc), false);
++	}
++}
++
+ /**
+  * vgic_v3_save_pending_tables - Save the pending tables into guest RAM
+  * kvm lock and all vcpu lock must be held
+@@ -365,14 +393,26 @@ int vgic_v3_save_pending_tables(struct kvm *kvm)
+ 	struct vgic_dist *dist = &kvm->arch.vgic;
+ 	struct vgic_irq *irq;
+ 	gpa_t last_ptr = ~(gpa_t)0;
+-	int ret;
++	bool vlpi_avail = false;
++	int ret = 0;
+ 	u8 val;
+ 
++	/*
++	 * As a preparation for getting any VLPI states.
++	 * The vgic initialized check ensures that the allocation and
++	 * enabling of the doorbells have already been done.
++	 */
++	if (kvm_vgic_global_state.has_gicv4_1 && !WARN_ON(!vgic_initialized(kvm))) {
++		unmap_all_vpes(dist);
++		vlpi_avail = true;
++	}
++
+ 	list_for_each_entry(irq, &dist->lpi_list_head, lpi_list) {
+ 		int byte_offset, bit_nr;
+ 		struct kvm_vcpu *vcpu;
+ 		gpa_t pendbase, ptr;
+ 		bool stored;
++		bool is_pending = irq->pending_latch;
+ 
+ 		vcpu = irq->target_vcpu;
+ 		if (!vcpu)
+@@ -387,24 +427,33 @@ int vgic_v3_save_pending_tables(struct kvm *kvm)
+ 		if (ptr != last_ptr) {
+ 			ret = kvm_read_guest_lock(kvm, ptr, &val, 1);
+ 			if (ret)
+-				return ret;
++				goto out;
+ 			last_ptr = ptr;
+ 		}
+ 
+ 		stored = val & (1U << bit_nr);
+-		if (stored == irq->pending_latch)
++
++		if (irq->hw && vlpi_avail)
++			vgic_v4_get_vlpi_state(irq, &is_pending);
++
++		if (stored == is_pending)
+ 			continue;
+ 
+-		if (irq->pending_latch)
++		if (is_pending)
+ 			val |= 1 << bit_nr;
+ 		else
+ 			val &= ~(1 << bit_nr);
+ 
+ 		ret = kvm_write_guest_lock(kvm, ptr, &val, 1);
+ 		if (ret)
+-			return ret;
++			goto out;
+ 	}
+-	return 0;
++
++out:
++	if (vlpi_avail)
++		map_all_vpes(dist);
++
++	return ret;
+ }
+ 
+ /**
+
+From patchwork Wed Jan 27 12:13:36 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Shenming Lu <lushenming@huawei.com>
+X-Patchwork-Id: 12049917
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 39925C433E6
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 12:19:49 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id EB01420791
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 12:19:48 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S237738AbhA0MSO (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 27 Jan 2021 07:18:14 -0500
+Received: from szxga05-in.huawei.com ([45.249.212.191]:11519 "EHLO
+        szxga05-in.huawei.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S235817AbhA0MPC (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 27 Jan 2021 07:15:02 -0500
+Received: from DGGEMS404-HUB.china.huawei.com (unknown [172.30.72.59])
+        by szxga05-in.huawei.com (SkyGuard) with ESMTP id 4DQjDF3lVtzjDSK;
+        Wed, 27 Jan 2021 20:13:01 +0800 (CST)
+Received: from DESKTOP-7FEPK9S.china.huawei.com (10.174.186.182) by
+ DGGEMS404-HUB.china.huawei.com (10.3.19.204) with Microsoft SMTP Server id
+ 14.3.498.0; Wed, 27 Jan 2021 20:14:07 +0800
+From: Shenming Lu <lushenming@huawei.com>
+To: Marc Zyngier <maz@kernel.org>, Eric Auger <eric.auger@redhat.com>,
+        "Will Deacon" <will@kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>,
+        <linux-kernel@vger.kernel.org>
+CC: Alex Williamson <alex.williamson@redhat.com>,
+        Cornelia Huck <cohuck@redhat.com>,
+        Lorenzo Pieralisi <lorenzo.pieralisi@arm.com>,
+        <wanghaibin.wang@huawei.com>, <yuzenghui@huawei.com>,
+        <lushenming@huawei.com>
+Subject: [PATCH v3 3/4] KVM: arm64: GICv4.1: Restore VLPI's pending state to
+ physical side
+Date: Wed, 27 Jan 2021 20:13:36 +0800
+Message-ID: <20210127121337.1092-4-lushenming@huawei.com>
+X-Mailer: git-send-email 2.27.0.windows.1
+In-Reply-To: <20210127121337.1092-1-lushenming@huawei.com>
+References: <20210127121337.1092-1-lushenming@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.174.186.182]
+X-CFilter-Loop: Reflected
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Zenghui Yu <yuzenghui@huawei.com>
+
+When setting the forwarding path of a VLPI (switch to the HW mode),
+we could also transfer the pending state from irq->pending_latch to
+VPT (especially in migration, the pending states of VLPIs are restored
+into kvm’s vgic first). And we currently send "INT+VSYNC" to trigger
+a VLPI to pending.
+
+Signed-off-by: Zenghui Yu <yuzenghui@huawei.com>
+Signed-off-by: Shenming Lu <lushenming@huawei.com>
+---
+ arch/arm64/kvm/vgic/vgic-v4.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/arch/arm64/kvm/vgic/vgic-v4.c b/arch/arm64/kvm/vgic/vgic-v4.c
+index ac029ba3d337..a3542af6f04a 100644
+--- a/arch/arm64/kvm/vgic/vgic-v4.c
++++ b/arch/arm64/kvm/vgic/vgic-v4.c
+@@ -449,6 +449,20 @@ int kvm_vgic_v4_set_forwarding(struct kvm *kvm, int virq,
+ 	irq->host_irq	= virq;
+ 	atomic_inc(&map.vpe->vlpi_count);
+ 
++	/* Transfer pending state */
++	if (irq->pending_latch) {
++		ret = irq_set_irqchip_state(irq->host_irq,
++					    IRQCHIP_STATE_PENDING,
++					    irq->pending_latch);
++		WARN_RATELIMIT(ret, "IRQ %d", irq->host_irq);
++
++		/*
++		 * Let it be pruned from ap_list later and don't bother
++		 * the List Register.
++		 */
++		irq->pending_latch = false;
++	}
++
+ out:
+ 	mutex_unlock(&its->its_lock);
+ 	return ret;
+
+From patchwork Wed Jan 27 12:13:37 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+X-Patchwork-Submitter: Shenming Lu <lushenming@huawei.com>
+X-Patchwork-Id: 12049911
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 03FA7C433DB
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 12:18:29 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id BD7D320789
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 12:18:28 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S237325AbhA0MSJ (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 27 Jan 2021 07:18:09 -0500
+Received: from szxga07-in.huawei.com ([45.249.212.35]:11903 "EHLO
+        szxga07-in.huawei.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S235835AbhA0MPC (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 27 Jan 2021 07:15:02 -0500
+Received: from DGGEMS404-HUB.china.huawei.com (unknown [172.30.72.58])
+        by szxga07-in.huawei.com (SkyGuard) with ESMTP id 4DQjDL5nQDz7bnS;
+        Wed, 27 Jan 2021 20:13:06 +0800 (CST)
+Received: from DESKTOP-7FEPK9S.china.huawei.com (10.174.186.182) by
+ DGGEMS404-HUB.china.huawei.com (10.3.19.204) with Microsoft SMTP Server id
+ 14.3.498.0; Wed, 27 Jan 2021 20:14:09 +0800
+From: Shenming Lu <lushenming@huawei.com>
+To: Marc Zyngier <maz@kernel.org>, Eric Auger <eric.auger@redhat.com>,
+        "Will Deacon" <will@kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <kvmarm@lists.cs.columbia.edu>, <kvm@vger.kernel.org>,
+        <linux-kernel@vger.kernel.org>
+CC: Alex Williamson <alex.williamson@redhat.com>,
+        Cornelia Huck <cohuck@redhat.com>,
+        Lorenzo Pieralisi <lorenzo.pieralisi@arm.com>,
+        <wanghaibin.wang@huawei.com>, <yuzenghui@huawei.com>,
+        <lushenming@huawei.com>
+Subject: [PATCH v3 4/4] KVM: arm64: GICv4.1: Give a chance to save VLPI's
+ pending state
+Date: Wed, 27 Jan 2021 20:13:37 +0800
+Message-ID: <20210127121337.1092-5-lushenming@huawei.com>
+X-Mailer: git-send-email 2.27.0.windows.1
+In-Reply-To: <20210127121337.1092-1-lushenming@huawei.com>
+References: <20210127121337.1092-1-lushenming@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.174.186.182]
+X-CFilter-Loop: Reflected
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Before GICv4.1, we don't have direct access to the VLPI's pending
+state. So we simply let it fail early when encountering any VLPI.
+
+But now we don't have to return -EACCES directly if on GICv4.1. So
+let’s change the hard code and give a chance to save the VLPI's pending
+state (and preserve the UAPI).
+
+Signed-off-by: Shenming Lu <lushenming@huawei.com>
+---
+ Documentation/virt/kvm/devices/arm-vgic-its.rst | 2 +-
+ arch/arm64/kvm/vgic/vgic-its.c                  | 6 +++---
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/Documentation/virt/kvm/devices/arm-vgic-its.rst b/Documentation/virt/kvm/devices/arm-vgic-its.rst
+index 6c304fd2b1b4..d257eddbae29 100644
+--- a/Documentation/virt/kvm/devices/arm-vgic-its.rst
++++ b/Documentation/virt/kvm/devices/arm-vgic-its.rst
+@@ -80,7 +80,7 @@ KVM_DEV_ARM_VGIC_GRP_CTRL
+     -EFAULT  Invalid guest ram access
+     -EBUSY   One or more VCPUS are running
+     -EACCES  The virtual ITS is backed by a physical GICv4 ITS, and the
+-	     state is not available
++	     state is not available without GICv4.1
+     =======  ==========================================================
+ 
+ KVM_DEV_ARM_VGIC_GRP_ITS_REGS
+diff --git a/arch/arm64/kvm/vgic/vgic-its.c b/arch/arm64/kvm/vgic/vgic-its.c
+index 40cbaca81333..ec7543a9617c 100644
+--- a/arch/arm64/kvm/vgic/vgic-its.c
++++ b/arch/arm64/kvm/vgic/vgic-its.c
+@@ -2218,10 +2218,10 @@ static int vgic_its_save_itt(struct vgic_its *its, struct its_device *device)
+ 		/*
+ 		 * If an LPI carries the HW bit, this means that this
+ 		 * interrupt is controlled by GICv4, and we do not
+-		 * have direct access to that state. Let's simply fail
+-		 * the save operation...
++		 * have direct access to that state without GICv4.1.
++		 * Let's simply fail the save operation...
+ 		 */
+-		if (ite->irq->hw)
++		if (ite->irq->hw && !kvm_vgic_global_state.has_gicv4_1)
+ 			return -EACCES;
+ 
+ 		ret = vgic_its_save_ite(its, device, ite, gpa, ite_esz);

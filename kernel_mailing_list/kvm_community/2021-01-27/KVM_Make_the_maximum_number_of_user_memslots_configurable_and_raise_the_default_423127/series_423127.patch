@@ -1,0 +1,862 @@
+From patchwork Wed Jan 27 17:57:27 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 12050749
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 7778DC433E9
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 17:59:36 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 3033764D9A
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 17:59:36 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1344372AbhA0R70 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 27 Jan 2021 12:59:26 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:50718 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S1344345AbhA0R7K (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Wed, 27 Jan 2021 12:59:10 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1611770262;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=bFzc083SDCVVQmZ3TEE32kOyxiqZz+UgdILDBdrPWO0=;
+        b=LXeKf1+vv3y6rkApVVEYY5uUeYq1H8APwKq6v7X1OmIQG+H08PdmrcMWPEAWT8NAClAw3k
+        fJC9i5TNm0Rha+1pGvWoOJUnqAIQT29q7/Mdg4LxeAWfhBCb7qttW1TGZ/PZanjGxRNR8W
+        XIschmE7GqS/Xs/VQr6EE4JnHOM5faI=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-345-_Z2AUTP_M0O_vX18-8mUUQ-1; Wed, 27 Jan 2021 12:57:41 -0500
+X-MC-Unique: _Z2AUTP_M0O_vX18-8mUUQ-1
+Received: from smtp.corp.redhat.com (int-mx03.intmail.prod.int.phx2.redhat.com
+ [10.5.11.13])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id AB5AD8066EA;
+        Wed, 27 Jan 2021 17:57:39 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.195.57])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 8DEB460864;
+        Wed, 27 Jan 2021 17:57:37 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <seanjc@google.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Igor Mammedov <imammedo@redhat.com>,
+        "Maciej S . Szmigiero" <maciej.szmigiero@oracle.com>
+Subject: [PATCH 1/5] KVM: Make the maximum number of user memslots a per-VM
+ thing
+Date: Wed, 27 Jan 2021 18:57:27 +0100
+Message-Id: <20210127175731.2020089-2-vkuznets@redhat.com>
+In-Reply-To: <20210127175731.2020089-1-vkuznets@redhat.com>
+References: <20210127175731.2020089-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.13
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Limiting the maximum number of user memslots globally can be undesirable as
+different VMs may have different needs. Generally, a relatively small
+number should suffice and a VMM may want to enforce the limitation so a VM
+won't accidentally eat too much memory. On the other hand, the number of
+required memslots can depend on the number of assigned vCPUs, e.g. each
+Hyper-V SynIC may require up to two additional slots per vCPU.
+
+Prepare to limit the maximum number of user memslots per-VM. No real
+functional change in this patch as the limit is still hard-coded to
+KVM_USER_MEM_SLOTS.
+
+Suggested-by: Sean Christopherson <seanjc@google.com>
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ arch/powerpc/kvm/book3s_hv.c |  2 +-
+ arch/s390/kvm/kvm-s390.c     |  2 +-
+ include/linux/kvm_host.h     |  1 +
+ virt/kvm/dirty_ring.c        |  2 +-
+ virt/kvm/kvm_main.c          | 11 ++++++-----
+ 5 files changed, 10 insertions(+), 8 deletions(-)
+
+diff --git a/arch/powerpc/kvm/book3s_hv.c b/arch/powerpc/kvm/book3s_hv.c
+index 6f612d240392..bea2f34e3662 100644
+--- a/arch/powerpc/kvm/book3s_hv.c
++++ b/arch/powerpc/kvm/book3s_hv.c
+@@ -4472,7 +4472,7 @@ static int kvm_vm_ioctl_get_dirty_log_hv(struct kvm *kvm,
+ 	mutex_lock(&kvm->slots_lock);
+ 
+ 	r = -EINVAL;
+-	if (log->slot >= KVM_USER_MEM_SLOTS)
++	if (log->slot >= kvm->memslots_max)
+ 		goto out;
+ 
+ 	slots = kvm_memslots(kvm);
+diff --git a/arch/s390/kvm/kvm-s390.c b/arch/s390/kvm/kvm-s390.c
+index dbafd057ca6a..b8c49105f40c 100644
+--- a/arch/s390/kvm/kvm-s390.c
++++ b/arch/s390/kvm/kvm-s390.c
+@@ -640,7 +640,7 @@ int kvm_vm_ioctl_get_dirty_log(struct kvm *kvm,
+ 	mutex_lock(&kvm->slots_lock);
+ 
+ 	r = -EINVAL;
+-	if (log->slot >= KVM_USER_MEM_SLOTS)
++	if (log->slot >= kvm->memslots_max)
+ 		goto out;
+ 
+ 	r = kvm_get_dirty_log(kvm, log, &is_dirty, &memslot);
+diff --git a/include/linux/kvm_host.h b/include/linux/kvm_host.h
+index f3b1013fb22c..0033ccffe617 100644
+--- a/include/linux/kvm_host.h
++++ b/include/linux/kvm_host.h
+@@ -513,6 +513,7 @@ struct kvm {
+ 	pid_t userspace_pid;
+ 	unsigned int max_halt_poll_ns;
+ 	u32 dirty_ring_size;
++	short int memslots_max;
+ };
+ 
+ #define kvm_err(fmt, ...) \
+diff --git a/virt/kvm/dirty_ring.c b/virt/kvm/dirty_ring.c
+index 9d01299563ee..40d0a749a55d 100644
+--- a/virt/kvm/dirty_ring.c
++++ b/virt/kvm/dirty_ring.c
+@@ -52,7 +52,7 @@ static void kvm_reset_dirty_gfn(struct kvm *kvm, u32 slot, u64 offset, u64 mask)
+ 	as_id = slot >> 16;
+ 	id = (u16)slot;
+ 
+-	if (as_id >= KVM_ADDRESS_SPACE_NUM || id >= KVM_USER_MEM_SLOTS)
++	if (as_id >= KVM_ADDRESS_SPACE_NUM || id >= kvm->memslots_max)
+ 		return;
+ 
+ 	memslot = id_to_memslot(__kvm_memslots(kvm, as_id), id);
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index 8367d88ce39b..a78e982e7107 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -755,6 +755,7 @@ static struct kvm *kvm_create_vm(unsigned long type)
+ 	INIT_LIST_HEAD(&kvm->devices);
+ 
+ 	BUILD_BUG_ON(KVM_MEM_SLOTS_NUM > SHRT_MAX);
++	kvm->memslots_max = KVM_USER_MEM_SLOTS;
+ 
+ 	if (init_srcu_struct(&kvm->srcu))
+ 		goto out_err_no_srcu;
+@@ -1404,7 +1405,7 @@ EXPORT_SYMBOL_GPL(kvm_set_memory_region);
+ static int kvm_vm_ioctl_set_memory_region(struct kvm *kvm,
+ 					  struct kvm_userspace_memory_region *mem)
+ {
+-	if ((u16)mem->slot >= KVM_USER_MEM_SLOTS)
++	if ((u16)mem->slot >= kvm->memslots_max)
+ 		return -EINVAL;
+ 
+ 	return kvm_set_memory_region(kvm, mem);
+@@ -1435,7 +1436,7 @@ int kvm_get_dirty_log(struct kvm *kvm, struct kvm_dirty_log *log,
+ 
+ 	as_id = log->slot >> 16;
+ 	id = (u16)log->slot;
+-	if (as_id >= KVM_ADDRESS_SPACE_NUM || id >= KVM_USER_MEM_SLOTS)
++	if (as_id >= KVM_ADDRESS_SPACE_NUM || id >= kvm->memslots_max)
+ 		return -EINVAL;
+ 
+ 	slots = __kvm_memslots(kvm, as_id);
+@@ -1497,7 +1498,7 @@ static int kvm_get_dirty_log_protect(struct kvm *kvm, struct kvm_dirty_log *log)
+ 
+ 	as_id = log->slot >> 16;
+ 	id = (u16)log->slot;
+-	if (as_id >= KVM_ADDRESS_SPACE_NUM || id >= KVM_USER_MEM_SLOTS)
++	if (as_id >= KVM_ADDRESS_SPACE_NUM || id >= kvm->memslots_max)
+ 		return -EINVAL;
+ 
+ 	slots = __kvm_memslots(kvm, as_id);
+@@ -1609,7 +1610,7 @@ static int kvm_clear_dirty_log_protect(struct kvm *kvm,
+ 
+ 	as_id = log->slot >> 16;
+ 	id = (u16)log->slot;
+-	if (as_id >= KVM_ADDRESS_SPACE_NUM || id >= KVM_USER_MEM_SLOTS)
++	if (as_id >= KVM_ADDRESS_SPACE_NUM || id >= kvm->memslots_max)
+ 		return -EINVAL;
+ 
+ 	if (log->first_page & 63)
+@@ -3682,7 +3683,7 @@ static long kvm_vm_ioctl_check_extension_generic(struct kvm *kvm, long arg)
+ 		return KVM_ADDRESS_SPACE_NUM;
+ #endif
+ 	case KVM_CAP_NR_MEMSLOTS:
+-		return KVM_USER_MEM_SLOTS;
++		return kvm ? kvm->memslots_max : KVM_USER_MEM_SLOTS;
+ 	case KVM_CAP_DIRTY_LOG_RING:
+ #if KVM_DIRTY_LOG_PAGE_OFFSET > 0
+ 		return KVM_DIRTY_RING_MAX_ENTRIES * sizeof(struct kvm_dirty_gfn);
+
+From patchwork Wed Jan 27 17:57:28 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 12050753
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_NONE
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 50264C43381
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 18:00:10 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 1323964DA9
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 18:00:10 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S234670AbhA0R7y (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 27 Jan 2021 12:59:54 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:42278 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S1344092AbhA0R7O (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Wed, 27 Jan 2021 12:59:14 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1611770268;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=yjWhEYxtdtW/nAud/lMESXboNCqr4x4MvFiUIVGZ9TE=;
+        b=UGhieZCrCsrCH6X6d/d1YvquDpNFMy384fc+/uA1x45fjU4LKvPOR6IKMu4VILd2/kwMX0
+        bzI9LEo80881lQIVP6K8ndxaiq6SiXNmN2bbpWfxxOJr9rwAndhzPvJCx85QnA9NFlaHGt
+        LIQNZ4Qsgd+bA2g9mCzgY5DqhOY+yek=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-293-JwirBN4YMDG8fU2ANKeOgQ-1; Wed, 27 Jan 2021 12:57:43 -0500
+X-MC-Unique: JwirBN4YMDG8fU2ANKeOgQ-1
+Received: from smtp.corp.redhat.com (int-mx03.intmail.prod.int.phx2.redhat.com
+ [10.5.11.13])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 5A027107AD37;
+        Wed, 27 Jan 2021 17:57:42 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.195.57])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 159D260854;
+        Wed, 27 Jan 2021 17:57:39 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <seanjc@google.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Igor Mammedov <imammedo@redhat.com>,
+        "Maciej S . Szmigiero" <maciej.szmigiero@oracle.com>
+Subject: [PATCH 2/5] KVM: Raise the maximum number of user memslots
+Date: Wed, 27 Jan 2021 18:57:28 +0100
+Message-Id: <20210127175731.2020089-3-vkuznets@redhat.com>
+In-Reply-To: <20210127175731.2020089-1-vkuznets@redhat.com>
+References: <20210127175731.2020089-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.13
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Current KVM_USER_MEM_SLOTS limits are arch specific (512 on Power, 509 on x86,
+32 on s390, 16 on MIPS) but they don't really need to be. Memory slots are
+allocated dynamically in KVM when added so the only real limitation is
+'id_to_index' array which is 'short'. We don't have any other
+KVM_MEM_SLOTS_NUM/KVM_USER_MEM_SLOTS-sized statically defined structures.
+
+Low KVM_USER_MEM_SLOTS can be a limiting factor for some configurations.
+In particular, when QEMU tries to start a Windows guest with Hyper-V SynIC
+enabled and e.g. 256 vCPUs the limit is hit as SynIC requires two pages per
+vCPU and the guest is free to pick any GFN for each of them, this fragments
+memslots as QEMU wants to have a separate memslot for each of these pages
+(which are supposed to act as 'overlay' pages).
+
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ arch/arm64/include/asm/kvm_host.h   | 1 -
+ arch/mips/include/asm/kvm_host.h    | 1 -
+ arch/powerpc/include/asm/kvm_host.h | 1 -
+ arch/s390/include/asm/kvm_host.h    | 1 -
+ arch/x86/include/asm/kvm_host.h     | 2 --
+ include/linux/kvm_host.h            | 5 ++---
+ virt/kvm/kvm_main.c                 | 1 +
+ 7 files changed, 3 insertions(+), 9 deletions(-)
+
+diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
+index 8fcfab0c2567..1b8a3d825276 100644
+--- a/arch/arm64/include/asm/kvm_host.h
++++ b/arch/arm64/include/asm/kvm_host.h
+@@ -30,7 +30,6 @@
+ 
+ #define __KVM_HAVE_ARCH_INTC_INITIALIZED
+ 
+-#define KVM_USER_MEM_SLOTS 512
+ #define KVM_HALT_POLL_NS_DEFAULT 500000
+ 
+ #include <kvm/arm_vgic.h>
+diff --git a/arch/mips/include/asm/kvm_host.h b/arch/mips/include/asm/kvm_host.h
+index 24f3d0f9996b..3a5612e7304c 100644
+--- a/arch/mips/include/asm/kvm_host.h
++++ b/arch/mips/include/asm/kvm_host.h
+@@ -83,7 +83,6 @@
+ 
+ 
+ #define KVM_MAX_VCPUS		16
+-#define KVM_USER_MEM_SLOTS	16
+ /* memory slots that does not exposed to userspace */
+ #define KVM_PRIVATE_MEM_SLOTS	0
+ 
+diff --git a/arch/powerpc/include/asm/kvm_host.h b/arch/powerpc/include/asm/kvm_host.h
+index d67a470e95a3..2b9b6855ec86 100644
+--- a/arch/powerpc/include/asm/kvm_host.h
++++ b/arch/powerpc/include/asm/kvm_host.h
+@@ -28,7 +28,6 @@
+ 
+ #define KVM_MAX_VCPUS		NR_CPUS
+ #define KVM_MAX_VCORES		NR_CPUS
+-#define KVM_USER_MEM_SLOTS	512
+ 
+ #include <asm/cputhreads.h>
+ 
+diff --git a/arch/s390/include/asm/kvm_host.h b/arch/s390/include/asm/kvm_host.h
+index 74f9a036bab2..6bcfc5614bbc 100644
+--- a/arch/s390/include/asm/kvm_host.h
++++ b/arch/s390/include/asm/kvm_host.h
+@@ -28,7 +28,6 @@
+ #define KVM_S390_BSCA_CPU_SLOTS 64
+ #define KVM_S390_ESCA_CPU_SLOTS 248
+ #define KVM_MAX_VCPUS 255
+-#define KVM_USER_MEM_SLOTS 32
+ 
+ /*
+  * These seem to be used for allocating ->chip in the routing table, which we
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 3d6616f6f6ef..a6547dc9191a 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -40,10 +40,8 @@
+ #define KVM_MAX_VCPUS 288
+ #define KVM_SOFT_MAX_VCPUS 240
+ #define KVM_MAX_VCPU_ID 1023
+-#define KVM_USER_MEM_SLOTS 509
+ /* memory slots that are not exposed to userspace */
+ #define KVM_PRIVATE_MEM_SLOTS 3
+-#define KVM_MEM_SLOTS_NUM (KVM_USER_MEM_SLOTS + KVM_PRIVATE_MEM_SLOTS)
+ 
+ #define KVM_HALT_POLL_NS_DEFAULT 200000
+ 
+diff --git a/include/linux/kvm_host.h b/include/linux/kvm_host.h
+index 0033ccffe617..754020140f37 100644
+--- a/include/linux/kvm_host.h
++++ b/include/linux/kvm_host.h
+@@ -425,9 +425,8 @@ struct kvm_irq_routing_table {
+ #define KVM_PRIVATE_MEM_SLOTS 0
+ #endif
+ 
+-#ifndef KVM_MEM_SLOTS_NUM
+-#define KVM_MEM_SLOTS_NUM (KVM_USER_MEM_SLOTS + KVM_PRIVATE_MEM_SLOTS)
+-#endif
++#define KVM_MEM_SLOTS_NUM SHRT_MAX
++#define KVM_USER_MEM_SLOTS (KVM_MEM_SLOTS_NUM - KVM_PRIVATE_MEM_SLOTS)
+ 
+ #ifndef __KVM_VCPU_MULTIPLE_ADDRESS_SPACE
+ static inline int kvm_arch_vcpu_memslots_id(struct kvm_vcpu *vcpu)
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index a78e982e7107..5adb1b694304 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -755,6 +755,7 @@ static struct kvm *kvm_create_vm(unsigned long type)
+ 	INIT_LIST_HEAD(&kvm->devices);
+ 
+ 	BUILD_BUG_ON(KVM_MEM_SLOTS_NUM > SHRT_MAX);
++	BUILD_BUG_ON(KVM_PRIVATE_MEM_SLOTS >= KVM_MEM_SLOTS_NUM);
+ 	kvm->memslots_max = KVM_USER_MEM_SLOTS;
+ 
+ 	if (init_srcu_struct(&kvm->srcu))
+
+From patchwork Wed Jan 27 17:57:29 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 12050751
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id C07EDC433E0
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 18:00:09 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 67E2A64D9A
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 18:00:09 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1344376AbhA0R7b (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 27 Jan 2021 12:59:31 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:54002 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S1344366AbhA0R7T (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Wed, 27 Jan 2021 12:59:19 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1611770272;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=1XOu+dEnl7Iy4FBd4URUgzw1f2EtHwRM8d4SBoHgF3s=;
+        b=T9Yn/c6BhdVN3d9RMEAE6gqpziNgnfLISQF6zr6hE45afiMbLvfwZowJY653d9InOzyrvI
+        YQhFBnmHWXm1XAFArP1+2Bb+DDOIrQCc0lIh7KniwNs3BzErfc7l9FWHnF3gX6PPKyPtuX
+        KfdzY3fkbkYG2UKDO5EosdxUydywvWc=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-489-LhCyXgkYNr6WWn5IQHT1lg-1; Wed, 27 Jan 2021 12:57:50 -0500
+X-MC-Unique: LhCyXgkYNr6WWn5IQHT1lg-1
+Received: from smtp.corp.redhat.com (int-mx03.intmail.prod.int.phx2.redhat.com
+ [10.5.11.13])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id A757C180E48B;
+        Wed, 27 Jan 2021 17:57:48 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.195.57])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id B740B707B6;
+        Wed, 27 Jan 2021 17:57:42 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <seanjc@google.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Igor Mammedov <imammedo@redhat.com>,
+        "Maciej S . Szmigiero" <maciej.szmigiero@oracle.com>
+Subject: [PATCH 3/5] KVM: Make the maximum number of user memslots
+ configurable
+Date: Wed, 27 Jan 2021 18:57:29 +0100
+Message-Id: <20210127175731.2020089-4-vkuznets@redhat.com>
+In-Reply-To: <20210127175731.2020089-1-vkuznets@redhat.com>
+References: <20210127175731.2020089-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.13
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The maximum number of user memslots is now a per-VM setting but there is
+no way to change it. Intoduce KVM_CAP_MEMSLOTS_LIMIT per-VM capability to
+set the limit.
+
+When the limit is set, it becomes impossible to manage memslots whose id
+is greater or equal so make sure there are no such slots.
+
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ Documentation/virt/kvm/api.rst | 16 ++++++++++++++++
+ include/uapi/linux/kvm.h       |  1 +
+ virt/kvm/kvm_main.c            | 30 ++++++++++++++++++++++++++++++
+ 3 files changed, 47 insertions(+)
+
+diff --git a/Documentation/virt/kvm/api.rst b/Documentation/virt/kvm/api.rst
+index 99ceb978c8b0..551236fc1261 100644
+--- a/Documentation/virt/kvm/api.rst
++++ b/Documentation/virt/kvm/api.rst
+@@ -6038,6 +6038,22 @@ KVM_EXIT_X86_RDMSR and KVM_EXIT_X86_WRMSR exit notifications which user space
+ can then handle to implement model specific MSR handling and/or user notifications
+ to inform a user that an MSR was not handled.
+ 
++7.22 KVM_CAP_MEMSLOTS_LIMIT
++----------------------
++
++:Architectures: all
++:Target: VM
++:Parameters: args[0] is the maximum number of memory slots
++:Returns: 0 on success; E2BIG when set above global KVM_CAP_NR_MEMSLOTS; EINVAL
++          when there is an existing slot with id >= limit
++
++This capability overrides the default maximum number of memory slots, available
++per target VM. The limit can be changed at any time, however, when lowered, no
++memory slots with id ('slot' in 'struct kvm_userspace_memory_region') greater
++than the requested value should exist or EINVAL is returned. The maximum allowed
++value can be queried by checking system KVM_CAP_NR_MEMSLOTS capability. Per-VM
++KVM_CAP_NR_MEMSLOTS capability represents the currently set limit.
++
+ 8. Other capabilities.
+ ======================
+ 
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index 374c67875cdb..f68b0cde801a 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -1058,6 +1058,7 @@ struct kvm_ppc_resize_hpt {
+ #define KVM_CAP_ENFORCE_PV_FEATURE_CPUID 190
+ #define KVM_CAP_SYS_HYPERV_CPUID 191
+ #define KVM_CAP_DIRTY_LOG_RING 192
++#define KVM_CAP_MEMSLOTS_LIMIT 193
+ 
+ #ifdef KVM_CAP_IRQ_ROUTING
+ 
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index 5adb1b694304..da2cbfe9c9ee 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -1412,6 +1412,31 @@ static int kvm_vm_ioctl_set_memory_region(struct kvm *kvm,
+ 	return kvm_set_memory_region(kvm, mem);
+ }
+ 
++static int kvm_set_memslots_max(struct kvm *kvm, u64 max)
++{
++	struct kvm_memory_slot *memslot;
++	int r = 0, as_id;
++
++	if (max > KVM_USER_MEM_SLOTS)
++		return -E2BIG;
++
++	mutex_lock(&kvm->slots_lock);
++	for (as_id = 0; as_id < KVM_ADDRESS_SPACE_NUM; as_id++) {
++		kvm_for_each_memslot(memslot, __kvm_memslots(kvm, as_id)) {
++			if (memslot->id >= max) {
++				r = -EINVAL;
++				break;
++			}
++		}
++	}
++	if (!r)
++		kvm->memslots_max = max;
++
++	mutex_unlock(&kvm->slots_lock);
++
++	return r;
++}
++
+ #ifndef CONFIG_KVM_GENERIC_DIRTYLOG_READ_PROTECT
+ /**
+  * kvm_get_dirty_log - get a snapshot of dirty pages
+@@ -3664,6 +3689,7 @@ static long kvm_vm_ioctl_check_extension_generic(struct kvm *kvm, long arg)
+ 	case KVM_CAP_CHECK_EXTENSION_VM:
+ 	case KVM_CAP_ENABLE_CAP_VM:
+ 	case KVM_CAP_HALT_POLL:
++	case KVM_CAP_MEMSLOTS_LIMIT:
+ 		return 1;
+ #ifdef CONFIG_KVM_MMIO
+ 	case KVM_CAP_COALESCED_MMIO:
+@@ -3789,6 +3815,10 @@ static int kvm_vm_ioctl_enable_cap_generic(struct kvm *kvm,
+ 	}
+ 	case KVM_CAP_DIRTY_LOG_RING:
+ 		return kvm_vm_ioctl_enable_dirty_log_ring(kvm, cap->args[0]);
++	case KVM_CAP_MEMSLOTS_LIMIT:
++		if (cap->flags)
++			return -EINVAL;
++		return kvm_set_memslots_max(kvm, cap->args[0]);
+ 	default:
+ 		return kvm_vm_ioctl_enable_cap(kvm, cap);
+ 	}
+
+From patchwork Wed Jan 27 17:57:30 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 12050755
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 049B0C433DB
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 18:01:08 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C0BFB64DA0
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 18:01:07 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1344003AbhA0SAj (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 27 Jan 2021 13:00:39 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([63.128.21.124]:53133 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S1343545AbhA0SAa (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Wed, 27 Jan 2021 13:00:30 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1611770342;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=xM3NmsWlQLbOeN4KfuSYLVfbjl0sV5BEAGILhGcJNwY=;
+        b=TezWgwAmFn5k7tn37vCjwfaC3jxYgxcSKkNVPsaXodITJxlVxZABdqjmzOVKgyE2Y0qaQB
+        yYXwRGEzN2Wa/Fp98CcxYnXG03nOZFaWT1OFIlbRc3f+7fbzqq18o4gflwjIFklBgWxVh/
+        HQu90R2VwckVRntAJCZ/Kjm8/cuRDQs=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-37-7KW3MrEGO76xAyrUZz7eUg-1; Wed, 27 Jan 2021 12:58:06 -0500
+X-MC-Unique: 7KW3MrEGO76xAyrUZz7eUg-1
+Received: from smtp.corp.redhat.com (int-mx03.intmail.prod.int.phx2.redhat.com
+ [10.5.11.13])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id B6E898030B1;
+        Wed, 27 Jan 2021 17:58:04 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.195.57])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 185A560917;
+        Wed, 27 Jan 2021 17:57:48 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <seanjc@google.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Igor Mammedov <imammedo@redhat.com>,
+        "Maciej S . Szmigiero" <maciej.szmigiero@oracle.com>
+Subject: [PATCH 4/5] selftests: kvm: Test the newly introduced
+ KVM_CAP_MEMSLOTS_LIMIT
+Date: Wed, 27 Jan 2021 18:57:30 +0100
+Message-Id: <20210127175731.2020089-5-vkuznets@redhat.com>
+In-Reply-To: <20210127175731.2020089-1-vkuznets@redhat.com>
+References: <20210127175731.2020089-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.13
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The number of user memslots can now be limited with KVM_CAP_MEMSLOTS_LIMIT
+and, when limited, per-VM KVM_CHECK_EXTENSION(KVM_CAP_NR_MEMSLOTS) should
+return the updated value.
+
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ .../testing/selftests/kvm/include/kvm_util.h  |  1 +
+ tools/testing/selftests/kvm/lib/kvm_util.c    | 30 ++++++++++++-
+ .../selftests/kvm/set_memory_region_test.c    | 43 ++++++++++++++++---
+ 3 files changed, 67 insertions(+), 7 deletions(-)
+
+diff --git a/tools/testing/selftests/kvm/include/kvm_util.h b/tools/testing/selftests/kvm/include/kvm_util.h
+index 5cbb861525ed..eb759a54dfc6 100644
+--- a/tools/testing/selftests/kvm/include/kvm_util.h
++++ b/tools/testing/selftests/kvm/include/kvm_util.h
+@@ -86,6 +86,7 @@ enum vm_mem_backing_src_type {
+ };
+ 
+ int kvm_check_cap(long cap);
++int vm_check_cap(struct kvm_vm *vm, long cap);
+ int vm_enable_cap(struct kvm_vm *vm, struct kvm_enable_cap *cap);
+ int vcpu_enable_cap(struct kvm_vm *vm, uint32_t vcpu_id,
+ 		    struct kvm_enable_cap *cap);
+diff --git a/tools/testing/selftests/kvm/lib/kvm_util.c b/tools/testing/selftests/kvm/lib/kvm_util.c
+index fa5a90e6c6f0..115947b77808 100644
+--- a/tools/testing/selftests/kvm/lib/kvm_util.c
++++ b/tools/testing/selftests/kvm/lib/kvm_util.c
+@@ -31,7 +31,7 @@ static void *align(void *x, size_t size)
+ }
+ 
+ /*
+- * Capability
++ * Check a global capability
+  *
+  * Input Args:
+  *   cap - Capability
+@@ -64,6 +64,34 @@ int kvm_check_cap(long cap)
+ 	return ret;
+ }
+ 
++/*
++ * Check a per-VM capability
++ *
++ * Input Args:
++ *   vm - Virtual Machine
++ *   cap - Capability
++ *
++ * Output Args: None
++ *
++ * Return:
++ *   On success, the Value corresponding to the capability (KVM_CAP_*)
++ *   specified by the value of cap.  On failure a TEST_ASSERT failure
++ *   is produced.
++ *
++ * Looks up and returns the value corresponding to the capability
++ * (KVM_CAP_*) given by cap.
++ */
++int vm_check_cap(struct kvm_vm *vm, long cap)
++{
++	int ret;
++
++	ret = ioctl(vm->fd, KVM_CHECK_EXTENSION, cap);
++	TEST_ASSERT(ret != -1, "KVM_CHECK_EXTENSION IOCTL failed,\n"
++		"  rc: %i errno: %i", ret, errno);
++
++	return ret;
++}
++
+ /* VM Enable Capability
+  *
+  * Input Args:
+diff --git a/tools/testing/selftests/kvm/set_memory_region_test.c b/tools/testing/selftests/kvm/set_memory_region_test.c
+index f127ed31dba7..66ed011f26f3 100644
+--- a/tools/testing/selftests/kvm/set_memory_region_test.c
++++ b/tools/testing/selftests/kvm/set_memory_region_test.c
+@@ -330,14 +330,14 @@ static void test_zero_memory_regions(void)
+ #endif /* __x86_64__ */
+ 
+ /*
+- * Test it can be added memory slots up to KVM_CAP_NR_MEMSLOTS, then any
+- * tentative to add further slots should fail.
++ * Test it can be added memory slots up to KVM_CAP_NR_MEMSLOTS/given limit,
++ * then any tentative to add further slots should fail.
+  */
+-static void test_add_max_memory_regions(void)
++static void test_add_max_memory_regions(int limit)
+ {
+ 	int ret;
+ 	struct kvm_vm *vm;
+-	uint32_t max_mem_slots;
++	uint32_t max_mem_slots, vm_mem_slots;
+ 	uint32_t slot;
+ 	uint64_t guest_addr = 0x0;
+ 	uint64_t mem_reg_npages;
+@@ -346,10 +346,38 @@ static void test_add_max_memory_regions(void)
+ 	max_mem_slots = kvm_check_cap(KVM_CAP_NR_MEMSLOTS);
+ 	TEST_ASSERT(max_mem_slots > 0,
+ 		    "KVM_CAP_NR_MEMSLOTS should be greater than 0");
+-	pr_info("Allowed number of memory slots: %i\n", max_mem_slots);
++
++	if (!limit)
++		pr_info("Allowed number of memory slots: %i\n", max_mem_slots);
+ 
+ 	vm = vm_create(VM_MODE_DEFAULT, 0, O_RDWR);
+ 
++	if (limit) {
++		struct kvm_enable_cap cap = {
++			.cap = KVM_CAP_MEMSLOTS_LIMIT,
++			.args[0] = limit
++		};
++
++		pr_info("Default max number of memory slots: %i\n", max_mem_slots);
++
++		vm_mem_slots = vm_check_cap(vm, KVM_CAP_NR_MEMSLOTS);
++		TEST_ASSERT(vm_mem_slots == max_mem_slots,
++			    "KVM_CAP_NR_MEMSLOTS for a newly created VM: %d"
++			    " should equal to the global limit: %d",
++			    vm_mem_slots, max_mem_slots);
++
++		pr_info("Limiting the number of memory slots to: %i\n", limit);
++
++		vm_enable_cap(vm, &cap);
++		vm_mem_slots = vm_check_cap(vm, KVM_CAP_NR_MEMSLOTS);
++		TEST_ASSERT(vm_mem_slots == limit,
++			    "KVM_CAP_NR_MEMSLOTS was limited to: %d"
++			    " but is currently set to %d instead",
++			    limit, vm_mem_slots);
++
++		max_mem_slots = vm_mem_slots;
++	}
++
+ 	mem_reg_npages = vm_calc_num_guest_pages(VM_MODE_DEFAULT, MEM_REGION_SIZE);
+ 
+ 	/* Check it can be added memory slots up to the maximum allowed */
+@@ -394,7 +422,10 @@ int main(int argc, char *argv[])
+ 	test_zero_memory_regions();
+ #endif
+ 
+-	test_add_max_memory_regions();
++	test_add_max_memory_regions(0);
++
++	test_add_max_memory_regions(10);
++
+ 
+ #ifdef __x86_64__
+ 	if (argc > 1)
+
+From patchwork Wed Jan 27 17:57:31 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 12050757
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.1 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 51CC0C433E0
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 18:01:09 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 115E464DA0
+	for <kvm@archiver.kernel.org>; Wed, 27 Jan 2021 18:01:09 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S235772AbhA0SBG (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 27 Jan 2021 13:01:06 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([63.128.21.124]:48969 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S1344122AbhA0R7h (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Wed, 27 Jan 2021 12:59:37 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1611770291;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=GCxviBQBbv8OTsE75UZ23UOIHww55oQgzi/r5zVwztY=;
+        b=CbQ3gNQIOil7I4chP2KRr4kWZZGeLhufzv0G2lRRH8S66GAwMh4QrrWzBAEK2xdxJyIc4L
+        Ks6Vw6iENw5fA5Dk2x5Q7/aZtS1+bnJdVFKr2lIDimZTVvEGrw85jH8vedQ40077FiFX+K
+        AB4V0fo7/nelIVI4WEIICjQshBnzCF8=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-80-rXfN4KvtPgyN6qSBLvfmJQ-1; Wed, 27 Jan 2021 12:58:08 -0500
+X-MC-Unique: rXfN4KvtPgyN6qSBLvfmJQ-1
+Received: from smtp.corp.redhat.com (int-mx03.intmail.prod.int.phx2.redhat.com
+ [10.5.11.13])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id BE0F2107ACE8;
+        Wed, 27 Jan 2021 17:58:06 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.195.57])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 0FC4D5C675;
+        Wed, 27 Jan 2021 17:58:04 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <seanjc@google.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Igor Mammedov <imammedo@redhat.com>,
+        "Maciej S . Szmigiero" <maciej.szmigiero@oracle.com>
+Subject: [PATCH 5/5] selftests: kvm: Raise the default timeout to 120 seconds
+Date: Wed, 27 Jan 2021 18:57:31 +0100
+Message-Id: <20210127175731.2020089-6-vkuznets@redhat.com>
+In-Reply-To: <20210127175731.2020089-1-vkuznets@redhat.com>
+References: <20210127175731.2020089-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.13
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+With the updated maximum number of user memslots (32)
+set_memory_region_test sometimes takes longer than the default 45 seconds
+to finish. Raise the value to an arbitrary 120 seconds.
+
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ tools/testing/selftests/kvm/settings | 1 +
+ 1 file changed, 1 insertion(+)
+ create mode 100644 tools/testing/selftests/kvm/settings
+
+diff --git a/tools/testing/selftests/kvm/settings b/tools/testing/selftests/kvm/settings
+new file mode 100644
+index 000000000000..6091b45d226b
+--- /dev/null
++++ b/tools/testing/selftests/kvm/settings
+@@ -0,0 +1 @@
++timeout=120
