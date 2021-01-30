@@ -1,0 +1,1813 @@
+From patchwork Fri Jan 29 16:36:37 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 12056029
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 13B1FC433E6
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:38:28 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id D9E0E64DEB
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:38:27 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231335AbhA2QiP (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 29 Jan 2021 11:38:15 -0500
+Received: from foss.arm.com ([217.140.110.172]:51060 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S230249AbhA2Qh4 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 29 Jan 2021 11:37:56 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 51AAE1424;
+        Fri, 29 Jan 2021 08:37:10 -0800 (PST)
+Received: from monolith.localdoman (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 5B78A3F71B;
+        Fri, 29 Jan 2021 08:37:09 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: drjones@redhat.com, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu
+Cc: andre.przywara@arm.com, Eric Auger <eric.auger@redhat.com>
+Subject: [kvm-unit-tests PATCH v3 01/11] lib: arm/arm64: gicv3: Add missing
+ barrier when sending IPIs
+Date: Fri, 29 Jan 2021 16:36:37 +0000
+Message-Id: <20210129163647.91564-2-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.30.0
+In-Reply-To: <20210129163647.91564-1-alexandru.elisei@arm.com>
+References: <20210129163647.91564-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+One common usage for IPIs is for one CPU to write to a shared memory
+location, send the IPI to kick another CPU, and the receiver to read from
+the same location. Proper synchronization is needed to make sure that the
+IPI receiver reads the most recent value and not stale data (for example,
+the write from the sender CPU might still be in a store buffer).
+
+For GICv3, IPIs are generated with a write to the ICC_SGI1R_EL1 register.
+To make sure the memory stores are observable by other CPUs, we need a
+wmb() barrier (DSB ST), which waits for stores to complete.
+
+From the definition of DSB from ARM DDI 0487F.b, page B2-139:
+
+"In addition, no instruction that appears in program order after the DSB
+instruction can alter any state of the system or perform any part of its
+functionality until the DSB completes other than:
+
+- Being fetched from memory and decoded.
+- Reading the general-purpose, SIMD and floating-point, Special-purpose, or
+System registers that are directly or indirectly read without causing
+side-effects."
+
+Similar definition for armv7 (ARM DDI 0406C.d, page A3-150).
+
+The DSB instruction is enough to prevent reordering of the GIC register
+write which comes in program order after the memory access.
+
+This also matches what the Linux GICv3 irqchip driver does (commit
+21ec30c0ef52 ("irqchip/gic-v3: Use wmb() instead of smb_wmb() in
+gic_raise_softirq()")).
+
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Reviewed-by: Andre Przywara <andre.przywara@arm.com>
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ lib/arm/gic-v3.c | 6 ++++++
+ arm/gic.c        | 5 +++++
+ 2 files changed, 11 insertions(+)
+
+diff --git a/lib/arm/gic-v3.c b/lib/arm/gic-v3.c
+index a7e2cb819746..2c067e4e9ba2 100644
+--- a/lib/arm/gic-v3.c
++++ b/lib/arm/gic-v3.c
+@@ -77,6 +77,12 @@ void gicv3_ipi_send_mask(int irq, const cpumask_t *dest)
+ 
+ 	assert(irq < 16);
+ 
++	/*
++	 * Ensure stores to Normal memory are visible to other CPUs before
++	 * sending the IPI.
++	 */
++	wmb();
++
+ 	/*
+ 	 * For each cpu in the mask collect its peers, which are also in
+ 	 * the mask, in order to form target lists.
+diff --git a/arm/gic.c b/arm/gic.c
+index acb060585fae..fee48f9b4ccb 100644
+--- a/arm/gic.c
++++ b/arm/gic.c
+@@ -275,6 +275,11 @@ static void gicv3_ipi_send_self(void)
+ 
+ static void gicv3_ipi_send_broadcast(void)
+ {
++	/*
++	 * Ensure stores to Normal memory are visible to other CPUs before
++	 * sending the IPI
++	 */
++	wmb();
+ 	gicv3_write_sgi1r(1ULL << 40 | IPI_IRQ << 24);
+ 	isb();
+ }
+
+From patchwork Fri Jan 29 16:36:38 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 12056025
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 63846C433DB
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:38:19 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 354E664DD6
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:38:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231381AbhA2QiR (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 29 Jan 2021 11:38:17 -0500
+Received: from foss.arm.com ([217.140.110.172]:51068 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S230388AbhA2Qh5 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 29 Jan 2021 11:37:57 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 4BBF61509;
+        Fri, 29 Jan 2021 08:37:11 -0800 (PST)
+Received: from monolith.localdoman (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 8BDE23F71B;
+        Fri, 29 Jan 2021 08:37:10 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: drjones@redhat.com, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu
+Cc: andre.przywara@arm.com
+Subject: [kvm-unit-tests PATCH v3 02/11] lib: arm/arm64: gicv2: Document
+ existing barriers when sending IPIs
+Date: Fri, 29 Jan 2021 16:36:38 +0000
+Message-Id: <20210129163647.91564-3-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.30.0
+In-Reply-To: <20210129163647.91564-1-alexandru.elisei@arm.com>
+References: <20210129163647.91564-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+GICv2 generates IPIs with a MMIO write to the GICD_SGIR register. A common
+pattern for IPI usage is for the IPI receiver to read data written to
+memory by the sender. The armv7 and armv8 architectures implement a
+weakly-ordered memory model, which means that barriers are required to make
+sure that the expected values are observed.
+
+Because the receiver CPU must observe the write to memory that generated
+the IPI when reading the GICC_IAR MMIO register, we only need to ensure
+ordering of memory accesses, and not completion. The same pattern can be
+observed in the Linux GICv2 irqchip driver (more details in commit
+8adbf57fc429 ("irqchip: gic: use dmb ishst instead of dsb when raising a
+softirq")).
+
+However, it turns out that no changes are needed to the way GICv2 sends
+IPIs because of the implicit barriers in the MMIO writel and readl
+functions. Writel executes a wmb() (DST ST) before the MMIO write, and
+readl executes a rmb() (DST LD) after the MMIO read. According to  ARM DDI
+0406C.d and ARM DDI 0487F.b, the DSB instruction:
+
+"[..] acts as a stronger barrier than a DMB and all ordering that is
+created by a DMB with specific options is also generated by a DSB with the
+same options."
+
+which means that the correct memory ordering is enforced.
+
+It's not immediately obvious that the proper barriers are in place, so add
+a comment explaining that correct memory synchronization is implemented.
+
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ lib/arm/gic-v2.c | 6 ++++++
+ arm/gic.c        | 7 +++++++
+ 2 files changed, 13 insertions(+)
+
+diff --git a/lib/arm/gic-v2.c b/lib/arm/gic-v2.c
+index dc6a97c600ec..786d6a4e4c6e 100644
+--- a/lib/arm/gic-v2.c
++++ b/lib/arm/gic-v2.c
+@@ -45,6 +45,11 @@ void gicv2_ipi_send_single(int irq, int cpu)
+ {
+ 	assert(cpu < 8);
+ 	assert(irq < 16);
++	/*
++	 * The wmb() in writel and rmb() in readl() from gicv2_read_iar() are
++	 * sufficient for ensuring that stores that happen in program order
++	 * before the IPI will be visible after the interrupt is acknowledged.
++	 */
+ 	writel(1 << (cpu + 16) | irq, gicv2_dist_base() + GICD_SGIR);
+ }
+ 
+@@ -53,5 +58,6 @@ void gicv2_ipi_send_mask(int irq, const cpumask_t *dest)
+ 	u8 tlist = (u8)cpumask_bits(dest)[0];
+ 
+ 	assert(irq < 16);
++	/* No barriers needed, same situation as gicv2_ipi_send_single() */
+ 	writel(tlist << 16 | irq, gicv2_dist_base() + GICD_SGIR);
+ }
+diff --git a/arm/gic.c b/arm/gic.c
+index fee48f9b4ccb..e2e053aeb823 100644
+--- a/arm/gic.c
++++ b/arm/gic.c
+@@ -260,11 +260,18 @@ static void check_lpi_hits(int *expected, const char *msg)
+ 
+ static void gicv2_ipi_send_self(void)
+ {
++	/*
++	 * The wmb() in writel and rmb() when acknowledging the interrupt are
++	 * sufficient for ensuring that writes that happen in program order
++	 * before the interrupt are observed in the interrupt handler after
++	 * acknowledging the interrupt.
++	 */
+ 	writel(2 << 24 | IPI_IRQ, gicv2_dist_base() + GICD_SGIR);
+ }
+ 
+ static void gicv2_ipi_send_broadcast(void)
+ {
++	/* No barriers are needed, same situation as gicv2_ipi_send_self() */
+ 	writel(1 << 24 | IPI_IRQ, gicv2_dist_base() + GICD_SGIR);
+ }
+ 
+
+From patchwork Fri Jan 29 16:36:39 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 12056027
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 31458C433E6
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:38:21 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 0422B64DFB
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:38:21 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231396AbhA2QiS (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 29 Jan 2021 11:38:18 -0500
+Received: from foss.arm.com ([217.140.110.172]:51076 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S230525AbhA2Qh6 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 29 Jan 2021 11:37:58 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id BA7351515;
+        Fri, 29 Jan 2021 08:37:12 -0800 (PST)
+Received: from monolith.localdoman (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 81BA63F71B;
+        Fri, 29 Jan 2021 08:37:11 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: drjones@redhat.com, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu
+Cc: andre.przywara@arm.com, Eric Auger <eric.auger@redhat.com>
+Subject: [kvm-unit-tests PATCH v3 03/11] arm/arm64: gic: Remove SMP
+ synchronization from ipi_clear_active_handler()
+Date: Fri, 29 Jan 2021 16:36:39 +0000
+Message-Id: <20210129163647.91564-4-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.30.0
+In-Reply-To: <20210129163647.91564-1-alexandru.elisei@arm.com>
+References: <20210129163647.91564-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The gicv{2,3}-active test sends an IPI from the boot CPU to itself, then
+checks that the interrupt has been received as expected. There is no need
+to use inter-processor memory synchronization primitives on code that runs
+on the same CPU, so remove the unneeded memory barriers.
+
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Reviewed-by: Andre Przywara <andre.przywara@arm.com>
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ arm/gic.c | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/arm/gic.c b/arm/gic.c
+index e2e053aeb823..8bb804abf34d 100644
+--- a/arm/gic.c
++++ b/arm/gic.c
+@@ -367,6 +367,7 @@ static struct gic gicv3 = {
+ 	},
+ };
+ 
++/* Runs on the same CPU as the sender, no need for memory synchronization */
+ static void ipi_clear_active_handler(struct pt_regs *regs __unused)
+ {
+ 	u32 irqstat = gic_read_iar();
+@@ -383,13 +384,10 @@ static void ipi_clear_active_handler(struct pt_regs *regs __unused)
+ 
+ 		writel(val, base + GICD_ICACTIVER);
+ 
+-		smp_rmb(); /* pairs with wmb in stats_reset */
+ 		++acked[smp_processor_id()];
+ 		check_irqnr(irqnr);
+-		smp_wmb(); /* pairs with rmb in check_acked */
+ 	} else {
+ 		++spurious[smp_processor_id()];
+-		smp_wmb();
+ 	}
+ }
+ 
+
+From patchwork Fri Jan 29 16:36:40 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 12056031
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 500B7C433DB
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:38:36 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 2CC5664DFB
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:38:36 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231408AbhA2Qi1 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 29 Jan 2021 11:38:27 -0500
+Received: from foss.arm.com ([217.140.110.172]:51082 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S231124AbhA2Qh7 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 29 Jan 2021 11:37:59 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id AFE12152B;
+        Fri, 29 Jan 2021 08:37:13 -0800 (PST)
+Received: from monolith.localdoman (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ F07F03F71B;
+        Fri, 29 Jan 2021 08:37:12 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: drjones@redhat.com, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu
+Cc: andre.przywara@arm.com
+Subject: [kvm-unit-tests PATCH v3 04/11] arm/arm64: gic: Remove unnecessary
+ synchronization with stats_reset()
+Date: Fri, 29 Jan 2021 16:36:40 +0000
+Message-Id: <20210129163647.91564-5-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.30.0
+In-Reply-To: <20210129163647.91564-1-alexandru.elisei@arm.com>
+References: <20210129163647.91564-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The GICv3 driver executes a DSB barrier before sending an IPI, which
+ensures that memory accesses have completed. This removes the need to
+enforce ordering with respect to stats_reset() in the IPI handler.
+
+For GICv2, the same barrier is executed by readl() after the MMIO read.
+Together with the wmb() barrier from writel() when triggering the IPI,
+this ensures that the expected memory ordering is respected.
+
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ arm/gic.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/arm/gic.c b/arm/gic.c
+index 8bb804abf34d..db1417ae1ca1 100644
+--- a/arm/gic.c
++++ b/arm/gic.c
+@@ -59,7 +59,6 @@ static void stats_reset(void)
+ 		bad_sender[i] = -1;
+ 		bad_irq[i] = -1;
+ 	}
+-	smp_wmb();
+ }
+ 
+ static void check_acked(const char *testname, cpumask_t *mask)
+@@ -149,7 +148,6 @@ static void ipi_handler(struct pt_regs *regs __unused)
+ 
+ 	if (irqnr != GICC_INT_SPURIOUS) {
+ 		gic_write_eoir(irqstat);
+-		smp_rmb(); /* pairs with wmb in stats_reset */
+ 		++acked[smp_processor_id()];
+ 		check_ipi_sender(irqstat);
+ 		check_irqnr(irqnr);
+
+From patchwork Fri Jan 29 16:36:41 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 12056035
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 278ECC433E6
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:39:29 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id CA97564E03
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:39:28 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231394AbhA2QjX (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 29 Jan 2021 11:39:23 -0500
+Received: from foss.arm.com ([217.140.110.172]:51174 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S231645AbhA2Qiw (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 29 Jan 2021 11:38:52 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id A6488153B;
+        Fri, 29 Jan 2021 08:37:14 -0800 (PST)
+Received: from monolith.localdoman (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ E64F83F71B;
+        Fri, 29 Jan 2021 08:37:13 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: drjones@redhat.com, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu
+Cc: andre.przywara@arm.com
+Subject: [kvm-unit-tests PATCH v3 05/11] arm/arm64: gic: Use correct memory
+ ordering for the IPI test
+Date: Fri, 29 Jan 2021 16:36:41 +0000
+Message-Id: <20210129163647.91564-6-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.30.0
+In-Reply-To: <20210129163647.91564-1-alexandru.elisei@arm.com>
+References: <20210129163647.91564-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The IPI test works by sending IPIs to even numbered CPUs from the
+IPI_SENDER CPU (CPU1), and then checking that the other CPUs received the
+interrupts as expected. The check is done in check_acked() by the
+IPI_SENDER CPU with the help of three arrays:
+
+- acked, where acked[i] == 1 means that CPU i received the interrupt.
+- bad_irq, where bad_irq[i] == -1 means that the interrupt received by CPU
+  i had the expected interrupt number (IPI_IRQ).
+- bad_sender, where bad_sender[i] == -1 means that the interrupt received
+  by CPU i was from the expected sender (IPI_SENDER, GICv2 only).
+
+The assumption made by check_acked() is that if a CPU acked an interrupt,
+then bad_sender and bad_irq have also been updated. This is a common
+inter-thread communication pattern called message passing.  For message
+passing to work correctly on weakly consistent memory model architectures,
+like arm and arm64, barriers or address dependencies are required. This is
+described in ARM DDI 0487F.b, in "Armv7 compatible approaches for ordering,
+using DMB and DSB barriers" (page K11-7993), in the section with a single
+observer, which is in our case the IPI_SENDER CPU.
+
+The IPI test attempts to enforce the correct ordering using memory
+barriers, but it's not enough. For example, the program execution below is
+valid from an architectural point of view:
+
+3 online CPUs, initial state (from stats_reset()):
+
+acked[2] = 0;
+bad_sender[2] = -1;
+bad_irq[2] = -1;
+
+CPU1 (in check_acked())		| CPU2 (in ipi_handler())
+				|
+smp_rmb() // DMB ISHLD		| acked[2]++;
+read 1 from acked[2]		|
+nr_pass++ // nr_pass = 3	|
+read -1 from bad_sender[2]	|
+read -1 from bad_irq[2]		|
+				| // in check_ipi_sender()
+				| bad_sender[2] = <bad ipi sender>
+				| // in check_irqnr()
+				| bad_irq[2] = <bad irq number>
+				| smp_wmb() // DMB ISHST
+nr_pass == nr_cpus, return	|
+
+In this scenario, CPU1 will read the updated acked value, but it will read
+the initial bad_sender and bad_irq values. This is permitted because the
+memory barriers do not create a data dependency between the value read from
+acked and the values read from bad_rq and bad_sender on CPU1, respectively
+between the values written to acked, bad_sender and bad_irq on CPU2.
+
+To avoid this situation, let's reorder the barriers and accesses to the
+arrays to create the needed dependencies that ensure that message passing
+behaves as expected.
+
+In the interrupt handler, the writes to bad_sender and bad_irq are
+reordered before the write to acked and a smp_wmb() barrier is added. This
+ensures that if other PEs observe the write to acked, then they will also
+observe the writes to the other two arrays.
+
+In check_acked(), put the smp_rmb() barrier after the read from acked to
+ensure that the subsequent reads from bad_sender, respectively bad_irq,
+aren't reordered locally by the PE.
+
+With these changes, the expected ordering of accesses is respected and we
+end up with the pattern described in the Arm ARM and also in the Linux
+litmus test MP+fencewmbonceonce+fencermbonceonce.litmus from
+tools/memory-model/litmus-tests. More examples and explanations can be
+found in the Linux source tree, in Documentation/memory-barriers.txt, in
+the sections "SMP BARRIER PAIRING" and "READ MEMORY BARRIERS VS LOAD
+SPECULATION".
+
+For consistency with ipi_handler(), the array accesses in
+ipi_clear_active_handler() have also been reordered. This shouldn't affect
+the functionality of that test.
+
+Reviewed-by: Andre Przywara <andre.przywara@arm.com>
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ arm/gic.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/arm/gic.c b/arm/gic.c
+index db1417ae1ca1..c1b6c94a5f5e 100644
+--- a/arm/gic.c
++++ b/arm/gic.c
+@@ -72,9 +72,9 @@ static void check_acked(const char *testname, cpumask_t *mask)
+ 		mdelay(100);
+ 		nr_pass = 0;
+ 		for_each_present_cpu(cpu) {
+-			smp_rmb();
+ 			nr_pass += cpumask_test_cpu(cpu, mask) ?
+ 				acked[cpu] == 1 : acked[cpu] == 0;
++			smp_rmb(); /* pairs with smp_wmb in ipi_handler */
+ 
+ 			if (bad_sender[cpu] != -1) {
+ 				printf("cpu%d received IPI from wrong sender %d\n",
+@@ -148,10 +148,10 @@ static void ipi_handler(struct pt_regs *regs __unused)
+ 
+ 	if (irqnr != GICC_INT_SPURIOUS) {
+ 		gic_write_eoir(irqstat);
+-		++acked[smp_processor_id()];
+ 		check_ipi_sender(irqstat);
+ 		check_irqnr(irqnr);
+-		smp_wmb(); /* pairs with rmb in check_acked */
++		smp_wmb(); /* pairs with smp_rmb in check_acked */
++		++acked[smp_processor_id()];
+ 	} else {
+ 		++spurious[smp_processor_id()];
+ 		smp_wmb();
+@@ -382,8 +382,8 @@ static void ipi_clear_active_handler(struct pt_regs *regs __unused)
+ 
+ 		writel(val, base + GICD_ICACTIVER);
+ 
+-		++acked[smp_processor_id()];
+ 		check_irqnr(irqnr);
++		++acked[smp_processor_id()];
+ 	} else {
+ 		++spurious[smp_processor_id()];
+ 	}
+
+From patchwork Fri Jan 29 16:36:42 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 12056041
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 293AEC433E6
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:39:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id E4BB964E03
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:39:57 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S229661AbhA2Qjq (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 29 Jan 2021 11:39:46 -0500
+Received: from foss.arm.com ([217.140.110.172]:51172 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S231622AbhA2Qiw (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 29 Jan 2021 11:38:52 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 13C731570;
+        Fri, 29 Jan 2021 08:37:16 -0800 (PST)
+Received: from monolith.localdoman (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ DC6853F71B;
+        Fri, 29 Jan 2021 08:37:14 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: drjones@redhat.com, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu
+Cc: andre.przywara@arm.com, Eric Auger <eric.auger@redhat.com>
+Subject: [kvm-unit-tests PATCH v3 06/11] arm/arm64: gic: Check spurious and
+ bad_sender in the active test
+Date: Fri, 29 Jan 2021 16:36:42 +0000
+Message-Id: <20210129163647.91564-7-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.30.0
+In-Reply-To: <20210129163647.91564-1-alexandru.elisei@arm.com>
+References: <20210129163647.91564-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The gicv{2,3}-active test sends an IPI from the boot CPU to itself, then
+checks that the interrupt has been received as expected. The
+ipi_clear_active_handler() clears the active state of the interrupt with a
+write to the GICD_ICACTIVER register instead of writing the to EOI
+register.
+
+When acknowledging the interrupt it is possible to get back an spurious
+interrupt ID (ID 1023), and the interrupt handler increments the number of
+spurious interrupts received on the current processor. However, this is not
+checked at the end of the test. Let's also check for spurious interrupts,
+like the IPI test does.
+
+For IPIs on GICv2, the value returned by a read of the GICC_IAR register
+performed when acknowledging the interrupt also contains the sender CPU
+ID. Add a check for that too.
+
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ arm/gic.c | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/arm/gic.c b/arm/gic.c
+index c1b6c94a5f5e..982c96681cf9 100644
+--- a/arm/gic.c
++++ b/arm/gic.c
+@@ -125,12 +125,12 @@ static void check_spurious(void)
+ 	}
+ }
+ 
+-static void check_ipi_sender(u32 irqstat)
++static void check_ipi_sender(u32 irqstat, int sender)
+ {
+ 	if (gic_version() == 2) {
+ 		int src = (irqstat >> 10) & 7;
+ 
+-		if (src != IPI_SENDER)
++		if (src != sender)
+ 			bad_sender[smp_processor_id()] = src;
+ 	}
+ }
+@@ -148,7 +148,7 @@ static void ipi_handler(struct pt_regs *regs __unused)
+ 
+ 	if (irqnr != GICC_INT_SPURIOUS) {
+ 		gic_write_eoir(irqstat);
+-		check_ipi_sender(irqstat);
++		check_ipi_sender(irqstat, IPI_SENDER);
+ 		check_irqnr(irqnr);
+ 		smp_wmb(); /* pairs with smp_rmb in check_acked */
+ 		++acked[smp_processor_id()];
+@@ -382,6 +382,7 @@ static void ipi_clear_active_handler(struct pt_regs *regs __unused)
+ 
+ 		writel(val, base + GICD_ICACTIVER);
+ 
++		check_ipi_sender(irqstat, smp_processor_id());
+ 		check_irqnr(irqnr);
+ 		++acked[smp_processor_id()];
+ 	} else {
+@@ -394,6 +395,7 @@ static void run_active_clear_test(void)
+ 	report_prefix_push("active");
+ 	setup_irq(ipi_clear_active_handler);
+ 	ipi_test_self();
++	check_spurious();
+ 	report_prefix_pop();
+ }
+ 
+
+From patchwork Fri Jan 29 16:36:43 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 12056039
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 0C8C8C433E9
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:39:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C259E64DFB
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:39:57 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231837AbhA2Qjj (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 29 Jan 2021 11:39:39 -0500
+Received: from foss.arm.com ([217.140.110.172]:51176 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S231657AbhA2Qiz (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 29 Jan 2021 11:38:55 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 244AE1596;
+        Fri, 29 Jan 2021 08:37:17 -0800 (PST)
+Received: from monolith.localdoman (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 485443F71B;
+        Fri, 29 Jan 2021 08:37:16 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: drjones@redhat.com, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu
+Cc: andre.przywara@arm.com, Eric Auger <eric.auger@redhat.com>
+Subject: [kvm-unit-tests PATCH v3 07/11] arm/arm64: gic: Wait for writes to
+ acked or spurious to complete
+Date: Fri, 29 Jan 2021 16:36:43 +0000
+Message-Id: <20210129163647.91564-8-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.30.0
+In-Reply-To: <20210129163647.91564-1-alexandru.elisei@arm.com>
+References: <20210129163647.91564-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The IPI test has two parts: in the first part, it tests that the sender CPU
+can send an IPI to itself (ipi_test_self()), and in the second part it
+sends interrupts to even-numbered CPUs (ipi_test_smp()). When acknowledging
+an interrupt, if we read back a spurious interrupt ID (1023), the handler
+increments the index in the static array spurious corresponding to the CPU
+ID that the handler is running on; if we get the expected interrupt ID, we
+increment the same index in the acked array.
+
+Reads of the spurious and acked arrays are synchronized with writes
+performed before sending the IPI. The synchronization is done either in the
+IPI sender function (GICv3), either by creating a data dependency (GICv2).
+
+At the end of the test, the sender CPU reads from the acked and spurious
+arrays to check against the expected behaviour. We need to make sure the
+that writes in ipi_handler() are observable by the sender CPU. Use a DSB
+ISHST to make sure that the writes have completed.
+
+One might rightfully argue that there are no guarantees regarding when the
+DSB instruction completes, just like there are no guarantees regarding when
+the value is observed by the other CPUs. However, let's do our best and
+instruct the CPU to complete the memory access when we know that it will be
+needed.
+
+We still need to follow the message passing pattern for the acked,
+respectively bad_irq and bad_sender, because DSB guarantees that all memory
+accesses that come before the barrier have completed, not that they have
+completed in program order.
+
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ arm/gic.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/arm/gic.c b/arm/gic.c
+index 982c96681cf9..af4d4645c0ae 100644
+--- a/arm/gic.c
++++ b/arm/gic.c
+@@ -117,7 +117,6 @@ static void check_spurious(void)
+ {
+ 	int cpu;
+ 
+-	smp_rmb();
+ 	for_each_present_cpu(cpu) {
+ 		if (spurious[cpu])
+ 			report_info("WARN: cpu%d got %d spurious interrupts",
+@@ -154,8 +153,10 @@ static void ipi_handler(struct pt_regs *regs __unused)
+ 		++acked[smp_processor_id()];
+ 	} else {
+ 		++spurious[smp_processor_id()];
+-		smp_wmb();
+ 	}
++
++	/* Wait for writes to acked/spurious to complete */
++	dsb(ishst);
+ }
+ 
+ static void setup_irq(irq_handler_fn handler)
+
+From patchwork Fri Jan 29 16:36:44 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 12056033
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id D2D42C433E0
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:39:28 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 87E5F64DFB
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:39:28 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231771AbhA2QjU (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 29 Jan 2021 11:39:20 -0500
+Received: from foss.arm.com ([217.140.110.172]:51178 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S231660AbhA2Qiz (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 29 Jan 2021 11:38:55 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 194D21597;
+        Fri, 29 Jan 2021 08:37:18 -0800 (PST)
+Received: from monolith.localdoman (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 5A2E83F71B;
+        Fri, 29 Jan 2021 08:37:17 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: drjones@redhat.com, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu
+Cc: andre.przywara@arm.com
+Subject: [kvm-unit-tests PATCH v3 08/11] arm/arm64: gic: Split check_acked()
+ into two functions
+Date: Fri, 29 Jan 2021 16:36:44 +0000
+Message-Id: <20210129163647.91564-9-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.30.0
+In-Reply-To: <20210129163647.91564-1-alexandru.elisei@arm.com>
+References: <20210129163647.91564-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+check_acked() has several peculiarities: is the only function among the
+check_* functions which calls report() directly, it does two things
+(waits for interrupts and checks for misfired interrupts) and it also
+mixes printf, report_info and report calls.
+
+check_acked() also reports a pass and returns as soon all the target CPUs
+have received interrupts, However, a CPU not having received an interrupt
+*now* does not guarantee not receiving an erroneous interrupt if we wait
+long enough.
+
+Rework the function by splitting it into two separate functions, each with
+a single responsibility: wait_for_interrupts(), which waits for the
+expected interrupts to fire, and check_acked() which checks that interrupts
+have been received as expected.
+
+wait_for_interrupts() also waits an extra 100 milliseconds after the
+expected interrupts have been received in an effort to make sure we don't
+miss misfiring interrupts.
+
+Splitting check_acked() into two functions will also allow us to
+customize the behavior of each function in the future more easily
+without using an unnecessarily long list of arguments for check_acked().
+
+CC: Andre Przywara <andre.przywara@arm.com>
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ arm/gic.c | 74 ++++++++++++++++++++++++++++++++++++-------------------
+ 1 file changed, 48 insertions(+), 26 deletions(-)
+
+diff --git a/arm/gic.c b/arm/gic.c
+index af4d4645c0ae..2c96cf49ce8c 100644
+--- a/arm/gic.c
++++ b/arm/gic.c
+@@ -61,41 +61,43 @@ static void stats_reset(void)
+ 	}
+ }
+ 
+-static void check_acked(const char *testname, cpumask_t *mask)
++static void wait_for_interrupts(cpumask_t *mask)
+ {
+-	int missing = 0, extra = 0, unexpected = 0;
+ 	int nr_pass, cpu, i;
+-	bool bad = false;
+ 
+ 	/* Wait up to 5s for all interrupts to be delivered */
+-	for (i = 0; i < 50; ++i) {
++	for (i = 0; i < 50; i++) {
+ 		mdelay(100);
+ 		nr_pass = 0;
+ 		for_each_present_cpu(cpu) {
++			/*
++			 * A CPU having received more than one interrupts will
++			 * show up in check_acked(), and no matter how long we
++			 * wait it cannot un-receive it. Consider at least one
++			 * interrupt as a pass.
++			 */
+ 			nr_pass += cpumask_test_cpu(cpu, mask) ?
+-				acked[cpu] == 1 : acked[cpu] == 0;
+-			smp_rmb(); /* pairs with smp_wmb in ipi_handler */
+-
+-			if (bad_sender[cpu] != -1) {
+-				printf("cpu%d received IPI from wrong sender %d\n",
+-					cpu, bad_sender[cpu]);
+-				bad = true;
+-			}
+-
+-			if (bad_irq[cpu] != -1) {
+-				printf("cpu%d received wrong irq %d\n",
+-					cpu, bad_irq[cpu]);
+-				bad = true;
+-			}
++				acked[cpu] >= 1 : acked[cpu] == 0;
+ 		}
++
+ 		if (nr_pass == nr_cpus) {
+-			report(!bad, "%s", testname);
+ 			if (i)
+-				report_info("took more than %d ms", i * 100);
++				report_info("interrupts took more than %d ms", i * 100);
++			/* Wait for unexpected interrupts to fire */
++			mdelay(100);
+ 			return;
+ 		}
+ 	}
+ 
++	report_info("interrupts timed-out (5s)");
++}
++
++static bool check_acked(cpumask_t *mask)
++{
++	int missing = 0, extra = 0, unexpected = 0;
++	bool pass = true;
++	int cpu;
++
+ 	for_each_present_cpu(cpu) {
+ 		if (cpumask_test_cpu(cpu, mask)) {
+ 			if (!acked[cpu])
+@@ -106,11 +108,28 @@ static void check_acked(const char *testname, cpumask_t *mask)
+ 			if (acked[cpu])
+ 				++unexpected;
+ 		}
++		smp_rmb(); /* pairs with smp_wmb in ipi_handler */
++
++		if (bad_sender[cpu] != -1) {
++			report_info("cpu%d received IPI from wrong sender %d",
++					cpu, bad_sender[cpu]);
++			pass = false;
++		}
++
++		if (bad_irq[cpu] != -1) {
++			report_info("cpu%d received wrong irq %d",
++					cpu, bad_irq[cpu]);
++			pass = false;
++		}
++	}
++
++	if (missing || extra || unexpected) {
++		report_info("ACKS: missing=%d extra=%d unexpected=%d",
++				missing, extra, unexpected);
++		pass = false;
+ 	}
+ 
+-	report(false, "%s", testname);
+-	report_info("Timed-out (5s). ACKS: missing=%d extra=%d unexpected=%d",
+-		    missing, extra, unexpected);
++	return pass;
+ }
+ 
+ static void check_spurious(void)
+@@ -299,7 +318,8 @@ static void ipi_test_self(void)
+ 	cpumask_clear(&mask);
+ 	cpumask_set_cpu(smp_processor_id(), &mask);
+ 	gic->ipi.send_self();
+-	check_acked("IPI: self", &mask);
++	wait_for_interrupts(&mask);
++	report(check_acked(&mask), "Interrupts received");
+ 	report_prefix_pop();
+ }
+ 
+@@ -314,7 +334,8 @@ static void ipi_test_smp(void)
+ 	for (i = smp_processor_id() & 1; i < nr_cpus; i += 2)
+ 		cpumask_clear_cpu(i, &mask);
+ 	gic_ipi_send_mask(IPI_IRQ, &mask);
+-	check_acked("IPI: directed", &mask);
++	wait_for_interrupts(&mask);
++	report(check_acked(&mask), "Interrupts received");
+ 	report_prefix_pop();
+ 
+ 	report_prefix_push("broadcast");
+@@ -322,7 +343,8 @@ static void ipi_test_smp(void)
+ 	cpumask_copy(&mask, &cpu_present_mask);
+ 	cpumask_clear_cpu(smp_processor_id(), &mask);
+ 	gic->ipi.send_broadcast();
+-	check_acked("IPI: broadcast", &mask);
++	wait_for_interrupts(&mask);
++	report(check_acked(&mask), "Interrupts received");
+ 	report_prefix_pop();
+ }
+ 
+
+From patchwork Fri Jan 29 16:36:45 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 12056043
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 3CCFEC43381
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:39:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 12E7964E00
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:39:58 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231374AbhA2Qjv (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 29 Jan 2021 11:39:51 -0500
+Received: from foss.arm.com ([217.140.110.172]:51180 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S231715AbhA2QjB (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 29 Jan 2021 11:39:01 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 2CA5D15AD;
+        Fri, 29 Jan 2021 08:37:19 -0800 (PST)
+Received: from monolith.localdoman (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 4F2633F71B;
+        Fri, 29 Jan 2021 08:37:18 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: drjones@redhat.com, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu
+Cc: andre.przywara@arm.com, Eric Auger <eric.auger@redhat.com>
+Subject: [kvm-unit-tests PATCH v3 09/11] arm/arm64: gic: Make check_acked()
+ more generic
+Date: Fri, 29 Jan 2021 16:36:45 +0000
+Message-Id: <20210129163647.91564-10-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.30.0
+In-Reply-To: <20210129163647.91564-1-alexandru.elisei@arm.com>
+References: <20210129163647.91564-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Testing that an interrupt is received as expected is done in three places:
+in check_ipi_sender(), check_irqnr() and check_acked(). check_irqnr()
+compares the interrupt ID with IPI_IRQ and records a failure in bad_irq,
+and check_ipi_sender() compares the sender with IPI_SENDER and writes to
+bad_sender when they don't match.
+
+Let's move all the checks to check_acked() by renaming
+bad_sender->irq_sender and bad_irq->irq_number and changing their semantics
+so they record the interrupt sender, respectively the irq number.
+check_acked() now takes two new parameters: the expected interrupt number
+and sender.
+
+This has two distinct advantages:
+
+1. check_acked() and ipi_handler() can now be used for interrupts other
+   than IPIs.
+2. Correctness checks are consolidated in one function.
+
+CC: Andre Przywara <andre.przywara@arm.com>
+Reviewed-by: Eric Auger <eric.auger@redhat.com>
+Reviewed-by: Andre Przywara <andre.przywara@arm.com>
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ arm/gic.c | 68 +++++++++++++++++++++++++++----------------------------
+ 1 file changed, 33 insertions(+), 35 deletions(-)
+
+diff --git a/arm/gic.c b/arm/gic.c
+index 2c96cf49ce8c..af2c112336e7 100644
+--- a/arm/gic.c
++++ b/arm/gic.c
+@@ -34,7 +34,7 @@ struct gic {
+ 
+ static struct gic *gic;
+ static int acked[NR_CPUS], spurious[NR_CPUS];
+-static int bad_sender[NR_CPUS], bad_irq[NR_CPUS];
++static int irq_sender[NR_CPUS], irq_number[NR_CPUS];
+ static cpumask_t ready;
+ 
+ static void nr_cpu_check(int nr)
+@@ -56,8 +56,8 @@ static void stats_reset(void)
+ 
+ 	for (i = 0; i < nr_cpus; ++i) {
+ 		acked[i] = 0;
+-		bad_sender[i] = -1;
+-		bad_irq[i] = -1;
++		irq_sender[i] = -1;
++		irq_number[i] = -1;
+ 	}
+ }
+ 
+@@ -92,9 +92,10 @@ static void wait_for_interrupts(cpumask_t *mask)
+ 	report_info("interrupts timed-out (5s)");
+ }
+ 
+-static bool check_acked(cpumask_t *mask)
++static bool check_acked(cpumask_t *mask, int sender, int irqnum)
+ {
+ 	int missing = 0, extra = 0, unexpected = 0;
++	bool has_gicv2 = (gic_version() == 2);
+ 	bool pass = true;
+ 	int cpu;
+ 
+@@ -108,17 +109,19 @@ static bool check_acked(cpumask_t *mask)
+ 			if (acked[cpu])
+ 				++unexpected;
+ 		}
++		if (!acked[cpu])
++			continue;
+ 		smp_rmb(); /* pairs with smp_wmb in ipi_handler */
+ 
+-		if (bad_sender[cpu] != -1) {
++		if (has_gicv2 && irq_sender[cpu] != sender) {
+ 			report_info("cpu%d received IPI from wrong sender %d",
+-					cpu, bad_sender[cpu]);
++					cpu, irq_sender[cpu]);
+ 			pass = false;
+ 		}
+ 
+-		if (bad_irq[cpu] != -1) {
++		if (irq_number[cpu] != irqnum) {
+ 			report_info("cpu%d received wrong irq %d",
+-					cpu, bad_irq[cpu]);
++					cpu, irq_number[cpu]);
+ 			pass = false;
+ 		}
+ 	}
+@@ -143,35 +146,27 @@ static void check_spurious(void)
+ 	}
+ }
+ 
+-static void check_ipi_sender(u32 irqstat, int sender)
++static int gic_get_sender(int irqstat)
+ {
+-	if (gic_version() == 2) {
+-		int src = (irqstat >> 10) & 7;
+-
+-		if (src != sender)
+-			bad_sender[smp_processor_id()] = src;
+-	}
+-}
+-
+-static void check_irqnr(u32 irqnr)
+-{
+-	if (irqnr != IPI_IRQ)
+-		bad_irq[smp_processor_id()] = irqnr;
++	if (gic_version() == 2)
++		return (irqstat >> 10) & 7;
++	return -1;
+ }
+ 
+ static void ipi_handler(struct pt_regs *regs __unused)
+ {
+ 	u32 irqstat = gic_read_iar();
+ 	u32 irqnr = gic_iar_irqnr(irqstat);
++	int this_cpu = smp_processor_id();
+ 
+ 	if (irqnr != GICC_INT_SPURIOUS) {
+ 		gic_write_eoir(irqstat);
+-		check_ipi_sender(irqstat, IPI_SENDER);
+-		check_irqnr(irqnr);
++		irq_sender[this_cpu] = gic_get_sender(irqstat);
++		irq_number[this_cpu] = irqnr;
+ 		smp_wmb(); /* pairs with smp_rmb in check_acked */
+-		++acked[smp_processor_id()];
++		++acked[this_cpu];
+ 	} else {
+-		++spurious[smp_processor_id()];
++		++spurious[this_cpu];
+ 	}
+ 
+ 	/* Wait for writes to acked/spurious to complete */
+@@ -311,40 +306,42 @@ static void gicv3_ipi_send_broadcast(void)
+ 
+ static void ipi_test_self(void)
+ {
++	int this_cpu = smp_processor_id();
+ 	cpumask_t mask;
+ 
+ 	report_prefix_push("self");
+ 	stats_reset();
+ 	cpumask_clear(&mask);
+-	cpumask_set_cpu(smp_processor_id(), &mask);
++	cpumask_set_cpu(this_cpu, &mask);
+ 	gic->ipi.send_self();
+ 	wait_for_interrupts(&mask);
+-	report(check_acked(&mask), "Interrupts received");
++	report(check_acked(&mask, this_cpu, IPI_IRQ), "Interrupts received");
+ 	report_prefix_pop();
+ }
+ 
+ static void ipi_test_smp(void)
+ {
++	int this_cpu = smp_processor_id();
+ 	cpumask_t mask;
+ 	int i;
+ 
+ 	report_prefix_push("target-list");
+ 	stats_reset();
+ 	cpumask_copy(&mask, &cpu_present_mask);
+-	for (i = smp_processor_id() & 1; i < nr_cpus; i += 2)
++	for (i = this_cpu & 1; i < nr_cpus; i += 2)
+ 		cpumask_clear_cpu(i, &mask);
+ 	gic_ipi_send_mask(IPI_IRQ, &mask);
+ 	wait_for_interrupts(&mask);
+-	report(check_acked(&mask), "Interrupts received");
++	report(check_acked(&mask, this_cpu, IPI_IRQ), "Interrupts received");
+ 	report_prefix_pop();
+ 
+ 	report_prefix_push("broadcast");
+ 	stats_reset();
+ 	cpumask_copy(&mask, &cpu_present_mask);
+-	cpumask_clear_cpu(smp_processor_id(), &mask);
++	cpumask_clear_cpu(this_cpu, &mask);
+ 	gic->ipi.send_broadcast();
+ 	wait_for_interrupts(&mask);
+-	report(check_acked(&mask), "Interrupts received");
++	report(check_acked(&mask, this_cpu, IPI_IRQ), "Interrupts received");
+ 	report_prefix_pop();
+ }
+ 
+@@ -393,6 +390,7 @@ static void ipi_clear_active_handler(struct pt_regs *regs __unused)
+ {
+ 	u32 irqstat = gic_read_iar();
+ 	u32 irqnr = gic_iar_irqnr(irqstat);
++	int this_cpu = smp_processor_id();
+ 
+ 	if (irqnr != GICC_INT_SPURIOUS) {
+ 		void *base;
+@@ -405,11 +403,11 @@ static void ipi_clear_active_handler(struct pt_regs *regs __unused)
+ 
+ 		writel(val, base + GICD_ICACTIVER);
+ 
+-		check_ipi_sender(irqstat, smp_processor_id());
+-		check_irqnr(irqnr);
+-		++acked[smp_processor_id()];
++		irq_sender[this_cpu] = gic_get_sender(irqstat);
++		irq_number[this_cpu] = irqnr;
++		++acked[this_cpu];
+ 	} else {
+-		++spurious[smp_processor_id()];
++		++spurious[this_cpu];
+ 	}
+ }
+ 
+
+From patchwork Fri Jan 29 16:36:46 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 12056037
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id DA9CAC433DB
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:39:57 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id A8B8C64DFF
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:39:57 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231614AbhA2Qjh (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 29 Jan 2021 11:39:37 -0500
+Received: from foss.arm.com ([217.140.110.172]:51182 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S231716AbhA2QjB (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 29 Jan 2021 11:39:01 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id 5D7AA15BE;
+        Fri, 29 Jan 2021 08:37:20 -0800 (PST)
+Received: from monolith.localdoman (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 628E43F71B;
+        Fri, 29 Jan 2021 08:37:19 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: drjones@redhat.com, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu
+Cc: andre.przywara@arm.com, Auger Eric <eric.auger@redhat.com>,
+        Zenghui Yu <yuzenghui@huawei.com>
+Subject: [kvm-unit-tests PATCH v3 10/11] arm64: gic: its-trigger: Don't
+ trigger the LPI while it is pending
+Date: Fri, 29 Jan 2021 16:36:46 +0000
+Message-Id: <20210129163647.91564-11-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.30.0
+In-Reply-To: <20210129163647.91564-1-alexandru.elisei@arm.com>
+References: <20210129163647.91564-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The its-trigger test checks that LPI 8195 is not delivered to the CPU while
+it is disabled at the ITS level. After that it is re-enabled and the test
+checks that the interrupt is properly asserted. After it's re-enabled and
+before the stats are examined, the test triggers the interrupt again, which
+can lead to the same interrupt being delivered twice: once after the
+configuration invalidation and before the INT command, and once after the
+INT command.
+
+Add an explicit check that the interrupt has fired after the invalidation.
+Leave the check after the INT command to make sure the INT command still
+works for the now re-enabled LPI.
+
+CC: Auger Eric <eric.auger@redhat.com>
+Suggested-by: Zenghui Yu <yuzenghui@huawei.com>
+Reviewed-by: Andre Przywara <andre.przywara@arm.com>
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ arm/gic.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/arm/gic.c b/arm/gic.c
+index af2c112336e7..8bc2a35908f2 100644
+--- a/arm/gic.c
++++ b/arm/gic.c
+@@ -802,6 +802,9 @@ static void test_its_trigger(void)
+ 
+ 	/* Now call the invall and check the LPI hits */
+ 	its_send_invall(col3);
++	lpi_stats_expect(3, 8195);
++	check_lpi_stats("dev2/eventid=20 pending LPI is received");
++
+ 	lpi_stats_expect(3, 8195);
+ 	its_send_int(dev2, 20);
+ 	check_lpi_stats("dev2/eventid=20 now triggers an LPI");
+
+From patchwork Fri Jan 29 16:36:47 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alexandru Elisei <alexandru.elisei@arm.com>
+X-Patchwork-Id: 12056045
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id ADCA5C433E0
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:40:04 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 77FA564DFF
+	for <kvm@archiver.kernel.org>; Fri, 29 Jan 2021 16:40:04 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231889AbhA2Qj7 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 29 Jan 2021 11:39:59 -0500
+Received: from foss.arm.com ([217.140.110.172]:51184 "EHLO foss.arm.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S231758AbhA2QjC (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 29 Jan 2021 11:39:02 -0500
+Received: from usa-sjc-imap-foss1.foss.arm.com (unknown [10.121.207.14])
+        by usa-sjc-mx-foss1.foss.arm.com (Postfix) with ESMTP id D282E15DB;
+        Fri, 29 Jan 2021 08:37:21 -0800 (PST)
+Received: from monolith.localdoman (unknown [172.31.20.19])
+        by usa-sjc-imap-foss1.foss.arm.com (Postfix) with ESMTPSA id
+ 9C73D3F71B;
+        Fri, 29 Jan 2021 08:37:20 -0800 (PST)
+From: Alexandru Elisei <alexandru.elisei@arm.com>
+To: drjones@redhat.com, kvm@vger.kernel.org,
+        kvmarm@lists.cs.columbia.edu
+Cc: andre.przywara@arm.com, Eric Auger <eric.auger@redhat.com>
+Subject: [kvm-unit-tests PATCH v3 11/11] arm64: gic: Use IPI test checking for
+ the LPI tests
+Date: Fri, 29 Jan 2021 16:36:47 +0000
+Message-Id: <20210129163647.91564-12-alexandru.elisei@arm.com>
+X-Mailer: git-send-email 2.30.0
+In-Reply-To: <20210129163647.91564-1-alexandru.elisei@arm.com>
+References: <20210129163647.91564-1-alexandru.elisei@arm.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The LPI code validates a result similarly to the IPI tests, by checking if
+the target CPU received the interrupt with the expected interrupt number.
+However, the LPI tests invent their own way of checking the test results by
+creating a global struct (lpi_stats), using a separate interrupt handler
+(lpi_handler) and test function (check_lpi_stats).
+
+There are several areas that can be improved in the LPI code, which are
+already covered by the IPI tests:
+
+- check_lpi_stats() doesn't take into account that the target CPU can
+  receive the correct interrupt multiple times.
+- check_lpi_stats() doesn't take into the account the scenarios where all
+  online CPUs can receive the interrupt, but the target CPU is the last CPU
+  that touches lpi_stats.observed.
+- Insufficient or missing memory synchronization.
+
+Instead of duplicating code, let's convert the LPI tests to use
+check_acked() and the same interrupt handler as the IPI tests, which has
+been renamed to irq_handler() to avoid any confusion.
+
+check_lpi_stats() has been replaced with check_acked() which, together with
+using irq_handler(), instantly gives us more correctness checks and proper
+memory synchronization between threads. lpi_stats.expected has been
+replaced by the CPU mask and the expected interrupt number arguments to
+check_acked(), with no change in semantics.
+
+lpi_handler() aborted the test if the interrupt number was not an LPI. This
+was changed in favor of allowing the test to continue, as it will fail in
+check_acked(), but possibly print information useful for debugging. If the
+test receives spurious interrupts, those are reported via report_info() at
+the end of the test for consistency with the IPI tests, which don't treat
+spurious interrupts as critical errors.
+
+In the spirit of code reuse, secondary_lpi_tests() has been replaced with
+ipi_recv() because the two are now identical; ipi_recv() has been renamed
+to irq_recv(), similarly to irq_handler(), to avoid confusion.
+
+CC: Eric Auger <eric.auger@redhat.com>
+Signed-off-by: Alexandru Elisei <alexandru.elisei@arm.com>
+---
+ arm/gic.c | 190 +++++++++++++++++++++++++-----------------------------
+ 1 file changed, 87 insertions(+), 103 deletions(-)
+
+diff --git a/arm/gic.c b/arm/gic.c
+index 8bc2a35908f2..42048436c4c1 100644
+--- a/arm/gic.c
++++ b/arm/gic.c
+@@ -105,13 +105,12 @@ static bool check_acked(cpumask_t *mask, int sender, int irqnum)
+ 				++missing;
+ 			else if (acked[cpu] > 1)
+ 				++extra;
+-		} else {
+-			if (acked[cpu])
++		} else if (acked[cpu]) {
+ 				++unexpected;
+ 		}
+ 		if (!acked[cpu])
+ 			continue;
+-		smp_rmb(); /* pairs with smp_wmb in ipi_handler */
++		smp_rmb(); /* pairs with smp_wmb in irq_handler */
+ 
+ 		if (has_gicv2 && irq_sender[cpu] != sender) {
+ 			report_info("cpu%d received IPI from wrong sender %d",
+@@ -149,11 +148,12 @@ static void check_spurious(void)
+ static int gic_get_sender(int irqstat)
+ {
+ 	if (gic_version() == 2)
++		/* GICC_IAR.CPUID is RAZ for non-SGIs */
+ 		return (irqstat >> 10) & 7;
+ 	return -1;
+ }
+ 
+-static void ipi_handler(struct pt_regs *regs __unused)
++static void irq_handler(struct pt_regs *regs __unused)
+ {
+ 	u32 irqstat = gic_read_iar();
+ 	u32 irqnr = gic_iar_irqnr(irqstat);
+@@ -185,75 +185,6 @@ static void setup_irq(irq_handler_fn handler)
+ }
+ 
+ #if defined(__aarch64__)
+-struct its_event {
+-	int cpu_id;
+-	int lpi_id;
+-};
+-
+-struct its_stats {
+-	struct its_event expected;
+-	struct its_event observed;
+-};
+-
+-static struct its_stats lpi_stats;
+-
+-static void lpi_handler(struct pt_regs *regs __unused)
+-{
+-	u32 irqstat = gic_read_iar();
+-	int irqnr = gic_iar_irqnr(irqstat);
+-
+-	gic_write_eoir(irqstat);
+-	assert(irqnr >= 8192);
+-	smp_rmb(); /* pairs with wmb in lpi_stats_expect */
+-	lpi_stats.observed.cpu_id = smp_processor_id();
+-	lpi_stats.observed.lpi_id = irqnr;
+-	acked[lpi_stats.observed.cpu_id]++;
+-	smp_wmb(); /* pairs with rmb in check_lpi_stats */
+-}
+-
+-static void lpi_stats_expect(int exp_cpu_id, int exp_lpi_id)
+-{
+-	lpi_stats.expected.cpu_id = exp_cpu_id;
+-	lpi_stats.expected.lpi_id = exp_lpi_id;
+-	lpi_stats.observed.cpu_id = -1;
+-	lpi_stats.observed.lpi_id = -1;
+-	smp_wmb(); /* pairs with rmb in handler */
+-}
+-
+-static void check_lpi_stats(const char *msg)
+-{
+-	int i;
+-
+-	for (i = 0; i < 50; i++) {
+-		mdelay(100);
+-		smp_rmb(); /* pairs with wmb in lpi_handler */
+-		if (lpi_stats.observed.cpu_id == lpi_stats.expected.cpu_id &&
+-		    lpi_stats.observed.lpi_id == lpi_stats.expected.lpi_id) {
+-			report(true, "%s", msg);
+-			return;
+-		}
+-	}
+-
+-	if (lpi_stats.observed.cpu_id == -1 && lpi_stats.observed.lpi_id == -1) {
+-		report_info("No LPI received whereas (cpuid=%d, intid=%d) "
+-			    "was expected", lpi_stats.expected.cpu_id,
+-			    lpi_stats.expected.lpi_id);
+-	} else {
+-		report_info("Unexpected LPI (cpuid=%d, intid=%d)",
+-			    lpi_stats.observed.cpu_id,
+-			    lpi_stats.observed.lpi_id);
+-	}
+-	report(false, "%s", msg);
+-}
+-
+-static void secondary_lpi_test(void)
+-{
+-	setup_irq(lpi_handler);
+-	cpumask_set_cpu(smp_processor_id(), &ready);
+-	while (1)
+-		wfi();
+-}
+-
+ static void check_lpi_hits(int *expected, const char *msg)
+ {
+ 	bool pass = true;
+@@ -347,7 +278,7 @@ static void ipi_test_smp(void)
+ 
+ static void ipi_send(void)
+ {
+-	setup_irq(ipi_handler);
++	setup_irq(irq_handler);
+ 	wait_on_ready();
+ 	ipi_test_self();
+ 	ipi_test_smp();
+@@ -355,9 +286,9 @@ static void ipi_send(void)
+ 	exit(report_summary());
+ }
+ 
+-static void ipi_recv(void)
++static void irq_recv(void)
+ {
+-	setup_irq(ipi_handler);
++	setup_irq(irq_handler);
+ 	cpumask_set_cpu(smp_processor_id(), &ready);
+ 	while (1)
+ 		wfi();
+@@ -368,7 +299,7 @@ static void ipi_test(void *data __unused)
+ 	if (smp_processor_id() == IPI_SENDER)
+ 		ipi_send();
+ 	else
+-		ipi_recv();
++		irq_recv();
+ }
+ 
+ static struct gic gicv2 = {
+@@ -696,14 +627,12 @@ static int its_prerequisites(int nb_cpus)
+ 		return -1;
+ 	}
+ 
+-	stats_reset();
+-
+-	setup_irq(lpi_handler);
++	setup_irq(irq_handler);
+ 
+ 	for_each_present_cpu(cpu) {
+ 		if (cpu == 0)
+ 			continue;
+-		smp_boot_secondary(cpu, secondary_lpi_test);
++		smp_boot_secondary(cpu, irq_recv);
+ 	}
+ 	wait_on_ready();
+ 
+@@ -757,6 +686,7 @@ static void test_its_trigger(void)
+ {
+ 	struct its_collection *col3;
+ 	struct its_device *dev2, *dev7;
++	cpumask_t mask;
+ 
+ 	if (its_setup1())
+ 		return;
+@@ -767,13 +697,21 @@ static void test_its_trigger(void)
+ 
+ 	report_prefix_push("int");
+ 
+-	lpi_stats_expect(3, 8195);
++	stats_reset();
++	cpumask_clear(&mask);
++	cpumask_set_cpu(3, &mask);
+ 	its_send_int(dev2, 20);
+-	check_lpi_stats("dev=2, eventid=20  -> lpi= 8195, col=3");
++	wait_for_interrupts(&mask);
++	report(check_acked(&mask, 0, 8195),
++			"dev=2, eventid=20  -> lpi= 8195, col=3");
+ 
+-	lpi_stats_expect(2, 8196);
++	stats_reset();
++	cpumask_clear(&mask);
++	cpumask_set_cpu(2, &mask);
+ 	its_send_int(dev7, 255);
+-	check_lpi_stats("dev=7, eventid=255 -> lpi= 8196, col=2");
++	wait_for_interrupts(&mask);
++	report(check_acked(&mask, 0, 8196),
++			"dev=7, eventid=255 -> lpi= 8196, col=2");
+ 
+ 	report_prefix_pop();
+ 
+@@ -786,9 +724,12 @@ static void test_its_trigger(void)
+ 	gicv3_lpi_set_config(8195, LPI_PROP_DEFAULT & ~LPI_PROP_ENABLED);
+ 	its_send_inv(dev2, 20);
+ 
+-	lpi_stats_expect(-1, -1);
++	stats_reset();
++	cpumask_clear(&mask);
+ 	its_send_int(dev2, 20);
+-	check_lpi_stats("dev2/eventid=20 does not trigger any LPI");
++	wait_for_interrupts(&mask);
++	report(check_acked(&mask, -1, -1),
++			"dev2/eventid=20 does not trigger any LPI");
+ 
+ 	/*
+ 	 * re-enable the LPI but willingly do not call invall
+@@ -796,18 +737,31 @@ static void test_its_trigger(void)
+ 	 * The LPI should not hit
+ 	 */
+ 	gicv3_lpi_set_config(8195, LPI_PROP_DEFAULT);
+-	lpi_stats_expect(-1, -1);
++	stats_reset();
++	cpumask_clear(&mask);
+ 	its_send_int(dev2, 20);
+-	check_lpi_stats("dev2/eventid=20 still does not trigger any LPI");
++	wait_for_interrupts(&mask);
++	report(check_acked(&mask, -1, -1),
++			"dev2/eventid=20 still does not trigger any LPI");
+ 
+ 	/* Now call the invall and check the LPI hits */
++	stats_reset();
++	/* The barrier is from its_send_int() */
++	wmb();
++	cpumask_clear(&mask);
++	cpumask_set_cpu(3, &mask);
+ 	its_send_invall(col3);
+-	lpi_stats_expect(3, 8195);
+-	check_lpi_stats("dev2/eventid=20 pending LPI is received");
++	wait_for_interrupts(&mask);
++	report(check_acked(&mask, 0, 8195),
++			"dev2/eventid=20 pending LPI is received");
+ 
+-	lpi_stats_expect(3, 8195);
++	stats_reset();
++	cpumask_clear(&mask);
++	cpumask_set_cpu(3, &mask);
+ 	its_send_int(dev2, 20);
+-	check_lpi_stats("dev2/eventid=20 now triggers an LPI");
++	wait_for_interrupts(&mask);
++	report(check_acked(&mask, 0, 8195),
++			"dev2/eventid=20 now triggers an LPI");
+ 
+ 	report_prefix_pop();
+ 
+@@ -818,9 +772,13 @@ static void test_its_trigger(void)
+ 	 */
+ 
+ 	its_send_mapd(dev2, false);
+-	lpi_stats_expect(-1, -1);
++	stats_reset();
++	cpumask_clear(&mask);
+ 	its_send_int(dev2, 20);
+-	check_lpi_stats("no LPI after device unmap");
++	wait_for_interrupts(&mask);
++	report(check_acked(&mask, -1, -1), "no LPI after device unmap");
++
++	check_spurious();
+ 	report_prefix_pop();
+ }
+ 
+@@ -828,6 +786,7 @@ static void test_its_migration(void)
+ {
+ 	struct its_device *dev2, *dev7;
+ 	bool test_skipped = false;
++	cpumask_t mask;
+ 
+ 	if (its_setup1()) {
+ 		test_skipped = true;
+@@ -844,13 +803,23 @@ do_migrate:
+ 	if (test_skipped)
+ 		return;
+ 
+-	lpi_stats_expect(3, 8195);
++	stats_reset();
++	cpumask_clear(&mask);
++	cpumask_set_cpu(3, &mask);
+ 	its_send_int(dev2, 20);
+-	check_lpi_stats("dev2/eventid=20 triggers LPI 8195 on PE #3 after migration");
++	wait_for_interrupts(&mask);
++	report(check_acked(&mask, 0, 8195),
++			"dev2/eventid=20 triggers LPI 8195 on PE #3 after migration");
+ 
+-	lpi_stats_expect(2, 8196);
++	stats_reset();
++	cpumask_clear(&mask);
++	cpumask_set_cpu(2, &mask);
+ 	its_send_int(dev7, 255);
+-	check_lpi_stats("dev7/eventid=255 triggers LPI 8196 on PE #2 after migration");
++	wait_for_interrupts(&mask);
++	report(check_acked(&mask, 0, 8196),
++			"dev7/eventid=255 triggers LPI 8196 on PE #2 after migration");
++
++	check_spurious();
+ }
+ 
+ #define ERRATA_UNMAPPED_COLLECTIONS "ERRATA_8c58be34494b"
+@@ -860,6 +829,7 @@ static void test_migrate_unmapped_collection(void)
+ 	struct its_collection *col = NULL;
+ 	struct its_device *dev2 = NULL, *dev7 = NULL;
+ 	bool test_skipped = false;
++	cpumask_t mask;
+ 	int pe0 = 0;
+ 	u8 config;
+ 
+@@ -894,17 +864,27 @@ do_migrate:
+ 	its_send_mapc(col, true);
+ 	its_send_invall(col);
+ 
+-	lpi_stats_expect(2, 8196);
++	stats_reset();
++	cpumask_clear(&mask);
++	cpumask_set_cpu(2, &mask);
+ 	its_send_int(dev7, 255);
+-	check_lpi_stats("dev7/eventid= 255 triggered LPI 8196 on PE #2");
++	wait_for_interrupts(&mask);
++	report(check_acked(&mask, 0, 8196),
++			"dev7/eventid= 255 triggered LPI 8196 on PE #2");
+ 
+ 	config = gicv3_lpi_get_config(8192);
+ 	report(config == LPI_PROP_DEFAULT,
+ 	       "Config of LPI 8192 was properly migrated");
+ 
+-	lpi_stats_expect(pe0, 8192);
++	stats_reset();
++	cpumask_clear(&mask);
++	cpumask_set_cpu(pe0, &mask);
+ 	its_send_int(dev2, 0);
+-	check_lpi_stats("dev2/eventid = 0 triggered LPI 8192 on PE0");
++	wait_for_interrupts(&mask);
++	report(check_acked(&mask, 0, 8192),
++			"dev2/eventid = 0 triggered LPI 8192 on PE0");
++
++	check_spurious();
+ }
+ 
+ static void test_its_pending_migration(void)
+@@ -961,6 +941,10 @@ static void test_its_pending_migration(void)
+ 	pendbaser = readq(ptr);
+ 	writeq(pendbaser & ~GICR_PENDBASER_PTZ, ptr);
+ 
++	/*
++	 * Reset and initialization values for acked are the same, so we don't
++	 * need to explicitely call stats_reset().
++	 */
+ 	gicv3_lpi_rdist_enable(pe0);
+ 	gicv3_lpi_rdist_enable(pe1);
+ 
