@@ -1,0 +1,890 @@
+From patchwork Mon Feb  1 06:01:48 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Like Xu <like.xu@linux.intel.com>
+X-Patchwork-Id: 12058143
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id A09CEC433E0
+	for <kvm@archiver.kernel.org>; Mon,  1 Feb 2021 06:35:50 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 5A27D64E30
+	for <kvm@archiver.kernel.org>; Mon,  1 Feb 2021 06:35:50 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231877AbhBAGbZ (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 1 Feb 2021 01:31:25 -0500
+Received: from mga14.intel.com ([192.55.52.115]:26662 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S232122AbhBAGK0 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 1 Feb 2021 01:10:26 -0500
+IronPort-SDR: 
+ nBA9B+YJaami8y8u2Te6h1RVOrQscx7koabazhk9w8wj2h02UJ/YHHjU5CBWFcpcXZVnX9psXn
+ YpZ6cui3MxWw==
+X-IronPort-AV: E=McAfee;i="6000,8403,9881"; a="179860892"
+X-IronPort-AV: E=Sophos;i="5.79,391,1602572400";
+   d="scan'208";a="179860892"
+Received: from fmsmga008.fm.intel.com ([10.253.24.58])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 31 Jan 2021 22:08:20 -0800
+IronPort-SDR: 
+ SmZu/epYWqJg2KowbBnFA0dfDjJKq4ol5vn0Wq401xaOZDcJ5fgpcAmnvlzoAxEVgk7OnT5tKa
+ KdiYaVXUYk+w==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.79,391,1602572400";
+   d="scan'208";a="368980347"
+Received: from clx-ap-likexu.sh.intel.com ([10.239.48.108])
+  by fmsmga008.fm.intel.com with ESMTP; 31 Jan 2021 22:08:18 -0800
+From: Like Xu <like.xu@linux.intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+        Sean Christopherson <seanjc@google.com>
+Cc: Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, ak@linux.intel.com,
+        wei.w.wang@intel.com, kan.liang@intel.com,
+        alex.shi@linux.alibaba.com, kvm@vger.kernel.org, x86@kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v14 07/11] KVM: vmx/pmu: Reduce the overhead of LBR
+ pass-through or cancellation
+Date: Mon,  1 Feb 2021 14:01:48 +0800
+Message-Id: <20210201060152.370069-1-like.xu@linux.intel.com>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210201051039.255478-1-like.xu@linux.intel.com>
+References: <20210201051039.255478-1-like.xu@linux.intel.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+When the LBR records msrs has already been pass-through, there is no
+need to call vmx_update_intercept_for_lbr_msrs() again and again, and
+vice versa.
+
+Signed-off-by: Like Xu <like.xu@linux.intel.com>
+Reviewed-by: Andi Kleen <ak@linux.intel.com>
+---
+ arch/x86/kvm/vmx/pmu_intel.c | 13 +++++++++++++
+ arch/x86/kvm/vmx/vmx.h       |  3 +++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/arch/x86/kvm/vmx/pmu_intel.c b/arch/x86/kvm/vmx/pmu_intel.c
+index 287fc14f0445..60f395e18446 100644
+--- a/arch/x86/kvm/vmx/pmu_intel.c
++++ b/arch/x86/kvm/vmx/pmu_intel.c
+@@ -550,6 +550,7 @@ static void intel_pmu_init(struct kvm_vcpu *vcpu)
+ 	vcpu->arch.perf_capabilities = 0;
+ 	lbr_desc->records.nr = 0;
+ 	lbr_desc->event = NULL;
++	lbr_desc->msr_passthrough = false;
+ }
+ 
+ static void intel_pmu_reset(struct kvm_vcpu *vcpu)
+@@ -596,12 +597,24 @@ static void vmx_update_intercept_for_lbr_msrs(struct kvm_vcpu *vcpu, bool set)
+ 
+ static inline void vmx_disable_lbr_msrs_passthrough(struct kvm_vcpu *vcpu)
+ {
++	struct lbr_desc *lbr_desc = vcpu_to_lbr_desc(vcpu);
++
++	if (!lbr_desc->msr_passthrough)
++		return;
++
+ 	vmx_update_intercept_for_lbr_msrs(vcpu, true);
++	lbr_desc->msr_passthrough = false;
+ }
+ 
+ static inline void vmx_enable_lbr_msrs_passthrough(struct kvm_vcpu *vcpu)
+ {
++	struct lbr_desc *lbr_desc = vcpu_to_lbr_desc(vcpu);
++
++	if (lbr_desc->msr_passthrough)
++		return;
++
+ 	vmx_update_intercept_for_lbr_msrs(vcpu, false);
++	lbr_desc->msr_passthrough = true;
+ }
+ 
+ /*
+diff --git a/arch/x86/kvm/vmx/vmx.h b/arch/x86/kvm/vmx/vmx.h
+index 863bb3fe73d4..4d6a2624a204 100644
+--- a/arch/x86/kvm/vmx/vmx.h
++++ b/arch/x86/kvm/vmx/vmx.h
+@@ -90,6 +90,9 @@ struct lbr_desc {
+ 	 * The records may be inaccurate if the host reclaims the LBR.
+ 	 */
+ 	struct perf_event *event;
++
++	/* True if LBRs are marked as not intercepted in the MSR bitmap */
++	bool msr_passthrough;
+ };
+ 
+ /*
+
+From patchwork Mon Feb  1 06:01:49 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Like Xu <like.xu@linux.intel.com>
+X-Patchwork-Id: 12058137
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 099C0C433E9
+	for <kvm@archiver.kernel.org>; Mon,  1 Feb 2021 06:33:56 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C20EB64E31
+	for <kvm@archiver.kernel.org>; Mon,  1 Feb 2021 06:33:55 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231927AbhBAGcw (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 1 Feb 2021 01:32:52 -0500
+Received: from mga14.intel.com ([192.55.52.115]:26665 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S232126AbhBAGK1 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 1 Feb 2021 01:10:27 -0500
+IronPort-SDR: 
+ LBvv6UMCgNXBlByO19XNz50rbZrwri7JoBqzsFGnIjUJ8L3b3dOZ/rvHswgKUyJVI2aZdJTsVd
+ 5gE/DWFQ7CAQ==
+X-IronPort-AV: E=McAfee;i="6000,8403,9881"; a="179860894"
+X-IronPort-AV: E=Sophos;i="5.79,391,1602572400";
+   d="scan'208";a="179860894"
+Received: from fmsmga008.fm.intel.com ([10.253.24.58])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 31 Jan 2021 22:08:23 -0800
+IronPort-SDR: 
+ a7NhYPMIEHv5cMVRrTs20KLwEXozVN9mrBU4RWOiIlvCdQxsIhkN0SOlicqKBNS//X91RVc0FW
+ SfELM67vtFxw==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.79,391,1602572400";
+   d="scan'208";a="368980360"
+Received: from clx-ap-likexu.sh.intel.com ([10.239.48.108])
+  by fmsmga008.fm.intel.com with ESMTP; 31 Jan 2021 22:08:20 -0800
+From: Like Xu <like.xu@linux.intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+        Sean Christopherson <seanjc@google.com>
+Cc: Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, ak@linux.intel.com,
+        wei.w.wang@intel.com, kan.liang@intel.com,
+        alex.shi@linux.alibaba.com, kvm@vger.kernel.org, x86@kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v14 08/11] KVM: vmx/pmu: Emulate legacy freezing LBRs on
+ virtual PMI
+Date: Mon,  1 Feb 2021 14:01:49 +0800
+Message-Id: <20210201060152.370069-2-like.xu@linux.intel.com>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210201060152.370069-1-like.xu@linux.intel.com>
+References: <20210201051039.255478-1-like.xu@linux.intel.com>
+ <20210201060152.370069-1-like.xu@linux.intel.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The current vPMU only supports Architecture Version 2. According to
+Intel SDM "17.4.7 Freezing LBR and Performance Counters on PMI", if
+IA32_DEBUGCTL.Freeze_LBR_On_PMI = 1, the LBR is frozen on the virtual
+PMI and the KVM would emulate to clear the LBR bit (bit 0) in
+IA32_DEBUGCTL. Also, guest needs to re-enable IA32_DEBUGCTL.LBR
+to resume recording branches.
+
+Signed-off-by: Like Xu <like.xu@linux.intel.com>
+Reviewed-by: Andi Kleen <ak@linux.intel.com>
+---
+ arch/x86/kvm/pmu.c              |  5 ++++-
+ arch/x86/kvm/pmu.h              |  1 +
+ arch/x86/kvm/vmx/capabilities.h |  4 +++-
+ arch/x86/kvm/vmx/pmu_intel.c    | 30 ++++++++++++++++++++++++++++++
+ arch/x86/kvm/vmx/vmx.c          |  2 +-
+ 5 files changed, 39 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/kvm/pmu.c b/arch/x86/kvm/pmu.c
+index 67741d2a0308..405890c723a1 100644
+--- a/arch/x86/kvm/pmu.c
++++ b/arch/x86/kvm/pmu.c
+@@ -383,8 +383,11 @@ int kvm_pmu_rdpmc(struct kvm_vcpu *vcpu, unsigned idx, u64 *data)
+ 
+ void kvm_pmu_deliver_pmi(struct kvm_vcpu *vcpu)
+ {
+-	if (lapic_in_kernel(vcpu))
++	if (lapic_in_kernel(vcpu)) {
++		if (kvm_x86_ops.pmu_ops->deliver_pmi)
++			kvm_x86_ops.pmu_ops->deliver_pmi(vcpu);
+ 		kvm_apic_local_deliver(vcpu->arch.apic, APIC_LVTPC);
++	}
+ }
+ 
+ bool kvm_pmu_is_valid_msr(struct kvm_vcpu *vcpu, u32 msr)
+diff --git a/arch/x86/kvm/pmu.h b/arch/x86/kvm/pmu.h
+index 067fef51760c..742a4e98df8c 100644
+--- a/arch/x86/kvm/pmu.h
++++ b/arch/x86/kvm/pmu.h
+@@ -39,6 +39,7 @@ struct kvm_pmu_ops {
+ 	void (*refresh)(struct kvm_vcpu *vcpu);
+ 	void (*init)(struct kvm_vcpu *vcpu);
+ 	void (*reset)(struct kvm_vcpu *vcpu);
++	void (*deliver_pmi)(struct kvm_vcpu *vcpu);
+ };
+ 
+ static inline u64 pmc_bitmask(struct kvm_pmc *pmc)
+diff --git a/arch/x86/kvm/vmx/capabilities.h b/arch/x86/kvm/vmx/capabilities.h
+index 62aa7a701ebb..57b940c613ab 100644
+--- a/arch/x86/kvm/vmx/capabilities.h
++++ b/arch/x86/kvm/vmx/capabilities.h
+@@ -21,6 +21,8 @@ extern int __read_mostly pt_mode;
+ #define PMU_CAP_FW_WRITES	(1ULL << 13)
+ #define PMU_CAP_LBR_FMT		0x3f
+ 
++#define DEBUGCTLMSR_LBR_MASK		(DEBUGCTLMSR_LBR | DEBUGCTLMSR_FREEZE_LBRS_ON_PMI)
++
+ struct nested_vmx_msrs {
+ 	/*
+ 	 * We only store the "true" versions of the VMX capability MSRs. We
+@@ -384,7 +386,7 @@ static inline u64 vmx_supported_debugctl(void)
+ 	u64 debugctl = DEBUGCTLMSR_BTF;
+ 
+ 	if (vmx_get_perf_capabilities() & PMU_CAP_LBR_FMT)
+-		debugctl |= DEBUGCTLMSR_LBR;
++		debugctl |= DEBUGCTLMSR_LBR_MASK;
+ 
+ 	return debugctl;
+ }
+diff --git a/arch/x86/kvm/vmx/pmu_intel.c b/arch/x86/kvm/vmx/pmu_intel.c
+index 60f395e18446..51edd9c1adfa 100644
+--- a/arch/x86/kvm/vmx/pmu_intel.c
++++ b/arch/x86/kvm/vmx/pmu_intel.c
+@@ -579,6 +579,35 @@ static void intel_pmu_reset(struct kvm_vcpu *vcpu)
+ 	intel_pmu_release_guest_lbr_event(vcpu);
+ }
+ 
++/*
++ * Emulate LBR_On_PMI behavior for 1 < pmu.version < 4.
++ *
++ * If Freeze_LBR_On_PMI = 1, the LBR is frozen on PMI and
++ * the KVM emulates to clear the LBR bit (bit 0) in IA32_DEBUGCTL.
++ *
++ * Guest needs to re-enable LBR to resume branches recording.
++ */
++static void intel_pmu_legacy_freezing_lbrs_on_pmi(struct kvm_vcpu *vcpu)
++{
++	u64 data = vmcs_read64(GUEST_IA32_DEBUGCTL);
++
++	if (data & DEBUGCTLMSR_FREEZE_LBRS_ON_PMI) {
++		data &= ~DEBUGCTLMSR_LBR;
++		vmcs_write64(GUEST_IA32_DEBUGCTL, data);
++	}
++}
++
++static void intel_pmu_deliver_pmi(struct kvm_vcpu *vcpu)
++{
++	u8 version = vcpu_to_pmu(vcpu)->version;
++
++	if (!intel_pmu_lbr_is_enabled(vcpu))
++		return;
++
++	if (version > 1 && version < 4)
++		intel_pmu_legacy_freezing_lbrs_on_pmi(vcpu);
++}
++
+ static void vmx_update_intercept_for_lbr_msrs(struct kvm_vcpu *vcpu, bool set)
+ {
+ 	struct x86_pmu_lbr *lbr = vcpu_to_lbr_records(vcpu);
+@@ -665,4 +694,5 @@ struct kvm_pmu_ops intel_pmu_ops = {
+ 	.refresh = intel_pmu_refresh,
+ 	.init = intel_pmu_init,
+ 	.reset = intel_pmu_reset,
++	.deliver_pmi = intel_pmu_deliver_pmi,
+ };
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 40fdeb394328..5389032ca4ad 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -1963,7 +1963,7 @@ static u64 vcpu_supported_debugctl(struct kvm_vcpu *vcpu)
+ 	u64 debugctl = vmx_supported_debugctl();
+ 
+ 	if (!intel_pmu_lbr_is_enabled(vcpu))
+-		debugctl &= ~DEBUGCTLMSR_LBR;
++		debugctl &= ~DEBUGCTLMSR_LBR_MASK;
+ 
+ 	return debugctl;
+ }
+
+From patchwork Mon Feb  1 06:01:50 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Like Xu <like.xu@linux.intel.com>
+X-Patchwork-Id: 12058135
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.9 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,UNWANTED_LANGUAGE_BODY,
+	URIBL_BLOCKED,USER_AGENT_GIT autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 36827C433E0
+	for <kvm@archiver.kernel.org>; Mon,  1 Feb 2021 06:33:54 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id E6AE164E30
+	for <kvm@archiver.kernel.org>; Mon,  1 Feb 2021 06:33:53 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231899AbhBAGca (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 1 Feb 2021 01:32:30 -0500
+Received: from mga14.intel.com ([192.55.52.115]:26670 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S232124AbhBAGK1 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 1 Feb 2021 01:10:27 -0500
+IronPort-SDR: 
+ GLqq5GZgIiVBzI2WIJX3Wx19716ABwJU6IOrKnRMc+6EKM/W5s78hRBcRGi2yezGbkKjDycmON
+ P0XLpPVdEekg==
+X-IronPort-AV: E=McAfee;i="6000,8403,9881"; a="179860900"
+X-IronPort-AV: E=Sophos;i="5.79,391,1602572400";
+   d="scan'208";a="179860900"
+Received: from fmsmga008.fm.intel.com ([10.253.24.58])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 31 Jan 2021 22:08:26 -0800
+IronPort-SDR: 
+ R0o2ohyRDO9wN4O3p90OLLLN9SQxnI0lGabuwwvmwNAj3Vrqzxl19yIw4ZumQTtavcMLH/tyrF
+ Orsvv7/18Tzg==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.79,391,1602572400";
+   d="scan'208";a="368980422"
+Received: from clx-ap-likexu.sh.intel.com ([10.239.48.108])
+  by fmsmga008.fm.intel.com with ESMTP; 31 Jan 2021 22:08:23 -0800
+From: Like Xu <like.xu@linux.intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+        Sean Christopherson <seanjc@google.com>
+Cc: Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, ak@linux.intel.com,
+        wei.w.wang@intel.com, kan.liang@intel.com,
+        alex.shi@linux.alibaba.com, kvm@vger.kernel.org, x86@kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v14 09/11] KVM: vmx/pmu: Release guest LBR event via lazy
+ release mechanism
+Date: Mon,  1 Feb 2021 14:01:50 +0800
+Message-Id: <20210201060152.370069-3-like.xu@linux.intel.com>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210201060152.370069-1-like.xu@linux.intel.com>
+References: <20210201051039.255478-1-like.xu@linux.intel.com>
+ <20210201060152.370069-1-like.xu@linux.intel.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The vPMU uses GUEST_LBR_IN_USE_IDX (bit 58) in 'pmu->pmc_in_use' to
+indicate whether a guest LBR event is still needed by the vcpu. If the
+vcpu no longer accesses LBR related registers within a scheduling time
+slice, and the enable bit of LBR has been unset, vPMU will treat the
+guest LBR event as a bland event of a vPMC counter and release it
+as usual. Also, the pass-through state of LBR records msrs is cancelled.
+
+Signed-off-by: Like Xu <like.xu@linux.intel.com>
+---
+ arch/x86/kvm/pmu.c           |  3 +++
+ arch/x86/kvm/pmu.h           |  1 +
+ arch/x86/kvm/vmx/pmu_intel.c | 21 ++++++++++++++++++++-
+ 3 files changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/pmu.c b/arch/x86/kvm/pmu.c
+index 405890c723a1..136dc2f3c5d3 100644
+--- a/arch/x86/kvm/pmu.c
++++ b/arch/x86/kvm/pmu.c
+@@ -476,6 +476,9 @@ void kvm_pmu_cleanup(struct kvm_vcpu *vcpu)
+ 			pmc_stop_counter(pmc);
+ 	}
+ 
++	if (kvm_x86_ops.pmu_ops->cleanup)
++		kvm_x86_ops.pmu_ops->cleanup(vcpu);
++
+ 	bitmap_zero(pmu->pmc_in_use, X86_PMC_IDX_MAX);
+ }
+ 
+diff --git a/arch/x86/kvm/pmu.h b/arch/x86/kvm/pmu.h
+index 742a4e98df8c..7b30bc967af3 100644
+--- a/arch/x86/kvm/pmu.h
++++ b/arch/x86/kvm/pmu.h
+@@ -40,6 +40,7 @@ struct kvm_pmu_ops {
+ 	void (*init)(struct kvm_vcpu *vcpu);
+ 	void (*reset)(struct kvm_vcpu *vcpu);
+ 	void (*deliver_pmi)(struct kvm_vcpu *vcpu);
++	void (*cleanup)(struct kvm_vcpu *vcpu);
+ };
+ 
+ static inline u64 pmc_bitmask(struct kvm_pmc *pmc)
+diff --git a/arch/x86/kvm/vmx/pmu_intel.c b/arch/x86/kvm/vmx/pmu_intel.c
+index 51edd9c1adfa..23cd31b849f4 100644
+--- a/arch/x86/kvm/vmx/pmu_intel.c
++++ b/arch/x86/kvm/vmx/pmu_intel.c
+@@ -288,8 +288,10 @@ int intel_pmu_create_guest_lbr_event(struct kvm_vcpu *vcpu)
+ 					PERF_SAMPLE_BRANCH_USER,
+ 	};
+ 
+-	if (unlikely(lbr_desc->event))
++	if (unlikely(lbr_desc->event)) {
++		__set_bit(INTEL_PMC_IDX_FIXED_VLBR, pmu->pmc_in_use);
+ 		return 0;
++	}
+ 
+ 	event = perf_event_create_kernel_counter(&attr, -1,
+ 						current, NULL, NULL);
+@@ -300,6 +302,7 @@ int intel_pmu_create_guest_lbr_event(struct kvm_vcpu *vcpu)
+ 	}
+ 	lbr_desc->event = event;
+ 	pmu->event_count++;
++	__set_bit(INTEL_PMC_IDX_FIXED_VLBR, pmu->pmc_in_use);
+ 	return 0;
+ }
+ 
+@@ -332,9 +335,11 @@ static bool intel_pmu_handle_lbr_msrs_access(struct kvm_vcpu *vcpu,
+ 			rdmsrl(index, msr_info->data);
+ 		else
+ 			wrmsrl(index, msr_info->data);
++		__set_bit(INTEL_PMC_IDX_FIXED_VLBR, vcpu_to_pmu(vcpu)->pmc_in_use);
+ 		local_irq_enable();
+ 		return true;
+ 	}
++	clear_bit(INTEL_PMC_IDX_FIXED_VLBR, vcpu_to_pmu(vcpu)->pmc_in_use);
+ 	local_irq_enable();
+ 
+ dummy:
+@@ -463,6 +468,7 @@ static void intel_pmu_refresh(struct kvm_vcpu *vcpu)
+ 	struct kvm_cpuid_entry2 *entry;
+ 	union cpuid10_eax eax;
+ 	union cpuid10_edx edx;
++	struct lbr_desc *lbr_desc = vcpu_to_lbr_desc(vcpu);
+ 
+ 	pmu->nr_arch_gp_counters = 0;
+ 	pmu->nr_arch_fixed_counters = 0;
+@@ -482,6 +488,8 @@ static void intel_pmu_refresh(struct kvm_vcpu *vcpu)
+ 		return;
+ 
+ 	perf_get_x86_pmu_capability(&x86_pmu);
++	if (lbr_desc->records.nr)
++		bitmap_set(pmu->all_valid_pmc_idx, INTEL_PMC_IDX_FIXED_VLBR, 1);
+ 
+ 	pmu->nr_arch_gp_counters = min_t(int, eax.split.num_counters,
+ 					 x86_pmu.num_counters_gp);
+@@ -658,17 +666,21 @@ static inline void vmx_enable_lbr_msrs_passthrough(struct kvm_vcpu *vcpu)
+  */
+ void vmx_passthrough_lbr_msrs(struct kvm_vcpu *vcpu)
+ {
++	struct kvm_pmu *pmu = vcpu_to_pmu(vcpu);
+ 	struct lbr_desc *lbr_desc = vcpu_to_lbr_desc(vcpu);
+ 
+ 	if (!lbr_desc->event) {
+ 		vmx_disable_lbr_msrs_passthrough(vcpu);
+ 		if (vmcs_read64(GUEST_IA32_DEBUGCTL) & DEBUGCTLMSR_LBR)
+ 			goto warn;
++		if (test_bit(INTEL_PMC_IDX_FIXED_VLBR, pmu->pmc_in_use))
++			goto warn;
+ 		return;
+ 	}
+ 
+ 	if (lbr_desc->event->state < PERF_EVENT_STATE_ACTIVE) {
+ 		vmx_disable_lbr_msrs_passthrough(vcpu);
++		__clear_bit(INTEL_PMC_IDX_FIXED_VLBR, pmu->pmc_in_use);
+ 		goto warn;
+ 	} else
+ 		vmx_enable_lbr_msrs_passthrough(vcpu);
+@@ -680,6 +692,12 @@ void vmx_passthrough_lbr_msrs(struct kvm_vcpu *vcpu)
+ 		vcpu->vcpu_id);
+ }
+ 
++static void intel_pmu_cleanup(struct kvm_vcpu *vcpu)
++{
++	if (!(vmcs_read64(GUEST_IA32_DEBUGCTL) & DEBUGCTLMSR_LBR))
++		intel_pmu_release_guest_lbr_event(vcpu);
++}
++
+ struct kvm_pmu_ops intel_pmu_ops = {
+ 	.find_arch_event = intel_find_arch_event,
+ 	.find_fixed_event = intel_find_fixed_event,
+@@ -695,4 +713,5 @@ struct kvm_pmu_ops intel_pmu_ops = {
+ 	.init = intel_pmu_init,
+ 	.reset = intel_pmu_reset,
+ 	.deliver_pmi = intel_pmu_deliver_pmi,
++	.cleanup = intel_pmu_cleanup,
+ };
+
+From patchwork Mon Feb  1 06:01:51 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Like Xu <like.xu@linux.intel.com>
+X-Patchwork-Id: 12058139
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 24EF0C43381
+	for <kvm@archiver.kernel.org>; Mon,  1 Feb 2021 06:33:56 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id E2A3664E32
+	for <kvm@archiver.kernel.org>; Mon,  1 Feb 2021 06:33:55 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S232066AbhBAGdd (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 1 Feb 2021 01:33:33 -0500
+Received: from mga14.intel.com ([192.55.52.115]:26662 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S232141AbhBAGNy (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 1 Feb 2021 01:13:54 -0500
+IronPort-SDR: 
+ nW2RFa7VddR7G/VrHHBnsxYsuZxzM/0KmVVQvhOfvII7N+JZIaWJkiejuA88PXizUl5UmFhqZn
+ XmAO3utvprKA==
+X-IronPort-AV: E=McAfee;i="6000,8403,9881"; a="179860905"
+X-IronPort-AV: E=Sophos;i="5.79,391,1602572400";
+   d="scan'208";a="179860905"
+Received: from fmsmga008.fm.intel.com ([10.253.24.58])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 31 Jan 2021 22:08:30 -0800
+IronPort-SDR: 
+ AHp9ivoOqyafW29bH/e9KW7yzwQbvjCk5Z5jwUduobXzjb+5cy3ZWW3n7qWWXhDmS9Oon6FtzQ
+ 73WqWRDudBUg==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.79,391,1602572400";
+   d="scan'208";a="368980436"
+Received: from clx-ap-likexu.sh.intel.com ([10.239.48.108])
+  by fmsmga008.fm.intel.com with ESMTP; 31 Jan 2021 22:08:27 -0800
+From: Like Xu <like.xu@linux.intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+        Sean Christopherson <seanjc@google.com>
+Cc: Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, ak@linux.intel.com,
+        wei.w.wang@intel.com, kan.liang@intel.com,
+        alex.shi@linux.alibaba.com, kvm@vger.kernel.org, x86@kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v14 10/11] KVM: vmx/pmu: Expose LBR_FMT in the
+ MSR_IA32_PERF_CAPABILITIES
+Date: Mon,  1 Feb 2021 14:01:51 +0800
+Message-Id: <20210201060152.370069-4-like.xu@linux.intel.com>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210201060152.370069-1-like.xu@linux.intel.com>
+References: <20210201051039.255478-1-like.xu@linux.intel.com>
+ <20210201060152.370069-1-like.xu@linux.intel.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Userspace could enable guest LBR feature when the exactly supported
+LBR format value is initialized to the MSR_IA32_PERF_CAPABILITIES
+and the LBR is also compatible with vPMU version and host cpu model.
+
+The LBR could be enabled on the guest if host perf supports LBR
+(checked via x86_perf_get_lbr()) and the vcpu model is compatible
+with the host one.
+
+Signed-off-by: Like Xu <like.xu@linux.intel.com>
+---
+ arch/x86/kvm/vmx/capabilities.h | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/vmx/capabilities.h b/arch/x86/kvm/vmx/capabilities.h
+index 57b940c613ab..c49f3ee8eca8 100644
+--- a/arch/x86/kvm/vmx/capabilities.h
++++ b/arch/x86/kvm/vmx/capabilities.h
+@@ -374,11 +374,18 @@ static inline bool vmx_pt_mode_is_host_guest(void)
+ 
+ static inline u64 vmx_get_perf_capabilities(void)
+ {
++	u64 perf_cap;
++
++	if (boot_cpu_has(X86_FEATURE_PDCM))
++		rdmsrl(MSR_IA32_PERF_CAPABILITIES, perf_cap);
++
++	perf_cap &= PMU_CAP_LBR_FMT;
++
+ 	/*
+ 	 * Since counters are virtualized, KVM would support full
+ 	 * width counting unconditionally, even if the host lacks it.
+ 	 */
+-	return PMU_CAP_FW_WRITES;
++	return PMU_CAP_FW_WRITES | perf_cap;
+ }
+ 
+ static inline u64 vmx_supported_debugctl(void)
+
+From patchwork Mon Feb  1 06:01:52 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Like Xu <like.xu@linux.intel.com>
+X-Patchwork-Id: 12058141
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 8C9FBC433E0
+	for <kvm@archiver.kernel.org>; Mon,  1 Feb 2021 06:34:15 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 39C0064E32
+	for <kvm@archiver.kernel.org>; Mon,  1 Feb 2021 06:34:15 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231984AbhBAGd4 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 1 Feb 2021 01:33:56 -0500
+Received: from mga14.intel.com ([192.55.52.115]:26665 "EHLO mga14.intel.com"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S232142AbhBAGOA (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Mon, 1 Feb 2021 01:14:00 -0500
+IronPort-SDR: 
+ L5JEeIm/5mH8S7INYVga6ZhdtvcvpYFhjMabUJnOdzA/Q2dDAe/4qeS9l5+KW1zB5bnUpRIh3T
+ P57nD5vddJ0w==
+X-IronPort-AV: E=McAfee;i="6000,8403,9881"; a="179860909"
+X-IronPort-AV: E=Sophos;i="5.79,391,1602572400";
+   d="scan'208";a="179860909"
+Received: from fmsmga008.fm.intel.com ([10.253.24.58])
+  by fmsmga103.fm.intel.com with ESMTP/TLS/ECDHE-RSA-AES256-GCM-SHA384;
+ 31 Jan 2021 22:08:33 -0800
+IronPort-SDR: 
+ r1ErT8/wQkiHn/NHaR1Abc/aFAtArKTH2Czu8TnjTEMcVw27QBWL9NIJZi5UpiM0xrUejiVdHc
+ BT/aandOt8qg==
+X-ExtLoop1: 1
+X-IronPort-AV: E=Sophos;i="5.79,391,1602572400";
+   d="scan'208";a="368980445"
+Received: from clx-ap-likexu.sh.intel.com ([10.239.48.108])
+  by fmsmga008.fm.intel.com with ESMTP; 31 Jan 2021 22:08:30 -0800
+From: Like Xu <like.xu@linux.intel.com>
+To: Paolo Bonzini <pbonzini@redhat.com>,
+        Sean Christopherson <seanjc@google.com>
+Cc: Vitaly Kuznetsov <vkuznets@redhat.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Joerg Roedel <joro@8bytes.org>, ak@linux.intel.com,
+        wei.w.wang@intel.com, kan.liang@intel.com,
+        alex.shi@linux.alibaba.com, kvm@vger.kernel.org, x86@kernel.org,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v14 11/11] selftests: kvm/x86: add test for pmu msr
+ MSR_IA32_PERF_CAPABILITIES
+Date: Mon,  1 Feb 2021 14:01:52 +0800
+Message-Id: <20210201060152.370069-5-like.xu@linux.intel.com>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210201060152.370069-1-like.xu@linux.intel.com>
+References: <20210201051039.255478-1-like.xu@linux.intel.com>
+ <20210201060152.370069-1-like.xu@linux.intel.com>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This test will check the effect of various CPUID settings on the
+MSR_IA32_PERF_CAPABILITIES MSR, check that whatever user space writes
+with KVM_SET_MSR is _not_ modified from the guest and can be retrieved
+with KVM_GET_MSR, and check that invalid LBR formats are rejected.
+
+Signed-off-by: Like Xu <like.xu@linux.intel.com>
+---
+ tools/testing/selftests/kvm/.gitignore        |   1 +
+ tools/testing/selftests/kvm/Makefile          |   1 +
+ .../selftests/kvm/x86_64/vmx_pmu_msrs_test.c  | 149 ++++++++++++++++++
+ 3 files changed, 151 insertions(+)
+ create mode 100644 tools/testing/selftests/kvm/x86_64/vmx_pmu_msrs_test.c
+
+diff --git a/tools/testing/selftests/kvm/.gitignore b/tools/testing/selftests/kvm/.gitignore
+index ce8f4ad39684..28b71efe52a0 100644
+--- a/tools/testing/selftests/kvm/.gitignore
++++ b/tools/testing/selftests/kvm/.gitignore
+@@ -25,6 +25,7 @@
+ /x86_64/vmx_set_nested_state_test
+ /x86_64/vmx_tsc_adjust_test
+ /x86_64/xss_msr_test
++/x86_64/vmx_pmu_msrs_test
+ /demand_paging_test
+ /dirty_log_test
+ /dirty_log_perf_test
+diff --git a/tools/testing/selftests/kvm/Makefile b/tools/testing/selftests/kvm/Makefile
+index fe41c6a0fa67..cf8737828dd4 100644
+--- a/tools/testing/selftests/kvm/Makefile
++++ b/tools/testing/selftests/kvm/Makefile
+@@ -59,6 +59,7 @@ TEST_GEN_PROGS_x86_64 += x86_64/vmx_tsc_adjust_test
+ TEST_GEN_PROGS_x86_64 += x86_64/xss_msr_test
+ TEST_GEN_PROGS_x86_64 += x86_64/debug_regs
+ TEST_GEN_PROGS_x86_64 += x86_64/tsc_msrs_test
++TEST_GEN_PROGS_x86_64 += x86_64/vmx_pmu_msrs_test
+ TEST_GEN_PROGS_x86_64 += demand_paging_test
+ TEST_GEN_PROGS_x86_64 += dirty_log_test
+ TEST_GEN_PROGS_x86_64 += dirty_log_perf_test
+diff --git a/tools/testing/selftests/kvm/x86_64/vmx_pmu_msrs_test.c b/tools/testing/selftests/kvm/x86_64/vmx_pmu_msrs_test.c
+new file mode 100644
+index 000000000000..b3ad63e6ff12
+--- /dev/null
++++ b/tools/testing/selftests/kvm/x86_64/vmx_pmu_msrs_test.c
+@@ -0,0 +1,149 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * VMX-pmu related msrs test
++ *
++ * Copyright (C) 2021 Intel Corporation
++ *
++ * Test to check the effect of various CPUID settings
++ * on the MSR_IA32_PERF_CAPABILITIES MSR, and check that
++ * whatever we write with KVM_SET_MSR is _not_ modified
++ * in the guest and test it can be retrieved with KVM_GET_MSR.
++ *
++ * Test to check that invalid LBR formats are rejected.
++ */
++
++#define _GNU_SOURCE /* for program_invocation_short_name */
++#include <sys/ioctl.h>
++
++#include "kvm_util.h"
++#include "vmx.h"
++
++#define VCPU_ID	      0
++
++#define X86_FEATURE_PDCM	(1<<15)
++#define PMU_CAP_FW_WRITES	(1ULL << 13)
++#define PMU_CAP_LBR_FMT		0x3f
++
++union cpuid10_eax {
++	struct {
++		unsigned int version_id:8;
++		unsigned int num_counters:8;
++		unsigned int bit_width:8;
++		unsigned int mask_length:8;
++	} split;
++	unsigned int full;
++};
++
++union perf_capabilities {
++	struct {
++		u64	lbr_format:6;
++		u64	pebs_trap:1;
++		u64	pebs_arch_reg:1;
++		u64	pebs_format:4;
++		u64	smm_freeze:1;
++		u64	full_width_write:1;
++		u64 pebs_baseline:1;
++		u64	perf_metrics:1;
++		u64	pebs_output_pt_available:1;
++		u64	anythread_deprecated:1;
++	};
++	u64	capabilities;
++};
++
++uint64_t rdmsr_on_cpu(uint32_t reg)
++{
++	uint64_t data;
++	int fd;
++	char msr_file[64];
++
++	sprintf(msr_file, "/dev/cpu/%d/msr", 0);
++	fd = open(msr_file, O_RDONLY);
++	if (fd < 0)
++		exit(KSFT_SKIP);
++
++	if (pread(fd, &data, sizeof(data), reg) != sizeof(data))
++		exit(KSFT_SKIP);
++
++	close(fd);
++	return data;
++}
++
++static void guest_code(void)
++{
++	wrmsr(MSR_IA32_PERF_CAPABILITIES, PMU_CAP_LBR_FMT);
++}
++
++int main(int argc, char *argv[])
++{
++	struct kvm_cpuid2 *cpuid;
++	struct kvm_cpuid_entry2 *entry_1_0;
++	struct kvm_cpuid_entry2 *entry_a_0;
++	bool pdcm_supported = false;
++	struct kvm_vm *vm;
++	int ret;
++	union cpuid10_eax eax;
++	union perf_capabilities host_cap;
++
++	host_cap.capabilities = rdmsr_on_cpu(MSR_IA32_PERF_CAPABILITIES);
++	host_cap.capabilities &= (PMU_CAP_FW_WRITES | PMU_CAP_LBR_FMT);
++
++	/* Create VM */
++	vm = vm_create_default(VCPU_ID, 0, guest_code);
++	cpuid = kvm_get_supported_cpuid();
++
++	if (kvm_get_cpuid_max_basic() >= 0xa) {
++		entry_1_0 = kvm_get_supported_cpuid_index(1, 0);
++		entry_a_0 = kvm_get_supported_cpuid_index(0xa, 0);
++		pdcm_supported = entry_1_0 && !!(entry_1_0->ecx & X86_FEATURE_PDCM);
++		eax.full = entry_a_0->eax;
++	}
++	if (!pdcm_supported) {
++		print_skip("MSR_IA32_PERF_CAPABILITIES is not supported by the vCPU");
++		exit(KSFT_SKIP);
++	}
++	if (!eax.split.version_id) {
++		print_skip("PMU is not supported by the vCPU");
++		exit(KSFT_SKIP);
++	}
++
++	/* testcase 1, set capabilities when we have PDCM bit */
++	vcpu_set_cpuid(vm, VCPU_ID, cpuid);
++	vcpu_set_msr(vm, 0, MSR_IA32_PERF_CAPABILITIES, PMU_CAP_FW_WRITES);
++
++	/* check capabilities can be retrieved with KVM_GET_MSR */
++	ASSERT_EQ(vcpu_get_msr(vm, VCPU_ID, MSR_IA32_PERF_CAPABILITIES), PMU_CAP_FW_WRITES);
++
++	/* check whatever we write with KVM_SET_MSR is _not_ modified */
++	vcpu_run(vm, VCPU_ID);
++	ASSERT_EQ(vcpu_get_msr(vm, VCPU_ID, MSR_IA32_PERF_CAPABILITIES), PMU_CAP_FW_WRITES);
++
++	/* testcase 2, check valid LBR formats are accepted */
++	vcpu_set_msr(vm, 0, MSR_IA32_PERF_CAPABILITIES, 0);
++	ASSERT_EQ(vcpu_get_msr(vm, VCPU_ID, MSR_IA32_PERF_CAPABILITIES), 0);
++
++	vcpu_set_msr(vm, 0, MSR_IA32_PERF_CAPABILITIES, host_cap.lbr_format);
++	ASSERT_EQ(vcpu_get_msr(vm, VCPU_ID, MSR_IA32_PERF_CAPABILITIES), (u64)host_cap.lbr_format);
++
++	/* testcase 3, check invalid LBR format is rejected */
++	ret = _vcpu_set_msr(vm, 0, MSR_IA32_PERF_CAPABILITIES, PMU_CAP_LBR_FMT);
++	TEST_ASSERT(ret == 0, "Bad PERF_CAPABILITIES didn't fail.");
++
++	/* testcase 4, set capabilities when we don't have PDCM bit */
++	entry_1_0->ecx &= ~X86_FEATURE_PDCM;
++	vcpu_set_cpuid(vm, VCPU_ID, cpuid);
++	ret = _vcpu_set_msr(vm, 0, MSR_IA32_PERF_CAPABILITIES, host_cap.capabilities);
++	TEST_ASSERT(ret == 0, "Bad PERF_CAPABILITIES didn't fail.");
++
++	/* testcase 5, set capabilities when we don't have PMU version bits */
++	entry_1_0->ecx |= X86_FEATURE_PDCM;
++	eax.split.version_id = 0;
++	entry_1_0->ecx = eax.full;
++	vcpu_set_cpuid(vm, VCPU_ID, cpuid);
++	ret = _vcpu_set_msr(vm, 0, MSR_IA32_PERF_CAPABILITIES, PMU_CAP_FW_WRITES);
++	TEST_ASSERT(ret == 0, "Bad PERF_CAPABILITIES didn't fail.");
++
++	vcpu_set_msr(vm, 0, MSR_IA32_PERF_CAPABILITIES, 0);
++	ASSERT_EQ(vcpu_get_msr(vm, VCPU_ID, MSR_IA32_PERF_CAPABILITIES), 0);
++
++	kvm_vm_free(vm);
++}
