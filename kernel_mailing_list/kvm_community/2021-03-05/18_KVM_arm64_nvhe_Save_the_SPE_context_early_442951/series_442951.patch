@@ -1,0 +1,1321 @@
+From patchwork Fri Mar  5 18:52:47 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 12119319
+Return-Path: <SRS0=d8nC=ID=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No,
+ score=-17.0 required=3.0 tests=BAYES_00,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,
+	USER_AGENT_GIT autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 9DFF1C433E6
+	for <kvm@archiver.kernel.org>; Fri,  5 Mar 2021 18:53:57 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 2BB7865090
+	for <kvm@archiver.kernel.org>; Fri,  5 Mar 2021 18:53:57 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S229818AbhCESxZ (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 5 Mar 2021 13:53:25 -0500
+Received: from mail.kernel.org ([198.145.29.99]:58190 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S229493AbhCESxB (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 5 Mar 2021 13:53:01 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id 055DF6509A;
+        Fri,  5 Mar 2021 18:53:01 +0000 (UTC)
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1lIFZL-00HYFA-9w; Fri, 05 Mar 2021 18:52:59 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Andrew Scull <ascull@google.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Howard Zhang <Howard.Zhang@arm.com>,
+        Jia He <justin.he@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Quentin Perret <qperret@google.com>,
+        Shameerali Kolothum Thodi
+        <shameerali.kolothum.thodi@huawei.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Will Deacon <will@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        kernel-team@android.com, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org,
+        stable@vger.kernel.org
+Subject: [PATCH 1/8] KVM: arm64: nvhe: Save the SPE context early
+Date: Fri,  5 Mar 2021 18:52:47 +0000
+Message-Id: <20210305185254.3730990-2-maz@kernel.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210305185254.3730990-1-maz@kernel.org>
+References: <87eegtzbch.wl-maz@kernel.org>
+ <20210305185254.3730990-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: pbonzini@redhat.com, alexandru.elisei@arm.com,
+ andre.przywara@arm.com, ascull@google.com, catalin.marinas@arm.com,
+ christoffer.dall@arm.com, Howard.Zhang@arm.com, justin.he@arm.com,
+ mark.rutland@arm.com, qperret@google.com,
+ shameerali.kolothum.thodi@huawei.com, suzuki.poulose@arm.com,
+ will@kernel.org, james.morse@arm.com, julien.thierry.kdev@gmail.com,
+ kernel-team@android.com, linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org, stable@vger.kernel.org
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Suzuki K Poulose <suzuki.poulose@arm.com>
+
+The nVHE KVM hyp drains and disables the SPE buffer, before
+entering the guest, as the EL1&0 translation regime
+is going to be loaded with that of the guest.
+
+But this operation is performed way too late, because :
+  - The owning translation regime of the SPE buffer
+    is transferred to EL2. (MDCR_EL2_E2PB == 0)
+  - The guest Stage1 is loaded.
+
+Thus the flush could use the host EL1 virtual address,
+but use the EL2 translations instead of host EL1, for writing
+out any cached data.
+
+Fix this by moving the SPE buffer handling early enough.
+The restore path is doing the right thing.
+
+Fixes: 014c4c77aad7 ("KVM: arm64: Improve debug register save/restore flow")
+Cc: stable@vger.kernel.org
+Cc: Christoffer Dall <christoffer.dall@arm.com>
+Cc: Marc Zyngier <maz@kernel.org>
+Cc: Will Deacon <will@kernel.org>
+Cc: Catalin Marinas <catalin.marinas@arm.com>
+Cc: Mark Rutland <mark.rutland@arm.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>
+Reviewed-by: Alexandru Elisei <alexandru.elisei@arm.com>
+Signed-off-by: Suzuki K Poulose <suzuki.poulose@arm.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+Link: https://lore.kernel.org/r/20210302120345.3102874-1-suzuki.poulose@arm.com
+---
+ arch/arm64/include/asm/kvm_hyp.h   |  5 +++++
+ arch/arm64/kvm/hyp/nvhe/debug-sr.c | 12 ++++++++++--
+ arch/arm64/kvm/hyp/nvhe/switch.c   | 11 ++++++++++-
+ 3 files changed, 25 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm64/include/asm/kvm_hyp.h b/arch/arm64/include/asm/kvm_hyp.h
+index c0450828378b..385bd7dd3d39 100644
+--- a/arch/arm64/include/asm/kvm_hyp.h
++++ b/arch/arm64/include/asm/kvm_hyp.h
+@@ -83,6 +83,11 @@ void sysreg_restore_guest_state_vhe(struct kvm_cpu_context *ctxt);
+ void __debug_switch_to_guest(struct kvm_vcpu *vcpu);
+ void __debug_switch_to_host(struct kvm_vcpu *vcpu);
+ 
++#ifdef __KVM_NVHE_HYPERVISOR__
++void __debug_save_host_buffers_nvhe(struct kvm_vcpu *vcpu);
++void __debug_restore_host_buffers_nvhe(struct kvm_vcpu *vcpu);
++#endif
++
+ void __fpsimd_save_state(struct user_fpsimd_state *fp_regs);
+ void __fpsimd_restore_state(struct user_fpsimd_state *fp_regs);
+ 
+diff --git a/arch/arm64/kvm/hyp/nvhe/debug-sr.c b/arch/arm64/kvm/hyp/nvhe/debug-sr.c
+index 91a711aa8382..f401724f12ef 100644
+--- a/arch/arm64/kvm/hyp/nvhe/debug-sr.c
++++ b/arch/arm64/kvm/hyp/nvhe/debug-sr.c
+@@ -58,16 +58,24 @@ static void __debug_restore_spe(u64 pmscr_el1)
+ 	write_sysreg_s(pmscr_el1, SYS_PMSCR_EL1);
+ }
+ 
+-void __debug_switch_to_guest(struct kvm_vcpu *vcpu)
++void __debug_save_host_buffers_nvhe(struct kvm_vcpu *vcpu)
+ {
+ 	/* Disable and flush SPE data generation */
+ 	__debug_save_spe(&vcpu->arch.host_debug_state.pmscr_el1);
++}
++
++void __debug_switch_to_guest(struct kvm_vcpu *vcpu)
++{
+ 	__debug_switch_to_guest_common(vcpu);
+ }
+ 
+-void __debug_switch_to_host(struct kvm_vcpu *vcpu)
++void __debug_restore_host_buffers_nvhe(struct kvm_vcpu *vcpu)
+ {
+ 	__debug_restore_spe(vcpu->arch.host_debug_state.pmscr_el1);
++}
++
++void __debug_switch_to_host(struct kvm_vcpu *vcpu)
++{
+ 	__debug_switch_to_host_common(vcpu);
+ }
+ 
+diff --git a/arch/arm64/kvm/hyp/nvhe/switch.c b/arch/arm64/kvm/hyp/nvhe/switch.c
+index f3d0e9eca56c..59aa1045fdaf 100644
+--- a/arch/arm64/kvm/hyp/nvhe/switch.c
++++ b/arch/arm64/kvm/hyp/nvhe/switch.c
+@@ -192,6 +192,14 @@ int __kvm_vcpu_run(struct kvm_vcpu *vcpu)
+ 	pmu_switch_needed = __pmu_switch_to_guest(host_ctxt);
+ 
+ 	__sysreg_save_state_nvhe(host_ctxt);
++	/*
++	 * We must flush and disable the SPE buffer for nVHE, as
++	 * the translation regime(EL1&0) is going to be loaded with
++	 * that of the guest. And we must do this before we change the
++	 * translation regime to EL2 (via MDCR_EL2_E2PB == 0) and
++	 * before we load guest Stage1.
++	 */
++	__debug_save_host_buffers_nvhe(vcpu);
+ 
+ 	__adjust_pc(vcpu);
+ 
+@@ -234,11 +242,12 @@ int __kvm_vcpu_run(struct kvm_vcpu *vcpu)
+ 	if (vcpu->arch.flags & KVM_ARM64_FP_ENABLED)
+ 		__fpsimd_save_fpexc32(vcpu);
+ 
++	__debug_switch_to_host(vcpu);
+ 	/*
+ 	 * This must come after restoring the host sysregs, since a non-VHE
+ 	 * system may enable SPE here and make use of the TTBRs.
+ 	 */
+-	__debug_switch_to_host(vcpu);
++	__debug_restore_host_buffers_nvhe(vcpu);
+ 
+ 	if (pmu_switch_needed)
+ 		__pmu_switch_to_host(host_ctxt);
+
+From patchwork Fri Mar  5 18:52:48 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 12119321
+Return-Path: <SRS0=d8nC=ID=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No,
+ score=-17.0 required=3.0 tests=BAYES_00,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 81430C4332E
+	for <kvm@archiver.kernel.org>; Fri,  5 Mar 2021 18:53:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 4440E65090
+	for <kvm@archiver.kernel.org>; Fri,  5 Mar 2021 18:53:58 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S229911AbhCESx1 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 5 Mar 2021 13:53:27 -0500
+Received: from mail.kernel.org ([198.145.29.99]:58224 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S229595AbhCESxC (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 5 Mar 2021 13:53:02 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id C71D260200;
+        Fri,  5 Mar 2021 18:53:01 +0000 (UTC)
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1lIFZM-00HYFA-3M; Fri, 05 Mar 2021 18:53:00 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Andrew Scull <ascull@google.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Howard Zhang <Howard.Zhang@arm.com>,
+        Jia He <justin.he@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Quentin Perret <qperret@google.com>,
+        Shameerali Kolothum Thodi
+        <shameerali.kolothum.thodi@huawei.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Will Deacon <will@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        kernel-team@android.com, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org,
+        stable@vger.kernel.org
+Subject: [PATCH 2/8] KVM: arm64: Avoid corrupting vCPU context register in
+ guest exit
+Date: Fri,  5 Mar 2021 18:52:48 +0000
+Message-Id: <20210305185254.3730990-3-maz@kernel.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210305185254.3730990-1-maz@kernel.org>
+References: <87eegtzbch.wl-maz@kernel.org>
+ <20210305185254.3730990-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: pbonzini@redhat.com, alexandru.elisei@arm.com,
+ andre.przywara@arm.com, ascull@google.com, catalin.marinas@arm.com,
+ christoffer.dall@arm.com, Howard.Zhang@arm.com, justin.he@arm.com,
+ mark.rutland@arm.com, qperret@google.com,
+ shameerali.kolothum.thodi@huawei.com, suzuki.poulose@arm.com,
+ will@kernel.org, james.morse@arm.com, julien.thierry.kdev@gmail.com,
+ kernel-team@android.com, linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org, stable@vger.kernel.org
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Will Deacon <will@kernel.org>
+
+Commit 7db21530479f ("KVM: arm64: Restore hyp when panicking in guest
+context") tracks the currently running vCPU, clearing the pointer to
+NULL on exit from a guest.
+
+Unfortunately, the use of 'set_loaded_vcpu' clobbers x1 to point at the
+kvm_hyp_ctxt instead of the vCPU context, causing the subsequent RAS
+code to go off into the weeds when it saves the DISR assuming that the
+CPU context is embedded in a struct vCPU.
+
+Leave x1 alone and use x3 as a temporary register instead when clearing
+the vCPU on the guest exit path.
+
+Cc: Marc Zyngier <maz@kernel.org>
+Cc: Andrew Scull <ascull@google.com>
+Cc: <stable@vger.kernel.org>
+Fixes: 7db21530479f ("KVM: arm64: Restore hyp when panicking in guest context")
+Suggested-by: Quentin Perret <qperret@google.com>
+Signed-off-by: Will Deacon <will@kernel.org>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+Link: https://lore.kernel.org/r/20210226181211.14542-1-will@kernel.org
+---
+ arch/arm64/kvm/hyp/entry.S | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/kvm/hyp/entry.S b/arch/arm64/kvm/hyp/entry.S
+index b0afad7a99c6..0c66a1d408fd 100644
+--- a/arch/arm64/kvm/hyp/entry.S
++++ b/arch/arm64/kvm/hyp/entry.S
+@@ -146,7 +146,7 @@ SYM_INNER_LABEL(__guest_exit, SYM_L_GLOBAL)
+ 	// Now restore the hyp regs
+ 	restore_callee_saved_regs x2
+ 
+-	set_loaded_vcpu xzr, x1, x2
++	set_loaded_vcpu xzr, x2, x3
+ 
+ alternative_if ARM64_HAS_RAS_EXTN
+ 	// If we have the RAS extensions we can consume a pending error
+
+From patchwork Fri Mar  5 18:52:49 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 12119325
+Return-Path: <SRS0=d8nC=ID=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No,
+ score=-17.0 required=3.0 tests=BAYES_00,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 9DDACC4332B
+	for <kvm@archiver.kernel.org>; Fri,  5 Mar 2021 18:53:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 6E315650A1
+	for <kvm@archiver.kernel.org>; Fri,  5 Mar 2021 18:53:58 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S229904AbhCESx0 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 5 Mar 2021 13:53:26 -0500
+Received: from mail.kernel.org ([198.145.29.99]:58254 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S229611AbhCESxC (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 5 Mar 2021 13:53:02 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id 7B183650A1;
+        Fri,  5 Mar 2021 18:53:02 +0000 (UTC)
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1lIFZM-00HYFA-RT; Fri, 05 Mar 2021 18:53:00 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Andrew Scull <ascull@google.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Howard Zhang <Howard.Zhang@arm.com>,
+        Jia He <justin.he@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Quentin Perret <qperret@google.com>,
+        Shameerali Kolothum Thodi
+        <shameerali.kolothum.thodi@huawei.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Will Deacon <will@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        kernel-team@android.com, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org,
+        stable@vger.kernel.org
+Subject: [PATCH 3/8] KVM: arm64: Fix nVHE hyp panic host context restore
+Date: Fri,  5 Mar 2021 18:52:49 +0000
+Message-Id: <20210305185254.3730990-4-maz@kernel.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210305185254.3730990-1-maz@kernel.org>
+References: <87eegtzbch.wl-maz@kernel.org>
+ <20210305185254.3730990-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: pbonzini@redhat.com, alexandru.elisei@arm.com,
+ andre.przywara@arm.com, ascull@google.com, catalin.marinas@arm.com,
+ christoffer.dall@arm.com, Howard.Zhang@arm.com, justin.he@arm.com,
+ mark.rutland@arm.com, qperret@google.com,
+ shameerali.kolothum.thodi@huawei.com, suzuki.poulose@arm.com,
+ will@kernel.org, james.morse@arm.com, julien.thierry.kdev@gmail.com,
+ kernel-team@android.com, linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org, stable@vger.kernel.org
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Andrew Scull <ascull@google.com>
+
+When panicking from the nVHE hyp and restoring the host context, x29 is
+expected to hold a pointer to the host context. This wasn't being done
+so fix it to make sure there's a valid pointer the host context being
+used.
+
+Rather than passing a boolean indicating whether or not the host context
+should be restored, instead pass the pointer to the host context. NULL
+is passed to indicate that no context should be restored.
+
+Fixes: a2e102e20fd6 ("KVM: arm64: nVHE: Handle hyp panics")
+Cc: stable@vger.kernel.org
+Signed-off-by: Andrew Scull <ascull@google.com>
+[maz: partial rewrite to fit 5.12-rc1]
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+Link: https://lore.kernel.org/r/20210219122406.1337626-1-ascull@google.com
+---
+ arch/arm64/include/asm/kvm_hyp.h |  3 ++-
+ arch/arm64/kvm/hyp/nvhe/host.S   | 15 ++++++++-------
+ arch/arm64/kvm/hyp/nvhe/switch.c |  3 +--
+ 3 files changed, 11 insertions(+), 10 deletions(-)
+
+diff --git a/arch/arm64/include/asm/kvm_hyp.h b/arch/arm64/include/asm/kvm_hyp.h
+index 385bd7dd3d39..32ae676236b6 100644
+--- a/arch/arm64/include/asm/kvm_hyp.h
++++ b/arch/arm64/include/asm/kvm_hyp.h
+@@ -102,7 +102,8 @@ bool kvm_host_psci_handler(struct kvm_cpu_context *host_ctxt);
+ 
+ void __noreturn hyp_panic(void);
+ #ifdef __KVM_NVHE_HYPERVISOR__
+-void __noreturn __hyp_do_panic(bool restore_host, u64 spsr, u64 elr, u64 par);
++void __noreturn __hyp_do_panic(struct kvm_cpu_context *host_ctxt, u64 spsr,
++			       u64 elr, u64 par);
+ #endif
+ 
+ #endif /* __ARM64_KVM_HYP_H__ */
+diff --git a/arch/arm64/kvm/hyp/nvhe/host.S b/arch/arm64/kvm/hyp/nvhe/host.S
+index 6585a7cbbc56..5d94584840cc 100644
+--- a/arch/arm64/kvm/hyp/nvhe/host.S
++++ b/arch/arm64/kvm/hyp/nvhe/host.S
+@@ -71,7 +71,8 @@ SYM_FUNC_START(__host_enter)
+ SYM_FUNC_END(__host_enter)
+ 
+ /*
+- * void __noreturn __hyp_do_panic(bool restore_host, u64 spsr, u64 elr, u64 par);
++ * void __noreturn __hyp_do_panic(struct kvm_cpu_context *host_ctxt, u64 spsr,
++ * 				  u64 elr, u64 par);
+  */
+ SYM_FUNC_START(__hyp_do_panic)
+ 	/* Prepare and exit to the host's panic funciton. */
+@@ -82,9 +83,11 @@ SYM_FUNC_START(__hyp_do_panic)
+ 	hyp_kimg_va lr, x6
+ 	msr	elr_el2, lr
+ 
+-	/* Set the panic format string. Use the, now free, LR as scratch. */
+-	ldr	lr, =__hyp_panic_string
+-	hyp_kimg_va lr, x6
++	mov	x29, x0
++
++	/* Load the format string into x0 and arguments into x1-7 */
++	ldr	x0, =__hyp_panic_string
++	hyp_kimg_va x0, x6
+ 
+ 	/* Load the format arguments into x1-7. */
+ 	mov	x6, x3
+@@ -94,9 +97,7 @@ SYM_FUNC_START(__hyp_do_panic)
+ 	mrs	x5, hpfar_el2
+ 
+ 	/* Enter the host, conditionally restoring the host context. */
+-	cmp	x0, xzr
+-	mov	x0, lr
+-	b.eq	__host_enter_without_restoring
++	cbz	x29, __host_enter_without_restoring
+ 	b	__host_enter_for_panic
+ SYM_FUNC_END(__hyp_do_panic)
+ 
+diff --git a/arch/arm64/kvm/hyp/nvhe/switch.c b/arch/arm64/kvm/hyp/nvhe/switch.c
+index 59aa1045fdaf..68ab6b4d5141 100644
+--- a/arch/arm64/kvm/hyp/nvhe/switch.c
++++ b/arch/arm64/kvm/hyp/nvhe/switch.c
+@@ -266,7 +266,6 @@ void __noreturn hyp_panic(void)
+ 	u64 spsr = read_sysreg_el2(SYS_SPSR);
+ 	u64 elr = read_sysreg_el2(SYS_ELR);
+ 	u64 par = read_sysreg_par();
+-	bool restore_host = true;
+ 	struct kvm_cpu_context *host_ctxt;
+ 	struct kvm_vcpu *vcpu;
+ 
+@@ -280,7 +279,7 @@ void __noreturn hyp_panic(void)
+ 		__sysreg_restore_state_nvhe(host_ctxt);
+ 	}
+ 
+-	__hyp_do_panic(restore_host, spsr, elr, par);
++	__hyp_do_panic(host_ctxt, spsr, elr, par);
+ 	unreachable();
+ }
+ 
+
+From patchwork Fri Mar  5 18:52:50 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 12119331
+Return-Path: <SRS0=d8nC=ID=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No,
+ score=-17.0 required=3.0 tests=BAYES_00,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,
+	USER_AGENT_GIT autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id E7D8AC43332
+	for <kvm@archiver.kernel.org>; Fri,  5 Mar 2021 18:53:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C94E565090
+	for <kvm@archiver.kernel.org>; Fri,  5 Mar 2021 18:53:58 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S229919AbhCESx1 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 5 Mar 2021 13:53:27 -0500
+Received: from mail.kernel.org ([198.145.29.99]:58284 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S229615AbhCESxD (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 5 Mar 2021 13:53:03 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id 5D6E0650A3;
+        Fri,  5 Mar 2021 18:53:03 +0000 (UTC)
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1lIFZN-00HYFA-JC; Fri, 05 Mar 2021 18:53:01 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Andrew Scull <ascull@google.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Howard Zhang <Howard.Zhang@arm.com>,
+        Jia He <justin.he@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Quentin Perret <qperret@google.com>,
+        Shameerali Kolothum Thodi
+        <shameerali.kolothum.thodi@huawei.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Will Deacon <will@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        kernel-team@android.com, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org
+Subject: [PATCH 4/8] KVM: arm64: Turn kvm_arm_support_pmu_v3() into a static
+ key
+Date: Fri,  5 Mar 2021 18:52:50 +0000
+Message-Id: <20210305185254.3730990-5-maz@kernel.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210305185254.3730990-1-maz@kernel.org>
+References: <87eegtzbch.wl-maz@kernel.org>
+ <20210305185254.3730990-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: pbonzini@redhat.com, alexandru.elisei@arm.com,
+ andre.przywara@arm.com, ascull@google.com, catalin.marinas@arm.com,
+ christoffer.dall@arm.com, Howard.Zhang@arm.com, justin.he@arm.com,
+ mark.rutland@arm.com, qperret@google.com,
+ shameerali.kolothum.thodi@huawei.com, suzuki.poulose@arm.com,
+ will@kernel.org, james.morse@arm.com, julien.thierry.kdev@gmail.com,
+ kernel-team@android.com, linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+We currently find out about the presence of a HW PMU (or the handling
+of that PMU by perf, which amounts to the same thing) in a fairly
+roundabout way, by checking the number of counters available to perf.
+That's good enough for now, but we will soon need to find about about
+that on paths where perf is out of reach (in the world switch).
+
+Instead, let's turn kvm_arm_support_pmu_v3() into a static key.
+
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+Reviewed-by: Alexandru Elisei <alexandru.elisei@arm.com>
+Link: https://lore.kernel.org/r/20210209114844.3278746-2-maz@kernel.org
+---
+ arch/arm64/kvm/perf.c     | 10 ++++++++++
+ arch/arm64/kvm/pmu-emul.c | 10 ----------
+ include/kvm/arm_pmu.h     |  9 +++++++--
+ 3 files changed, 17 insertions(+), 12 deletions(-)
+
+diff --git a/arch/arm64/kvm/perf.c b/arch/arm64/kvm/perf.c
+index d45b8b9a4415..739164324afe 100644
+--- a/arch/arm64/kvm/perf.c
++++ b/arch/arm64/kvm/perf.c
+@@ -11,6 +11,8 @@
+ 
+ #include <asm/kvm_emulate.h>
+ 
++DEFINE_STATIC_KEY_FALSE(kvm_arm_pmu_available);
++
+ static int kvm_is_in_guest(void)
+ {
+         return kvm_get_running_vcpu() != NULL;
+@@ -48,6 +50,14 @@ static struct perf_guest_info_callbacks kvm_guest_cbs = {
+ 
+ int kvm_perf_init(void)
+ {
++	/*
++	 * Check if HW_PERF_EVENTS are supported by checking the number of
++	 * hardware performance counters. This could ensure the presence of
++	 * a physical PMU and CONFIG_PERF_EVENT is selected.
++	 */
++	if (IS_ENABLED(CONFIG_ARM_PMU) && perf_num_counters() > 0)
++		static_branch_enable(&kvm_arm_pmu_available);
++
+ 	return perf_register_guest_info_callbacks(&kvm_guest_cbs);
+ }
+ 
+diff --git a/arch/arm64/kvm/pmu-emul.c b/arch/arm64/kvm/pmu-emul.c
+index e9ec08b0b070..e32c6e139a09 100644
+--- a/arch/arm64/kvm/pmu-emul.c
++++ b/arch/arm64/kvm/pmu-emul.c
+@@ -823,16 +823,6 @@ u64 kvm_pmu_get_pmceid(struct kvm_vcpu *vcpu, bool pmceid1)
+ 	return val & mask;
+ }
+ 
+-bool kvm_arm_support_pmu_v3(void)
+-{
+-	/*
+-	 * Check if HW_PERF_EVENTS are supported by checking the number of
+-	 * hardware performance counters. This could ensure the presence of
+-	 * a physical PMU and CONFIG_PERF_EVENT is selected.
+-	 */
+-	return (perf_num_counters() > 0);
+-}
+-
+ int kvm_arm_pmu_v3_enable(struct kvm_vcpu *vcpu)
+ {
+ 	if (!kvm_vcpu_has_pmu(vcpu))
+diff --git a/include/kvm/arm_pmu.h b/include/kvm/arm_pmu.h
+index 8dcb3e1477bc..6fd3cda608e4 100644
+--- a/include/kvm/arm_pmu.h
++++ b/include/kvm/arm_pmu.h
+@@ -13,6 +13,13 @@
+ #define ARMV8_PMU_CYCLE_IDX		(ARMV8_PMU_MAX_COUNTERS - 1)
+ #define ARMV8_PMU_MAX_COUNTER_PAIRS	((ARMV8_PMU_MAX_COUNTERS + 1) >> 1)
+ 
++DECLARE_STATIC_KEY_FALSE(kvm_arm_pmu_available);
++
++static __always_inline bool kvm_arm_support_pmu_v3(void)
++{
++	return static_branch_likely(&kvm_arm_pmu_available);
++}
++
+ #ifdef CONFIG_HW_PERF_EVENTS
+ 
+ struct kvm_pmc {
+@@ -47,7 +54,6 @@ void kvm_pmu_software_increment(struct kvm_vcpu *vcpu, u64 val);
+ void kvm_pmu_handle_pmcr(struct kvm_vcpu *vcpu, u64 val);
+ void kvm_pmu_set_counter_event_type(struct kvm_vcpu *vcpu, u64 data,
+ 				    u64 select_idx);
+-bool kvm_arm_support_pmu_v3(void);
+ int kvm_arm_pmu_v3_set_attr(struct kvm_vcpu *vcpu,
+ 			    struct kvm_device_attr *attr);
+ int kvm_arm_pmu_v3_get_attr(struct kvm_vcpu *vcpu,
+@@ -87,7 +93,6 @@ static inline void kvm_pmu_software_increment(struct kvm_vcpu *vcpu, u64 val) {}
+ static inline void kvm_pmu_handle_pmcr(struct kvm_vcpu *vcpu, u64 val) {}
+ static inline void kvm_pmu_set_counter_event_type(struct kvm_vcpu *vcpu,
+ 						  u64 data, u64 select_idx) {}
+-static inline bool kvm_arm_support_pmu_v3(void) { return false; }
+ static inline int kvm_arm_pmu_v3_set_attr(struct kvm_vcpu *vcpu,
+ 					  struct kvm_device_attr *attr)
+ {
+
+From patchwork Fri Mar  5 18:52:51 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 12119327
+Return-Path: <SRS0=d8nC=ID=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No,
+ score=-17.0 required=3.0 tests=BAYES_00,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,
+	USER_AGENT_GIT autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id C9102C43333
+	for <kvm@archiver.kernel.org>; Fri,  5 Mar 2021 18:53:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id ADF25650A3
+	for <kvm@archiver.kernel.org>; Fri,  5 Mar 2021 18:53:58 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S229948AbhCESx2 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 5 Mar 2021 13:53:28 -0500
+Received: from mail.kernel.org ([198.145.29.99]:58316 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S229646AbhCESxE (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 5 Mar 2021 13:53:04 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id 19794650A6;
+        Fri,  5 Mar 2021 18:53:04 +0000 (UTC)
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1lIFZO-00HYFA-D6; Fri, 05 Mar 2021 18:53:02 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Andrew Scull <ascull@google.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Howard Zhang <Howard.Zhang@arm.com>,
+        Jia He <justin.he@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Quentin Perret <qperret@google.com>,
+        Shameerali Kolothum Thodi
+        <shameerali.kolothum.thodi@huawei.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Will Deacon <will@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        kernel-team@android.com, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org
+Subject: [PATCH 5/8] KVM: arm64: Don't access PMSELR_EL0/PMUSERENR_EL0 when no
+ PMU is available
+Date: Fri,  5 Mar 2021 18:52:51 +0000
+Message-Id: <20210305185254.3730990-6-maz@kernel.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210305185254.3730990-1-maz@kernel.org>
+References: <87eegtzbch.wl-maz@kernel.org>
+ <20210305185254.3730990-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: pbonzini@redhat.com, alexandru.elisei@arm.com,
+ andre.przywara@arm.com, ascull@google.com, catalin.marinas@arm.com,
+ christoffer.dall@arm.com, Howard.Zhang@arm.com, justin.he@arm.com,
+ mark.rutland@arm.com, qperret@google.com,
+ shameerali.kolothum.thodi@huawei.com, suzuki.poulose@arm.com,
+ will@kernel.org, james.morse@arm.com, julien.thierry.kdev@gmail.com,
+ kernel-team@android.com, linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+When running under a nesting hypervisor, it isn't guaranteed that
+the virtual HW will include a PMU. In which case, let's not try
+to access the PMU registers in the world switch, as that'd be
+deadly.
+
+Reported-by: Andre Przywara <andre.przywara@arm.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+Reviewed-by: Alexandru Elisei <alexandru.elisei@arm.com>
+Link: https://lore.kernel.org/r/20210209114844.3278746-3-maz@kernel.org
+---
+ arch/arm64/kernel/image-vars.h          | 3 +++
+ arch/arm64/kvm/hyp/include/hyp/switch.h | 9 ++++++---
+ 2 files changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm64/kernel/image-vars.h b/arch/arm64/kernel/image-vars.h
+index 23f1a557bd9f..5aa9ed1e9ec6 100644
+--- a/arch/arm64/kernel/image-vars.h
++++ b/arch/arm64/kernel/image-vars.h
+@@ -101,6 +101,9 @@ KVM_NVHE_ALIAS(__stop___kvm_ex_table);
+ /* Array containing bases of nVHE per-CPU memory regions. */
+ KVM_NVHE_ALIAS(kvm_arm_hyp_percpu_base);
+ 
++/* PMU available static key */
++KVM_NVHE_ALIAS(kvm_arm_pmu_available);
++
+ #endif /* CONFIG_KVM */
+ 
+ #endif /* __ARM64_KERNEL_IMAGE_VARS_H */
+diff --git a/arch/arm64/kvm/hyp/include/hyp/switch.h b/arch/arm64/kvm/hyp/include/hyp/switch.h
+index 54f4860cd87c..6c1f51f25eb3 100644
+--- a/arch/arm64/kvm/hyp/include/hyp/switch.h
++++ b/arch/arm64/kvm/hyp/include/hyp/switch.h
+@@ -90,15 +90,18 @@ static inline void __activate_traps_common(struct kvm_vcpu *vcpu)
+ 	 * counter, which could make a PMXEVCNTR_EL0 access UNDEF at
+ 	 * EL1 instead of being trapped to EL2.
+ 	 */
+-	write_sysreg(0, pmselr_el0);
+-	write_sysreg(ARMV8_PMU_USERENR_MASK, pmuserenr_el0);
++	if (kvm_arm_support_pmu_v3()) {
++		write_sysreg(0, pmselr_el0);
++		write_sysreg(ARMV8_PMU_USERENR_MASK, pmuserenr_el0);
++	}
+ 	write_sysreg(vcpu->arch.mdcr_el2, mdcr_el2);
+ }
+ 
+ static inline void __deactivate_traps_common(void)
+ {
+ 	write_sysreg(0, hstr_el2);
+-	write_sysreg(0, pmuserenr_el0);
++	if (kvm_arm_support_pmu_v3())
++		write_sysreg(0, pmuserenr_el0);
+ }
+ 
+ static inline void ___activate_traps(struct kvm_vcpu *vcpu)
+
+From patchwork Fri Mar  5 18:52:52 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 12119333
+Return-Path: <SRS0=d8nC=ID=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No,
+ score=-17.0 required=3.0 tests=BAYES_00,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 28FCDC43603
+	for <kvm@archiver.kernel.org>; Fri,  5 Mar 2021 18:53:59 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 0A61865090
+	for <kvm@archiver.kernel.org>; Fri,  5 Mar 2021 18:53:58 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S229963AbhCESx2 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 5 Mar 2021 13:53:28 -0500
+Received: from mail.kernel.org ([198.145.29.99]:58346 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S229781AbhCESxF (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 5 Mar 2021 13:53:05 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id 01E9D650A4;
+        Fri,  5 Mar 2021 18:53:05 +0000 (UTC)
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1lIFZP-00HYFA-8k; Fri, 05 Mar 2021 18:53:03 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Andrew Scull <ascull@google.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Howard Zhang <Howard.Zhang@arm.com>,
+        Jia He <justin.he@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Quentin Perret <qperret@google.com>,
+        Shameerali Kolothum Thodi
+        <shameerali.kolothum.thodi@huawei.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Will Deacon <will@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        kernel-team@android.com, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org
+Subject: [PATCH 6/8] KVM: arm64: Rename __vgic_v3_get_ich_vtr_el2() to
+ __vgic_v3_get_gic_config()
+Date: Fri,  5 Mar 2021 18:52:52 +0000
+Message-Id: <20210305185254.3730990-7-maz@kernel.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210305185254.3730990-1-maz@kernel.org>
+References: <87eegtzbch.wl-maz@kernel.org>
+ <20210305185254.3730990-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: pbonzini@redhat.com, alexandru.elisei@arm.com,
+ andre.przywara@arm.com, ascull@google.com, catalin.marinas@arm.com,
+ christoffer.dall@arm.com, Howard.Zhang@arm.com, justin.he@arm.com,
+ mark.rutland@arm.com, qperret@google.com,
+ shameerali.kolothum.thodi@huawei.com, suzuki.poulose@arm.com,
+ will@kernel.org, james.morse@arm.com, julien.thierry.kdev@gmail.com,
+ kernel-team@android.com, linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+As we are about to report a bit more information to the rest of
+the kernel, rename __vgic_v3_get_ich_vtr_el2() to the more
+explicit __vgic_v3_get_gic_config().
+
+No functional change.
+
+Tested-by: Shameer Kolothum <shameerali.kolothum.thodi@huawei.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/include/asm/kvm_asm.h   | 4 ++--
+ arch/arm64/kvm/hyp/nvhe/hyp-main.c | 6 +++---
+ arch/arm64/kvm/hyp/vgic-v3-sr.c    | 7 ++++++-
+ arch/arm64/kvm/vgic/vgic-v3.c      | 4 +++-
+ 4 files changed, 14 insertions(+), 7 deletions(-)
+
+diff --git a/arch/arm64/include/asm/kvm_asm.h b/arch/arm64/include/asm/kvm_asm.h
+index 22d933e9b59e..9c0e396dd03f 100644
+--- a/arch/arm64/include/asm/kvm_asm.h
++++ b/arch/arm64/include/asm/kvm_asm.h
+@@ -50,7 +50,7 @@
+ #define __KVM_HOST_SMCCC_FUNC___kvm_tlb_flush_local_vmid	5
+ #define __KVM_HOST_SMCCC_FUNC___kvm_timer_set_cntvoff		6
+ #define __KVM_HOST_SMCCC_FUNC___kvm_enable_ssbs			7
+-#define __KVM_HOST_SMCCC_FUNC___vgic_v3_get_ich_vtr_el2		8
++#define __KVM_HOST_SMCCC_FUNC___vgic_v3_get_gic_config		8
+ #define __KVM_HOST_SMCCC_FUNC___vgic_v3_read_vmcr		9
+ #define __KVM_HOST_SMCCC_FUNC___vgic_v3_write_vmcr		10
+ #define __KVM_HOST_SMCCC_FUNC___vgic_v3_init_lrs		11
+@@ -192,7 +192,7 @@ extern void __kvm_timer_set_cntvoff(u64 cntvoff);
+ 
+ extern int __kvm_vcpu_run(struct kvm_vcpu *vcpu);
+ 
+-extern u64 __vgic_v3_get_ich_vtr_el2(void);
++extern u64 __vgic_v3_get_gic_config(void);
+ extern u64 __vgic_v3_read_vmcr(void);
+ extern void __vgic_v3_write_vmcr(u32 vmcr);
+ extern void __vgic_v3_init_lrs(void);
+diff --git a/arch/arm64/kvm/hyp/nvhe/hyp-main.c b/arch/arm64/kvm/hyp/nvhe/hyp-main.c
+index f012f8665ecc..8f129968204e 100644
+--- a/arch/arm64/kvm/hyp/nvhe/hyp-main.c
++++ b/arch/arm64/kvm/hyp/nvhe/hyp-main.c
+@@ -67,9 +67,9 @@ static void handle___kvm_enable_ssbs(struct kvm_cpu_context *host_ctxt)
+ 	write_sysreg_el2(tmp, SYS_SCTLR);
+ }
+ 
+-static void handle___vgic_v3_get_ich_vtr_el2(struct kvm_cpu_context *host_ctxt)
++static void handle___vgic_v3_get_gic_config(struct kvm_cpu_context *host_ctxt)
+ {
+-	cpu_reg(host_ctxt, 1) = __vgic_v3_get_ich_vtr_el2();
++	cpu_reg(host_ctxt, 1) = __vgic_v3_get_gic_config();
+ }
+ 
+ static void handle___vgic_v3_read_vmcr(struct kvm_cpu_context *host_ctxt)
+@@ -118,7 +118,7 @@ static const hcall_t host_hcall[] = {
+ 	HANDLE_FUNC(__kvm_tlb_flush_local_vmid),
+ 	HANDLE_FUNC(__kvm_timer_set_cntvoff),
+ 	HANDLE_FUNC(__kvm_enable_ssbs),
+-	HANDLE_FUNC(__vgic_v3_get_ich_vtr_el2),
++	HANDLE_FUNC(__vgic_v3_get_gic_config),
+ 	HANDLE_FUNC(__vgic_v3_read_vmcr),
+ 	HANDLE_FUNC(__vgic_v3_write_vmcr),
+ 	HANDLE_FUNC(__vgic_v3_init_lrs),
+diff --git a/arch/arm64/kvm/hyp/vgic-v3-sr.c b/arch/arm64/kvm/hyp/vgic-v3-sr.c
+index 80406f463c28..005daa0c9dd7 100644
+--- a/arch/arm64/kvm/hyp/vgic-v3-sr.c
++++ b/arch/arm64/kvm/hyp/vgic-v3-sr.c
+@@ -405,7 +405,12 @@ void __vgic_v3_init_lrs(void)
+ 		__gic_v3_set_lr(0, i);
+ }
+ 
+-u64 __vgic_v3_get_ich_vtr_el2(void)
++/*
++ * Return the GIC CPU configuration:
++ * - [31:0]  ICH_VTR_EL2
++ * - [63:32] RES0
++ */
++u64 __vgic_v3_get_gic_config(void)
+ {
+ 	return read_gicreg(ICH_VTR_EL2);
+ }
+diff --git a/arch/arm64/kvm/vgic/vgic-v3.c b/arch/arm64/kvm/vgic/vgic-v3.c
+index 52915b342351..c3e6c3fd333b 100644
+--- a/arch/arm64/kvm/vgic/vgic-v3.c
++++ b/arch/arm64/kvm/vgic/vgic-v3.c
+@@ -574,9 +574,11 @@ early_param("kvm-arm.vgic_v4_enable", early_gicv4_enable);
+  */
+ int vgic_v3_probe(const struct gic_kvm_info *info)
+ {
+-	u32 ich_vtr_el2 = kvm_call_hyp_ret(__vgic_v3_get_ich_vtr_el2);
++	u64 ich_vtr_el2 = kvm_call_hyp_ret(__vgic_v3_get_gic_config);
+ 	int ret;
+ 
++	ich_vtr_el2 = (u32)ich_vtr_el2;
++
+ 	/*
+ 	 * The ListRegs field is 5 bits, but there is an architectural
+ 	 * maximum of 16 list registers. Just ignore bit 4...
+
+From patchwork Fri Mar  5 18:52:53 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 12119323
+Return-Path: <SRS0=d8nC=ID=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No,
+ score=-17.0 required=3.0 tests=BAYES_00,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id B081BC43331
+	for <kvm@archiver.kernel.org>; Fri,  5 Mar 2021 18:53:58 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 927A165090
+	for <kvm@archiver.kernel.org>; Fri,  5 Mar 2021 18:53:58 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S229955AbhCESx2 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 5 Mar 2021 13:53:28 -0500
+Received: from mail.kernel.org ([198.145.29.99]:58382 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S229783AbhCESxG (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 5 Mar 2021 13:53:06 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id B3DA3650A7;
+        Fri,  5 Mar 2021 18:53:05 +0000 (UTC)
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1lIFZQ-00HYFA-0s; Fri, 05 Mar 2021 18:53:04 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Andrew Scull <ascull@google.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Howard Zhang <Howard.Zhang@arm.com>,
+        Jia He <justin.he@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Quentin Perret <qperret@google.com>,
+        Shameerali Kolothum Thodi
+        <shameerali.kolothum.thodi@huawei.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Will Deacon <will@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        kernel-team@android.com, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org
+Subject: [PATCH 7/8] KVM: arm64: Workaround firmware wrongly advertising
+ GICv2-on-v3 compatibility
+Date: Fri,  5 Mar 2021 18:52:53 +0000
+Message-Id: <20210305185254.3730990-8-maz@kernel.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210305185254.3730990-1-maz@kernel.org>
+References: <87eegtzbch.wl-maz@kernel.org>
+ <20210305185254.3730990-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: pbonzini@redhat.com, alexandru.elisei@arm.com,
+ andre.przywara@arm.com, ascull@google.com, catalin.marinas@arm.com,
+ christoffer.dall@arm.com, Howard.Zhang@arm.com, justin.he@arm.com,
+ mark.rutland@arm.com, qperret@google.com,
+ shameerali.kolothum.thodi@huawei.com, suzuki.poulose@arm.com,
+ will@kernel.org, james.morse@arm.com, julien.thierry.kdev@gmail.com,
+ kernel-team@android.com, linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+It looks like we have broken firmware out there that wrongly advertises
+a GICv2 compatibility interface, despite the CPUs not being able to deal
+with it.
+
+To work around this, check that the CPU initialising KVM is actually able
+to switch to MMIO instead of system registers, and use that as a
+precondition to enable GICv2 compatibility in KVM.
+
+Note that the detection happens on a single CPU. If the firmware is
+lying *and* that the CPUs are asymetric, all hope is lost anyway.
+
+Reported-by: Shameerali Kolothum Thodi <shameerali.kolothum.thodi@huawei.com>
+Tested-by: Shameer Kolothum <shameerali.kolothum.thodi@huawei.com>
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+---
+ arch/arm64/kvm/hyp/vgic-v3-sr.c | 35 +++++++++++++++++++++++++++++++--
+ arch/arm64/kvm/vgic/vgic-v3.c   |  8 ++++++--
+ 2 files changed, 39 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm64/kvm/hyp/vgic-v3-sr.c b/arch/arm64/kvm/hyp/vgic-v3-sr.c
+index 005daa0c9dd7..ee3682b9873c 100644
+--- a/arch/arm64/kvm/hyp/vgic-v3-sr.c
++++ b/arch/arm64/kvm/hyp/vgic-v3-sr.c
+@@ -408,11 +408,42 @@ void __vgic_v3_init_lrs(void)
+ /*
+  * Return the GIC CPU configuration:
+  * - [31:0]  ICH_VTR_EL2
+- * - [63:32] RES0
++ * - [62:32] RES0
++ * - [63]    MMIO (GICv2) capable
+  */
+ u64 __vgic_v3_get_gic_config(void)
+ {
+-	return read_gicreg(ICH_VTR_EL2);
++	u64 val, sre = read_gicreg(ICC_SRE_EL1);
++	unsigned long flags = 0;
++
++	/*
++	 * To check whether we have a MMIO-based (GICv2 compatible)
++	 * CPU interface, we need to disable the system register
++	 * view. To do that safely, we have to prevent any interrupt
++	 * from firing (which would be deadly).
++	 *
++	 * Note that this only makes sense on VHE, as interrupts are
++	 * already masked for nVHE as part of the exception entry to
++	 * EL2.
++	 */
++	if (has_vhe())
++		flags = local_daif_save();
++
++	write_gicreg(0, ICC_SRE_EL1);
++	isb();
++
++	val = read_gicreg(ICC_SRE_EL1);
++
++	write_gicreg(sre, ICC_SRE_EL1);
++	isb();
++
++	if (has_vhe())
++		local_daif_restore(flags);
++
++	val  = (val & ICC_SRE_EL1_SRE) ? 0 : (1ULL << 63);
++	val |= read_gicreg(ICH_VTR_EL2);
++
++	return val;
+ }
+ 
+ u64 __vgic_v3_read_vmcr(void)
+diff --git a/arch/arm64/kvm/vgic/vgic-v3.c b/arch/arm64/kvm/vgic/vgic-v3.c
+index c3e6c3fd333b..6f530925a231 100644
+--- a/arch/arm64/kvm/vgic/vgic-v3.c
++++ b/arch/arm64/kvm/vgic/vgic-v3.c
+@@ -575,8 +575,10 @@ early_param("kvm-arm.vgic_v4_enable", early_gicv4_enable);
+ int vgic_v3_probe(const struct gic_kvm_info *info)
+ {
+ 	u64 ich_vtr_el2 = kvm_call_hyp_ret(__vgic_v3_get_gic_config);
++	bool has_v2;
+ 	int ret;
+ 
++	has_v2 = ich_vtr_el2 >> 63;
+ 	ich_vtr_el2 = (u32)ich_vtr_el2;
+ 
+ 	/*
+@@ -596,13 +598,15 @@ int vgic_v3_probe(const struct gic_kvm_info *info)
+ 			 gicv4_enable ? "en" : "dis");
+ 	}
+ 
++	kvm_vgic_global_state.vcpu_base = 0;
++
+ 	if (!info->vcpu.start) {
+ 		kvm_info("GICv3: no GICV resource entry\n");
+-		kvm_vgic_global_state.vcpu_base = 0;
++	} else if (!has_v2) {
++		pr_warn(FW_BUG "CPU interface incapable of MMIO access\n");
+ 	} else if (!PAGE_ALIGNED(info->vcpu.start)) {
+ 		pr_warn("GICV physical address 0x%llx not page aligned\n",
+ 			(unsigned long long)info->vcpu.start);
+-		kvm_vgic_global_state.vcpu_base = 0;
+ 	} else {
+ 		kvm_vgic_global_state.vcpu_base = info->vcpu.start;
+ 		kvm_vgic_global_state.can_emulate_gicv2 = true;
+
+From patchwork Fri Mar  5 18:52:54 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Marc Zyngier <maz@kernel.org>
+X-Patchwork-Id: 12119329
+Return-Path: <SRS0=d8nC=ID=vger.kernel.org=kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No,
+ score=-17.0 required=3.0 tests=BAYES_00,INCLUDES_CR_TRAILER,
+	INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,
+	USER_AGENT_GIT autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 1329CC4321A
+	for <kvm@archiver.kernel.org>; Fri,  5 Mar 2021 18:53:59 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id E2267650A3
+	for <kvm@archiver.kernel.org>; Fri,  5 Mar 2021 18:53:58 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S229976AbhCESx3 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Fri, 5 Mar 2021 13:53:29 -0500
+Received: from mail.kernel.org ([198.145.29.99]:58412 "EHLO mail.kernel.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S229794AbhCESxG (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Fri, 5 Mar 2021 13:53:06 -0500
+Received: from disco-boy.misterjones.org (disco-boy.misterjones.org
+ [51.254.78.96])
+        (using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+        (No client certificate requested)
+        by mail.kernel.org (Postfix) with ESMTPSA id 92BB6650AC;
+        Fri,  5 Mar 2021 18:53:06 +0000 (UTC)
+Received: from 78.163-31-62.static.virginmediabusiness.co.uk ([62.31.163.78]
+ helo=why.lan)
+        by disco-boy.misterjones.org with esmtpsa  (TLS1.3) tls
+ TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        (Exim 4.94)
+        (envelope-from <maz@kernel.org>)
+        id 1lIFZQ-00HYFA-Qa; Fri, 05 Mar 2021 18:53:04 +0000
+From: Marc Zyngier <maz@kernel.org>
+To: Paolo Bonzini <pbonzini@redhat.com>
+Cc: Alexandru Elisei <alexandru.elisei@arm.com>,
+        Andre Przywara <andre.przywara@arm.com>,
+        Andrew Scull <ascull@google.com>,
+        Catalin Marinas <catalin.marinas@arm.com>,
+        Christoffer Dall <christoffer.dall@arm.com>,
+        Howard Zhang <Howard.Zhang@arm.com>,
+        Jia He <justin.he@arm.com>,
+        Mark Rutland <mark.rutland@arm.com>,
+        Quentin Perret <qperret@google.com>,
+        Shameerali Kolothum Thodi
+        <shameerali.kolothum.thodi@huawei.com>,
+        Suzuki K Poulose <suzuki.poulose@arm.com>,
+        Will Deacon <will@kernel.org>,
+        James Morse <james.morse@arm.com>,
+        Julien Thierry <julien.thierry.kdev@gmail.com>,
+        kernel-team@android.com, linux-arm-kernel@lists.infradead.org,
+        kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org,
+        stable@vger.kernel.org
+Subject: [PATCH 8/8] KVM: arm64: Fix range alignment when walking page tables
+Date: Fri,  5 Mar 2021 18:52:54 +0000
+Message-Id: <20210305185254.3730990-9-maz@kernel.org>
+X-Mailer: git-send-email 2.29.2
+In-Reply-To: <20210305185254.3730990-1-maz@kernel.org>
+References: <87eegtzbch.wl-maz@kernel.org>
+ <20210305185254.3730990-1-maz@kernel.org>
+MIME-Version: 1.0
+X-SA-Exim-Connect-IP: 62.31.163.78
+X-SA-Exim-Rcpt-To: pbonzini@redhat.com, alexandru.elisei@arm.com,
+ andre.przywara@arm.com, ascull@google.com, catalin.marinas@arm.com,
+ christoffer.dall@arm.com, Howard.Zhang@arm.com, justin.he@arm.com,
+ mark.rutland@arm.com, qperret@google.com,
+ shameerali.kolothum.thodi@huawei.com, suzuki.poulose@arm.com,
+ will@kernel.org, james.morse@arm.com, julien.thierry.kdev@gmail.com,
+ kernel-team@android.com, linux-arm-kernel@lists.infradead.org,
+ kvmarm@lists.cs.columbia.edu, kvm@vger.kernel.org, stable@vger.kernel.org
+X-SA-Exim-Mail-From: maz@kernel.org
+X-SA-Exim-Scanned: No (on disco-boy.misterjones.org);
+ SAEximRunCond expanded to false
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Jia He <justin.he@arm.com>
+
+When walking the page tables at a given level, and if the start
+address for the range isn't aligned for that level, we propagate
+the misalignment on each iteration at that level.
+
+This results in the walker ignoring a number of entries (depending
+on the original misalignment) on each subsequent iteration.
+
+Properly aligning the address before the next iteration addresses
+this issue.
+
+Cc: stable@vger.kernel.org
+Reported-by: Howard Zhang <Howard.Zhang@arm.com>
+Acked-by: Will Deacon <will@kernel.org>
+Signed-off-by: Jia He <justin.he@arm.com>
+Fixes: b1e57de62cfb ("KVM: arm64: Add stand-alone page-table walker infrastructure")
+[maz: rewrite commit message]
+Signed-off-by: Marc Zyngier <maz@kernel.org>
+Link: https://lore.kernel.org/r/20210303024225.2591-1-justin.he@arm.com
+---
+ arch/arm64/kvm/hyp/pgtable.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/kvm/hyp/pgtable.c b/arch/arm64/kvm/hyp/pgtable.c
+index 4d177ce1d536..926fc07074f5 100644
+--- a/arch/arm64/kvm/hyp/pgtable.c
++++ b/arch/arm64/kvm/hyp/pgtable.c
+@@ -223,6 +223,7 @@ static inline int __kvm_pgtable_visit(struct kvm_pgtable_walk_data *data,
+ 		goto out;
+ 
+ 	if (!table) {
++		data->addr = ALIGN_DOWN(data->addr, kvm_granule_size(level));
+ 		data->addr += kvm_granule_size(level);
+ 		goto out;
+ 	}
