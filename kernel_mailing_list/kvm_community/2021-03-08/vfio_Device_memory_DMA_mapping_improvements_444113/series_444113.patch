@@ -1,0 +1,3100 @@
+From patchwork Mon Mar  8 21:47:28 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alex Williamson <alex.williamson@redhat.com>
+X-Patchwork-Id: 12123431
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,
+	URIBL_BLOCKED autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 72934C433DB
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:48:16 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 449C8651B7
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:48:16 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S229978AbhCHVrn (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 8 Mar 2021 16:47:43 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:32870 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S230047AbhCHVri (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 8 Mar 2021 16:47:38 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615240058;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=5qWQV30xEvYhKMl4+qKvr7XLbSB144DLEcjcsYdfp1w=;
+        b=aKL/06AqfWoo7gZz3xgFB1TlWfKyjccm94N1u9nu6aXOrA8Kn4BT9cwUegMJBOuuTrmBMO
+        pDbXYW466Ex7BCXNff5sNFC0V69Ymun6ko8yD6PQaArpBkMyNtkhvDlf22I3Ap7PvkbJDe
+        fDw/UMjAh+8j9ahLf3Gxjtm17K9ST/g=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-47-HSiE92j2N1GDfXZoE6nETg-1; Mon, 08 Mar 2021 16:47:36 -0500
+X-MC-Unique: HSiE92j2N1GDfXZoE6nETg-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 7958B1005D4A;
+        Mon,  8 Mar 2021 21:47:35 +0000 (UTC)
+Received: from gimli.home (ovpn-112-255.phx2.redhat.com [10.3.112.255])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id A06941A878;
+        Mon,  8 Mar 2021 21:47:28 +0000 (UTC)
+Subject: [PATCH v1 01/14] vfio: Create vfio_fs_type with inode per device
+From: Alex Williamson <alex.williamson@redhat.com>
+To: alex.williamson@redhat.com
+Cc: cohuck@redhat.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jgg@nvidia.com, peterx@redhat.com
+Date: Mon, 08 Mar 2021 14:47:28 -0700
+Message-ID: <161524004828.3480.1817334832614722574.stgit@gimli.home>
+In-Reply-To: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+References: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+User-Agent: StGit/0.21-2-g8ef5
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+By linking all the device fds we provide to userspace to an
+address space through a new pseudo fs, we can use tools like
+unmap_mapping_range() to zap all vmas associated with a device.
+
+Suggested-by: Jason Gunthorpe <jgg@nvidia.com>
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ drivers/vfio/vfio.c |   54 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 54 insertions(+)
+
+diff --git a/drivers/vfio/vfio.c b/drivers/vfio/vfio.c
+index 38779e6fd80c..abdf8d52a911 100644
+--- a/drivers/vfio/vfio.c
++++ b/drivers/vfio/vfio.c
+@@ -32,11 +32,18 @@
+ #include <linux/vfio.h>
+ #include <linux/wait.h>
+ #include <linux/sched/signal.h>
++#include <linux/pseudo_fs.h>
++#include <linux/mount.h>
+ 
+ #define DRIVER_VERSION	"0.3"
+ #define DRIVER_AUTHOR	"Alex Williamson <alex.williamson@redhat.com>"
+ #define DRIVER_DESC	"VFIO - User Level meta-driver"
+ 
++#define VFIO_MAGIC 0x5646494f /* "VFIO" */
++
++static int vfio_fs_cnt;
++static struct vfsmount *vfio_fs_mnt;
++
+ static struct vfio {
+ 	struct class			*class;
+ 	struct list_head		iommu_drivers_list;
+@@ -97,6 +104,7 @@ struct vfio_device {
+ 	struct vfio_group		*group;
+ 	struct list_head		group_next;
+ 	void				*device_data;
++	struct inode			*inode;
+ };
+ 
+ #ifdef CONFIG_VFIO_NOIOMMU
+@@ -529,6 +537,34 @@ static struct vfio_group *vfio_group_get_from_dev(struct device *dev)
+ 	return group;
+ }
+ 
++static int vfio_fs_init_fs_context(struct fs_context *fc)
++{
++	return init_pseudo(fc, VFIO_MAGIC) ? 0 : -ENOMEM;
++}
++
++static struct file_system_type vfio_fs_type = {
++	.name = "vfio",
++	.owner = THIS_MODULE,
++	.init_fs_context = vfio_fs_init_fs_context,
++	.kill_sb = kill_anon_super,
++};
++
++static struct inode *vfio_fs_inode_new(void)
++{
++	struct inode *inode;
++	int ret;
++
++	ret = simple_pin_fs(&vfio_fs_type, &vfio_fs_mnt, &vfio_fs_cnt);
++	if (ret)
++		return ERR_PTR(ret);
++
++	inode = alloc_anon_inode(vfio_fs_mnt->mnt_sb);
++	if (IS_ERR(inode))
++		simple_release_fs(&vfio_fs_mnt, &vfio_fs_cnt);
++
++	return inode;
++}
++
+ /**
+  * Device objects - create, release, get, put, search
+  */
+@@ -539,11 +575,19 @@ struct vfio_device *vfio_group_create_device(struct vfio_group *group,
+ 					     void *device_data)
+ {
+ 	struct vfio_device *device;
++	struct inode *inode;
+ 
+ 	device = kzalloc(sizeof(*device), GFP_KERNEL);
+ 	if (!device)
+ 		return ERR_PTR(-ENOMEM);
+ 
++	inode = vfio_fs_inode_new();
++	if (IS_ERR(inode)) {
++		kfree(device);
++		return ERR_CAST(inode);
++	}
++	device->inode = inode;
++
+ 	kref_init(&device->kref);
+ 	device->dev = dev;
+ 	device->group = group;
+@@ -574,6 +618,9 @@ static void vfio_device_release(struct kref *kref)
+ 
+ 	dev_set_drvdata(device->dev, NULL);
+ 
++	iput(device->inode);
++	simple_release_fs(&vfio_fs_mnt, &vfio_fs_cnt);
++
+ 	kfree(device);
+ 
+ 	/* vfio_del_group_dev may be waiting for this device */
+@@ -1488,6 +1535,13 @@ static int vfio_group_get_device_fd(struct vfio_group *group, char *buf)
+ 	 */
+ 	filep->f_mode |= (FMODE_LSEEK | FMODE_PREAD | FMODE_PWRITE);
+ 
++	/*
++	 * Use the pseudo fs inode on the device to link all mmaps
++	 * to the same address space, allowing us to unmap all vmas
++	 * associated to this device using unmap_mapping_range().
++	 */
++	filep->f_mapping = device->inode->i_mapping;
++
+ 	atomic_inc(&group->container_users);
+ 
+ 	fd_install(ret, filep);
+
+From patchwork Mon Mar  8 21:47:40 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alex Williamson <alex.williamson@redhat.com>
+X-Patchwork-Id: 12123433
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 59A68C433E0
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:48:48 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 16FFD6523D
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:48:48 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231292AbhCHVsR (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 8 Mar 2021 16:48:17 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:28983 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S230342AbhCHVrv (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 8 Mar 2021 16:47:51 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615240070;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=mcBBJ8/DsjCOp6AAjE3kwckspOlsAATYaDIZrfP5u90=;
+        b=NTpl24m7z52Cr5Ds9l1lJRpX8ID21vxVerG/zhTqHMy0shcmsDvZmBmTVEiJqOMByDxqi8
+        AKNr1HJnF7WbsgNVJw7CX1+SU+XCYt2GfoLzypUuH6Hle8MbtXlJh/E1+o79E/kpo4RYjQ
+        3fxi0BWhhgm+zeXnni0Npd4IJf0i1K4=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-233-3kgx176DMxihEZ4wTVoImw-1; Mon, 08 Mar 2021 16:47:48 -0500
+X-MC-Unique: 3kgx176DMxihEZ4wTVoImw-1
+Received: from smtp.corp.redhat.com (int-mx01.intmail.prod.int.phx2.redhat.com
+ [10.5.11.11])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id B6839107B018;
+        Mon,  8 Mar 2021 21:47:47 +0000 (UTC)
+Received: from gimli.home (ovpn-112-255.phx2.redhat.com [10.3.112.255])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id E613918B42;
+        Mon,  8 Mar 2021 21:47:40 +0000 (UTC)
+Subject: [PATCH v1 02/14] vfio: Update vfio_add_group_dev() API
+From: Alex Williamson <alex.williamson@redhat.com>
+To: alex.williamson@redhat.com
+Cc: cohuck@redhat.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jgg@nvidia.com, peterx@redhat.com
+Date: Mon, 08 Mar 2021 14:47:40 -0700
+Message-ID: <161524006056.3480.3931750068527641030.stgit@gimli.home>
+In-Reply-To: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+References: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+User-Agent: StGit/0.21-2-g8ef5
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.11
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Rather than an errno, return a pointer to the opaque vfio_device
+to allow the bus driver to call into vfio-core without additional
+lookups and references.  Note that bus drivers are still required
+to use vfio_del_group_dev() to teardown the vfio_device.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ Documentation/driver-api/vfio.rst            |    6 +++---
+ drivers/vfio/fsl-mc/vfio_fsl_mc.c            |    6 ++++--
+ drivers/vfio/mdev/vfio_mdev.c                |    5 ++++-
+ drivers/vfio/pci/vfio_pci.c                  |    7 +++++--
+ drivers/vfio/platform/vfio_platform_common.c |    7 +++++--
+ drivers/vfio/vfio.c                          |   23 ++++++++++-------------
+ include/linux/vfio.h                         |    6 +++---
+ 7 files changed, 34 insertions(+), 26 deletions(-)
+
+diff --git a/Documentation/driver-api/vfio.rst b/Documentation/driver-api/vfio.rst
+index f1a4d3c3ba0b..03e978eb8ec7 100644
+--- a/Documentation/driver-api/vfio.rst
++++ b/Documentation/driver-api/vfio.rst
+@@ -252,9 +252,9 @@ into VFIO core.  When devices are bound and unbound to the driver,
+ the driver should call vfio_add_group_dev() and vfio_del_group_dev()
+ respectively::
+ 
+-	extern int vfio_add_group_dev(struct device *dev,
+-				      const struct vfio_device_ops *ops,
+-				      void *device_data);
++	extern struct vfio_device *vfio_add_group_dev(struct device *dev,
++					const struct vfio_device_ops *ops,
++					void *device_data);
+ 
+ 	extern void *vfio_del_group_dev(struct device *dev);
+ 
+diff --git a/drivers/vfio/fsl-mc/vfio_fsl_mc.c b/drivers/vfio/fsl-mc/vfio_fsl_mc.c
+index f27e25112c40..a4c2d0b9cd51 100644
+--- a/drivers/vfio/fsl-mc/vfio_fsl_mc.c
++++ b/drivers/vfio/fsl-mc/vfio_fsl_mc.c
+@@ -592,6 +592,7 @@ static int vfio_fsl_mc_probe(struct fsl_mc_device *mc_dev)
+ 	struct iommu_group *group;
+ 	struct vfio_fsl_mc_device *vdev;
+ 	struct device *dev = &mc_dev->dev;
++	struct vfio_device *device;
+ 	int ret;
+ 
+ 	group = vfio_iommu_group_get(dev);
+@@ -608,8 +609,9 @@ static int vfio_fsl_mc_probe(struct fsl_mc_device *mc_dev)
+ 
+ 	vdev->mc_dev = mc_dev;
+ 
+-	ret = vfio_add_group_dev(dev, &vfio_fsl_mc_ops, vdev);
+-	if (ret) {
++	device = vfio_add_group_dev(dev, &vfio_fsl_mc_ops, vdev);
++	if (IS_ERR(device)) {
++		ret = PTR_ERR(device);
+ 		dev_err(dev, "VFIO_FSL_MC: Failed to add to vfio group\n");
+ 		goto out_group_put;
+ 	}
+diff --git a/drivers/vfio/mdev/vfio_mdev.c b/drivers/vfio/mdev/vfio_mdev.c
+index b52eea128549..ebae3871b155 100644
+--- a/drivers/vfio/mdev/vfio_mdev.c
++++ b/drivers/vfio/mdev/vfio_mdev.c
+@@ -124,8 +124,11 @@ static const struct vfio_device_ops vfio_mdev_dev_ops = {
+ static int vfio_mdev_probe(struct device *dev)
+ {
+ 	struct mdev_device *mdev = to_mdev_device(dev);
++	struct vfio_device *device;
+ 
+-	return vfio_add_group_dev(dev, &vfio_mdev_dev_ops, mdev);
++	device = vfio_add_group_dev(dev, &vfio_mdev_dev_ops, mdev);
++
++	return PTR_ERR_OR_ZERO(device);
+ }
+ 
+ static void vfio_mdev_remove(struct device *dev)
+diff --git a/drivers/vfio/pci/vfio_pci.c b/drivers/vfio/pci/vfio_pci.c
+index 65e7e6b44578..f0a1d05f0137 100644
+--- a/drivers/vfio/pci/vfio_pci.c
++++ b/drivers/vfio/pci/vfio_pci.c
+@@ -1926,6 +1926,7 @@ static int vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+ {
+ 	struct vfio_pci_device *vdev;
+ 	struct iommu_group *group;
++	struct vfio_device *device;
+ 	int ret;
+ 
+ 	if (vfio_pci_is_denylisted(pdev))
+@@ -1968,9 +1969,11 @@ static int vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+ 	INIT_LIST_HEAD(&vdev->vma_list);
+ 	init_rwsem(&vdev->memory_lock);
+ 
+-	ret = vfio_add_group_dev(&pdev->dev, &vfio_pci_ops, vdev);
+-	if (ret)
++	device = vfio_add_group_dev(&pdev->dev, &vfio_pci_ops, vdev);
++	if (IS_ERR(device)) {
++		ret = PTR_ERR(device);
+ 		goto out_free;
++	}
+ 
+ 	ret = vfio_pci_reflck_attach(vdev);
+ 	if (ret)
+diff --git a/drivers/vfio/platform/vfio_platform_common.c b/drivers/vfio/platform/vfio_platform_common.c
+index fb4b385191f2..ff41fe0b758e 100644
+--- a/drivers/vfio/platform/vfio_platform_common.c
++++ b/drivers/vfio/platform/vfio_platform_common.c
+@@ -657,6 +657,7 @@ int vfio_platform_probe_common(struct vfio_platform_device *vdev,
+ 			       struct device *dev)
+ {
+ 	struct iommu_group *group;
++	struct vfio_device *device;
+ 	int ret;
+ 
+ 	if (!vdev)
+@@ -685,9 +686,11 @@ int vfio_platform_probe_common(struct vfio_platform_device *vdev,
+ 		goto put_reset;
+ 	}
+ 
+-	ret = vfio_add_group_dev(dev, &vfio_platform_ops, vdev);
+-	if (ret)
++	device = vfio_add_group_dev(dev, &vfio_platform_ops, vdev);
++	if (IS_ERR(device)) {
++		ret = PTR_ERR(device);
+ 		goto put_iommu;
++	}
+ 
+ 	mutex_init(&vdev->igate);
+ 
+diff --git a/drivers/vfio/vfio.c b/drivers/vfio/vfio.c
+index abdf8d52a911..34d32f16246a 100644
+--- a/drivers/vfio/vfio.c
++++ b/drivers/vfio/vfio.c
+@@ -848,8 +848,9 @@ static int vfio_iommu_group_notifier(struct notifier_block *nb,
+ /**
+  * VFIO driver API
+  */
+-int vfio_add_group_dev(struct device *dev,
+-		       const struct vfio_device_ops *ops, void *device_data)
++struct vfio_device *vfio_add_group_dev(struct device *dev,
++				       const struct vfio_device_ops *ops,
++				       void *device_data)
+ {
+ 	struct iommu_group *iommu_group;
+ 	struct vfio_group *group;
+@@ -857,14 +858,14 @@ int vfio_add_group_dev(struct device *dev,
+ 
+ 	iommu_group = iommu_group_get(dev);
+ 	if (!iommu_group)
+-		return -EINVAL;
++		return ERR_PTR(-EINVAL);
+ 
+ 	group = vfio_group_get_from_iommu(iommu_group);
+ 	if (!group) {
+ 		group = vfio_create_group(iommu_group);
+ 		if (IS_ERR(group)) {
+ 			iommu_group_put(iommu_group);
+-			return PTR_ERR(group);
++			return ERR_CAST(group);
+ 		}
+ 	} else {
+ 		/*
+@@ -880,23 +881,19 @@ int vfio_add_group_dev(struct device *dev,
+ 			 iommu_group_id(iommu_group));
+ 		vfio_device_put(device);
+ 		vfio_group_put(group);
+-		return -EBUSY;
++		return ERR_PTR(-EBUSY);
+ 	}
+ 
+ 	device = vfio_group_create_device(group, dev, ops, device_data);
+-	if (IS_ERR(device)) {
+-		vfio_group_put(group);
+-		return PTR_ERR(device);
+-	}
+ 
+ 	/*
+-	 * Drop all but the vfio_device reference.  The vfio_device holds
+-	 * a reference to the vfio_group, which holds a reference to the
+-	 * iommu_group.
++	 * Drop all but the vfio_device reference.  The vfio_device, if
++	 * !IS_ERR() holds a reference to the vfio_group, which holds a
++	 * reference to the iommu_group.
+ 	 */
+ 	vfio_group_put(group);
+ 
+-	return 0;
++	return device;
+ }
+ EXPORT_SYMBOL_GPL(vfio_add_group_dev);
+ 
+diff --git a/include/linux/vfio.h b/include/linux/vfio.h
+index b7e18bde5aa8..b784463000d4 100644
+--- a/include/linux/vfio.h
++++ b/include/linux/vfio.h
+@@ -48,9 +48,9 @@ struct vfio_device_ops {
+ extern struct iommu_group *vfio_iommu_group_get(struct device *dev);
+ extern void vfio_iommu_group_put(struct iommu_group *group, struct device *dev);
+ 
+-extern int vfio_add_group_dev(struct device *dev,
+-			      const struct vfio_device_ops *ops,
+-			      void *device_data);
++extern struct vfio_device *vfio_add_group_dev(struct device *dev,
++					const struct vfio_device_ops *ops,
++					void *device_data);
+ 
+ extern void *vfio_del_group_dev(struct device *dev);
+ extern struct vfio_device *vfio_device_get_from_dev(struct device *dev);
+
+From patchwork Mon Mar  8 21:47:52 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alex Williamson <alex.williamson@redhat.com>
+X-Patchwork-Id: 12123437
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id CAC8CC433E6
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:48:48 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 383366525F
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:48:48 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231423AbhCHVsS (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 8 Mar 2021 16:48:18 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:33704 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S231205AbhCHVsC (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 8 Mar 2021 16:48:02 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615240082;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=hW4A6VrZBqHMNaSKmE4dJ1kMW+0QH0GPJ90BtbinJGI=;
+        b=FMWMcJKJSoV1S6rEi2QYw73knffYxedGCZTCb8SYRr80ZvQhzpBUgsN7nwrYltGnMGY3Cs
+        9HcdTX4G4X6B5Qb7TA5BibaojtqGNaWM9KRz6UhhYCNiu0sjGt1ur81arhwbUvSCgYkWZh
+        vpO3u3Z0cdmIENA8/OMu0SU+/t2B2lc=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-275-7TjGgObcNPeYsZoGc7NIHQ-1; Mon, 08 Mar 2021 16:48:00 -0500
+X-MC-Unique: 7TjGgObcNPeYsZoGc7NIHQ-1
+Received: from smtp.corp.redhat.com (int-mx07.intmail.prod.int.phx2.redhat.com
+ [10.5.11.22])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 9067526862;
+        Mon,  8 Mar 2021 21:47:59 +0000 (UTC)
+Received: from gimli.home (ovpn-112-255.phx2.redhat.com [10.3.112.255])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 2D991101F513;
+        Mon,  8 Mar 2021 21:47:53 +0000 (UTC)
+Subject: [PATCH v1 03/14] vfio: Export unmap_mapping_range() wrapper
+From: Alex Williamson <alex.williamson@redhat.com>
+To: alex.williamson@redhat.com
+Cc: cohuck@redhat.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jgg@nvidia.com, peterx@redhat.com
+Date: Mon, 08 Mar 2021 14:47:52 -0700
+Message-ID: <161524007281.3480.3739694915199289018.stgit@gimli.home>
+In-Reply-To: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+References: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+User-Agent: StGit/0.21-2-g8ef5
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.22
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Allow bus drivers to use vfio pseudo fs mapping to zap all mmaps
+across a range of their device files.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ drivers/vfio/vfio.c  |    7 +++++++
+ include/linux/vfio.h |    2 ++
+ 2 files changed, 9 insertions(+)
+
+diff --git a/drivers/vfio/vfio.c b/drivers/vfio/vfio.c
+index 34d32f16246a..3852e57b9e04 100644
+--- a/drivers/vfio/vfio.c
++++ b/drivers/vfio/vfio.c
+@@ -565,6 +565,13 @@ static struct inode *vfio_fs_inode_new(void)
+ 	return inode;
+ }
+ 
++void vfio_device_unmap_mapping_range(struct vfio_device *device,
++				     loff_t start, loff_t len)
++{
++	unmap_mapping_range(device->inode->i_mapping, start, len, true);
++}
++EXPORT_SYMBOL_GPL(vfio_device_unmap_mapping_range);
++
+ /**
+  * Device objects - create, release, get, put, search
+  */
+diff --git a/include/linux/vfio.h b/include/linux/vfio.h
+index b784463000d4..f435dfca15eb 100644
+--- a/include/linux/vfio.h
++++ b/include/linux/vfio.h
+@@ -56,6 +56,8 @@ extern void *vfio_del_group_dev(struct device *dev);
+ extern struct vfio_device *vfio_device_get_from_dev(struct device *dev);
+ extern void vfio_device_put(struct vfio_device *device);
+ extern void *vfio_device_data(struct vfio_device *device);
++extern void vfio_device_unmap_mapping_range(struct vfio_device *device,
++					    loff_t start, loff_t len);
+ 
+ /* events for the backend driver notify callback */
+ enum vfio_iommu_notify_type {
+
+From patchwork Mon Mar  8 21:48:04 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alex Williamson <alex.williamson@redhat.com>
+X-Patchwork-Id: 12123439
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,
+	URIBL_BLOCKED autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 066FDC4332B
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:48:49 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C8A8C65279
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:48:48 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231515AbhCHVsT (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 8 Mar 2021 16:48:19 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:55101 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S231228AbhCHVsJ (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 8 Mar 2021 16:48:09 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615240088;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=QI8Q/hD5IEKfRMmZauwTEu0F6AAS366PUMrvTrEx18k=;
+        b=Ce+TFMBXz5IPyzgtL3QQEXBuaD6cnwcDAZI7P0kZ8EvPi/wtf4GyzoezB4WKIERwZeg+bz
+        hy8nRCPkJoaCWvZP3P0Zn61itxXF7xxcXggioEtv0pzVi/wA7bm5pO4MgigDDty7cpdtQz
+        bkVqyYM2lIi58uZa1dBQij4h0GEiVSM=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-45-JjADnkiQOha-OQMlc4XOBg-1; Mon, 08 Mar 2021 16:48:06 -0500
+X-MC-Unique: JjADnkiQOha-OQMlc4XOBg-1
+Received: from smtp.corp.redhat.com (int-mx07.intmail.prod.int.phx2.redhat.com
+ [10.5.11.22])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 859451842142;
+        Mon,  8 Mar 2021 21:48:05 +0000 (UTC)
+Received: from gimli.home (ovpn-112-255.phx2.redhat.com [10.3.112.255])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 0A3DD1037E83;
+        Mon,  8 Mar 2021 21:48:04 +0000 (UTC)
+Subject: [PATCH v1 04/14] vfio/pci: Use vfio_device_unmap_mapping_range()
+From: Alex Williamson <alex.williamson@redhat.com>
+To: alex.williamson@redhat.com
+Cc: cohuck@redhat.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jgg@nvidia.com, peterx@redhat.com
+Date: Mon, 08 Mar 2021 14:48:04 -0700
+Message-ID: <161524008465.3480.3992897117771608302.stgit@gimli.home>
+In-Reply-To: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+References: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+User-Agent: StGit/0.21-2-g8ef5
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.22
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+With the vfio device fd tied to the address space of the pseudo fs
+inode, we can use the mm to track all vmas that might be mmap'ing
+device BARs, which removes our vma_list and all the complicated
+lock ordering necessary to manually zap each related vma.
+
+Note that we can no longer store the pfn in vm_pgoff if we want to
+use unmap_mapping_range() to zap a selective portion of the device
+fd corresponding to BAR mappings.
+
+Suggested-by: Jason Gunthorpe <jgg@nvidia.com>
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ drivers/vfio/pci/vfio_pci.c         |  228 +++++++----------------------------
+ drivers/vfio/pci/vfio_pci_private.h |    3 
+ 2 files changed, 46 insertions(+), 185 deletions(-)
+
+diff --git a/drivers/vfio/pci/vfio_pci.c b/drivers/vfio/pci/vfio_pci.c
+index f0a1d05f0137..415b5109da9b 100644
+--- a/drivers/vfio/pci/vfio_pci.c
++++ b/drivers/vfio/pci/vfio_pci.c
+@@ -225,7 +225,7 @@ static void vfio_pci_probe_mmaps(struct vfio_pci_device *vdev)
+ 
+ static void vfio_pci_try_bus_reset(struct vfio_pci_device *vdev);
+ static void vfio_pci_disable(struct vfio_pci_device *vdev);
+-static int vfio_pci_try_zap_and_vma_lock_cb(struct pci_dev *pdev, void *data);
++static int vfio_pci_mem_trylock_and_zap_cb(struct pci_dev *pdev, void *data);
+ 
+ /*
+  * INTx masking requires the ability to disable INTx signaling via PCI_COMMAND
+@@ -1168,7 +1168,7 @@ static long vfio_pci_ioctl(void *device_data,
+ 		struct vfio_pci_group_info info;
+ 		struct vfio_devices devs = { .cur_index = 0 };
+ 		bool slot = false;
+-		int i, group_idx, mem_idx = 0, count = 0, ret = 0;
++		int i, group_idx, count = 0, ret = 0;
+ 
+ 		minsz = offsetofend(struct vfio_pci_hot_reset, count);
+ 
+@@ -1268,32 +1268,16 @@ static long vfio_pci_ioctl(void *device_data,
+ 		}
+ 
+ 		/*
+-		 * We need to get memory_lock for each device, but devices
+-		 * can share mmap_lock, therefore we need to zap and hold
+-		 * the vma_lock for each device, and only then get each
+-		 * memory_lock.
++		 * Try to get the memory_lock write lock for all devices and
++		 * zap all BAR mmaps.
+ 		 */
+ 		ret = vfio_pci_for_each_slot_or_bus(vdev->pdev,
+-					    vfio_pci_try_zap_and_vma_lock_cb,
++					    vfio_pci_mem_trylock_and_zap_cb,
+ 					    &devs, slot);
+-		if (ret)
+-			goto hot_reset_release;
+-
+-		for (; mem_idx < devs.cur_index; mem_idx++) {
+-			struct vfio_pci_device *tmp;
+-
+-			tmp = vfio_device_data(devs.devices[mem_idx]);
+-
+-			ret = down_write_trylock(&tmp->memory_lock);
+-			if (!ret) {
+-				ret = -EBUSY;
+-				goto hot_reset_release;
+-			}
+-			mutex_unlock(&tmp->vma_lock);
+-		}
+ 
+ 		/* User has access, do the reset */
+-		ret = pci_reset_bus(vdev->pdev);
++		if (!ret)
++			ret = pci_reset_bus(vdev->pdev);
+ 
+ hot_reset_release:
+ 		for (i = 0; i < devs.cur_index; i++) {
+@@ -1303,10 +1287,7 @@ static long vfio_pci_ioctl(void *device_data,
+ 			device = devs.devices[i];
+ 			tmp = vfio_device_data(device);
+ 
+-			if (i < mem_idx)
+-				up_write(&tmp->memory_lock);
+-			else
+-				mutex_unlock(&tmp->vma_lock);
++			up_write(&tmp->memory_lock);
+ 			vfio_device_put(device);
+ 		}
+ 		kfree(devs.devices);
+@@ -1452,100 +1433,18 @@ static ssize_t vfio_pci_write(void *device_data, const char __user *buf,
+ 	return vfio_pci_rw(device_data, (char __user *)buf, count, ppos, true);
+ }
+ 
+-/* Return 1 on zap and vma_lock acquired, 0 on contention (only with @try) */
+-static int vfio_pci_zap_and_vma_lock(struct vfio_pci_device *vdev, bool try)
++static void vfio_pci_zap_bars(struct vfio_pci_device *vdev)
+ {
+-	struct vfio_pci_mmap_vma *mmap_vma, *tmp;
+-
+-	/*
+-	 * Lock ordering:
+-	 * vma_lock is nested under mmap_lock for vm_ops callback paths.
+-	 * The memory_lock semaphore is used by both code paths calling
+-	 * into this function to zap vmas and the vm_ops.fault callback
+-	 * to protect the memory enable state of the device.
+-	 *
+-	 * When zapping vmas we need to maintain the mmap_lock => vma_lock
+-	 * ordering, which requires using vma_lock to walk vma_list to
+-	 * acquire an mm, then dropping vma_lock to get the mmap_lock and
+-	 * reacquiring vma_lock.  This logic is derived from similar
+-	 * requirements in uverbs_user_mmap_disassociate().
+-	 *
+-	 * mmap_lock must always be the top-level lock when it is taken.
+-	 * Therefore we can only hold the memory_lock write lock when
+-	 * vma_list is empty, as we'd need to take mmap_lock to clear
+-	 * entries.  vma_list can only be guaranteed empty when holding
+-	 * vma_lock, thus memory_lock is nested under vma_lock.
+-	 *
+-	 * This enables the vm_ops.fault callback to acquire vma_lock,
+-	 * followed by memory_lock read lock, while already holding
+-	 * mmap_lock without risk of deadlock.
+-	 */
+-	while (1) {
+-		struct mm_struct *mm = NULL;
+-
+-		if (try) {
+-			if (!mutex_trylock(&vdev->vma_lock))
+-				return 0;
+-		} else {
+-			mutex_lock(&vdev->vma_lock);
+-		}
+-		while (!list_empty(&vdev->vma_list)) {
+-			mmap_vma = list_first_entry(&vdev->vma_list,
+-						    struct vfio_pci_mmap_vma,
+-						    vma_next);
+-			mm = mmap_vma->vma->vm_mm;
+-			if (mmget_not_zero(mm))
+-				break;
+-
+-			list_del(&mmap_vma->vma_next);
+-			kfree(mmap_vma);
+-			mm = NULL;
+-		}
+-		if (!mm)
+-			return 1;
+-		mutex_unlock(&vdev->vma_lock);
+-
+-		if (try) {
+-			if (!mmap_read_trylock(mm)) {
+-				mmput(mm);
+-				return 0;
+-			}
+-		} else {
+-			mmap_read_lock(mm);
+-		}
+-		if (try) {
+-			if (!mutex_trylock(&vdev->vma_lock)) {
+-				mmap_read_unlock(mm);
+-				mmput(mm);
+-				return 0;
+-			}
+-		} else {
+-			mutex_lock(&vdev->vma_lock);
+-		}
+-		list_for_each_entry_safe(mmap_vma, tmp,
+-					 &vdev->vma_list, vma_next) {
+-			struct vm_area_struct *vma = mmap_vma->vma;
+-
+-			if (vma->vm_mm != mm)
+-				continue;
+-
+-			list_del(&mmap_vma->vma_next);
+-			kfree(mmap_vma);
+-
+-			zap_vma_ptes(vma, vma->vm_start,
+-				     vma->vm_end - vma->vm_start);
+-		}
+-		mutex_unlock(&vdev->vma_lock);
+-		mmap_read_unlock(mm);
+-		mmput(mm);
+-	}
++	vfio_device_unmap_mapping_range(vdev->device,
++			VFIO_PCI_INDEX_TO_OFFSET(VFIO_PCI_BAR0_REGION_INDEX),
++			VFIO_PCI_INDEX_TO_OFFSET(VFIO_PCI_ROM_REGION_INDEX) -
++			VFIO_PCI_INDEX_TO_OFFSET(VFIO_PCI_BAR0_REGION_INDEX));
+ }
+ 
+ void vfio_pci_zap_and_down_write_memory_lock(struct vfio_pci_device *vdev)
+ {
+-	vfio_pci_zap_and_vma_lock(vdev, false);
+ 	down_write(&vdev->memory_lock);
+-	mutex_unlock(&vdev->vma_lock);
++	vfio_pci_zap_bars(vdev);
+ }
+ 
+ u16 vfio_pci_memory_lock_and_enable(struct vfio_pci_device *vdev)
+@@ -1567,82 +1466,51 @@ void vfio_pci_memory_unlock_and_restore(struct vfio_pci_device *vdev, u16 cmd)
+ 	up_write(&vdev->memory_lock);
+ }
+ 
+-/* Caller holds vma_lock */
+-static int __vfio_pci_add_vma(struct vfio_pci_device *vdev,
+-			      struct vm_area_struct *vma)
++static int vfio_pci_bar_vma_to_pfn(struct vm_area_struct *vma,
++				   unsigned long *pfn)
+ {
+-	struct vfio_pci_mmap_vma *mmap_vma;
+-
+-	mmap_vma = kmalloc(sizeof(*mmap_vma), GFP_KERNEL);
+-	if (!mmap_vma)
+-		return -ENOMEM;
++	struct vfio_pci_device *vdev = vma->vm_private_data;
++	struct pci_dev *pdev = vdev->pdev;
++	int index;
++	u64 pgoff;
+ 
+-	mmap_vma->vma = vma;
+-	list_add(&mmap_vma->vma_next, &vdev->vma_list);
++	index = vma->vm_pgoff >> (VFIO_PCI_OFFSET_SHIFT - PAGE_SHIFT);
+ 
+-	return 0;
+-}
++	if (index >= VFIO_PCI_ROM_REGION_INDEX ||
++	    !vdev->bar_mmap_supported[index] || !vdev->barmap[index])
++		return -EINVAL;
+ 
+-/*
+- * Zap mmaps on open so that we can fault them in on access and therefore
+- * our vma_list only tracks mappings accessed since last zap.
+- */
+-static void vfio_pci_mmap_open(struct vm_area_struct *vma)
+-{
+-	zap_vma_ptes(vma, vma->vm_start, vma->vm_end - vma->vm_start);
+-}
++	pgoff = vma->vm_pgoff &
++		((1U << (VFIO_PCI_OFFSET_SHIFT - PAGE_SHIFT)) - 1);
+ 
+-static void vfio_pci_mmap_close(struct vm_area_struct *vma)
+-{
+-	struct vfio_pci_device *vdev = vma->vm_private_data;
+-	struct vfio_pci_mmap_vma *mmap_vma;
++	*pfn = (pci_resource_start(pdev, index) >> PAGE_SHIFT) + pgoff;
+ 
+-	mutex_lock(&vdev->vma_lock);
+-	list_for_each_entry(mmap_vma, &vdev->vma_list, vma_next) {
+-		if (mmap_vma->vma == vma) {
+-			list_del(&mmap_vma->vma_next);
+-			kfree(mmap_vma);
+-			break;
+-		}
+-	}
+-	mutex_unlock(&vdev->vma_lock);
++	return 0;
+ }
+ 
+ static vm_fault_t vfio_pci_mmap_fault(struct vm_fault *vmf)
+ {
+ 	struct vm_area_struct *vma = vmf->vma;
+ 	struct vfio_pci_device *vdev = vma->vm_private_data;
+-	vm_fault_t ret = VM_FAULT_NOPAGE;
+-
+-	mutex_lock(&vdev->vma_lock);
+-	down_read(&vdev->memory_lock);
+-
+-	if (!__vfio_pci_memory_enabled(vdev)) {
+-		ret = VM_FAULT_SIGBUS;
+-		mutex_unlock(&vdev->vma_lock);
+-		goto up_out;
+-	}
++	unsigned long pfn;
++	vm_fault_t ret = VM_FAULT_SIGBUS;
+ 
+-	if (__vfio_pci_add_vma(vdev, vma)) {
+-		ret = VM_FAULT_OOM;
+-		mutex_unlock(&vdev->vma_lock);
+-		goto up_out;
+-	}
++	if (vfio_pci_bar_vma_to_pfn(vma, &pfn))
++		return ret;
+ 
+-	mutex_unlock(&vdev->vma_lock);
++	down_read(&vdev->memory_lock);
+ 
+-	if (io_remap_pfn_range(vma, vma->vm_start, vma->vm_pgoff,
+-			       vma->vm_end - vma->vm_start, vma->vm_page_prot))
+-		ret = VM_FAULT_SIGBUS;
++	if (__vfio_pci_memory_enabled(vdev) &&
++	    !io_remap_pfn_range(vma, vma->vm_start, pfn,
++				vma->vm_end - vma->vm_start, vma->vm_page_prot))
++		ret = VM_FAULT_NOPAGE;
+ 
+-up_out:
+ 	up_read(&vdev->memory_lock);
++
+ 	return ret;
+ }
+ 
+ static const struct vm_operations_struct vfio_pci_mmap_ops = {
+-	.open = vfio_pci_mmap_open,
+-	.close = vfio_pci_mmap_close,
+ 	.fault = vfio_pci_mmap_fault,
+ };
+ 
+@@ -1702,7 +1570,6 @@ static int vfio_pci_mmap(void *device_data, struct vm_area_struct *vma)
+ 
+ 	vma->vm_private_data = vdev;
+ 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+-	vma->vm_pgoff = (pci_resource_start(pdev, index) >> PAGE_SHIFT) + pgoff;
+ 
+ 	/*
+ 	 * See remap_pfn_range(), called from vfio_pci_fault() but we can't
+@@ -1926,7 +1793,6 @@ static int vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+ {
+ 	struct vfio_pci_device *vdev;
+ 	struct iommu_group *group;
+-	struct vfio_device *device;
+ 	int ret;
+ 
+ 	if (vfio_pci_is_denylisted(pdev))
+@@ -1965,13 +1831,11 @@ static int vfio_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+ 	mutex_init(&vdev->ioeventfds_lock);
+ 	INIT_LIST_HEAD(&vdev->dummy_resources_list);
+ 	INIT_LIST_HEAD(&vdev->ioeventfds_list);
+-	mutex_init(&vdev->vma_lock);
+-	INIT_LIST_HEAD(&vdev->vma_list);
+ 	init_rwsem(&vdev->memory_lock);
+ 
+-	device = vfio_add_group_dev(&pdev->dev, &vfio_pci_ops, vdev);
+-	if (IS_ERR(device)) {
+-		ret = PTR_ERR(device);
++	vdev->device = vfio_add_group_dev(&pdev->dev, &vfio_pci_ops, vdev);
++	if (IS_ERR(vdev->device)) {
++		ret = PTR_ERR(vdev->device);
+ 		goto out_free;
+ 	}
+ 
+@@ -2253,7 +2117,7 @@ static int vfio_pci_get_unused_devs(struct pci_dev *pdev, void *data)
+ 	return 0;
+ }
+ 
+-static int vfio_pci_try_zap_and_vma_lock_cb(struct pci_dev *pdev, void *data)
++static int vfio_pci_mem_trylock_and_zap_cb(struct pci_dev *pdev, void *data)
+ {
+ 	struct vfio_devices *devs = data;
+ 	struct vfio_device *device;
+@@ -2273,15 +2137,13 @@ static int vfio_pci_try_zap_and_vma_lock_cb(struct pci_dev *pdev, void *data)
+ 
+ 	vdev = vfio_device_data(device);
+ 
+-	/*
+-	 * Locking multiple devices is prone to deadlock, runaway and
+-	 * unwind if we hit contention.
+-	 */
+-	if (!vfio_pci_zap_and_vma_lock(vdev, true)) {
++	if (!down_write_trylock(&vdev->memory_lock)) {
+ 		vfio_device_put(device);
+ 		return -EBUSY;
+ 	}
+ 
++	vfio_pci_zap_bars(vdev);
++
+ 	devs->devices[devs->cur_index++] = device;
+ 	return 0;
+ }
+diff --git a/drivers/vfio/pci/vfio_pci_private.h b/drivers/vfio/pci/vfio_pci_private.h
+index 9cd1882a05af..ba37f4eeefd0 100644
+--- a/drivers/vfio/pci/vfio_pci_private.h
++++ b/drivers/vfio/pci/vfio_pci_private.h
+@@ -101,6 +101,7 @@ struct vfio_pci_mmap_vma {
+ 
+ struct vfio_pci_device {
+ 	struct pci_dev		*pdev;
++	struct vfio_device	*device;
+ 	void __iomem		*barmap[PCI_STD_NUM_BARS];
+ 	bool			bar_mmap_supported[PCI_STD_NUM_BARS];
+ 	u8			*pci_config_map;
+@@ -139,8 +140,6 @@ struct vfio_pci_device {
+ 	struct list_head	ioeventfds_list;
+ 	struct vfio_pci_vf_token	*vf_token;
+ 	struct notifier_block	nb;
+-	struct mutex		vma_lock;
+-	struct list_head	vma_list;
+ 	struct rw_semaphore	memory_lock;
+ };
+ 
+
+From patchwork Mon Mar  8 21:48:10 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alex Williamson <alex.williamson@redhat.com>
+X-Patchwork-Id: 12123441
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,
+	URIBL_BLOCKED autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id D737DC433DB
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:49:19 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id AC5EC6525F
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:49:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231339AbhCHVss (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 8 Mar 2021 16:48:48 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([63.128.21.124]:36931 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S230039AbhCHVsQ (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 8 Mar 2021 16:48:16 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615240096;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=d6MnUnVW52Yw6f/HHmKvr8ccfx7cPXR9bB5feQ6cEzw=;
+        b=hYnHVm+gxZ31cMWNdmJ2EAsm6SoUnVeey0lMxsuQp/T9RvlfLtbWdBh64SXUkCFLgDOrpV
+        ssfZx442w5KbTUWBeV2JTbIr4LnfHloC4LsEE2NfA/XF5toJCQe+Mnwg+SAknaihH6h0/z
+        MJRy9c/OMg7tu14ELtppb/NgHmebNcQ=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-462-pl2EUHLcOcK1VrFI6N1Utw-1; Mon, 08 Mar 2021 16:48:12 -0500
+X-MC-Unique: pl2EUHLcOcK1VrFI6N1Utw-1
+Received: from smtp.corp.redhat.com (int-mx07.intmail.prod.int.phx2.redhat.com
+ [10.5.11.22])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 64216107465C;
+        Mon,  8 Mar 2021 21:48:11 +0000 (UTC)
+Received: from gimli.home (ovpn-112-255.phx2.redhat.com [10.3.112.255])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id F071110023AC;
+        Mon,  8 Mar 2021 21:48:10 +0000 (UTC)
+Subject: [PATCH v1 05/14] vfio: Create a vfio_device from vma lookup
+From: Alex Williamson <alex.williamson@redhat.com>
+To: alex.williamson@redhat.com
+Cc: cohuck@redhat.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jgg@nvidia.com, peterx@redhat.com
+Date: Mon, 08 Mar 2021 14:48:10 -0700
+Message-ID: <161524009061.3480.597759044049531365.stgit@gimli.home>
+In-Reply-To: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+References: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+User-Agent: StGit/0.21-2-g8ef5
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.22
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Creating an address space mapping onto our vfio pseudo fs for each
+device file descriptor means that we can universally retrieve a
+vfio_device from a vma mapping this file.
+
+Suggested-by: Jason Gunthorpe <jgg@nvidia.com>
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ drivers/vfio/vfio.c  |   19 +++++++++++++++++--
+ include/linux/vfio.h |    1 +
+ 2 files changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/vfio/vfio.c b/drivers/vfio/vfio.c
+index 3852e57b9e04..3a3e85a0dc3e 100644
+--- a/drivers/vfio/vfio.c
++++ b/drivers/vfio/vfio.c
+@@ -927,6 +927,23 @@ struct vfio_device *vfio_device_get_from_dev(struct device *dev)
+ }
+ EXPORT_SYMBOL_GPL(vfio_device_get_from_dev);
+ 
++static const struct file_operations vfio_device_fops;
++
++struct vfio_device *vfio_device_get_from_vma(struct vm_area_struct *vma)
++{
++	struct vfio_device *device;
++
++	if (!vma->vm_file || vma->vm_file->f_op != &vfio_device_fops)
++		return ERR_PTR(-ENODEV);
++
++	device = vma->vm_file->private_data;
++
++	vfio_device_get(device);
++
++	return device;
++}
++EXPORT_SYMBOL_GPL(vfio_device_get_from_vma);
++
+ static struct vfio_device *vfio_device_get_from_name(struct vfio_group *group,
+ 						     char *buf)
+ {
+@@ -1486,8 +1503,6 @@ static int vfio_group_add_container_user(struct vfio_group *group)
+ 	return 0;
+ }
+ 
+-static const struct file_operations vfio_device_fops;
+-
+ static int vfio_group_get_device_fd(struct vfio_group *group, char *buf)
+ {
+ 	struct vfio_device *device;
+diff --git a/include/linux/vfio.h b/include/linux/vfio.h
+index f435dfca15eb..660b8adf90a6 100644
+--- a/include/linux/vfio.h
++++ b/include/linux/vfio.h
+@@ -58,6 +58,7 @@ extern void vfio_device_put(struct vfio_device *device);
+ extern void *vfio_device_data(struct vfio_device *device);
+ extern void vfio_device_unmap_mapping_range(struct vfio_device *device,
+ 					    loff_t start, loff_t len);
++extern struct vfio_device *vfio_device_get_from_vma(struct vm_area_struct *vma);
+ 
+ /* events for the backend driver notify callback */
+ enum vfio_iommu_notify_type {
+
+From patchwork Mon Mar  8 21:48:16 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alex Williamson <alex.williamson@redhat.com>
+X-Patchwork-Id: 12123445
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,
+	URIBL_BLOCKED autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id E9755C433E6
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:49:19 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id BF2BE6526C
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:49:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231807AbhCHVst (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 8 Mar 2021 16:48:49 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:32899 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S229471AbhCHVs2 (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 8 Mar 2021 16:48:28 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615240107;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=mnL7xLU8VAUfu1s0cNPH4G0MS7CPcOoMJVc60snGgA0=;
+        b=KxpyG6BGi9xo0t651oj1UosfXGmNS5a6c7dtsTl4baJeuHUFoVs1omSYyE0NKpaY9R1RKO
+        AXG/dyleIM7ezd3dPw/AdnUOUbS2faWmiTwEfSk8gEvtAFiPOqgWi4B8hQmr4RVCn9wLNM
+        aBje9uMbRrEhsm7fkH237BxbzWNimDw=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-357-I2zFBCQvPoKp9ZvePbcsRg-1; Mon, 08 Mar 2021 16:48:26 -0500
+X-MC-Unique: I2zFBCQvPoKp9ZvePbcsRg-1
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id E2F251084D68;
+        Mon,  8 Mar 2021 21:48:24 +0000 (UTC)
+Received: from gimli.home (ovpn-112-255.phx2.redhat.com [10.3.112.255])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id D09ED3A47;
+        Mon,  8 Mar 2021 21:48:16 +0000 (UTC)
+Subject: [PATCH v1 06/14] vfio: Add vma to pfn callback
+From: Alex Williamson <alex.williamson@redhat.com>
+To: alex.williamson@redhat.com
+Cc: cohuck@redhat.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jgg@nvidia.com, peterx@redhat.com
+Date: Mon, 08 Mar 2021 14:48:16 -0700
+Message-ID: <161524009646.3480.6519905534709638083.stgit@gimli.home>
+In-Reply-To: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+References: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+User-Agent: StGit/0.21-2-g8ef5
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Add a new vfio_device_ops callback to allow the bus driver to
+translate a vma mapping of a vfio device fd to a pfn.  Plumb through
+vfio-core.  Implemented for vfio-pci.
+
+Suggested-by: Jason Gunthorpe <jgg@nvidia.com>
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ drivers/vfio/pci/vfio_pci.c |    1 +
+ drivers/vfio/vfio.c         |   16 ++++++++++++++++
+ include/linux/vfio.h        |    3 +++
+ 3 files changed, 20 insertions(+)
+
+diff --git a/drivers/vfio/pci/vfio_pci.c b/drivers/vfio/pci/vfio_pci.c
+index 415b5109da9b..585895970e9c 100644
+--- a/drivers/vfio/pci/vfio_pci.c
++++ b/drivers/vfio/pci/vfio_pci.c
+@@ -1756,6 +1756,7 @@ static const struct vfio_device_ops vfio_pci_ops = {
+ 	.mmap		= vfio_pci_mmap,
+ 	.request	= vfio_pci_request,
+ 	.match		= vfio_pci_match,
++	.vma_to_pfn	= vfio_pci_bar_vma_to_pfn,
+ };
+ 
+ static int vfio_pci_reflck_attach(struct vfio_pci_device *vdev);
+diff --git a/drivers/vfio/vfio.c b/drivers/vfio/vfio.c
+index 3a3e85a0dc3e..c47895539a1a 100644
+--- a/drivers/vfio/vfio.c
++++ b/drivers/vfio/vfio.c
+@@ -944,6 +944,22 @@ struct vfio_device *vfio_device_get_from_vma(struct vm_area_struct *vma)
+ }
+ EXPORT_SYMBOL_GPL(vfio_device_get_from_vma);
+ 
++int vfio_vma_to_pfn(struct vm_area_struct *vma, unsigned long *pfn)
++{
++	struct vfio_device *device;
++
++	if (!vma->vm_file || vma->vm_file->f_op != &vfio_device_fops)
++		return -EINVAL;
++
++	device = vma->vm_file->private_data;
++
++	if (unlikely(!device->ops->vma_to_pfn))
++		return -EINVAL;
++
++	return device->ops->vma_to_pfn(vma, pfn);
++}
++EXPORT_SYMBOL_GPL(vfio_vma_to_pfn);
++
+ static struct vfio_device *vfio_device_get_from_name(struct vfio_group *group,
+ 						     char *buf)
+ {
+diff --git a/include/linux/vfio.h b/include/linux/vfio.h
+index 660b8adf90a6..dbd90d0ba713 100644
+--- a/include/linux/vfio.h
++++ b/include/linux/vfio.h
+@@ -29,6 +29,7 @@
+  * @match: Optional device name match callback (return: 0 for no-match, >0 for
+  *         match, -errno for abort (ex. match with insufficient or incorrect
+  *         additional args)
++ * @vma_to_pfn: Optional pfn from vma lookup against vma mapping device fd
+  */
+ struct vfio_device_ops {
+ 	char	*name;
+@@ -43,6 +44,7 @@ struct vfio_device_ops {
+ 	int	(*mmap)(void *device_data, struct vm_area_struct *vma);
+ 	void	(*request)(void *device_data, unsigned int count);
+ 	int	(*match)(void *device_data, char *buf);
++	int	(*vma_to_pfn)(struct vm_area_struct *vma, unsigned long *pfn);
+ };
+ 
+ extern struct iommu_group *vfio_iommu_group_get(struct device *dev);
+@@ -59,6 +61,7 @@ extern void *vfio_device_data(struct vfio_device *device);
+ extern void vfio_device_unmap_mapping_range(struct vfio_device *device,
+ 					    loff_t start, loff_t len);
+ extern struct vfio_device *vfio_device_get_from_vma(struct vm_area_struct *vma);
++extern int vfio_vma_to_pfn(struct vm_area_struct *vma, unsigned long *pfn);
+ 
+ /* events for the backend driver notify callback */
+ enum vfio_iommu_notify_type {
+
+From patchwork Mon Mar  8 21:48:30 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alex Williamson <alex.williamson@redhat.com>
+X-Patchwork-Id: 12123443
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 0EE3CC43381
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:49:20 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id D124F65274
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:49:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231852AbhCHVsu (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 8 Mar 2021 16:48:50 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:30797 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S230457AbhCHVsk (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 8 Mar 2021 16:48:40 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615240120;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=ZiCtnKe49mXJKCHvRCDyFEhrqKhPGm+jd0mcGZGsRFA=;
+        b=QEi4sL8c3SRWRWQJN2ORma9apsboYEW3tXT+BcO5n0XpXraUh/MORsm3yjd9oE7C/NAfMc
+        yy5apTWWV8zd2l3Yg74yUXRYs1Cl2AyE+2yV/s7D15KTs0TLG/UnJMT625tnPy5AdUtUrw
+        ZyK13fqWfPSGKUa4pNY1X3vit5rBJYE=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-203-zxMQ6AjANZq_2nxcTOj-fQ-1; Mon, 08 Mar 2021 16:48:38 -0500
+X-MC-Unique: zxMQ6AjANZq_2nxcTOj-fQ-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id F34391005D45;
+        Mon,  8 Mar 2021 21:48:36 +0000 (UTC)
+Received: from gimli.home (ovpn-112-255.phx2.redhat.com [10.3.112.255])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 5ADD71A878;
+        Mon,  8 Mar 2021 21:48:30 +0000 (UTC)
+Subject: [PATCH v1 07/14] vfio: Add a device notifier interface
+From: Alex Williamson <alex.williamson@redhat.com>
+To: alex.williamson@redhat.com
+Cc: cohuck@redhat.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jgg@nvidia.com, peterx@redhat.com
+Date: Mon, 08 Mar 2021 14:48:30 -0700
+Message-ID: <161524010999.3480.14282676267275402685.stgit@gimli.home>
+In-Reply-To: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+References: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+User-Agent: StGit/0.21-2-g8ef5
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Using a vfio device, a notifier block can be registered to receive
+select device events.  Notifiers can only be registered for contained
+devices, ie. they are available through a user context.  Registration
+of a notifier increments the reference to that container context
+therefore notifiers must minimally respond to the release event by
+asynchronously removing notifiers.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ drivers/vfio/Kconfig |    1 +
+ drivers/vfio/vfio.c  |   35 +++++++++++++++++++++++++++++++++++
+ include/linux/vfio.h |    9 +++++++++
+ 3 files changed, 45 insertions(+)
+
+diff --git a/drivers/vfio/Kconfig b/drivers/vfio/Kconfig
+index 90c0525b1e0c..9a67675c9b6c 100644
+--- a/drivers/vfio/Kconfig
++++ b/drivers/vfio/Kconfig
+@@ -23,6 +23,7 @@ menuconfig VFIO
+ 	tristate "VFIO Non-Privileged userspace driver framework"
+ 	select IOMMU_API
+ 	select VFIO_IOMMU_TYPE1 if (X86 || S390 || ARM || ARM64)
++	select SRCU
+ 	help
+ 	  VFIO provides a framework for secure userspace device drivers.
+ 	  See Documentation/driver-api/vfio.rst for more details.
+diff --git a/drivers/vfio/vfio.c b/drivers/vfio/vfio.c
+index c47895539a1a..7f6d00e54e83 100644
+--- a/drivers/vfio/vfio.c
++++ b/drivers/vfio/vfio.c
+@@ -105,6 +105,7 @@ struct vfio_device {
+ 	struct list_head		group_next;
+ 	void				*device_data;
+ 	struct inode			*inode;
++	struct srcu_notifier_head	notifier;
+ };
+ 
+ #ifdef CONFIG_VFIO_NOIOMMU
+@@ -601,6 +602,7 @@ struct vfio_device *vfio_group_create_device(struct vfio_group *group,
+ 	device->ops = ops;
+ 	device->device_data = device_data;
+ 	dev_set_drvdata(dev, device);
++	srcu_init_notifier_head(&device->notifier);
+ 
+ 	/* No need to get group_lock, caller has group reference */
+ 	vfio_group_get(group);
+@@ -1785,6 +1787,39 @@ static const struct file_operations vfio_device_fops = {
+ 	.mmap		= vfio_device_fops_mmap,
+ };
+ 
++int vfio_device_register_notifier(struct vfio_device *device,
++				  struct notifier_block *nb)
++{
++	int ret;
++
++	/* Container ref persists until unregister on success */
++	ret =  vfio_group_add_container_user(device->group);
++	if (ret)
++		return ret;
++
++	ret = srcu_notifier_chain_register(&device->notifier, nb);
++	if (ret)
++		vfio_group_try_dissolve_container(device->group);
++
++	return ret;
++}
++EXPORT_SYMBOL_GPL(vfio_device_register_notifier);
++
++void vfio_device_unregister_notifier(struct vfio_device *device,
++				    struct notifier_block *nb)
++{
++	if (!srcu_notifier_chain_unregister(&device->notifier, nb))
++		vfio_group_try_dissolve_container(device->group);
++}
++EXPORT_SYMBOL_GPL(vfio_device_unregister_notifier);
++
++int vfio_device_notifier_call(struct vfio_device *device,
++			      enum vfio_device_notify_type event)
++{
++	return srcu_notifier_call_chain(&device->notifier, event, NULL);
++}
++EXPORT_SYMBOL_GPL(vfio_device_notifier_call);
++
+ /**
+  * External user API, exported by symbols to be linked dynamically.
+  *
+diff --git a/include/linux/vfio.h b/include/linux/vfio.h
+index dbd90d0ba713..c3ff36a7fa6f 100644
+--- a/include/linux/vfio.h
++++ b/include/linux/vfio.h
+@@ -62,6 +62,15 @@ extern void vfio_device_unmap_mapping_range(struct vfio_device *device,
+ 					    loff_t start, loff_t len);
+ extern struct vfio_device *vfio_device_get_from_vma(struct vm_area_struct *vma);
+ extern int vfio_vma_to_pfn(struct vm_area_struct *vma, unsigned long *pfn);
++extern int vfio_device_register_notifier(struct vfio_device *device,
++					 struct notifier_block *nb);
++extern void vfio_device_unregister_notifier(struct vfio_device *device,
++					    struct notifier_block *nb);
++enum vfio_device_notify_type {
++	VFIO_DEVICE_RELEASE = 0,
++};
++int vfio_device_notifier_call(struct vfio_device *device,
++			      enum vfio_device_notify_type event);
+ 
+ /* events for the backend driver notify callback */
+ enum vfio_iommu_notify_type {
+
+From patchwork Mon Mar  8 21:48:42 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alex Williamson <alex.williamson@redhat.com>
+X-Patchwork-Id: 12123447
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 706AAC433E0
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:49:53 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 3DC8F65253
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:49:53 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231760AbhCHVtU (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 8 Mar 2021 16:49:20 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([63.128.21.124]:55792 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S231907AbhCHVsw (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 8 Mar 2021 16:48:52 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615240132;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=RiD+X3RrWWZTnpp+Wb9slelJucGP/OyLw2+qHNm3UaM=;
+        b=ErSWn7wxFJxhPC6ZHOjdTol915tRV5n2CIoYHnaM8JqAk5jvqI/YksGyLca0y1ZigiTm8X
+        RXtxKEAG5cJtM1+hN6idSKNtAUVT9XiskVOHgiPhIQQ1MgYoGGNUhVZV1XizzGSXuzgAlx
+        bcrr3XkRua372ZB78dJPAQgaNVVpba8=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-518-UH31uqmPPWerh-gcH3_cYQ-1; Mon, 08 Mar 2021 16:48:49 -0500
+X-MC-Unique: UH31uqmPPWerh-gcH3_cYQ-1
+Received: from smtp.corp.redhat.com (int-mx06.intmail.prod.int.phx2.redhat.com
+ [10.5.11.16])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id DDEE58018B3;
+        Mon,  8 Mar 2021 21:48:48 +0000 (UTC)
+Received: from gimli.home (ovpn-112-255.phx2.redhat.com [10.3.112.255])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 69D9B5C27C;
+        Mon,  8 Mar 2021 21:48:42 +0000 (UTC)
+Subject: [PATCH v1 08/14] vfio/pci: Notify on device release
+From: Alex Williamson <alex.williamson@redhat.com>
+To: alex.williamson@redhat.com
+Cc: cohuck@redhat.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jgg@nvidia.com, peterx@redhat.com
+Date: Mon, 08 Mar 2021 14:48:42 -0700
+Message-ID: <161524012206.3480.6390372271074364981.stgit@gimli.home>
+In-Reply-To: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+References: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+User-Agent: StGit/0.21-2-g8ef5
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.16
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Trigger a release notifier call when open reference count is zero.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ drivers/vfio/pci/vfio_pci.c |    1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/vfio/pci/vfio_pci.c b/drivers/vfio/pci/vfio_pci.c
+index 585895970e9c..bee9318b46ed 100644
+--- a/drivers/vfio/pci/vfio_pci.c
++++ b/drivers/vfio/pci/vfio_pci.c
+@@ -560,6 +560,7 @@ static void vfio_pci_release(void *device_data)
+ 	mutex_lock(&vdev->reflck->lock);
+ 
+ 	if (!(--vdev->refcnt)) {
++		vfio_device_notifier_call(vdev->device, VFIO_DEVICE_RELEASE);
+ 		vfio_pci_vf_token_user_add(vdev, -1);
+ 		vfio_spapr_pci_eeh_release(vdev->pdev);
+ 		vfio_pci_disable(vdev);
+
+From patchwork Mon Mar  8 21:48:54 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alex Williamson <alex.williamson@redhat.com>
+X-Patchwork-Id: 12123451
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 9971EC433DB
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:49:53 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 744646525B
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:49:53 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231907AbhCHVtW (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 8 Mar 2021 16:49:22 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([170.10.133.124]:47761 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S232001AbhCHVtG (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 8 Mar 2021 16:49:06 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615240146;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=cbA4Upz6JfYHZisf65UoZM/yG3LCNqxzyODN3VMABkE=;
+        b=g+8zcvB4h+jZTj+XSj86KwbRNG7gPgTAo5vyXyoVbqKBq1r3gjyCoEN593YCCZw6DJKfN4
+        QK9gkZ7Nn8TKe6ggQOH67rJ0EdPpQIVq6+n30vMK2QFzJjtogPi1N6YQEWIaDYjZ9y1KCT
+        Y7XQ+rBiv/meY39u5AUqwt6EMNmTQqw=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-28-ZzJdFQ8lPm-DidCu4_rQ1A-1; Mon, 08 Mar 2021 16:49:02 -0500
+X-MC-Unique: ZzJdFQ8lPm-DidCu4_rQ1A-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 65A0380432E;
+        Mon,  8 Mar 2021 21:49:01 +0000 (UTC)
+Received: from gimli.home (ovpn-112-255.phx2.redhat.com [10.3.112.255])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 566A11A86F;
+        Mon,  8 Mar 2021 21:48:54 +0000 (UTC)
+Subject: [PATCH v1 09/14] vfio/type1: Refactor pfn_list clearing
+From: Alex Williamson <alex.williamson@redhat.com>
+To: alex.williamson@redhat.com
+Cc: cohuck@redhat.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jgg@nvidia.com, peterx@redhat.com
+Date: Mon, 08 Mar 2021 14:48:54 -0700
+Message-ID: <161524013398.3480.17180657517567370372.stgit@gimli.home>
+In-Reply-To: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+References: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+User-Agent: StGit/0.21-2-g8ef5
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Pull code out to a function for re-use.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ drivers/vfio/vfio_iommu_type1.c |   57 +++++++++++++++++++++++----------------
+ 1 file changed, 34 insertions(+), 23 deletions(-)
+
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index 12d9905b429f..f7d35a114354 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -542,6 +542,39 @@ static int follow_fault_pfn(struct vm_area_struct *vma, struct mm_struct *mm,
+ 	return ret;
+ }
+ 
++/* Return 1 if iommu->lock dropped and notified, 0 if done */
++static int unmap_dma_pfn_list(struct vfio_iommu *iommu, struct vfio_dma *dma,
++			      struct vfio_dma **dma_last, int *retries)
++{
++	if (!RB_EMPTY_ROOT(&dma->pfn_list)) {
++		struct vfio_iommu_type1_dma_unmap nb_unmap;
++
++		if (*dma_last == dma) {
++			BUG_ON(++(*retries) > 10);
++		} else {
++			*dma_last = dma;
++			*retries = 0;
++		}
++
++		nb_unmap.iova = dma->iova;
++		nb_unmap.size = dma->size;
++
++		/*
++		 * Notify anyone (mdev vendor drivers) to invalidate and
++		 * unmap iovas within the range we're about to unmap.
++		 * Vendor drivers MUST unpin pages in response to an
++		 * invalidation.
++		 */
++		mutex_unlock(&iommu->lock);
++		blocking_notifier_call_chain(&iommu->notifier,
++					     VFIO_IOMMU_NOTIFY_DMA_UNMAP,
++					     &nb_unmap);
++		return 1;
++	}
++
++	return 0;
++}
++
+ /*
+  * Returns the positive number of pfns successfully obtained or a negative
+  * error code.
+@@ -1397,29 +1430,7 @@ static int vfio_dma_do_unmap(struct vfio_iommu *iommu,
+ 			continue;
+ 		}
+ 
+-		if (!RB_EMPTY_ROOT(&dma->pfn_list)) {
+-			struct vfio_iommu_type1_dma_unmap nb_unmap;
+-
+-			if (dma_last == dma) {
+-				BUG_ON(++retries > 10);
+-			} else {
+-				dma_last = dma;
+-				retries = 0;
+-			}
+-
+-			nb_unmap.iova = dma->iova;
+-			nb_unmap.size = dma->size;
+-
+-			/*
+-			 * Notify anyone (mdev vendor drivers) to invalidate and
+-			 * unmap iovas within the range we're about to unmap.
+-			 * Vendor drivers MUST unpin pages in response to an
+-			 * invalidation.
+-			 */
+-			mutex_unlock(&iommu->lock);
+-			blocking_notifier_call_chain(&iommu->notifier,
+-						    VFIO_IOMMU_NOTIFY_DMA_UNMAP,
+-						    &nb_unmap);
++		if (unmap_dma_pfn_list(iommu, dma, &dma_last, &retries)) {
+ 			mutex_lock(&iommu->lock);
+ 			goto again;
+ 		}
+
+From patchwork Mon Mar  8 21:49:06 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alex Williamson <alex.williamson@redhat.com>
+X-Patchwork-Id: 12123449
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id B27C0C433E9
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:49:53 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 8CFB06525A
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:49:53 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231925AbhCHVtY (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 8 Mar 2021 16:49:24 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:37634 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S230231AbhCHVtR (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 8 Mar 2021 16:49:17 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615240156;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=IbjMpnj13fwUb/rx8DtXEyIkPIQYznulLJxpmyYS3Gc=;
+        b=KXFPM1MIEyUfxq7zw10UMkQqT9ZUBmZjZjhkF8jUWexBDUiU9nIrUiX/9mByY4C+FYDqR9
+        GZN+taTNf5JlE1j99Ays8MrG5wXYdrk92icM3T1BRKF8GsxM8RhtOO/ubnXOk0oSipJLFJ
+        tRB0MDJlSciKs1UopO2ssEUkUqO13rY=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-289-Q_p4JOItNDyS9YGDIhbOIg-1; Mon, 08 Mar 2021 16:49:14 -0500
+X-MC-Unique: Q_p4JOItNDyS9YGDIhbOIg-1
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id AA909184214D;
+        Mon,  8 Mar 2021 21:49:13 +0000 (UTC)
+Received: from gimli.home (ovpn-112-255.phx2.redhat.com [10.3.112.255])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id D05215D9CD;
+        Mon,  8 Mar 2021 21:49:06 +0000 (UTC)
+Subject: [PATCH v1 10/14] vfio/type1: Pass iommu and dma objects through to
+ vaddr_get_pfn
+From: Alex Williamson <alex.williamson@redhat.com>
+To: alex.williamson@redhat.com
+Cc: cohuck@redhat.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jgg@nvidia.com, peterx@redhat.com
+Date: Mon, 08 Mar 2021 14:49:06 -0700
+Message-ID: <161524014647.3480.9320948215446571524.stgit@gimli.home>
+In-Reply-To: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+References: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+User-Agent: StGit/0.21-2-g8ef5
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+We'll need these to track vfio device mappings.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ drivers/vfio/vfio_iommu_type1.c |   28 ++++++++++++++++------------
+ 1 file changed, 16 insertions(+), 12 deletions(-)
+
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index f7d35a114354..f22c07a40521 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -579,15 +579,16 @@ static int unmap_dma_pfn_list(struct vfio_iommu *iommu, struct vfio_dma *dma,
+  * Returns the positive number of pfns successfully obtained or a negative
+  * error code.
+  */
+-static int vaddr_get_pfns(struct mm_struct *mm, unsigned long vaddr,
+-			  long npages, int prot, unsigned long *pfn,
++static int vaddr_get_pfns(struct vfio_iommu *iommu, struct vfio_dma *dma,
++			  struct mm_struct *mm, unsigned long vaddr,
++			  long npages, unsigned long *pfn,
+ 			  struct page **pages)
+ {
+ 	struct vm_area_struct *vma;
+ 	unsigned int flags = 0;
+ 	int ret;
+ 
+-	if (prot & IOMMU_WRITE)
++	if (dma->prot & IOMMU_WRITE)
+ 		flags |= FOLL_WRITE;
+ 
+ 	mmap_read_lock(mm);
+@@ -604,7 +605,8 @@ static int vaddr_get_pfns(struct mm_struct *mm, unsigned long vaddr,
+ 	vma = find_vma_intersection(mm, vaddr, vaddr + 1);
+ 
+ 	if (vma && vma->vm_flags & VM_PFNMAP) {
+-		ret = follow_fault_pfn(vma, mm, vaddr, pfn, prot & IOMMU_WRITE);
++		ret = follow_fault_pfn(vma, mm, vaddr, pfn,
++				       dma->prot & IOMMU_WRITE);
+ 		if (ret == -EAGAIN)
+ 			goto retry;
+ 
+@@ -680,7 +682,8 @@ static int vfio_wait_all_valid(struct vfio_iommu *iommu)
+  * the iommu can only map chunks of consecutive pfns anyway, so get the
+  * first page and all consecutive pages with the same locking.
+  */
+-static long vfio_pin_pages_remote(struct vfio_dma *dma, unsigned long vaddr,
++static long vfio_pin_pages_remote(struct vfio_iommu *iommu,
++				  struct vfio_dma *dma, unsigned long vaddr,
+ 				  long npage, unsigned long *pfn_base,
+ 				  unsigned long limit, struct vfio_batch *batch)
+ {
+@@ -708,7 +711,7 @@ static long vfio_pin_pages_remote(struct vfio_dma *dma, unsigned long vaddr,
+ 			/* Empty batch, so refill it. */
+ 			long req_pages = min_t(long, npage, batch->capacity);
+ 
+-			ret = vaddr_get_pfns(mm, vaddr, req_pages, dma->prot,
++			ret = vaddr_get_pfns(iommu, dma, mm, vaddr, req_pages,
+ 					     &pfn, batch->pages);
+ 			if (ret < 0)
+ 				goto unpin_out;
+@@ -806,7 +809,8 @@ static long vfio_unpin_pages_remote(struct vfio_dma *dma, dma_addr_t iova,
+ 	return unlocked;
+ }
+ 
+-static int vfio_pin_page_external(struct vfio_dma *dma, unsigned long vaddr,
++static int vfio_pin_page_external(struct vfio_iommu *iommu,
++				  struct vfio_dma *dma, unsigned long vaddr,
+ 				  unsigned long *pfn_base, bool do_accounting)
+ {
+ 	struct page *pages[1];
+@@ -817,7 +821,7 @@ static int vfio_pin_page_external(struct vfio_dma *dma, unsigned long vaddr,
+ 	if (!mm)
+ 		return -ENODEV;
+ 
+-	ret = vaddr_get_pfns(mm, vaddr, 1, dma->prot, pfn_base, pages);
++	ret = vaddr_get_pfns(iommu, dma, mm, vaddr, 1, pfn_base, pages);
+ 	if (ret == 1 && do_accounting && !is_invalid_reserved_pfn(*pfn_base)) {
+ 		ret = vfio_lock_acct(dma, 1, true);
+ 		if (ret) {
+@@ -925,8 +929,8 @@ static int vfio_iommu_type1_pin_pages(void *iommu_data,
+ 		}
+ 
+ 		remote_vaddr = dma->vaddr + (iova - dma->iova);
+-		ret = vfio_pin_page_external(dma, remote_vaddr, &phys_pfn[i],
+-					     do_accounting);
++		ret = vfio_pin_page_external(iommu, dma, remote_vaddr,
++					     &phys_pfn[i], do_accounting);
+ 		if (ret)
+ 			goto pin_unwind;
+ 
+@@ -1497,7 +1501,7 @@ static int vfio_pin_map_dma(struct vfio_iommu *iommu, struct vfio_dma *dma,
+ 
+ 	while (size) {
+ 		/* Pin a contiguous chunk of memory */
+-		npage = vfio_pin_pages_remote(dma, vaddr + dma->size,
++		npage = vfio_pin_pages_remote(iommu, dma, vaddr + dma->size,
+ 					      size >> PAGE_SHIFT, &pfn, limit,
+ 					      &batch);
+ 		if (npage <= 0) {
+@@ -1759,7 +1763,7 @@ static int vfio_iommu_replay(struct vfio_iommu *iommu,
+ 				size_t n = dma->iova + dma->size - iova;
+ 				long npage;
+ 
+-				npage = vfio_pin_pages_remote(dma, vaddr,
++				npage = vfio_pin_pages_remote(iommu, dma, vaddr,
+ 							      n >> PAGE_SHIFT,
+ 							      &pfn, limit,
+ 							      &batch);
+
+From patchwork Mon Mar  8 21:49:18 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alex Williamson <alex.williamson@redhat.com>
+X-Patchwork-Id: 12123453
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 02D08C433DB
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:50:25 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id CEDF365259
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:50:24 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231891AbhCHVty (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 8 Mar 2021 16:49:54 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:31369 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S232010AbhCHVtb (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 8 Mar 2021 16:49:31 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615240170;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=26XCLb7rid7Ukjix3izHq6+LQuV7mac/ZWZOJ4MKVFg=;
+        b=hE0BLamUTKmw+ZV8MOzdf/KAx2OctWdGC+pgpar7nDHYhMVNfYpCbk7HrFIM3XzkRgUi+S
+        5wi7bof9T3smfxh0PJFS6q6Wpy+/8XhwAMzL7Jeb4LnywX9gaiLTjQ+kpGGyzkJn3OWHha
+        /Q1yU27RbYy2hgv4v4ybRYkrR6j+B8c=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-343-iZIVxP7tPTi3hfqJvY5P5A-1; Mon, 08 Mar 2021 16:49:27 -0500
+X-MC-Unique: iZIVxP7tPTi3hfqJvY5P5A-1
+Received: from smtp.corp.redhat.com (int-mx02.intmail.prod.int.phx2.redhat.com
+ [10.5.11.12])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id CE0981084D69;
+        Mon,  8 Mar 2021 21:49:25 +0000 (UTC)
+Received: from gimli.home (ovpn-112-255.phx2.redhat.com [10.3.112.255])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 227D960C04;
+        Mon,  8 Mar 2021 21:49:19 +0000 (UTC)
+Subject: [PATCH v1 11/14] vfio/type1: Register device notifier
+From: Alex Williamson <alex.williamson@redhat.com>
+To: alex.williamson@redhat.com
+Cc: cohuck@redhat.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jgg@nvidia.com, peterx@redhat.com
+Date: Mon, 08 Mar 2021 14:49:18 -0700
+Message-ID: <161524015876.3480.18404153016941080011.stgit@gimli.home>
+In-Reply-To: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+References: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+User-Agent: StGit/0.21-2-g8ef5
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.12
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Impose a new default strict MMIO mapping mode where the vma for
+a VM_PFNMAP mapping must be backed by a vfio device.  This allows
+holding a reference to the device and registering a notifier for the
+device, which additionally keeps the device in an IOMMU context for
+the extent of the DMA mapping.  On notification of device release,
+automatically drop the DMA mappings for it.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ drivers/vfio/vfio_iommu_type1.c |  163 ++++++++++++++++++++++++++++-----------
+ 1 file changed, 116 insertions(+), 47 deletions(-)
+
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index f22c07a40521..e89f11141dee 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -101,6 +101,20 @@ struct vfio_dma {
+ 	struct task_struct	*task;
+ 	struct rb_root		pfn_list;	/* Ex-user pinned pfn list */
+ 	unsigned long		*bitmap;
++	struct pfnmap_obj	*pfnmap;
++};
++
++/*
++ * Separate object used for tracking pfnmaps to allow reference release and
++ * unregistering notifier outside of callback chain.
++ */
++struct pfnmap_obj {
++	struct notifier_block	nb;
++	struct work_struct	work;
++	struct vfio_iommu	*iommu;
++	struct vfio_dma		*dma;
++	struct vfio_device	*device;
++	unsigned long		base_pfn;
+ };
+ 
+ struct vfio_batch {
+@@ -506,42 +520,6 @@ static void vfio_batch_fini(struct vfio_batch *batch)
+ 		free_page((unsigned long)batch->pages);
+ }
+ 
+-static int follow_fault_pfn(struct vm_area_struct *vma, struct mm_struct *mm,
+-			    unsigned long vaddr, unsigned long *pfn,
+-			    bool write_fault)
+-{
+-	pte_t *ptep;
+-	spinlock_t *ptl;
+-	int ret;
+-
+-	ret = follow_pte(vma->vm_mm, vaddr, &ptep, &ptl);
+-	if (ret) {
+-		bool unlocked = false;
+-
+-		ret = fixup_user_fault(mm, vaddr,
+-				       FAULT_FLAG_REMOTE |
+-				       (write_fault ?  FAULT_FLAG_WRITE : 0),
+-				       &unlocked);
+-		if (unlocked)
+-			return -EAGAIN;
+-
+-		if (ret)
+-			return ret;
+-
+-		ret = follow_pte(vma->vm_mm, vaddr, &ptep, &ptl);
+-		if (ret)
+-			return ret;
+-	}
+-
+-	if (write_fault && !pte_write(*ptep))
+-		ret = -EFAULT;
+-	else
+-		*pfn = pte_pfn(*ptep);
+-
+-	pte_unmap_unlock(ptep, ptl);
+-	return ret;
+-}
+-
+ /* Return 1 if iommu->lock dropped and notified, 0 if done */
+ static int unmap_dma_pfn_list(struct vfio_iommu *iommu, struct vfio_dma *dma,
+ 			      struct vfio_dma **dma_last, int *retries)
+@@ -575,6 +553,52 @@ static int unmap_dma_pfn_list(struct vfio_iommu *iommu, struct vfio_dma *dma,
+ 	return 0;
+ }
+ 
++static void unregister_device_bg(struct work_struct *work)
++{
++	struct pfnmap_obj *pfnmap = container_of(work, struct pfnmap_obj, work);
++
++	vfio_device_unregister_notifier(pfnmap->device, &pfnmap->nb);
++	vfio_device_put(pfnmap->device);
++	kfree(pfnmap);
++}
++
++static void vfio_remove_dma(struct vfio_iommu *iommu, struct vfio_dma *dma);
++
++static int vfio_device_nb_cb(struct notifier_block *nb,
++			     unsigned long action, void *unused)
++{
++	struct pfnmap_obj *pfnmap = container_of(nb, struct pfnmap_obj, nb);
++
++	switch (action) {
++	case VFIO_DEVICE_RELEASE:
++	{
++		struct vfio_dma *dma_last = NULL;
++		int retries = 0;
++again:
++		mutex_lock(&pfnmap->iommu->lock);
++		if (pfnmap->dma) {
++			struct vfio_dma *dma = pfnmap->dma;
++
++			if (unmap_dma_pfn_list(pfnmap->iommu, dma,
++					       &dma_last, &retries))
++				goto again;
++
++			dma->pfnmap = NULL;
++			pfnmap->dma = NULL;
++			vfio_remove_dma(pfnmap->iommu, dma);
++		}
++		mutex_unlock(&pfnmap->iommu->lock);
++
++		/* Cannot unregister notifier from callback chain */
++		INIT_WORK(&pfnmap->work, unregister_device_bg);
++		schedule_work(&pfnmap->work);
++		break;
++	}
++	}
++
++	return NOTIFY_OK;
++}
++
+ /*
+  * Returns the positive number of pfns successfully obtained or a negative
+  * error code.
+@@ -601,21 +625,60 @@ static int vaddr_get_pfns(struct vfio_iommu *iommu, struct vfio_dma *dma,
+ 
+ 	vaddr = untagged_addr(vaddr);
+ 
+-retry:
+ 	vma = find_vma_intersection(mm, vaddr, vaddr + 1);
+ 
+ 	if (vma && vma->vm_flags & VM_PFNMAP) {
+-		ret = follow_fault_pfn(vma, mm, vaddr, pfn,
+-				       dma->prot & IOMMU_WRITE);
+-		if (ret == -EAGAIN)
+-			goto retry;
+-
+-		if (!ret) {
+-			if (is_invalid_reserved_pfn(*pfn))
+-				ret = 1;
+-			else
+-				ret = -EFAULT;
++		if ((dma->prot & IOMMU_WRITE && !(vma->vm_flags & VM_WRITE)) ||
++		    (dma->prot & IOMMU_READ && !(vma->vm_flags & VM_READ))) {
++			ret = -EFAULT;
++			goto done;
++		}
++
++		if (!dma->pfnmap) {
++			struct vfio_device *device;
++			unsigned long base_pfn;
++			struct pfnmap_obj *pfnmap;
++
++			device = vfio_device_get_from_vma(vma);
++			if (IS_ERR(device)) {
++				ret = PTR_ERR(device);
++				goto done;
++			}
++
++			ret = vfio_vma_to_pfn(vma, &base_pfn);
++			if (ret) {
++				vfio_device_put(device);
++				goto done;
++			}
++
++			pfnmap = kzalloc(sizeof(*pfnmap), GFP_KERNEL);
++			if (!pfnmap) {
++				vfio_device_put(device);
++				ret = -ENOMEM;
++				goto done;
++			}
++
++			pfnmap->nb.notifier_call = vfio_device_nb_cb;
++			pfnmap->iommu = iommu;
++			pfnmap->dma = dma;
++			pfnmap->device = device;
++			pfnmap->base_pfn = base_pfn;
++
++			dma->pfnmap = pfnmap;
++
++			ret = vfio_device_register_notifier(device,
++							    &pfnmap->nb);
++			if (ret) {
++				dma->pfnmap = NULL;
++				kfree(pfnmap);
++				vfio_device_put(device);
++				goto done;
++			}
+ 		}
++
++		*pfn = ((vaddr - vma->vm_start) >> PAGE_SHIFT) +
++							dma->pfnmap->base_pfn;
++		ret = 1;
+ 	}
+ done:
+ 	mmap_read_unlock(mm);
+@@ -1189,6 +1252,12 @@ static long vfio_unmap_unpin(struct vfio_iommu *iommu, struct vfio_dma *dma,
+ static void vfio_remove_dma(struct vfio_iommu *iommu, struct vfio_dma *dma)
+ {
+ 	WARN_ON(!RB_EMPTY_ROOT(&dma->pfn_list));
++	if (dma->pfnmap) {
++		vfio_device_unregister_notifier(dma->pfnmap->device,
++						&dma->pfnmap->nb);
++		vfio_device_put(dma->pfnmap->device);
++		kfree(dma->pfnmap);
++	}
+ 	vfio_unmap_unpin(iommu, dma, true);
+ 	vfio_unlink_dma(iommu, dma);
+ 	put_task_struct(dma->task);
+
+From patchwork Mon Mar  8 21:49:31 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alex Williamson <alex.williamson@redhat.com>
+X-Patchwork-Id: 12123455
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 49E27C43381
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:50:25 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 14AB46523D
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:50:25 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231966AbhCHVt4 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 8 Mar 2021 16:49:56 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([63.128.21.124]:25989 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S232040AbhCHVtl (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 8 Mar 2021 16:49:41 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615240180;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=DwxsuPh0j1VQRJi9ua3SibuYU7hsOwQfBMk4pAEkux0=;
+        b=g+ZsXd67gGYJ9dr8QzwFaUXDhvkvBYccfk5QWqS+oLtphMTcmNRBMKvEYbmECq8AHb5N7k
+        JpRbgHEvjlvuC0/wLii2+qCM/3KQyuHGESOhS46rJNzlwXDzxhNaHriXzKXUPKoNbIWLl3
+        6mpN+6DzlP44eczSOEdw2mBu/NbvGDI=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-170-ixWHP2wOPI-VRk60yA7fGg-1; Mon, 08 Mar 2021 16:49:38 -0500
+X-MC-Unique: ixWHP2wOPI-VRk60yA7fGg-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id BB922814313;
+        Mon,  8 Mar 2021 21:49:37 +0000 (UTC)
+Received: from gimli.home (ovpn-112-255.phx2.redhat.com [10.3.112.255])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 49AAC1A878;
+        Mon,  8 Mar 2021 21:49:31 +0000 (UTC)
+Subject: [PATCH v1 12/14] vfio/type1: Support batching of device mappings
+From: Alex Williamson <alex.williamson@redhat.com>
+To: alex.williamson@redhat.com
+Cc: cohuck@redhat.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jgg@nvidia.com, peterx@redhat.com
+Date: Mon, 08 Mar 2021 14:49:31 -0700
+Message-ID: <161524017090.3480.6508004360325488879.stgit@gimli.home>
+In-Reply-To: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+References: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+User-Agent: StGit/0.21-2-g8ef5
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Populate the page array to the extent available to enable batching.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ drivers/vfio/vfio_iommu_type1.c |   10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index e89f11141dee..d499bccfbe3f 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -628,6 +628,8 @@ static int vaddr_get_pfns(struct vfio_iommu *iommu, struct vfio_dma *dma,
+ 	vma = find_vma_intersection(mm, vaddr, vaddr + 1);
+ 
+ 	if (vma && vma->vm_flags & VM_PFNMAP) {
++		unsigned long count, i;
++
+ 		if ((dma->prot & IOMMU_WRITE && !(vma->vm_flags & VM_WRITE)) ||
+ 		    (dma->prot & IOMMU_READ && !(vma->vm_flags & VM_READ))) {
+ 			ret = -EFAULT;
+@@ -678,7 +680,13 @@ static int vaddr_get_pfns(struct vfio_iommu *iommu, struct vfio_dma *dma,
+ 
+ 		*pfn = ((vaddr - vma->vm_start) >> PAGE_SHIFT) +
+ 							dma->pfnmap->base_pfn;
+-		ret = 1;
++		count = min_t(long,
++			      (vma->vm_end - vaddr) >> PAGE_SHIFT, npages);
++
++		for (i = 0; i < count; i++)
++			pages[i] = pfn_to_page(*pfn + i);
++
++		ret = count;
+ 	}
+ done:
+ 	mmap_read_unlock(mm);
+
+From patchwork Mon Mar  8 21:49:42 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alex Williamson <alex.williamson@redhat.com>
+X-Patchwork-Id: 12123457
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 598F5C4332B
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:50:25 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 47FD56527B
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:50:25 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231987AbhCHVt5 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 8 Mar 2021 16:49:57 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:42836 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S232051AbhCHVts (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 8 Mar 2021 16:49:48 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615240188;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=yH1qUWM54OHmJwyCpqsZnQPoKLi/478uyIL1lGR3/CE=;
+        b=X28ipagwvqIzWxa3TKqi1Idy2qOY547h1xtoEKxHhp225tdEWn4XTEr1n/8qpnIuF9zPuX
+        LT+dMmU8nvOeAKQkTz5TeyvgQ8fGlTGbwefh7tIygBbxJX5jlNAbDbVLNWn7lOf+FmLRqa
+        Vgv+mN4lAxezuVYqIOU0QNqsEkgf3R0=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-247-1L4UkiF3O_uqkEfajM7MaQ-1; Mon, 08 Mar 2021 16:49:45 -0500
+X-MC-Unique: 1L4UkiF3O_uqkEfajM7MaQ-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 0EF811009E44;
+        Mon,  8 Mar 2021 21:49:44 +0000 (UTC)
+Received: from gimli.home (ovpn-112-255.phx2.redhat.com [10.3.112.255])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 444151A8A6;
+        Mon,  8 Mar 2021 21:49:43 +0000 (UTC)
+Subject: [PATCH v1 13/14] vfio: Remove extern from declarations across vfio
+From: Alex Williamson <alex.williamson@redhat.com>
+To: alex.williamson@redhat.com
+Cc: cohuck@redhat.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jgg@nvidia.com, peterx@redhat.com
+Date: Mon, 08 Mar 2021 14:49:42 -0700
+Message-ID: <161524018283.3480.13909145183028051928.stgit@gimli.home>
+In-Reply-To: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+References: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+User-Agent: StGit/0.21-2-g8ef5
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Cleanup disrecommended usage and docs.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ Documentation/driver-api/vfio-mediated-device.rst |   19 ++-
+ Documentation/driver-api/vfio.rst                 |    4 -
+ drivers/s390/cio/vfio_ccw_cp.h                    |   13 +-
+ drivers/s390/cio/vfio_ccw_private.h               |   14 +-
+ drivers/s390/crypto/vfio_ap_private.h             |    2 
+ drivers/vfio/fsl-mc/vfio_fsl_mc_private.h         |    7 +
+ drivers/vfio/pci/vfio_pci_private.h               |   66 +++++------
+ drivers/vfio/platform/vfio_platform_private.h     |   31 +++--
+ include/linux/vfio.h                              |  122 ++++++++++-----------
+ 9 files changed, 130 insertions(+), 148 deletions(-)
+
+diff --git a/Documentation/driver-api/vfio-mediated-device.rst b/Documentation/driver-api/vfio-mediated-device.rst
+index 25eb7d5b834b..7685ef582f7a 100644
+--- a/Documentation/driver-api/vfio-mediated-device.rst
++++ b/Documentation/driver-api/vfio-mediated-device.rst
+@@ -115,12 +115,11 @@ to register and unregister itself with the core driver:
+ 
+ * Register::
+ 
+-    extern int  mdev_register_driver(struct mdev_driver *drv,
+-				   struct module *owner);
++    int mdev_register_driver(struct mdev_driver *drv, struct module *owner);
+ 
+ * Unregister::
+ 
+-    extern void mdev_unregister_driver(struct mdev_driver *drv);
++    void mdev_unregister_driver(struct mdev_driver *drv);
+ 
+ The mediated bus driver is responsible for adding mediated devices to the VFIO
+ group when devices are bound to the driver and removing mediated devices from
+@@ -162,13 +161,13 @@ The callbacks in the mdev_parent_ops structure are as follows:
+ A driver should use the mdev_parent_ops structure in the function call to
+ register itself with the mdev core driver::
+ 
+-	extern int  mdev_register_device(struct device *dev,
+-	                                 const struct mdev_parent_ops *ops);
++	int  mdev_register_device(struct device *dev,
++				  const struct mdev_parent_ops *ops);
+ 
+ However, the mdev_parent_ops structure is not required in the function call
+ that a driver should use to unregister itself with the mdev core driver::
+ 
+-	extern void mdev_unregister_device(struct device *dev);
++	void mdev_unregister_device(struct device *dev);
+ 
+ 
+ Mediated Device Management Interface Through sysfs
+@@ -293,11 +292,11 @@ Translation APIs for Mediated Devices
+ The following APIs are provided for translating user pfn to host pfn in a VFIO
+ driver::
+ 
+-	extern int vfio_pin_pages(struct device *dev, unsigned long *user_pfn,
+-				  int npage, int prot, unsigned long *phys_pfn);
++	int vfio_pin_pages(struct device *dev, unsigned long *user_pfn,
++			   int npage, int prot, unsigned long *phys_pfn);
+ 
+-	extern int vfio_unpin_pages(struct device *dev, unsigned long *user_pfn,
+-				    int npage);
++	int vfio_unpin_pages(struct device *dev, unsigned long *user_pfn,
++			     int npage);
+ 
+ These functions call back into the back-end IOMMU module by using the pin_pages
+ and unpin_pages callbacks of the struct vfio_iommu_driver_ops[4]. Currently
+diff --git a/Documentation/driver-api/vfio.rst b/Documentation/driver-api/vfio.rst
+index 03e978eb8ec7..e6ba42ca6346 100644
+--- a/Documentation/driver-api/vfio.rst
++++ b/Documentation/driver-api/vfio.rst
+@@ -252,11 +252,11 @@ into VFIO core.  When devices are bound and unbound to the driver,
+ the driver should call vfio_add_group_dev() and vfio_del_group_dev()
+ respectively::
+ 
+-	extern struct vfio_device *vfio_add_group_dev(struct device *dev,
++	struct vfio_device *vfio_add_group_dev(struct device *dev,
+ 					const struct vfio_device_ops *ops,
+ 					void *device_data);
+ 
+-	extern void *vfio_del_group_dev(struct device *dev);
++	void *vfio_del_group_dev(struct device *dev);
+ 
+ vfio_add_group_dev() indicates to the core to begin tracking the
+ iommu_group of the specified dev and register the dev as owned by
+diff --git a/drivers/s390/cio/vfio_ccw_cp.h b/drivers/s390/cio/vfio_ccw_cp.h
+index ba31240ce965..1ea81c4fe630 100644
+--- a/drivers/s390/cio/vfio_ccw_cp.h
++++ b/drivers/s390/cio/vfio_ccw_cp.h
+@@ -42,12 +42,11 @@ struct channel_program {
+ 	struct ccw1 *guest_cp;
+ };
+ 
+-extern int cp_init(struct channel_program *cp, struct device *mdev,
+-		   union orb *orb);
+-extern void cp_free(struct channel_program *cp);
+-extern int cp_prefetch(struct channel_program *cp);
+-extern union orb *cp_get_orb(struct channel_program *cp, u32 intparm, u8 lpm);
+-extern void cp_update_scsw(struct channel_program *cp, union scsw *scsw);
+-extern bool cp_iova_pinned(struct channel_program *cp, u64 iova);
++int cp_init(struct channel_program *cp, struct device *mdev, union orb *orb);
++void cp_free(struct channel_program *cp);
++int cp_prefetch(struct channel_program *cp);
++union orb *cp_get_orb(struct channel_program *cp, u32 intparm, u8 lpm);
++void cp_update_scsw(struct channel_program *cp, union scsw *scsw);
++bool cp_iova_pinned(struct channel_program *cp, u64 iova);
+ 
+ #endif
+diff --git a/drivers/s390/cio/vfio_ccw_private.h b/drivers/s390/cio/vfio_ccw_private.h
+index b2c762eb42b9..01dff317e063 100644
+--- a/drivers/s390/cio/vfio_ccw_private.h
++++ b/drivers/s390/cio/vfio_ccw_private.h
+@@ -116,10 +116,10 @@ struct vfio_ccw_private {
+ 	struct work_struct	crw_work;
+ } __aligned(8);
+ 
+-extern int vfio_ccw_mdev_reg(struct subchannel *sch);
+-extern void vfio_ccw_mdev_unreg(struct subchannel *sch);
++int vfio_ccw_mdev_reg(struct subchannel *sch);
++void vfio_ccw_mdev_unreg(struct subchannel *sch);
+ 
+-extern int vfio_ccw_sch_quiesce(struct subchannel *sch);
++int vfio_ccw_sch_quiesce(struct subchannel *sch);
+ 
+ /*
+  * States of the device statemachine.
+@@ -150,7 +150,7 @@ enum vfio_ccw_event {
+  * Action called through jumptable.
+  */
+ typedef void (fsm_func_t)(struct vfio_ccw_private *, enum vfio_ccw_event);
+-extern fsm_func_t *vfio_ccw_jumptable[NR_VFIO_CCW_STATES][NR_VFIO_CCW_EVENTS];
++fsm_func_t *vfio_ccw_jumptable[NR_VFIO_CCW_STATES][NR_VFIO_CCW_EVENTS];
+ 
+ static inline void vfio_ccw_fsm_event(struct vfio_ccw_private *private,
+ 				     int event)
+@@ -159,12 +159,12 @@ static inline void vfio_ccw_fsm_event(struct vfio_ccw_private *private,
+ 	vfio_ccw_jumptable[private->state][event](private, event);
+ }
+ 
+-extern struct workqueue_struct *vfio_ccw_work_q;
++struct workqueue_struct *vfio_ccw_work_q;
+ 
+ 
+ /* s390 debug feature, similar to base cio */
+-extern debug_info_t *vfio_ccw_debug_msg_id;
+-extern debug_info_t *vfio_ccw_debug_trace_id;
++debug_info_t *vfio_ccw_debug_msg_id;
++debug_info_t *vfio_ccw_debug_trace_id;
+ 
+ #define VFIO_CCW_TRACE_EVENT(imp, txt) \
+ 		debug_text_event(vfio_ccw_debug_trace_id, imp, txt)
+diff --git a/drivers/s390/crypto/vfio_ap_private.h b/drivers/s390/crypto/vfio_ap_private.h
+index 28e9d9989768..d71a38dd4300 100644
+--- a/drivers/s390/crypto/vfio_ap_private.h
++++ b/drivers/s390/crypto/vfio_ap_private.h
+@@ -45,7 +45,7 @@ struct ap_matrix_dev {
+ 	struct ap_driver  *vfio_ap_drv;
+ };
+ 
+-extern struct ap_matrix_dev *matrix_dev;
++struct ap_matrix_dev *matrix_dev;
+ 
+ /**
+  * The AP matrix is comprised of three bit masks identifying the adapters,
+diff --git a/drivers/vfio/fsl-mc/vfio_fsl_mc_private.h b/drivers/vfio/fsl-mc/vfio_fsl_mc_private.h
+index a97ee691ed47..1c6f93b849e2 100644
+--- a/drivers/vfio/fsl-mc/vfio_fsl_mc_private.h
++++ b/drivers/vfio/fsl-mc/vfio_fsl_mc_private.h
+@@ -45,10 +45,9 @@ struct vfio_fsl_mc_device {
+ 	struct vfio_fsl_mc_irq      *mc_irqs;
+ };
+ 
+-extern int vfio_fsl_mc_set_irqs_ioctl(struct vfio_fsl_mc_device *vdev,
+-			       u32 flags, unsigned int index,
+-			       unsigned int start, unsigned int count,
+-			       void *data);
++int vfio_fsl_mc_set_irqs_ioctl(struct vfio_fsl_mc_device *vdev, u32 flags,
++			       unsigned int index, unsigned int start,
++			       unsigned int count, void *data);
+ 
+ void vfio_fsl_mc_irqs_cleanup(struct vfio_fsl_mc_device *vdev);
+ 
+diff --git a/drivers/vfio/pci/vfio_pci_private.h b/drivers/vfio/pci/vfio_pci_private.h
+index ba37f4eeefd0..49a60585cf9c 100644
+--- a/drivers/vfio/pci/vfio_pci_private.h
++++ b/drivers/vfio/pci/vfio_pci_private.h
+@@ -149,49 +149,45 @@ struct vfio_pci_device {
+ #define is_irq_none(vdev) (!(is_intx(vdev) || is_msi(vdev) || is_msix(vdev)))
+ #define irq_is(vdev, type) (vdev->irq_type == type)
+ 
+-extern void vfio_pci_intx_mask(struct vfio_pci_device *vdev);
+-extern void vfio_pci_intx_unmask(struct vfio_pci_device *vdev);
++void vfio_pci_intx_mask(struct vfio_pci_device *vdev);
++void vfio_pci_intx_unmask(struct vfio_pci_device *vdev);
+ 
+-extern int vfio_pci_set_irqs_ioctl(struct vfio_pci_device *vdev,
+-				   uint32_t flags, unsigned index,
+-				   unsigned start, unsigned count, void *data);
++int vfio_pci_set_irqs_ioctl(struct vfio_pci_device *vdev,
++			    uint32_t flags, unsigned index,
++			    unsigned start, unsigned count, void *data);
+ 
+-extern ssize_t vfio_pci_config_rw(struct vfio_pci_device *vdev,
+-				  char __user *buf, size_t count,
+-				  loff_t *ppos, bool iswrite);
++ssize_t vfio_pci_config_rw(struct vfio_pci_device *vdev, char __user *buf,
++			   size_t count, loff_t *ppos, bool iswrite);
+ 
+-extern ssize_t vfio_pci_bar_rw(struct vfio_pci_device *vdev, char __user *buf,
+-			       size_t count, loff_t *ppos, bool iswrite);
++ssize_t vfio_pci_bar_rw(struct vfio_pci_device *vdev, char __user *buf,
++			size_t count, loff_t *ppos, bool iswrite);
+ 
+-extern ssize_t vfio_pci_vga_rw(struct vfio_pci_device *vdev, char __user *buf,
+-			       size_t count, loff_t *ppos, bool iswrite);
++ssize_t vfio_pci_vga_rw(struct vfio_pci_device *vdev, char __user *buf,
++			size_t count, loff_t *ppos, bool iswrite);
+ 
+-extern long vfio_pci_ioeventfd(struct vfio_pci_device *vdev, loff_t offset,
+-			       uint64_t data, int count, int fd);
++long vfio_pci_ioeventfd(struct vfio_pci_device *vdev, loff_t offset,
++			uint64_t data, int count, int fd);
+ 
+-extern int vfio_pci_init_perm_bits(void);
+-extern void vfio_pci_uninit_perm_bits(void);
++int vfio_pci_init_perm_bits(void);
++void vfio_pci_uninit_perm_bits(void);
+ 
+-extern int vfio_config_init(struct vfio_pci_device *vdev);
+-extern void vfio_config_free(struct vfio_pci_device *vdev);
++int vfio_config_init(struct vfio_pci_device *vdev);
++void vfio_config_free(struct vfio_pci_device *vdev);
+ 
+-extern int vfio_pci_register_dev_region(struct vfio_pci_device *vdev,
+-					unsigned int type, unsigned int subtype,
+-					const struct vfio_pci_regops *ops,
+-					size_t size, u32 flags, void *data);
++int vfio_pci_register_dev_region(struct vfio_pci_device *vdev,
++				 unsigned int type, unsigned int subtype,
++				 const struct vfio_pci_regops *ops,
++				 size_t size, u32 flags, void *data);
+ 
+-extern int vfio_pci_set_power_state(struct vfio_pci_device *vdev,
+-				    pci_power_t state);
++int vfio_pci_set_power_state(struct vfio_pci_device *vdev, pci_power_t state);
+ 
+-extern bool __vfio_pci_memory_enabled(struct vfio_pci_device *vdev);
+-extern void vfio_pci_zap_and_down_write_memory_lock(struct vfio_pci_device
+-						    *vdev);
+-extern u16 vfio_pci_memory_lock_and_enable(struct vfio_pci_device *vdev);
+-extern void vfio_pci_memory_unlock_and_restore(struct vfio_pci_device *vdev,
+-					       u16 cmd);
++bool __vfio_pci_memory_enabled(struct vfio_pci_device *vdev);
++void vfio_pci_zap_and_down_write_memory_lock(struct vfio_pci_device *vdev);
++u16 vfio_pci_memory_lock_and_enable(struct vfio_pci_device *vdev);
++void vfio_pci_memory_unlock_and_restore(struct vfio_pci_device *vdev, u16 cmd);
+ 
+ #ifdef CONFIG_VFIO_PCI_IGD
+-extern int vfio_pci_igd_init(struct vfio_pci_device *vdev);
++int vfio_pci_igd_init(struct vfio_pci_device *vdev);
+ #else
+ static inline int vfio_pci_igd_init(struct vfio_pci_device *vdev)
+ {
+@@ -199,8 +195,8 @@ static inline int vfio_pci_igd_init(struct vfio_pci_device *vdev)
+ }
+ #endif
+ #ifdef CONFIG_VFIO_PCI_NVLINK2
+-extern int vfio_pci_nvdia_v100_nvlink2_init(struct vfio_pci_device *vdev);
+-extern int vfio_pci_ibm_npu2_init(struct vfio_pci_device *vdev);
++int vfio_pci_nvdia_v100_nvlink2_init(struct vfio_pci_device *vdev);
++int vfio_pci_ibm_npu2_init(struct vfio_pci_device *vdev);
+ #else
+ static inline int vfio_pci_nvdia_v100_nvlink2_init(struct vfio_pci_device *vdev)
+ {
+@@ -214,8 +210,8 @@ static inline int vfio_pci_ibm_npu2_init(struct vfio_pci_device *vdev)
+ #endif
+ 
+ #ifdef CONFIG_S390
+-extern int vfio_pci_info_zdev_add_caps(struct vfio_pci_device *vdev,
+-				       struct vfio_info_cap *caps);
++int vfio_pci_info_zdev_add_caps(struct vfio_pci_device *vdev,
++				struct vfio_info_cap *caps);
+ #else
+ static inline int vfio_pci_info_zdev_add_caps(struct vfio_pci_device *vdev,
+ 					      struct vfio_info_cap *caps)
+diff --git a/drivers/vfio/platform/vfio_platform_private.h b/drivers/vfio/platform/vfio_platform_private.h
+index 289089910643..2aa12d41f9c6 100644
+--- a/drivers/vfio/platform/vfio_platform_private.h
++++ b/drivers/vfio/platform/vfio_platform_private.h
+@@ -78,22 +78,21 @@ struct vfio_platform_reset_node {
+ 	vfio_platform_reset_fn_t of_reset;
+ };
+ 
+-extern int vfio_platform_probe_common(struct vfio_platform_device *vdev,
+-				      struct device *dev);
+-extern struct vfio_platform_device *vfio_platform_remove_common
+-				     (struct device *dev);
+-
+-extern int vfio_platform_irq_init(struct vfio_platform_device *vdev);
+-extern void vfio_platform_irq_cleanup(struct vfio_platform_device *vdev);
+-
+-extern int vfio_platform_set_irqs_ioctl(struct vfio_platform_device *vdev,
+-					uint32_t flags, unsigned index,
+-					unsigned start, unsigned count,
+-					void *data);
+-
+-extern void __vfio_platform_register_reset(struct vfio_platform_reset_node *n);
+-extern void vfio_platform_unregister_reset(const char *compat,
+-					   vfio_platform_reset_fn_t fn);
++int vfio_platform_probe_common(struct vfio_platform_device *vdev,
++			       struct device *dev);
++struct vfio_platform_device *vfio_platform_remove_common(struct device *dev);
++
++int vfio_platform_irq_init(struct vfio_platform_device *vdev);
++void vfio_platform_irq_cleanup(struct vfio_platform_device *vdev);
++
++int vfio_platform_set_irqs_ioctl(struct vfio_platform_device *vdev,
++				 uint32_t flags, unsigned index,
++				 unsigned start, unsigned count,
++				 void *data);
++
++void __vfio_platform_register_reset(struct vfio_platform_reset_node *n);
++void vfio_platform_unregister_reset(const char *compat,
++				    vfio_platform_reset_fn_t fn);
+ #define vfio_platform_register_reset(__compat, __reset)		\
+ static struct vfio_platform_reset_node __reset ## _node = {	\
+ 	.owner = THIS_MODULE,					\
+diff --git a/include/linux/vfio.h b/include/linux/vfio.h
+index c3ff36a7fa6f..27a63c1ce219 100644
+--- a/include/linux/vfio.h
++++ b/include/linux/vfio.h
+@@ -47,25 +47,25 @@ struct vfio_device_ops {
+ 	int	(*vma_to_pfn)(struct vm_area_struct *vma, unsigned long *pfn);
+ };
+ 
+-extern struct iommu_group *vfio_iommu_group_get(struct device *dev);
+-extern void vfio_iommu_group_put(struct iommu_group *group, struct device *dev);
++struct iommu_group *vfio_iommu_group_get(struct device *dev);
++void vfio_iommu_group_put(struct iommu_group *group, struct device *dev);
+ 
+-extern struct vfio_device *vfio_add_group_dev(struct device *dev,
++struct vfio_device *vfio_add_group_dev(struct device *dev,
+ 					const struct vfio_device_ops *ops,
+ 					void *device_data);
+ 
+-extern void *vfio_del_group_dev(struct device *dev);
+-extern struct vfio_device *vfio_device_get_from_dev(struct device *dev);
+-extern void vfio_device_put(struct vfio_device *device);
+-extern void *vfio_device_data(struct vfio_device *device);
+-extern void vfio_device_unmap_mapping_range(struct vfio_device *device,
+-					    loff_t start, loff_t len);
+-extern struct vfio_device *vfio_device_get_from_vma(struct vm_area_struct *vma);
+-extern int vfio_vma_to_pfn(struct vm_area_struct *vma, unsigned long *pfn);
+-extern int vfio_device_register_notifier(struct vfio_device *device,
+-					 struct notifier_block *nb);
+-extern void vfio_device_unregister_notifier(struct vfio_device *device,
+-					    struct notifier_block *nb);
++void *vfio_del_group_dev(struct device *dev);
++struct vfio_device *vfio_device_get_from_dev(struct device *dev);
++void vfio_device_put(struct vfio_device *device);
++void *vfio_device_data(struct vfio_device *device);
++void vfio_device_unmap_mapping_range(struct vfio_device *device,
++				     loff_t start, loff_t len);
++struct vfio_device *vfio_device_get_from_vma(struct vm_area_struct *vma);
++int vfio_vma_to_pfn(struct vm_area_struct *vma, unsigned long *pfn);
++int vfio_device_register_notifier(struct vfio_device *device,
++				  struct notifier_block *nb);
++void vfio_device_unregister_notifier(struct vfio_device *device,
++				     struct notifier_block *nb);
+ enum vfio_device_notify_type {
+ 	VFIO_DEVICE_RELEASE = 0,
+ };
+@@ -116,41 +116,37 @@ struct vfio_iommu_driver_ops {
+ 				  enum vfio_iommu_notify_type event);
+ };
+ 
+-extern int vfio_register_iommu_driver(const struct vfio_iommu_driver_ops *ops);
++int vfio_register_iommu_driver(const struct vfio_iommu_driver_ops *ops);
+ 
+-extern void vfio_unregister_iommu_driver(
+-				const struct vfio_iommu_driver_ops *ops);
++void vfio_unregister_iommu_driver(const struct vfio_iommu_driver_ops *ops);
+ 
+ /*
+  * External user API
+  */
+-extern struct vfio_group *vfio_group_get_external_user(struct file *filep);
+-extern void vfio_group_put_external_user(struct vfio_group *group);
+-extern struct vfio_group *vfio_group_get_external_user_from_dev(struct device
+-								*dev);
+-extern bool vfio_external_group_match_file(struct vfio_group *group,
+-					   struct file *filep);
+-extern int vfio_external_user_iommu_id(struct vfio_group *group);
+-extern long vfio_external_check_extension(struct vfio_group *group,
+-					  unsigned long arg);
++struct vfio_group *vfio_group_get_external_user(struct file *filep);
++void vfio_group_put_external_user(struct vfio_group *group);
++struct vfio_group *vfio_group_get_external_user_from_dev(struct device *dev);
++bool vfio_external_group_match_file(struct vfio_group *group,
++				    struct file *filep);
++int vfio_external_user_iommu_id(struct vfio_group *group);
++long vfio_external_check_extension(struct vfio_group *group, unsigned long arg);
+ 
+ #define VFIO_PIN_PAGES_MAX_ENTRIES	(PAGE_SIZE/sizeof(unsigned long))
+ 
+-extern int vfio_pin_pages(struct device *dev, unsigned long *user_pfn,
+-			  int npage, int prot, unsigned long *phys_pfn);
+-extern int vfio_unpin_pages(struct device *dev, unsigned long *user_pfn,
+-			    int npage);
++int vfio_pin_pages(struct device *dev, unsigned long *user_pfn,
++		   int npage, int prot, unsigned long *phys_pfn);
++int vfio_unpin_pages(struct device *dev, unsigned long *user_pfn, int npage);
+ 
+-extern int vfio_group_pin_pages(struct vfio_group *group,
+-				unsigned long *user_iova_pfn, int npage,
+-				int prot, unsigned long *phys_pfn);
+-extern int vfio_group_unpin_pages(struct vfio_group *group,
+-				  unsigned long *user_iova_pfn, int npage);
++int vfio_group_pin_pages(struct vfio_group *group,
++			 unsigned long *user_iova_pfn, int npage,
++			 int prot, unsigned long *phys_pfn);
++int vfio_group_unpin_pages(struct vfio_group *group,
++			   unsigned long *user_iova_pfn, int npage);
+ 
+-extern int vfio_dma_rw(struct vfio_group *group, dma_addr_t user_iova,
+-		       void *data, size_t len, bool write);
++int vfio_dma_rw(struct vfio_group *group, dma_addr_t user_iova,
++		void *data, size_t len, bool write);
+ 
+-extern struct iommu_domain *vfio_group_iommu_domain(struct vfio_group *group);
++struct iommu_domain *vfio_group_iommu_domain(struct vfio_group *group);
+ 
+ /* each type has independent events */
+ enum vfio_notify_type {
+@@ -164,16 +160,14 @@ enum vfio_notify_type {
+ /* events for VFIO_GROUP_NOTIFY */
+ #define VFIO_GROUP_NOTIFY_SET_KVM	BIT(0)
+ 
+-extern int vfio_register_notifier(struct device *dev,
+-				  enum vfio_notify_type type,
+-				  unsigned long *required_events,
+-				  struct notifier_block *nb);
+-extern int vfio_unregister_notifier(struct device *dev,
+-				    enum vfio_notify_type type,
+-				    struct notifier_block *nb);
++int vfio_register_notifier(struct device *dev, enum vfio_notify_type type,
++			   unsigned long *required_events,
++			   struct notifier_block *nb);
++int vfio_unregister_notifier(struct device *dev, enum vfio_notify_type type,
++			     struct notifier_block *nb);
+ 
+ struct kvm;
+-extern void vfio_group_set_kvm(struct vfio_group *group, struct kvm *kvm);
++void vfio_group_set_kvm(struct vfio_group *group, struct kvm *kvm);
+ 
+ /*
+  * Sub-module helpers
+@@ -182,25 +176,22 @@ struct vfio_info_cap {
+ 	struct vfio_info_cap_header *buf;
+ 	size_t size;
+ };
+-extern struct vfio_info_cap_header *vfio_info_cap_add(
+-		struct vfio_info_cap *caps, size_t size, u16 id, u16 version);
+-extern void vfio_info_cap_shift(struct vfio_info_cap *caps, size_t offset);
++struct vfio_info_cap_header *vfio_info_cap_add(struct vfio_info_cap *caps,
++					size_t size, u16 id, u16 version);
++void vfio_info_cap_shift(struct vfio_info_cap *caps, size_t offset);
+ 
+-extern int vfio_info_add_capability(struct vfio_info_cap *caps,
+-				    struct vfio_info_cap_header *cap,
+-				    size_t size);
++int vfio_info_add_capability(struct vfio_info_cap *caps,
++			     struct vfio_info_cap_header *cap, size_t size);
+ 
+-extern int vfio_set_irqs_validate_and_prepare(struct vfio_irq_set *hdr,
+-					      int num_irqs, int max_irq_type,
+-					      size_t *data_size);
++int vfio_set_irqs_validate_and_prepare(struct vfio_irq_set *hdr, int num_irqs,
++				       int max_irq_type, size_t *data_size);
+ 
+ struct pci_dev;
+ #if IS_ENABLED(CONFIG_VFIO_SPAPR_EEH)
+-extern void vfio_spapr_pci_eeh_open(struct pci_dev *pdev);
+-extern void vfio_spapr_pci_eeh_release(struct pci_dev *pdev);
+-extern long vfio_spapr_iommu_eeh_ioctl(struct iommu_group *group,
+-				       unsigned int cmd,
+-				       unsigned long arg);
++void vfio_spapr_pci_eeh_open(struct pci_dev *pdev);
++void vfio_spapr_pci_eeh_release(struct pci_dev *pdev);
++long vfio_spapr_iommu_eeh_ioctl(struct iommu_group *group,
++				unsigned int cmd, unsigned long arg);
+ #else
+ static inline void vfio_spapr_pci_eeh_open(struct pci_dev *pdev)
+ {
+@@ -234,10 +225,9 @@ struct virqfd {
+ 	struct virqfd		**pvirqfd;
+ };
+ 
+-extern int vfio_virqfd_enable(void *opaque,
+-			      int (*handler)(void *, void *),
+-			      void (*thread)(void *, void *),
+-			      void *data, struct virqfd **pvirqfd, int fd);
+-extern void vfio_virqfd_disable(struct virqfd **pvirqfd);
++int vfio_virqfd_enable(void *opaque, int (*handler)(void *, void *),
++		       void (*thread)(void *, void *), void *data,
++		       struct virqfd **pvirqfd, int fd);
++void vfio_virqfd_disable(struct virqfd **pvirqfd);
+ 
+ #endif /* VFIO_H */
+
+From patchwork Mon Mar  8 21:49:49 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Alex Williamson <alex.williamson@redhat.com>
+X-Patchwork-Id: 12123459
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 2BFF4C4332D
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:50:57 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 0F2B1652AD
+	for <kvm@archiver.kernel.org>; Mon,  8 Mar 2021 21:50:57 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231954AbhCHVu1 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 8 Mar 2021 16:50:27 -0500
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:41383 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S232035AbhCHVuA (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 8 Mar 2021 16:50:00 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615240199;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:content-type:content-type:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=RAa72pVdIFvN9TtnoqB8dYU4KzANd01qCZAe6yxIHp0=;
+        b=Qu6O6si2neB8hMXCgv2M1Xd1WtPFMtaUeNqWfskzV2hjEM7atU89Uh/xdXT6DFjpikUZBM
+        guFMQi93qB0DC5v76vjSP77yzm1ZAhIN6wSjYez5JJTbIf0ZlsbNzOSTvUhFeL81ryWRzu
+        yFCP/pJ+5KhMBAjClu1IxchPi3iRAhg=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-319-2fEasTi1OZ-7yRhIqB4uJg-1; Mon, 08 Mar 2021 16:49:57 -0500
+X-MC-Unique: 2fEasTi1OZ-7yRhIqB4uJg-1
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 6207A108BD06;
+        Mon,  8 Mar 2021 21:49:56 +0000 (UTC)
+Received: from gimli.home (ovpn-112-255.phx2.redhat.com [10.3.112.255])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 96B805D9CD;
+        Mon,  8 Mar 2021 21:49:49 +0000 (UTC)
+Subject: [PATCH v1 14/14] vfio: Cleanup use of bare unsigned
+From: Alex Williamson <alex.williamson@redhat.com>
+To: alex.williamson@redhat.com
+Cc: cohuck@redhat.com, kvm@vger.kernel.org,
+        linux-kernel@vger.kernel.org, jgg@nvidia.com, peterx@redhat.com
+Date: Mon, 08 Mar 2021 14:49:49 -0700
+Message-ID: <161524018910.3480.774661659452044338.stgit@gimli.home>
+In-Reply-To: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+References: <161523878883.3480.12103845207889888280.stgit@gimli.home>
+User-Agent: StGit/0.21-2-g8ef5
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Replace with 'unsigned int'.
+
+Signed-off-by: Alex Williamson <alex.williamson@redhat.com>
+---
+ drivers/vfio/pci/vfio_pci_intrs.c             |   42 ++++++++++++++-----------
+ drivers/vfio/pci/vfio_pci_private.h           |    4 +-
+ drivers/vfio/platform/vfio_platform_irq.c     |   21 +++++++------
+ drivers/vfio/platform/vfio_platform_private.h |    4 +-
+ 4 files changed, 39 insertions(+), 32 deletions(-)
+
+diff --git a/drivers/vfio/pci/vfio_pci_intrs.c b/drivers/vfio/pci/vfio_pci_intrs.c
+index 869dce5f134d..67de58d67908 100644
+--- a/drivers/vfio/pci/vfio_pci_intrs.c
++++ b/drivers/vfio/pci/vfio_pci_intrs.c
+@@ -364,8 +364,8 @@ static int vfio_msi_set_vector_signal(struct vfio_pci_device *vdev,
+ 	return 0;
+ }
+ 
+-static int vfio_msi_set_block(struct vfio_pci_device *vdev, unsigned start,
+-			      unsigned count, int32_t *fds, bool msix)
++static int vfio_msi_set_block(struct vfio_pci_device *vdev, unsigned int start,
++			      unsigned int count, int32_t *fds, bool msix)
+ {
+ 	int i, j, ret = 0;
+ 
+@@ -418,8 +418,9 @@ static void vfio_msi_disable(struct vfio_pci_device *vdev, bool msix)
+  * IOCTL support
+  */
+ static int vfio_pci_set_intx_unmask(struct vfio_pci_device *vdev,
+-				    unsigned index, unsigned start,
+-				    unsigned count, uint32_t flags, void *data)
++				    unsigned int index, unsigned int start,
++				    unsigned int count, uint32_t flags,
++				    void *data)
+ {
+ 	if (!is_intx(vdev) || start != 0 || count != 1)
+ 		return -EINVAL;
+@@ -445,8 +446,9 @@ static int vfio_pci_set_intx_unmask(struct vfio_pci_device *vdev,
+ }
+ 
+ static int vfio_pci_set_intx_mask(struct vfio_pci_device *vdev,
+-				  unsigned index, unsigned start,
+-				  unsigned count, uint32_t flags, void *data)
++				  unsigned int index, unsigned int start,
++				  unsigned int count, uint32_t flags,
++				  void *data)
+ {
+ 	if (!is_intx(vdev) || start != 0 || count != 1)
+ 		return -EINVAL;
+@@ -465,8 +467,9 @@ static int vfio_pci_set_intx_mask(struct vfio_pci_device *vdev,
+ }
+ 
+ static int vfio_pci_set_intx_trigger(struct vfio_pci_device *vdev,
+-				     unsigned index, unsigned start,
+-				     unsigned count, uint32_t flags, void *data)
++				     unsigned int index, unsigned int start,
++				     unsigned int count, uint32_t flags,
++				     void *data)
+ {
+ 	if (is_intx(vdev) && !count && (flags & VFIO_IRQ_SET_DATA_NONE)) {
+ 		vfio_intx_disable(vdev);
+@@ -508,8 +511,9 @@ static int vfio_pci_set_intx_trigger(struct vfio_pci_device *vdev,
+ }
+ 
+ static int vfio_pci_set_msi_trigger(struct vfio_pci_device *vdev,
+-				    unsigned index, unsigned start,
+-				    unsigned count, uint32_t flags, void *data)
++				    unsigned int index, unsigned int start,
++				    unsigned int count, uint32_t flags,
++				    void *data)
+ {
+ 	int i;
+ 	bool msix = (index == VFIO_PCI_MSIX_IRQ_INDEX) ? true : false;
+@@ -614,8 +618,9 @@ static int vfio_pci_set_ctx_trigger_single(struct eventfd_ctx **ctx,
+ }
+ 
+ static int vfio_pci_set_err_trigger(struct vfio_pci_device *vdev,
+-				    unsigned index, unsigned start,
+-				    unsigned count, uint32_t flags, void *data)
++				    unsigned int index, unsigned int start,
++				    unsigned int count, uint32_t flags,
++				    void *data)
+ {
+ 	if (index != VFIO_PCI_ERR_IRQ_INDEX || start != 0 || count > 1)
+ 		return -EINVAL;
+@@ -625,8 +630,9 @@ static int vfio_pci_set_err_trigger(struct vfio_pci_device *vdev,
+ }
+ 
+ static int vfio_pci_set_req_trigger(struct vfio_pci_device *vdev,
+-				    unsigned index, unsigned start,
+-				    unsigned count, uint32_t flags, void *data)
++				    unsigned int index, unsigned int start,
++				    unsigned int count, uint32_t flags,
++				    void *data)
+ {
+ 	if (index != VFIO_PCI_REQ_IRQ_INDEX || start != 0 || count > 1)
+ 		return -EINVAL;
+@@ -636,11 +642,11 @@ static int vfio_pci_set_req_trigger(struct vfio_pci_device *vdev,
+ }
+ 
+ int vfio_pci_set_irqs_ioctl(struct vfio_pci_device *vdev, uint32_t flags,
+-			    unsigned index, unsigned start, unsigned count,
+-			    void *data)
++			    unsigned int index, unsigned int start,
++			    unsigned int count, void *data)
+ {
+-	int (*func)(struct vfio_pci_device *vdev, unsigned index,
+-		    unsigned start, unsigned count, uint32_t flags,
++	int (*func)(struct vfio_pci_device *vdev, unsigned int index,
++		    unsigned int start, unsigned int count, uint32_t flags,
+ 		    void *data) = NULL;
+ 
+ 	switch (index) {
+diff --git a/drivers/vfio/pci/vfio_pci_private.h b/drivers/vfio/pci/vfio_pci_private.h
+index 49a60585cf9c..93f47044e2e5 100644
+--- a/drivers/vfio/pci/vfio_pci_private.h
++++ b/drivers/vfio/pci/vfio_pci_private.h
+@@ -153,8 +153,8 @@ void vfio_pci_intx_mask(struct vfio_pci_device *vdev);
+ void vfio_pci_intx_unmask(struct vfio_pci_device *vdev);
+ 
+ int vfio_pci_set_irqs_ioctl(struct vfio_pci_device *vdev,
+-			    uint32_t flags, unsigned index,
+-			    unsigned start, unsigned count, void *data);
++			    uint32_t flags, unsigned int index,
++			    unsigned int start, unsigned int count, void *data);
+ 
+ ssize_t vfio_pci_config_rw(struct vfio_pci_device *vdev, char __user *buf,
+ 			   size_t count, loff_t *ppos, bool iswrite);
+diff --git a/drivers/vfio/platform/vfio_platform_irq.c b/drivers/vfio/platform/vfio_platform_irq.c
+index c5b09ec0a3c9..90d87ab44131 100644
+--- a/drivers/vfio/platform/vfio_platform_irq.c
++++ b/drivers/vfio/platform/vfio_platform_irq.c
+@@ -39,8 +39,8 @@ static int vfio_platform_mask_handler(void *opaque, void *unused)
+ }
+ 
+ static int vfio_platform_set_irq_mask(struct vfio_platform_device *vdev,
+-				      unsigned index, unsigned start,
+-				      unsigned count, uint32_t flags,
++				      unsigned int index, unsigned int start,
++				      unsigned int count, uint32_t flags,
+ 				      void *data)
+ {
+ 	if (start != 0 || count != 1)
+@@ -99,8 +99,8 @@ static int vfio_platform_unmask_handler(void *opaque, void *unused)
+ }
+ 
+ static int vfio_platform_set_irq_unmask(struct vfio_platform_device *vdev,
+-					unsigned index, unsigned start,
+-					unsigned count, uint32_t flags,
++					unsigned int index, unsigned int start,
++					unsigned int count, uint32_t flags,
+ 					void *data)
+ {
+ 	if (start != 0 || count != 1)
+@@ -216,8 +216,8 @@ static int vfio_set_trigger(struct vfio_platform_device *vdev, int index,
+ }
+ 
+ static int vfio_platform_set_irq_trigger(struct vfio_platform_device *vdev,
+-					 unsigned index, unsigned start,
+-					 unsigned count, uint32_t flags,
++					 unsigned int index, unsigned int start,
++					 unsigned int count, uint32_t flags,
+ 					 void *data)
+ {
+ 	struct vfio_platform_irq *irq = &vdev->irqs[index];
+@@ -254,11 +254,12 @@ static int vfio_platform_set_irq_trigger(struct vfio_platform_device *vdev,
+ }
+ 
+ int vfio_platform_set_irqs_ioctl(struct vfio_platform_device *vdev,
+-				 uint32_t flags, unsigned index, unsigned start,
+-				 unsigned count, void *data)
++				 uint32_t flags, unsigned int index,
++				 unsigned int start, unsigned int count,
++				 void *data)
+ {
+-	int (*func)(struct vfio_platform_device *vdev, unsigned index,
+-		    unsigned start, unsigned count, uint32_t flags,
++	int (*func)(struct vfio_platform_device *vdev, unsigned int index,
++		    unsigned int start, unsigned int count, uint32_t flags,
+ 		    void *data) = NULL;
+ 
+ 	switch (flags & VFIO_IRQ_SET_ACTION_TYPE_MASK) {
+diff --git a/drivers/vfio/platform/vfio_platform_private.h b/drivers/vfio/platform/vfio_platform_private.h
+index 2aa12d41f9c6..09870bf07e95 100644
+--- a/drivers/vfio/platform/vfio_platform_private.h
++++ b/drivers/vfio/platform/vfio_platform_private.h
+@@ -86,8 +86,8 @@ int vfio_platform_irq_init(struct vfio_platform_device *vdev);
+ void vfio_platform_irq_cleanup(struct vfio_platform_device *vdev);
+ 
+ int vfio_platform_set_irqs_ioctl(struct vfio_platform_device *vdev,
+-				 uint32_t flags, unsigned index,
+-				 unsigned start, unsigned count,
++				 uint32_t flags, unsigned int index,
++				 unsigned int start, unsigned int count,
+ 				 void *data);
+ 
+ void __vfio_platform_register_reset(struct vfio_platform_reset_node *n);
