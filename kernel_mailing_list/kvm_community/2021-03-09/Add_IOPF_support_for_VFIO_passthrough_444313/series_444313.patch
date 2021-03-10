@@ -1,0 +1,1605 @@
+From patchwork Tue Mar  9 06:22:02 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Shenming Lu <lushenming@huawei.com>
+X-Patchwork-Id: 12124221
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id EB7B5C433E9
+	for <kvm@archiver.kernel.org>; Tue,  9 Mar 2021 06:23:30 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 83E49652B2
+	for <kvm@archiver.kernel.org>; Tue,  9 Mar 2021 06:23:30 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S229872AbhCIGW6 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 9 Mar 2021 01:22:58 -0500
+Received: from szxga05-in.huawei.com ([45.249.212.191]:13075 "EHLO
+        szxga05-in.huawei.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S229530AbhCIGW0 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 9 Mar 2021 01:22:26 -0500
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.59])
+        by szxga05-in.huawei.com (SkyGuard) with ESMTP id 4DvlS86Y4MzMkgq;
+        Tue,  9 Mar 2021 14:20:08 +0800 (CST)
+Received: from DESKTOP-7FEPK9S.china.huawei.com (10.174.184.135) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.498.0; Tue, 9 Mar 2021 14:22:15 +0800
+From: Shenming Lu <lushenming@huawei.com>
+To: Alex Williamson <alex.williamson@redhat.com>,
+        Cornelia Huck <cohuck@redhat.com>,
+        Will Deacon <will@kernel.org>,
+        Robin Murphy <robin.murphy@arm.com>,
+        Joerg Roedel <joro@8bytes.org>,
+        Jean-Philippe Brucker <jean-philippe@linaro.org>,
+        Eric Auger <eric.auger@redhat.com>, <kvm@vger.kernel.org>,
+        <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <iommu@lists.linux-foundation.org>, <linux-api@vger.kernel.org>
+CC: Kevin Tian <kevin.tian@intel.com>, <yi.l.liu@intel.com>,
+        Christoph Hellwig <hch@infradead.org>,
+        Lu Baolu <baolu.lu@linux.intel.com>,
+        Jonathan Cameron <Jonathan.Cameron@huawei.com>,
+        Barry Song <song.bao.hua@hisilicon.com>,
+        <wanghaibin.wang@huawei.com>, <yuzenghui@huawei.com>,
+        <zhukeqian1@huawei.com>, <lushenming@huawei.com>
+Subject: [RFC PATCH v2 1/6] iommu: Evolve to support more scenarios of using
+ IOPF
+Date: Tue, 9 Mar 2021 14:22:02 +0800
+Message-ID: <20210309062207.505-2-lushenming@huawei.com>
+X-Mailer: git-send-email 2.27.0.windows.1
+In-Reply-To: <20210309062207.505-1-lushenming@huawei.com>
+References: <20210309062207.505-1-lushenming@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.174.184.135]
+X-CFilter-Loop: Reflected
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This patch follows the discussion here:
+
+https://lore.kernel.org/linux-acpi/YAaxjmJW+ZMvrhac@myrica/
+
+In order to support more scenarios of using IOPF (mainly consider
+the nested extension), besides keeping IOMMU_DEV_FEAT_IOPF as a
+general capability for whether delivering faults through the IOMMU,
+we extend iommu_register_fault_handler() with flags and introduce
+IOPF_REPORT_FLAT and IOPF_REPORT_NESTED to describe the page fault
+reporting capability under a specific configuration.
+IOPF_REPORT_NESTED needs additional info to indicate which level/stage
+is concerned since the fault client may be interested in only one
+level.
+
+Signed-off-by: Shenming Lu <lushenming@huawei.com>
+---
+ .../iommu/arm/arm-smmu-v3/arm-smmu-v3-sva.c   |  3 +-
+ drivers/iommu/arm/arm-smmu-v3/arm-smmu-v3.c   | 11 ++--
+ drivers/iommu/io-pgfault.c                    |  4 --
+ drivers/iommu/iommu.c                         | 56 ++++++++++++++++++-
+ include/linux/iommu.h                         | 21 ++++++-
+ include/uapi/linux/iommu.h                    |  3 +
+ 6 files changed, 85 insertions(+), 13 deletions(-)
+
+diff --git a/drivers/iommu/arm/arm-smmu-v3/arm-smmu-v3-sva.c b/drivers/iommu/arm/arm-smmu-v3/arm-smmu-v3-sva.c
+index ee66d1f4cb81..5de9432349d4 100644
+--- a/drivers/iommu/arm/arm-smmu-v3/arm-smmu-v3-sva.c
++++ b/drivers/iommu/arm/arm-smmu-v3/arm-smmu-v3-sva.c
+@@ -482,7 +482,8 @@ static int arm_smmu_master_sva_enable_iopf(struct arm_smmu_master *master)
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = iommu_register_device_fault_handler(dev, iommu_queue_iopf, dev);
++	ret = iommu_register_device_fault_handler(dev, iommu_queue_iopf,
++						  IOPF_REPORT_FLAT, dev);
+ 	if (ret) {
+ 		iopf_queue_remove_device(master->smmu->evtq.iopf, dev);
+ 		return ret;
+diff --git a/drivers/iommu/arm/arm-smmu-v3/arm-smmu-v3.c b/drivers/iommu/arm/arm-smmu-v3/arm-smmu-v3.c
+index 363744df8d51..f40529d0075d 100644
+--- a/drivers/iommu/arm/arm-smmu-v3/arm-smmu-v3.c
++++ b/drivers/iommu/arm/arm-smmu-v3/arm-smmu-v3.c
+@@ -1447,10 +1447,6 @@ static int arm_smmu_handle_evt(struct arm_smmu_device *smmu, u64 *evt)
+ 		return -EOPNOTSUPP;
+ 	}
+ 
+-	/* Stage-2 is always pinned at the moment */
+-	if (evt[1] & EVTQ_1_S2)
+-		return -EFAULT;
+-
+ 	if (evt[1] & EVTQ_1_RnW)
+ 		perm |= IOMMU_FAULT_PERM_READ;
+ 	else
+@@ -1468,13 +1464,18 @@ static int arm_smmu_handle_evt(struct arm_smmu_device *smmu, u64 *evt)
+ 			.flags = IOMMU_FAULT_PAGE_REQUEST_LAST_PAGE,
+ 			.grpid = FIELD_GET(EVTQ_1_STAG, evt[1]),
+ 			.perm = perm,
+-			.addr = FIELD_GET(EVTQ_2_ADDR, evt[2]),
+ 		};
+ 
+ 		if (ssid_valid) {
+ 			flt->prm.flags |= IOMMU_FAULT_PAGE_REQUEST_PASID_VALID;
+ 			flt->prm.pasid = FIELD_GET(EVTQ_0_SSID, evt[0]);
+ 		}
++
++		if (evt[1] & EVTQ_1_S2) {
++			flt->prm.flags |= IOMMU_FAULT_PAGE_REQUEST_L2;
++			flt->prm.addr = FIELD_GET(EVTQ_3_IPA, evt[3]);
++		} else
++			flt->prm.addr = FIELD_GET(EVTQ_2_ADDR, evt[2]);
+ 	} else {
+ 		flt->type = IOMMU_FAULT_DMA_UNRECOV;
+ 		flt->event = (struct iommu_fault_unrecoverable) {
+diff --git a/drivers/iommu/io-pgfault.c b/drivers/iommu/io-pgfault.c
+index 1df8c1dcae77..abf16e06bcf5 100644
+--- a/drivers/iommu/io-pgfault.c
++++ b/drivers/iommu/io-pgfault.c
+@@ -195,10 +195,6 @@ int iommu_queue_iopf(struct iommu_fault *fault, void *cookie)
+ 
+ 	lockdep_assert_held(&param->lock);
+ 
+-	if (fault->type != IOMMU_FAULT_PAGE_REQ)
+-		/* Not a recoverable page fault */
+-		return -EOPNOTSUPP;
+-
+ 	/*
+ 	 * As long as we're holding param->lock, the queue can't be unlinked
+ 	 * from the device and therefore cannot disappear.
+diff --git a/drivers/iommu/iommu.c b/drivers/iommu/iommu.c
+index d0b0a15dba84..cb1d93b00f7d 100644
+--- a/drivers/iommu/iommu.c
++++ b/drivers/iommu/iommu.c
+@@ -1056,6 +1056,40 @@ int iommu_group_unregister_notifier(struct iommu_group *group,
+ }
+ EXPORT_SYMBOL_GPL(iommu_group_unregister_notifier);
+ 
++/*
++ * iommu_update_device_fault_handler - Update the device fault handler via flags
++ * @dev: the device
++ * @mask: bits(not set) to clear
++ * @set: bits to set
++ *
++ * Update the device fault handler installed by
++ * iommu_register_device_fault_handler().
++ *
++ * Return 0 on success, or an error.
++ */
++int iommu_update_device_fault_handler(struct device *dev, u32 mask, u32 set)
++{
++	struct dev_iommu *param = dev->iommu;
++	int ret = 0;
++
++	if (!param)
++		return -EINVAL;
++
++	mutex_lock(&param->lock);
++
++	if (param->fault_param) {
++		ret = -EINVAL;
++		goto out_unlock;
++	}
++
++	param->fault_param->flags = (param->fault_param->flags & mask) | set;
++
++out_unlock:
++	mutex_unlock(&param->lock);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(iommu_update_device_fault_handler);
++
+ /**
+  * iommu_register_device_fault_handler() - Register a device fault handler
+  * @dev: the device
+@@ -1076,11 +1110,14 @@ EXPORT_SYMBOL_GPL(iommu_group_unregister_notifier);
+  */
+ int iommu_register_device_fault_handler(struct device *dev,
+ 					iommu_dev_fault_handler_t handler,
+-					void *data)
++					u32 flags, void *data)
+ {
+ 	struct dev_iommu *param = dev->iommu;
+ 	int ret = 0;
+ 
++	if (flags & IOPF_REPORT_FLAT && flags & IOPF_REPORT_NESTED)
++		return -EINVAL;
++
+ 	if (!param)
+ 		return -EINVAL;
+ 
+@@ -1099,6 +1136,7 @@ int iommu_register_device_fault_handler(struct device *dev,
+ 		goto done_unlock;
+ 	}
+ 	param->fault_param->handler = handler;
++	param->fault_param->flags = flags;
+ 	param->fault_param->data = data;
+ 	mutex_init(&param->fault_param->lock);
+ 	INIT_LIST_HEAD(&param->fault_param->faults);
+@@ -1177,6 +1215,22 @@ int iommu_report_device_fault(struct device *dev, struct iommu_fault_event *evt)
+ 		goto done_unlock;
+ 	}
+ 
++	/* The unrecoverable fault reporting is not supported at the moment. */
++	if (evt->fault.type != IOMMU_FAULT_PAGE_REQ)
++		return -EOPNOTSUPP;
++
++	if (evt->fault.type == IOMMU_FAULT_PAGE_REQ) {
++		if (fparam->flags & IOPF_REPORT_NESTED) {
++			if (evt->fault.prm.flags & IOMMU_FAULT_PAGE_REQUEST_L2 &&
++			    !(fparam->flags & IOPF_REPORT_NESTED_L2_CONCERNED))
++				return -EOPNOTSUPP;
++			if (!(evt->fault.prm.flags & IOMMU_FAULT_PAGE_REQUEST_L2) &&
++			    !(fparam->flags & IOPF_REPORT_NESTED_L1_CONCERNED))
++				return -EOPNOTSUPP;
++		} else if (!(fparam->flags & IOPF_REPORT_FLAT))
++			return -EOPNOTSUPP;
++	}
++
+ 	if (evt->fault.type == IOMMU_FAULT_PAGE_REQ &&
+ 	    (evt->fault.prm.flags & IOMMU_FAULT_PAGE_REQUEST_LAST_PAGE)) {
+ 		evt_pending = kmemdup(evt, sizeof(struct iommu_fault_event),
+diff --git a/include/linux/iommu.h b/include/linux/iommu.h
+index 86d688c4418f..f03d761e8310 100644
+--- a/include/linux/iommu.h
++++ b/include/linux/iommu.h
+@@ -352,12 +352,21 @@ struct iommu_fault_event {
+ /**
+  * struct iommu_fault_param - per-device IOMMU fault data
+  * @handler: Callback function to handle IOMMU faults at device level
++ * @flags: Indicates whether the fault reporting is available under a
++ *	   specific configuration (1st/2nd-level-only(FLAT), or nested).
++ *	   IOPF_REPORT_NESTED needs to additionally know which level/stage
++ *	   is concerned.
+  * @data: handler private data
+  * @faults: holds the pending faults which needs response
+  * @lock: protect pending faults list
+  */
+ struct iommu_fault_param {
+ 	iommu_dev_fault_handler_t handler;
++#define IOPF_REPORT_FLAT			(1 << 0)
++#define IOPF_REPORT_NESTED			(1 << 1)
++#define IOPF_REPORT_NESTED_L1_CONCERNED		(1 << 2)
++#define IOPF_REPORT_NESTED_L2_CONCERNED		(1 << 3)
++	u32 flags;
+ 	void *data;
+ 	struct list_head faults;
+ 	struct mutex lock;
+@@ -509,9 +518,11 @@ extern int iommu_group_register_notifier(struct iommu_group *group,
+ 					 struct notifier_block *nb);
+ extern int iommu_group_unregister_notifier(struct iommu_group *group,
+ 					   struct notifier_block *nb);
++extern int iommu_update_device_fault_handler(struct device *dev,
++					     u32 mask, u32 set);
+ extern int iommu_register_device_fault_handler(struct device *dev,
+ 					iommu_dev_fault_handler_t handler,
+-					void *data);
++					u32 flags, void *data);
+ 
+ extern int iommu_unregister_device_fault_handler(struct device *dev);
+ 
+@@ -873,10 +884,16 @@ static inline int iommu_group_unregister_notifier(struct iommu_group *group,
+ 	return 0;
+ }
+ 
++static inline int iommu_update_device_fault_handler(struct device *dev,
++						    u32 mask, u32 set)
++{
++	return -ENODEV;
++}
++
+ static inline
+ int iommu_register_device_fault_handler(struct device *dev,
+ 					iommu_dev_fault_handler_t handler,
+-					void *data)
++					u32 flags, void *data)
+ {
+ 	return -ENODEV;
+ }
+diff --git a/include/uapi/linux/iommu.h b/include/uapi/linux/iommu.h
+index e1d9e75f2c94..0ce0dfb7713e 100644
+--- a/include/uapi/linux/iommu.h
++++ b/include/uapi/linux/iommu.h
+@@ -85,6 +85,8 @@ struct iommu_fault_unrecoverable {
+  *         When IOMMU_FAULT_PAGE_RESPONSE_NEEDS_PASID is set, the page response
+  *         must have the same PASID value as the page request. When it is clear,
+  *         the page response should not have a PASID.
++ *         If IOMMU_FAULT_PAGE_REQUEST_L2 is set, the fault occurred at the
++ *         second level/stage, otherwise, occurred at the first level.
+  * @pasid: Process Address Space ID
+  * @grpid: Page Request Group Index
+  * @perm: requested page permissions (IOMMU_FAULT_PERM_* values)
+@@ -96,6 +98,7 @@ struct iommu_fault_page_request {
+ #define IOMMU_FAULT_PAGE_REQUEST_LAST_PAGE	(1 << 1)
+ #define IOMMU_FAULT_PAGE_REQUEST_PRIV_DATA	(1 << 2)
+ #define IOMMU_FAULT_PAGE_RESPONSE_NEEDS_PASID	(1 << 3)
++#define IOMMU_FAULT_PAGE_REQUEST_L2		(1 << 4)
+ 	__u32	flags;
+ 	__u32	pasid;
+ 	__u32	grpid;
+
+From patchwork Tue Mar  9 06:22:03 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Shenming Lu <lushenming@huawei.com>
+X-Patchwork-Id: 12124231
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 6412CC43603
+	for <kvm@archiver.kernel.org>; Tue,  9 Mar 2021 06:23:34 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 5247E652A8
+	for <kvm@archiver.kernel.org>; Tue,  9 Mar 2021 06:23:34 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S229873AbhCIGW5 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 9 Mar 2021 01:22:57 -0500
+Received: from szxga06-in.huawei.com ([45.249.212.32]:13455 "EHLO
+        szxga06-in.huawei.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S229544AbhCIGW0 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 9 Mar 2021 01:22:26 -0500
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.59])
+        by szxga06-in.huawei.com (SkyGuard) with ESMTP id 4DvlT45JTXzkWc1;
+        Tue,  9 Mar 2021 14:20:56 +0800 (CST)
+Received: from DESKTOP-7FEPK9S.china.huawei.com (10.174.184.135) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.498.0; Tue, 9 Mar 2021 14:22:17 +0800
+From: Shenming Lu <lushenming@huawei.com>
+To: Alex Williamson <alex.williamson@redhat.com>,
+        Cornelia Huck <cohuck@redhat.com>,
+        Will Deacon <will@kernel.org>,
+        Robin Murphy <robin.murphy@arm.com>,
+        Joerg Roedel <joro@8bytes.org>,
+        Jean-Philippe Brucker <jean-philippe@linaro.org>,
+        Eric Auger <eric.auger@redhat.com>, <kvm@vger.kernel.org>,
+        <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <iommu@lists.linux-foundation.org>, <linux-api@vger.kernel.org>
+CC: Kevin Tian <kevin.tian@intel.com>, <yi.l.liu@intel.com>,
+        Christoph Hellwig <hch@infradead.org>,
+        Lu Baolu <baolu.lu@linux.intel.com>,
+        Jonathan Cameron <Jonathan.Cameron@huawei.com>,
+        Barry Song <song.bao.hua@hisilicon.com>,
+        <wanghaibin.wang@huawei.com>, <yuzenghui@huawei.com>,
+        <zhukeqian1@huawei.com>, <lushenming@huawei.com>
+Subject: [RFC PATCH v2 2/6] vfio: Add an MMU notifier to avoid pinning
+Date: Tue, 9 Mar 2021 14:22:03 +0800
+Message-ID: <20210309062207.505-3-lushenming@huawei.com>
+X-Mailer: git-send-email 2.27.0.windows.1
+In-Reply-To: <20210309062207.505-1-lushenming@huawei.com>
+References: <20210309062207.505-1-lushenming@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.174.184.135]
+X-CFilter-Loop: Reflected
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+To avoid pinning pages when they are mapped in IOMMU page tables,
+we add an MMU notifier to tell the addresses which are no longer
+valid and try to unmap them.
+
+Signed-off-by: Shenming Lu <lushenming@huawei.com>
+---
+ drivers/vfio/vfio_iommu_type1.c | 68 +++++++++++++++++++++++++++++++++
+ 1 file changed, 68 insertions(+)
+
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index 4bb162c1d649..03ccc11057af 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -40,6 +40,7 @@
+ #include <linux/notifier.h>
+ #include <linux/dma-iommu.h>
+ #include <linux/irqdomain.h>
++#include <linux/mmu_notifier.h>
+ 
+ #define DRIVER_VERSION  "0.2"
+ #define DRIVER_AUTHOR   "Alex Williamson <alex.williamson@redhat.com>"
+@@ -69,6 +70,7 @@ struct vfio_iommu {
+ 	struct mutex		lock;
+ 	struct rb_root		dma_list;
+ 	struct blocking_notifier_head notifier;
++	struct mmu_notifier	mn;
+ 	unsigned int		dma_avail;
+ 	unsigned int		vaddr_invalid_count;
+ 	uint64_t		pgsize_bitmap;
+@@ -101,6 +103,7 @@ struct vfio_dma {
+ 	struct task_struct	*task;
+ 	struct rb_root		pfn_list;	/* Ex-user pinned pfn list */
+ 	unsigned long		*bitmap;
++	unsigned long		*iopf_mapped_bitmap;
+ };
+ 
+ struct vfio_batch {
+@@ -157,6 +160,10 @@ struct vfio_regions {
+ #define DIRTY_BITMAP_PAGES_MAX	 ((u64)INT_MAX)
+ #define DIRTY_BITMAP_SIZE_MAX	 DIRTY_BITMAP_BYTES(DIRTY_BITMAP_PAGES_MAX)
+ 
++#define IOPF_MAPPED_BITMAP_GET(dma, i)	\
++			      ((dma->iopf_mapped_bitmap[(i) / BITS_PER_LONG]	\
++			       >> ((i) % BITS_PER_LONG)) & 0x1)
++
+ #define WAITED 1
+ 
+ static int put_pfn(unsigned long pfn, int prot);
+@@ -1149,6 +1156,35 @@ static long vfio_unmap_unpin(struct vfio_iommu *iommu, struct vfio_dma *dma,
+ 	return unlocked;
+ }
+ 
++static void vfio_unmap_partial_iopf(struct vfio_iommu *iommu,
++				    struct vfio_dma *dma,
++				    dma_addr_t start, dma_addr_t end)
++{
++	unsigned long bit_offset;
++	size_t len;
++	struct vfio_domain *d;
++
++	while (start < end) {
++		bit_offset = (start - dma->iova) >> PAGE_SHIFT;
++
++		for (len = 0; start + len < end; len += PAGE_SIZE) {
++			if (!IOPF_MAPPED_BITMAP_GET(dma,
++					bit_offset + (len >> PAGE_SHIFT)))
++				break;
++		}
++
++		if (len) {
++			list_for_each_entry(d, &iommu->domain_list, next)
++				iommu_unmap(d->domain, start, len);
++
++			bitmap_clear(dma->iopf_mapped_bitmap,
++				     bit_offset, len >> PAGE_SHIFT);
++		}
++
++		start += (len + PAGE_SIZE);
++	}
++}
++
+ static void vfio_remove_dma(struct vfio_iommu *iommu, struct vfio_dma *dma)
+ {
+ 	WARN_ON(!RB_EMPTY_ROOT(&dma->pfn_list));
+@@ -3096,6 +3132,38 @@ static int vfio_iommu_type1_dirty_pages(struct vfio_iommu *iommu,
+ 	return -EINVAL;
+ }
+ 
++static void mn_invalidate_range(struct mmu_notifier *mn, struct mm_struct *mm,
++				unsigned long start, unsigned long end)
++{
++	struct vfio_iommu *iommu = container_of(mn, struct vfio_iommu, mn);
++	struct rb_node *n;
++
++	mutex_lock(&iommu->lock);
++
++	for (n = rb_first(&iommu->dma_list); n; n = rb_next(n)) {
++		struct vfio_dma *dma = rb_entry(n, struct vfio_dma, node);
++		unsigned long start_n, end_n;
++
++		if (end <= dma->vaddr || start >= dma->vaddr + dma->size)
++			continue;
++
++		start_n = ALIGN_DOWN(max_t(unsigned long, start, dma->vaddr),
++				     PAGE_SIZE);
++		end_n = ALIGN(min_t(unsigned long, end, dma->vaddr + dma->size),
++			      PAGE_SIZE);
++
++		vfio_unmap_partial_iopf(iommu, dma,
++					start_n - dma->vaddr + dma->iova,
++					end_n - dma->vaddr + dma->iova);
++	}
++
++	mutex_unlock(&iommu->lock);
++}
++
++static const struct mmu_notifier_ops vfio_iommu_type1_mn_ops = {
++	.invalidate_range	= mn_invalidate_range,
++};
++
+ static long vfio_iommu_type1_ioctl(void *iommu_data,
+ 				   unsigned int cmd, unsigned long arg)
+ {
+
+From patchwork Tue Mar  9 06:22:04 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Shenming Lu <lushenming@huawei.com>
+X-Patchwork-Id: 12124223
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 33D17C4332B
+	for <kvm@archiver.kernel.org>; Tue,  9 Mar 2021 06:23:31 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 042ED652B1
+	for <kvm@archiver.kernel.org>; Tue,  9 Mar 2021 06:23:31 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S230046AbhCIGW7 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 9 Mar 2021 01:22:59 -0500
+Received: from szxga04-in.huawei.com ([45.249.212.190]:13584 "EHLO
+        szxga04-in.huawei.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S229911AbhCIGWa (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 9 Mar 2021 01:22:30 -0500
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.59])
+        by szxga04-in.huawei.com (SkyGuard) with ESMTP id 4DvlSp0bKmz17Hgx;
+        Tue,  9 Mar 2021 14:20:42 +0800 (CST)
+Received: from DESKTOP-7FEPK9S.china.huawei.com (10.174.184.135) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.498.0; Tue, 9 Mar 2021 14:22:19 +0800
+From: Shenming Lu <lushenming@huawei.com>
+To: Alex Williamson <alex.williamson@redhat.com>,
+        Cornelia Huck <cohuck@redhat.com>,
+        Will Deacon <will@kernel.org>,
+        Robin Murphy <robin.murphy@arm.com>,
+        Joerg Roedel <joro@8bytes.org>,
+        Jean-Philippe Brucker <jean-philippe@linaro.org>,
+        Eric Auger <eric.auger@redhat.com>, <kvm@vger.kernel.org>,
+        <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <iommu@lists.linux-foundation.org>, <linux-api@vger.kernel.org>
+CC: Kevin Tian <kevin.tian@intel.com>, <yi.l.liu@intel.com>,
+        Christoph Hellwig <hch@infradead.org>,
+        Lu Baolu <baolu.lu@linux.intel.com>,
+        Jonathan Cameron <Jonathan.Cameron@huawei.com>,
+        Barry Song <song.bao.hua@hisilicon.com>,
+        <wanghaibin.wang@huawei.com>, <yuzenghui@huawei.com>,
+        <zhukeqian1@huawei.com>, <lushenming@huawei.com>
+Subject: [RFC PATCH v2 3/6] vfio: Add a page fault handler
+Date: Tue, 9 Mar 2021 14:22:04 +0800
+Message-ID: <20210309062207.505-4-lushenming@huawei.com>
+X-Mailer: git-send-email 2.27.0.windows.1
+In-Reply-To: <20210309062207.505-1-lushenming@huawei.com>
+References: <20210309062207.505-1-lushenming@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.174.184.135]
+X-CFilter-Loop: Reflected
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+VFIO manages the DMA mapping itself. To support IOPF for VFIO
+devices, we add a VFIO page fault handler to serve the reported
+page faults from the IOMMU driver. Besides, we can pre-map more
+pages than requested at once to optimize for fewer page fault
+handlings.
+
+Signed-off-by: Shenming Lu <lushenming@huawei.com>
+---
+ drivers/vfio/vfio.c             |  35 +++++++
+ drivers/vfio/vfio_iommu_type1.c | 167 ++++++++++++++++++++++++++++++++
+ include/linux/vfio.h            |   5 +
+ 3 files changed, 207 insertions(+)
+
+diff --git a/drivers/vfio/vfio.c b/drivers/vfio/vfio.c
+index 38779e6fd80c..77b29bbd3027 100644
+--- a/drivers/vfio/vfio.c
++++ b/drivers/vfio/vfio.c
+@@ -2354,6 +2354,41 @@ struct iommu_domain *vfio_group_iommu_domain(struct vfio_group *group)
+ }
+ EXPORT_SYMBOL_GPL(vfio_group_iommu_domain);
+ 
++int vfio_iommu_dev_fault_handler(struct iommu_fault *fault, void *data)
++{
++	struct device *dev = (struct device *)data;
++	struct vfio_container *container;
++	struct vfio_group *group;
++	struct vfio_iommu_driver *driver;
++	int ret;
++
++	if (!dev)
++		return -EINVAL;
++
++	group = vfio_group_get_from_dev(dev);
++	if (!group)
++		return -ENODEV;
++
++	ret = vfio_group_add_container_user(group);
++	if (ret)
++		goto out;
++
++	container = group->container;
++	driver = container->iommu_driver;
++	if (likely(driver && driver->ops->dma_map_iopf))
++		ret = driver->ops->dma_map_iopf(container->iommu_data,
++						fault, dev);
++	else
++		ret = -ENOTTY;
++
++	vfio_group_try_dissolve_container(group);
++
++out:
++	vfio_group_put(group);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(vfio_iommu_dev_fault_handler);
++
+ /**
+  * Module/class support
+  */
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index 03ccc11057af..167d52c1468b 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -3330,6 +3330,172 @@ static void vfio_iommu_type1_notify(void *iommu_data,
+ 	wake_up_all(&iommu->vaddr_wait);
+ }
+ 
++/*
++ * To optimize for fewer page fault handlings, try to
++ * pre-map more pages than requested.
++ */
++#define IOPF_PREMAP_LEN		512
++
++static void unpin_pages_iopf(struct vfio_dma *dma,
++			     unsigned long pfn, unsigned long npages)
++{
++	while (npages--)
++		put_pfn(pfn++, dma->prot);
++}
++
++/*
++ * Return 0 on success or a negative error code, the
++ * number of pages contiguously pinned is in @*pinned.
++ */
++static int pin_pages_iopf(struct vfio_dma *dma, unsigned long vaddr,
++			  unsigned long npages, unsigned long *pfn_base,
++			  unsigned long *pinned, struct vfio_batch *batch)
++{
++	struct mm_struct *mm;
++	unsigned long pfn;
++	int ret = 0;
++	*pinned = 0;
++
++	mm = get_task_mm(dma->task);
++	if (!mm)
++		return -ENODEV;
++
++	if (batch->size) {
++		*pfn_base = page_to_pfn(batch->pages[batch->offset]);
++		pfn = *pfn_base;
++	} else
++		*pfn_base = 0;
++
++	while (npages) {
++		if (!batch->size) {
++			unsigned long req_pages = min_t(unsigned long, npages,
++							batch->capacity);
++
++			ret = vaddr_get_pfns(mm, vaddr, req_pages, dma->prot,
++					     &pfn, batch->pages);
++			if (ret < 0)
++				goto out;
++
++			batch->size = ret;
++			batch->offset = 0;
++			ret = 0;
++
++			if (!*pfn_base)
++				*pfn_base = pfn;
++		}
++
++		while (true) {
++			if (pfn != *pfn_base + *pinned)
++				goto out;
++
++			(*pinned)++;
++			npages--;
++			vaddr += PAGE_SIZE;
++			batch->offset++;
++			batch->size--;
++
++			if (!batch->size)
++				break;
++
++			pfn = page_to_pfn(batch->pages[batch->offset]);
++		}
++
++		if (unlikely(disable_hugepages))
++			break;
++	}
++
++out:
++	mmput(mm);
++	return ret;
++}
++
++static int vfio_iommu_type1_dma_map_iopf(void *iommu_data,
++					 struct iommu_fault *fault,
++					 struct device *dev)
++{
++	struct vfio_iommu *iommu = iommu_data;
++	dma_addr_t iova = ALIGN_DOWN(fault->prm.addr, PAGE_SIZE);
++	struct vfio_dma *dma;
++	int access_flags = 0;
++	size_t premap_len, map_len, mapped_len = 0;
++	unsigned long bit_offset, npages, i, vaddr, pfn;
++	struct vfio_batch batch;
++	enum iommu_page_response_code status = IOMMU_PAGE_RESP_INVALID;
++	struct iommu_page_response resp = {0};
++
++	mutex_lock(&iommu->lock);
++
++	dma = vfio_find_dma(iommu, iova, PAGE_SIZE);
++	if (!dma)
++		goto out_invalid;
++
++	if (fault->prm.perm & IOMMU_FAULT_PERM_READ)
++		access_flags |= IOMMU_READ;
++	if (fault->prm.perm & IOMMU_FAULT_PERM_WRITE)
++		access_flags |= IOMMU_WRITE;
++	if ((dma->prot & access_flags) != access_flags)
++		goto out_invalid;
++
++	bit_offset = (iova - dma->iova) >> PAGE_SHIFT;
++	if (IOPF_MAPPED_BITMAP_GET(dma, bit_offset))
++		goto out_success;
++
++	premap_len = IOPF_PREMAP_LEN << PAGE_SHIFT;
++	npages = dma->size >> PAGE_SHIFT;
++	map_len = PAGE_SIZE;
++	for (i = bit_offset + 1; i < npages; i++) {
++		if (map_len >= premap_len || IOPF_MAPPED_BITMAP_GET(dma, i))
++			break;
++		map_len += PAGE_SIZE;
++	}
++	vaddr = iova - dma->iova + dma->vaddr;
++	vfio_batch_init(&batch);
++
++	while (map_len) {
++		int ret;
++
++		ret = pin_pages_iopf(dma, vaddr + mapped_len,
++				     map_len >> PAGE_SHIFT, &pfn,
++				     &npages, &batch);
++		if (!npages)
++			break;
++
++		if (vfio_iommu_map(iommu, iova + mapped_len, pfn,
++				   npages, dma->prot)) {
++			unpin_pages_iopf(dma, pfn, npages);
++			vfio_batch_unpin(&batch, dma);
++			break;
++		}
++
++		bitmap_set(dma->iopf_mapped_bitmap,
++			   bit_offset + (mapped_len >> PAGE_SHIFT), npages);
++
++		unpin_pages_iopf(dma, pfn, npages);
++
++		map_len -= npages << PAGE_SHIFT;
++		mapped_len += npages << PAGE_SHIFT;
++
++		if (ret)
++			break;
++	}
++
++	vfio_batch_fini(&batch);
++
++	if (!mapped_len)
++		goto out_invalid;
++
++out_success:
++	status = IOMMU_PAGE_RESP_SUCCESS;
++
++out_invalid:
++	mutex_unlock(&iommu->lock);
++	resp.version		= IOMMU_PAGE_RESP_VERSION_1;
++	resp.grpid		= fault->prm.grpid;
++	resp.code		= status;
++	iommu_page_response(dev, &resp);
++	return 0;
++}
++
+ static const struct vfio_iommu_driver_ops vfio_iommu_driver_ops_type1 = {
+ 	.name			= "vfio-iommu-type1",
+ 	.owner			= THIS_MODULE,
+@@ -3345,6 +3511,7 @@ static const struct vfio_iommu_driver_ops vfio_iommu_driver_ops_type1 = {
+ 	.dma_rw			= vfio_iommu_type1_dma_rw,
+ 	.group_iommu_domain	= vfio_iommu_type1_group_iommu_domain,
+ 	.notify			= vfio_iommu_type1_notify,
++	.dma_map_iopf		= vfio_iommu_type1_dma_map_iopf,
+ };
+ 
+ static int __init vfio_iommu_type1_init(void)
+diff --git a/include/linux/vfio.h b/include/linux/vfio.h
+index b7e18bde5aa8..73af317a4343 100644
+--- a/include/linux/vfio.h
++++ b/include/linux/vfio.h
+@@ -99,6 +99,9 @@ struct vfio_iommu_driver_ops {
+ 						   struct iommu_group *group);
+ 	void		(*notify)(void *iommu_data,
+ 				  enum vfio_iommu_notify_type event);
++	int		(*dma_map_iopf)(void *iommu_data,
++					struct iommu_fault *fault,
++					struct device *dev);
+ };
+ 
+ extern int vfio_register_iommu_driver(const struct vfio_iommu_driver_ops *ops);
+@@ -160,6 +163,8 @@ extern int vfio_unregister_notifier(struct device *dev,
+ struct kvm;
+ extern void vfio_group_set_kvm(struct vfio_group *group, struct kvm *kvm);
+ 
++extern int vfio_iommu_dev_fault_handler(struct iommu_fault *fault, void *data);
++
+ /*
+  * Sub-module helpers
+  */
+
+From patchwork Tue Mar  9 06:22:05 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Shenming Lu <lushenming@huawei.com>
+X-Patchwork-Id: 12124227
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 5E07CC43331
+	for <kvm@archiver.kernel.org>; Tue,  9 Mar 2021 06:23:31 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 38101652C2
+	for <kvm@archiver.kernel.org>; Tue,  9 Mar 2021 06:23:31 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S229980AbhCIGW7 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 9 Mar 2021 01:22:59 -0500
+Received: from szxga04-in.huawei.com ([45.249.212.190]:13582 "EHLO
+        szxga04-in.huawei.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S229904AbhCIGWa (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 9 Mar 2021 01:22:30 -0500
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.59])
+        by szxga04-in.huawei.com (SkyGuard) with ESMTP id 4DvlSn6hNnz17Hqm;
+        Tue,  9 Mar 2021 14:20:41 +0800 (CST)
+Received: from DESKTOP-7FEPK9S.china.huawei.com (10.174.184.135) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.498.0; Tue, 9 Mar 2021 14:22:21 +0800
+From: Shenming Lu <lushenming@huawei.com>
+To: Alex Williamson <alex.williamson@redhat.com>,
+        Cornelia Huck <cohuck@redhat.com>,
+        Will Deacon <will@kernel.org>,
+        Robin Murphy <robin.murphy@arm.com>,
+        Joerg Roedel <joro@8bytes.org>,
+        Jean-Philippe Brucker <jean-philippe@linaro.org>,
+        Eric Auger <eric.auger@redhat.com>, <kvm@vger.kernel.org>,
+        <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <iommu@lists.linux-foundation.org>, <linux-api@vger.kernel.org>
+CC: Kevin Tian <kevin.tian@intel.com>, <yi.l.liu@intel.com>,
+        Christoph Hellwig <hch@infradead.org>,
+        Lu Baolu <baolu.lu@linux.intel.com>,
+        Jonathan Cameron <Jonathan.Cameron@huawei.com>,
+        Barry Song <song.bao.hua@hisilicon.com>,
+        <wanghaibin.wang@huawei.com>, <yuzenghui@huawei.com>,
+        <zhukeqian1@huawei.com>, <lushenming@huawei.com>
+Subject: [RFC PATCH v2 4/6] vfio: VFIO_IOMMU_ENABLE_IOPF
+Date: Tue, 9 Mar 2021 14:22:05 +0800
+Message-ID: <20210309062207.505-5-lushenming@huawei.com>
+X-Mailer: git-send-email 2.27.0.windows.1
+In-Reply-To: <20210309062207.505-1-lushenming@huawei.com>
+References: <20210309062207.505-1-lushenming@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.174.184.135]
+X-CFilter-Loop: Reflected
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Since enabling IOPF for devices may lead to a slow ramp up of
+performance, we add an VFIO_IOMMU_ENABLE_IOPF ioctl to make it
+configurable. And the IOPF enabling of a VFIO device includes
+setting IOMMU_DEV_FEAT_IOPF and registering the VFIO page fault
+handler. Note that VFIO_IOMMU_DISABLE_IOPF is not supported
+since there may be inflight page faults when disabling.
+
+Signed-off-by: Shenming Lu <lushenming@huawei.com>
+---
+ drivers/vfio/vfio_iommu_type1.c | 139 +++++++++++++++++++++++++++++++-
+ include/uapi/linux/vfio.h       |   6 ++
+ 2 files changed, 142 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index 167d52c1468b..3997473be4a7 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -71,6 +71,7 @@ struct vfio_iommu {
+ 	struct rb_root		dma_list;
+ 	struct blocking_notifier_head notifier;
+ 	struct mmu_notifier	mn;
++	struct mm_struct	*mm;
+ 	unsigned int		dma_avail;
+ 	unsigned int		vaddr_invalid_count;
+ 	uint64_t		pgsize_bitmap;
+@@ -81,6 +82,7 @@ struct vfio_iommu {
+ 	bool			dirty_page_tracking;
+ 	bool			pinned_page_dirty_scope;
+ 	bool			container_open;
++	bool			iopf_enabled;
+ };
+ 
+ struct vfio_domain {
+@@ -2278,6 +2280,62 @@ static void vfio_iommu_iova_insert_copy(struct vfio_iommu *iommu,
+ 	list_splice_tail(iova_copy, iova);
+ }
+ 
++static int dev_disable_iopf(struct device *dev, void *data)
++{
++	int *enabled_dev_cnt = data;
++
++	if (enabled_dev_cnt && *enabled_dev_cnt <= 0)
++		return -1;
++
++	iommu_unregister_device_fault_handler(dev);
++	iommu_dev_disable_feature(dev, IOMMU_DEV_FEAT_IOPF);
++
++	if (enabled_dev_cnt)
++		(*enabled_dev_cnt)--;
++
++	return 0;
++}
++
++static int dev_enable_iopf(struct device *dev, void *data)
++{
++	int *enabled_dev_cnt = data;
++	struct iommu_domain *domain;
++	int nested;
++	u32 flags;
++	int ret;
++
++	ret = iommu_dev_enable_feature(dev, IOMMU_DEV_FEAT_IOPF);
++	if (ret)
++		return ret;
++
++	domain = iommu_get_domain_for_dev(dev);
++	if (!domain) {
++		ret = -ENODEV;
++		goto out_disable;
++	}
++
++	ret = iommu_domain_get_attr(domain, DOMAIN_ATTR_NESTING, &nested);
++	if (ret)
++		goto out_disable;
++
++	if (nested)
++		flags = IOPF_REPORT_NESTED | IOPF_REPORT_NESTED_L2_CONCERNED;
++	else
++		flags = IOPF_REPORT_FLAT;
++
++	ret = iommu_register_device_fault_handler(dev,
++				vfio_iommu_dev_fault_handler, flags, dev);
++	if (ret)
++		goto out_disable;
++
++	(*enabled_dev_cnt)++;
++	return 0;
++
++out_disable:
++	iommu_dev_disable_feature(dev, IOMMU_DEV_FEAT_IOPF);
++	return ret;
++}
++
+ static int vfio_iommu_type1_attach_group(void *iommu_data,
+ 					 struct iommu_group *iommu_group)
+ {
+@@ -2291,6 +2349,7 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
+ 	struct iommu_domain_geometry geo;
+ 	LIST_HEAD(iova_copy);
+ 	LIST_HEAD(group_resv_regions);
++	int iopf_enabled_dev_cnt = 0;
+ 
+ 	mutex_lock(&iommu->lock);
+ 
+@@ -2368,6 +2427,13 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
+ 	if (ret)
+ 		goto out_domain;
+ 
++	if (iommu->iopf_enabled) {
++		ret = iommu_group_for_each_dev(iommu_group, &iopf_enabled_dev_cnt,
++					       dev_enable_iopf);
++		if (ret)
++			goto out_detach;
++	}
++
+ 	/* Get aperture info */
+ 	iommu_domain_get_attr(domain->domain, DOMAIN_ATTR_GEOMETRY, &geo);
+ 
+@@ -2449,9 +2515,11 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
+ 	vfio_test_domain_fgsp(domain);
+ 
+ 	/* replay mappings on new domains */
+-	ret = vfio_iommu_replay(iommu, domain);
+-	if (ret)
+-		goto out_detach;
++	if (!iommu->iopf_enabled) {
++		ret = vfio_iommu_replay(iommu, domain);
++		if (ret)
++			goto out_detach;
++	}
+ 
+ 	if (resv_msi) {
+ 		ret = iommu_get_msi_cookie(domain->domain, resv_msi_base);
+@@ -2482,6 +2550,8 @@ static int vfio_iommu_type1_attach_group(void *iommu_data,
+ 	iommu_domain_free(domain->domain);
+ 	vfio_iommu_iova_free(&iova_copy);
+ 	vfio_iommu_resv_free(&group_resv_regions);
++	iommu_group_for_each_dev(iommu_group, &iopf_enabled_dev_cnt,
++				 dev_disable_iopf);
+ out_free:
+ 	kfree(domain);
+ 	kfree(group);
+@@ -2643,6 +2713,10 @@ static void vfio_iommu_type1_detach_group(void *iommu_data,
+ 		if (!group)
+ 			continue;
+ 
++		if (iommu->iopf_enabled)
++			iommu_group_for_each_dev(iommu_group, NULL,
++						 dev_disable_iopf);
++
+ 		vfio_iommu_detach_group(domain, group);
+ 		update_dirty_scope = !group->pinned_page_dirty_scope;
+ 		list_del(&group->next);
+@@ -2761,6 +2835,11 @@ static void vfio_iommu_type1_release(void *iommu_data)
+ 
+ 	vfio_iommu_iova_free(&iommu->iova_list);
+ 
++	if (iommu->iopf_enabled) {
++		mmu_notifier_unregister(&iommu->mn, iommu->mm);
++		mmdrop(iommu->mm);
++	}
++
+ 	kfree(iommu);
+ }
+ 
+@@ -3164,6 +3243,58 @@ static const struct mmu_notifier_ops vfio_iommu_type1_mn_ops = {
+ 	.invalidate_range	= mn_invalidate_range,
+ };
+ 
++static int vfio_iommu_type1_enable_iopf(struct vfio_iommu *iommu)
++{
++	struct vfio_domain *d;
++	struct vfio_group *g;
++	int enabled_dev_cnt = 0;
++	int ret;
++
++	if (!current->mm)
++		return -ENODEV;
++
++	mutex_lock(&iommu->lock);
++
++	mmgrab(current->mm);
++	iommu->mm = current->mm;
++	iommu->mn.ops = &vfio_iommu_type1_mn_ops;
++	ret = mmu_notifier_register(&iommu->mn, current->mm);
++	if (ret)
++		goto out_drop;
++
++	list_for_each_entry(d, &iommu->domain_list, next) {
++		list_for_each_entry(g, &d->group_list, next) {
++			ret = iommu_group_for_each_dev(g->iommu_group,
++					&enabled_dev_cnt, dev_enable_iopf);
++			if (ret)
++				goto out_unwind;
++		}
++	}
++
++	iommu->iopf_enabled = true;
++	goto out_unlock;
++
++out_unwind:
++	list_for_each_entry(d, &iommu->domain_list, next) {
++		list_for_each_entry(g, &d->group_list, next) {
++			if (iommu_group_for_each_dev(g->iommu_group,
++					&enabled_dev_cnt, dev_disable_iopf))
++				goto out_unregister;
++		}
++	}
++
++out_unregister:
++	mmu_notifier_unregister(&iommu->mn, current->mm);
++
++out_drop:
++	iommu->mm = NULL;
++	mmdrop(current->mm);
++
++out_unlock:
++	mutex_unlock(&iommu->lock);
++	return ret;
++}
++
+ static long vfio_iommu_type1_ioctl(void *iommu_data,
+ 				   unsigned int cmd, unsigned long arg)
+ {
+@@ -3180,6 +3311,8 @@ static long vfio_iommu_type1_ioctl(void *iommu_data,
+ 		return vfio_iommu_type1_unmap_dma(iommu, arg);
+ 	case VFIO_IOMMU_DIRTY_PAGES:
+ 		return vfio_iommu_type1_dirty_pages(iommu, arg);
++	case VFIO_IOMMU_ENABLE_IOPF:
++		return vfio_iommu_type1_enable_iopf(iommu);
+ 	default:
+ 		return -ENOTTY;
+ 	}
+diff --git a/include/uapi/linux/vfio.h b/include/uapi/linux/vfio.h
+index 8ce36c1d53ca..5497036bebdc 100644
+--- a/include/uapi/linux/vfio.h
++++ b/include/uapi/linux/vfio.h
+@@ -1208,6 +1208,12 @@ struct vfio_iommu_type1_dirty_bitmap_get {
+ 
+ #define VFIO_IOMMU_DIRTY_PAGES             _IO(VFIO_TYPE, VFIO_BASE + 17)
+ 
++/*
++ * IOCTL to enable IOPF for the container.
++ * Called right after VFIO_SET_IOMMU.
++ */
++#define VFIO_IOMMU_ENABLE_IOPF             _IO(VFIO_TYPE, VFIO_BASE + 18)
++
+ /* -------- Additional API for SPAPR TCE (Server POWERPC) IOMMU -------- */
+ 
+ /*
+
+From patchwork Tue Mar  9 06:22:06 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Shenming Lu <lushenming@huawei.com>
+X-Patchwork-Id: 12124229
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id EC289C433E6
+	for <kvm@archiver.kernel.org>; Tue,  9 Mar 2021 06:23:33 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C0B1465295
+	for <kvm@archiver.kernel.org>; Tue,  9 Mar 2021 06:23:31 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S230063AbhCIGXA (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 9 Mar 2021 01:23:00 -0500
+Received: from szxga04-in.huawei.com ([45.249.212.190]:13583 "EHLO
+        szxga04-in.huawei.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S229901AbhCIGWa (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 9 Mar 2021 01:22:30 -0500
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.59])
+        by szxga04-in.huawei.com (SkyGuard) with ESMTP id 4DvlSp03NJz17Hbm;
+        Tue,  9 Mar 2021 14:20:42 +0800 (CST)
+Received: from DESKTOP-7FEPK9S.china.huawei.com (10.174.184.135) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.498.0; Tue, 9 Mar 2021 14:22:22 +0800
+From: Shenming Lu <lushenming@huawei.com>
+To: Alex Williamson <alex.williamson@redhat.com>,
+        Cornelia Huck <cohuck@redhat.com>,
+        Will Deacon <will@kernel.org>,
+        Robin Murphy <robin.murphy@arm.com>,
+        Joerg Roedel <joro@8bytes.org>,
+        Jean-Philippe Brucker <jean-philippe@linaro.org>,
+        Eric Auger <eric.auger@redhat.com>, <kvm@vger.kernel.org>,
+        <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <iommu@lists.linux-foundation.org>, <linux-api@vger.kernel.org>
+CC: Kevin Tian <kevin.tian@intel.com>, <yi.l.liu@intel.com>,
+        Christoph Hellwig <hch@infradead.org>,
+        Lu Baolu <baolu.lu@linux.intel.com>,
+        Jonathan Cameron <Jonathan.Cameron@huawei.com>,
+        Barry Song <song.bao.hua@hisilicon.com>,
+        <wanghaibin.wang@huawei.com>, <yuzenghui@huawei.com>,
+        <zhukeqian1@huawei.com>, <lushenming@huawei.com>
+Subject: [RFC PATCH v2 5/6] vfio: No need to statically pin and map if IOPF
+ enabled
+Date: Tue, 9 Mar 2021 14:22:06 +0800
+Message-ID: <20210309062207.505-6-lushenming@huawei.com>
+X-Mailer: git-send-email 2.27.0.windows.1
+In-Reply-To: <20210309062207.505-1-lushenming@huawei.com>
+References: <20210309062207.505-1-lushenming@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.174.184.135]
+X-CFilter-Loop: Reflected
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+If IOPF enabled for the VFIO container, there is no need to
+statically pin and map the entire DMA range, we can do it on
+demand. And unmap according to the IOPF mapped bitmap when
+removing vfio_dma.
+
+Signed-off-by: Shenming Lu <lushenming@huawei.com>
+---
+ drivers/vfio/vfio_iommu_type1.c | 35 ++++++++++++++++++++++++++++-----
+ 1 file changed, 30 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index 3997473be4a7..8d14ced649a6 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -165,6 +165,7 @@ struct vfio_regions {
+ #define IOPF_MAPPED_BITMAP_GET(dma, i)	\
+ 			      ((dma->iopf_mapped_bitmap[(i) / BITS_PER_LONG]	\
+ 			       >> ((i) % BITS_PER_LONG)) & 0x1)
++#define IOPF_MAPPED_BITMAP_BYTES(n)	DIRTY_BITMAP_BYTES(n)
+ 
+ #define WAITED 1
+ 
+@@ -877,7 +878,8 @@ static int vfio_iommu_type1_pin_pages(void *iommu_data,
+ 	 * already pinned and accounted. Accouting should be done if there is no
+ 	 * iommu capable domain in the container.
+ 	 */
+-	do_accounting = !IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu);
++	do_accounting = !IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu) ||
++			iommu->iopf_enabled;
+ 
+ 	for (i = 0; i < npage; i++) {
+ 		struct vfio_pfn *vpfn;
+@@ -966,7 +968,8 @@ static int vfio_iommu_type1_unpin_pages(void *iommu_data,
+ 
+ 	mutex_lock(&iommu->lock);
+ 
+-	do_accounting = !IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu);
++	do_accounting = !IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu) ||
++			iommu->iopf_enabled;
+ 	for (i = 0; i < npage; i++) {
+ 		struct vfio_dma *dma;
+ 		dma_addr_t iova;
+@@ -1087,7 +1090,7 @@ static long vfio_unmap_unpin(struct vfio_iommu *iommu, struct vfio_dma *dma,
+ 	if (!dma->size)
+ 		return 0;
+ 
+-	if (!IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu))
++	if (!IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu) || iommu->iopf_enabled)
+ 		return 0;
+ 
+ 	/*
+@@ -1187,11 +1190,20 @@ static void vfio_unmap_partial_iopf(struct vfio_iommu *iommu,
+ 	}
+ }
+ 
++static void vfio_dma_clean_iopf(struct vfio_iommu *iommu, struct vfio_dma *dma)
++{
++	vfio_unmap_partial_iopf(iommu, dma, dma->iova, dma->iova + dma->size);
++
++	kfree(dma->iopf_mapped_bitmap);
++}
++
+ static void vfio_remove_dma(struct vfio_iommu *iommu, struct vfio_dma *dma)
+ {
+ 	WARN_ON(!RB_EMPTY_ROOT(&dma->pfn_list));
+ 	vfio_unmap_unpin(iommu, dma, true);
+ 	vfio_unlink_dma(iommu, dma);
++	if (iommu->iopf_enabled)
++		vfio_dma_clean_iopf(iommu, dma);
+ 	put_task_struct(dma->task);
+ 	vfio_dma_bitmap_free(dma);
+ 	if (dma->vaddr_invalid) {
+@@ -1655,6 +1667,16 @@ static int vfio_dma_do_map(struct vfio_iommu *iommu,
+ 		goto out_unlock;
+ 	}
+ 
++	if (iommu->iopf_enabled) {
++		dma->iopf_mapped_bitmap = kvzalloc(IOPF_MAPPED_BITMAP_BYTES(
++						size >> PAGE_SHIFT), GFP_KERNEL);
++		if (!dma->iopf_mapped_bitmap) {
++			ret = -ENOMEM;
++			kfree(dma);
++			goto out_unlock;
++		}
++	}
++
+ 	iommu->dma_avail--;
+ 	dma->iova = iova;
+ 	dma->vaddr = vaddr;
+@@ -1694,8 +1716,11 @@ static int vfio_dma_do_map(struct vfio_iommu *iommu,
+ 	/* Insert zero-sized and grow as we map chunks of it */
+ 	vfio_link_dma(iommu, dma);
+ 
+-	/* Don't pin and map if container doesn't contain IOMMU capable domain*/
+-	if (!IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu))
++	/*
++	 * Don't pin and map if container doesn't contain IOMMU capable domain,
++	 * or IOPF enabled for the container.
++	 */
++	if (!IS_IOMMU_CAP_DOMAIN_IN_CONTAINER(iommu) || iommu->iopf_enabled)
+ 		dma->size = size;
+ 	else
+ 		ret = vfio_pin_map_dma(iommu, dma, size);
+
+From patchwork Tue Mar  9 06:22:07 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Shenming Lu <lushenming@huawei.com>
+X-Patchwork-Id: 12124225
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id C3F7DC43332
+	for <kvm@archiver.kernel.org>; Tue,  9 Mar 2021 06:23:31 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 8BB68652AC
+	for <kvm@archiver.kernel.org>; Tue,  9 Mar 2021 06:23:31 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S230094AbhCIGXB (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 9 Mar 2021 01:23:01 -0500
+Received: from szxga04-in.huawei.com ([45.249.212.190]:13585 "EHLO
+        szxga04-in.huawei.com" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S229916AbhCIGWf (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Tue, 9 Mar 2021 01:22:35 -0500
+Received: from DGGEMS414-HUB.china.huawei.com (unknown [172.30.72.60])
+        by szxga04-in.huawei.com (SkyGuard) with ESMTP id 4DvlSv01FRz17Hqs;
+        Tue,  9 Mar 2021 14:20:47 +0800 (CST)
+Received: from DESKTOP-7FEPK9S.china.huawei.com (10.174.184.135) by
+ DGGEMS414-HUB.china.huawei.com (10.3.19.214) with Microsoft SMTP Server id
+ 14.3.498.0; Tue, 9 Mar 2021 14:22:24 +0800
+From: Shenming Lu <lushenming@huawei.com>
+To: Alex Williamson <alex.williamson@redhat.com>,
+        Cornelia Huck <cohuck@redhat.com>,
+        Will Deacon <will@kernel.org>,
+        Robin Murphy <robin.murphy@arm.com>,
+        Joerg Roedel <joro@8bytes.org>,
+        Jean-Philippe Brucker <jean-philippe@linaro.org>,
+        Eric Auger <eric.auger@redhat.com>, <kvm@vger.kernel.org>,
+        <linux-kernel@vger.kernel.org>,
+        <linux-arm-kernel@lists.infradead.org>,
+        <iommu@lists.linux-foundation.org>, <linux-api@vger.kernel.org>
+CC: Kevin Tian <kevin.tian@intel.com>, <yi.l.liu@intel.com>,
+        Christoph Hellwig <hch@infradead.org>,
+        Lu Baolu <baolu.lu@linux.intel.com>,
+        Jonathan Cameron <Jonathan.Cameron@huawei.com>,
+        Barry Song <song.bao.hua@hisilicon.com>,
+        <wanghaibin.wang@huawei.com>, <yuzenghui@huawei.com>,
+        <zhukeqian1@huawei.com>, <lushenming@huawei.com>
+Subject: [RFC PATCH v2 6/6] vfio: Add nested IOPF support
+Date: Tue, 9 Mar 2021 14:22:07 +0800
+Message-ID: <20210309062207.505-7-lushenming@huawei.com>
+X-Mailer: git-send-email 2.27.0.windows.1
+In-Reply-To: <20210309062207.505-1-lushenming@huawei.com>
+References: <20210309062207.505-1-lushenming@huawei.com>
+MIME-Version: 1.0
+X-Originating-IP: [10.174.184.135]
+X-CFilter-Loop: Reflected
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+To set up nested mode, drivers such as vfio_pci have to register
+a handler to receive stage/level 1 faults from the IOMMU, but
+since currently each device can only have one iommu dev fault
+handler, and if stage 2 IOPF is already enabled (VFIO_IOMMU_ENABLE_IOPF),
+we choose to update the registered handler (a combined one) via
+flags (set IOPF_REPORT_NESTED_L1_CONCERNED), and further deliver
+the received stage 1 faults in the handler to the guest through
+a newly added vfio_device_ops callback.
+
+Signed-off-by: Shenming Lu <lushenming@huawei.com>
+---
+ drivers/vfio/vfio.c             | 83 +++++++++++++++++++++++++++++++++
+ drivers/vfio/vfio_iommu_type1.c | 37 +++++++++++++++
+ include/linux/vfio.h            |  9 ++++
+ 3 files changed, 129 insertions(+)
+
+diff --git a/drivers/vfio/vfio.c b/drivers/vfio/vfio.c
+index 77b29bbd3027..c6a01d947d0d 100644
+--- a/drivers/vfio/vfio.c
++++ b/drivers/vfio/vfio.c
+@@ -2389,6 +2389,89 @@ int vfio_iommu_dev_fault_handler(struct iommu_fault *fault, void *data)
+ }
+ EXPORT_SYMBOL_GPL(vfio_iommu_dev_fault_handler);
+ 
++int vfio_iommu_dev_fault_handler_unregister_nested(struct device *dev)
++{
++	struct vfio_container *container;
++	struct vfio_group *group;
++	struct vfio_iommu_driver *driver;
++	int ret;
++
++	if (!dev)
++		return -EINVAL;
++
++	group = vfio_group_get_from_dev(dev);
++	if (!group)
++		return -ENODEV;
++
++	ret = vfio_group_add_container_user(group);
++	if (ret)
++		goto out;
++
++	container = group->container;
++	driver = container->iommu_driver;
++	if (likely(driver && driver->ops->unregister_hdlr_nested))
++		ret = driver->ops->unregister_hdlr_nested(container->iommu_data,
++							  dev);
++	else
++		ret = -ENOTTY;
++
++	vfio_group_try_dissolve_container(group);
++
++out:
++	vfio_group_put(group);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(vfio_iommu_dev_fault_handler_unregister_nested);
++
++/*
++ * Register/Update the VFIO page fault handler
++ * to receive nested stage/level 1 faults.
++ */
++int vfio_iommu_dev_fault_handler_register_nested(struct device *dev)
++{
++	struct vfio_container *container;
++	struct vfio_group *group;
++	struct vfio_iommu_driver *driver;
++	int ret;
++
++	if (!dev)
++		return -EINVAL;
++
++	group = vfio_group_get_from_dev(dev);
++	if (!group)
++		return -ENODEV;
++
++	ret = vfio_group_add_container_user(group);
++	if (ret)
++		goto out;
++
++	container = group->container;
++	driver = container->iommu_driver;
++	if (likely(driver && driver->ops->register_hdlr_nested))
++		ret = driver->ops->register_hdlr_nested(container->iommu_data,
++							dev);
++	else
++		ret = -ENOTTY;
++
++	vfio_group_try_dissolve_container(group);
++
++out:
++	vfio_group_put(group);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(vfio_iommu_dev_fault_handler_register_nested);
++
++int vfio_transfer_dev_fault(struct device *dev, struct iommu_fault *fault)
++{
++	struct vfio_device *device = dev_get_drvdata(dev);
++
++	if (unlikely(!device->ops->transfer))
++		return -EOPNOTSUPP;
++
++	return device->ops->transfer(device->device_data, fault);
++}
++EXPORT_SYMBOL_GPL(vfio_transfer_dev_fault);
++
+ /**
+  * Module/class support
+  */
+diff --git a/drivers/vfio/vfio_iommu_type1.c b/drivers/vfio/vfio_iommu_type1.c
+index 8d14ced649a6..62ad4a47de4a 100644
+--- a/drivers/vfio/vfio_iommu_type1.c
++++ b/drivers/vfio/vfio_iommu_type1.c
+@@ -3581,6 +3581,13 @@ static int vfio_iommu_type1_dma_map_iopf(void *iommu_data,
+ 	enum iommu_page_response_code status = IOMMU_PAGE_RESP_INVALID;
+ 	struct iommu_page_response resp = {0};
+ 
++	/*
++	 * When configured in nested mode, further deliver
++	 * stage/level 1 faults to the guest.
++	 */
++	if (iommu->nesting && !(fault->prm.flags & IOMMU_FAULT_PAGE_REQUEST_L2))
++		return vfio_transfer_dev_fault(dev, fault);
++
+ 	mutex_lock(&iommu->lock);
+ 
+ 	dma = vfio_find_dma(iommu, iova, PAGE_SIZE);
+@@ -3654,6 +3661,34 @@ static int vfio_iommu_type1_dma_map_iopf(void *iommu_data,
+ 	return 0;
+ }
+ 
++static int vfio_iommu_type1_register_hdlr_nested(void *iommu_data,
++						 struct device *dev)
++{
++	struct vfio_iommu *iommu = iommu_data;
++
++	if (iommu->iopf_enabled)
++		return iommu_update_device_fault_handler(dev, ~0,
++					IOPF_REPORT_NESTED_L1_CONCERNED);
++	else
++		return iommu_register_device_fault_handler(dev,
++					vfio_iommu_dev_fault_handler,
++					IOPF_REPORT_NESTED |
++					IOPF_REPORT_NESTED_L1_CONCERNED,
++					dev);
++}
++
++static int vfio_iommu_type1_unregister_hdlr_nested(void *iommu_data,
++						   struct device *dev)
++{
++	struct vfio_iommu *iommu = iommu_data;
++
++	if (iommu->iopf_enabled)
++		return iommu_update_device_fault_handler(dev,
++					~IOPF_REPORT_NESTED_L1_CONCERNED, 0);
++	else
++		return iommu_unregister_device_fault_handler(dev);
++}
++
+ static const struct vfio_iommu_driver_ops vfio_iommu_driver_ops_type1 = {
+ 	.name			= "vfio-iommu-type1",
+ 	.owner			= THIS_MODULE,
+@@ -3670,6 +3705,8 @@ static const struct vfio_iommu_driver_ops vfio_iommu_driver_ops_type1 = {
+ 	.group_iommu_domain	= vfio_iommu_type1_group_iommu_domain,
+ 	.notify			= vfio_iommu_type1_notify,
+ 	.dma_map_iopf		= vfio_iommu_type1_dma_map_iopf,
++	.register_hdlr_nested	= vfio_iommu_type1_register_hdlr_nested,
++	.unregister_hdlr_nested	= vfio_iommu_type1_unregister_hdlr_nested,
+ };
+ 
+ static int __init vfio_iommu_type1_init(void)
+diff --git a/include/linux/vfio.h b/include/linux/vfio.h
+index 73af317a4343..60e935e4851b 100644
+--- a/include/linux/vfio.h
++++ b/include/linux/vfio.h
+@@ -29,6 +29,7 @@
+  * @match: Optional device name match callback (return: 0 for no-match, >0 for
+  *         match, -errno for abort (ex. match with insufficient or incorrect
+  *         additional args)
++ * @transfer: Optional. Transfer the received faults to the guest for nested mode.
+  */
+ struct vfio_device_ops {
+ 	char	*name;
+@@ -43,6 +44,7 @@ struct vfio_device_ops {
+ 	int	(*mmap)(void *device_data, struct vm_area_struct *vma);
+ 	void	(*request)(void *device_data, unsigned int count);
+ 	int	(*match)(void *device_data, char *buf);
++	int	(*transfer)(void *device_data, struct iommu_fault *fault);
+ };
+ 
+ extern struct iommu_group *vfio_iommu_group_get(struct device *dev);
+@@ -102,6 +104,10 @@ struct vfio_iommu_driver_ops {
+ 	int		(*dma_map_iopf)(void *iommu_data,
+ 					struct iommu_fault *fault,
+ 					struct device *dev);
++	int		(*register_hdlr_nested)(void *iommu_data,
++						struct device *dev);
++	int		(*unregister_hdlr_nested)(void *iommu_data,
++						  struct device *dev);
+ };
+ 
+ extern int vfio_register_iommu_driver(const struct vfio_iommu_driver_ops *ops);
+@@ -164,6 +170,9 @@ struct kvm;
+ extern void vfio_group_set_kvm(struct vfio_group *group, struct kvm *kvm);
+ 
+ extern int vfio_iommu_dev_fault_handler(struct iommu_fault *fault, void *data);
++extern int vfio_iommu_dev_fault_handler_unregister_nested(struct device *dev);
++extern int vfio_iommu_dev_fault_handler_register_nested(struct device *dev);
++extern int vfio_transfer_dev_fault(struct device *dev, struct iommu_fault *fault);
+ 
+ /*
+  * Sub-module helpers
