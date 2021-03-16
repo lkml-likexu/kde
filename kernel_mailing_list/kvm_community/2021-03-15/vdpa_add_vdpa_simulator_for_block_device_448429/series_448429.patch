@@ -1,0 +1,2407 @@
+From patchwork Mon Mar 15 16:34:37 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 12140005
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id D04E7C4332B
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:35:47 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id A5F4E64F2A
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:35:47 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S232386AbhCOQfQ (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 15 Mar 2021 12:35:16 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([63.128.21.124]:46231 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S232371AbhCOQfJ (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 15 Mar 2021 12:35:09 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615826108;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=f8kPzMA8SARyFAt9L8z9nU43ZH3TNeJLbjn6RnMoeoU=;
+        b=A5sZZzIlP3VjModfXlrK0ozBr/Nb0KtqVEPdTcN+Bvumm+bZcMtPy8JZQ7UDAZxLfuPLyU
+        vgr83Q05aVar9KSqTTFKf3uLur+E7Qqw8cTt770P1/ztikYkawK8Zx7KmqHwQtEP8nd5mB
+        98S9ncbFz/dlOkNxJnUM6DYEnlVBq1g=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-504-bItcXqIMOJ2H5IdAgXMv-g-1; Mon, 15 Mar 2021 12:35:04 -0400
+X-MC-Unique: bItcXqIMOJ2H5IdAgXMv-g-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id AAB5E108BD06;
+        Mon, 15 Mar 2021 16:35:02 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-114-1.ams2.redhat.com [10.36.114.1])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 3A40319D7C;
+        Mon, 15 Mar 2021 16:35:00 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: virtualization@lists.linux-foundation.org
+Cc: netdev@vger.kernel.org, Xie Yongji <xieyongji@bytedance.com>,
+        Laurent Vivier <lvivier@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>,
+        linux-kernel@vger.kernel.org, Max Gurtovoy <mgurtovoy@nvidia.com>,
+        Jason Wang <jasowang@redhat.com>,
+        Parav Pandit <parav@nvidia.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>, kvm@vger.kernel.org
+Subject: [PATCH v4 01/14] vdpa_sim: use iova module to allocate IOVA addresses
+Date: Mon, 15 Mar 2021 17:34:37 +0100
+Message-Id: <20210315163450.254396-2-sgarzare@redhat.com>
+In-Reply-To: <20210315163450.254396-1-sgarzare@redhat.com>
+References: <20210315163450.254396-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The identical mapping used until now created issues when mapping
+different virtual pages with the same physical address.
+To solve this issue, we can use the iova module, to handle the IOVA
+allocation.
+For simplicity we use an IOVA allocator with byte granularity.
+
+We add two new functions, vdpasim_map_range() and vdpasim_unmap_range(),
+to handle the IOVA allocation and the registration into the IOMMU/IOTLB.
+These functions are used by dma_map_ops callbacks.
+
+Acked-by: Jason Wang <jasowang@redhat.com>
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+v2:
+- used ULONG_MAX instead of ~0UL [Jason]
+- fixed typos in comment and patch description [Jason]
+---
+ drivers/vdpa/vdpa_sim/vdpa_sim.h |   2 +
+ drivers/vdpa/vdpa_sim/vdpa_sim.c | 108 +++++++++++++++++++------------
+ drivers/vdpa/Kconfig             |   1 +
+ 3 files changed, 69 insertions(+), 42 deletions(-)
+
+diff --git a/drivers/vdpa/vdpa_sim/vdpa_sim.h b/drivers/vdpa/vdpa_sim/vdpa_sim.h
+index 6d75444f9948..cd58e888bcf3 100644
+--- a/drivers/vdpa/vdpa_sim/vdpa_sim.h
++++ b/drivers/vdpa/vdpa_sim/vdpa_sim.h
+@@ -6,6 +6,7 @@
+ #ifndef _VDPA_SIM_H
+ #define _VDPA_SIM_H
+ 
++#include <linux/iova.h>
+ #include <linux/vringh.h>
+ #include <linux/vdpa.h>
+ #include <linux/virtio_byteorder.h>
+@@ -57,6 +58,7 @@ struct vdpasim {
+ 	/* virtio config according to device type */
+ 	void *config;
+ 	struct vhost_iotlb *iommu;
++	struct iova_domain iova;
+ 	void *buffer;
+ 	u32 status;
+ 	u32 generation;
+diff --git a/drivers/vdpa/vdpa_sim/vdpa_sim.c b/drivers/vdpa/vdpa_sim/vdpa_sim.c
+index 5b6b2f87d40c..fc2ec9599753 100644
+--- a/drivers/vdpa/vdpa_sim/vdpa_sim.c
++++ b/drivers/vdpa/vdpa_sim/vdpa_sim.c
+@@ -17,6 +17,7 @@
+ #include <linux/vringh.h>
+ #include <linux/vdpa.h>
+ #include <linux/vhost_iotlb.h>
++#include <linux/iova.h>
+ 
+ #include "vdpa_sim.h"
+ 
+@@ -128,30 +129,57 @@ static int dir_to_perm(enum dma_data_direction dir)
+ 	return perm;
+ }
+ 
++static dma_addr_t vdpasim_map_range(struct vdpasim *vdpasim, phys_addr_t paddr,
++				    size_t size, unsigned int perm)
++{
++	struct iova *iova;
++	dma_addr_t dma_addr;
++	int ret;
++
++	/* We set the limit_pfn to the maximum (ULONG_MAX - 1) */
++	iova = alloc_iova(&vdpasim->iova, size, ULONG_MAX - 1, true);
++	if (!iova)
++		return DMA_MAPPING_ERROR;
++
++	dma_addr = iova_dma_addr(&vdpasim->iova, iova);
++
++	spin_lock(&vdpasim->iommu_lock);
++	ret = vhost_iotlb_add_range(vdpasim->iommu, (u64)dma_addr,
++				    (u64)dma_addr + size - 1, (u64)paddr, perm);
++	spin_unlock(&vdpasim->iommu_lock);
++
++	if (ret) {
++		__free_iova(&vdpasim->iova, iova);
++		return DMA_MAPPING_ERROR;
++	}
++
++	return dma_addr;
++}
++
++static void vdpasim_unmap_range(struct vdpasim *vdpasim, dma_addr_t dma_addr,
++				size_t size)
++{
++	spin_lock(&vdpasim->iommu_lock);
++	vhost_iotlb_del_range(vdpasim->iommu, (u64)dma_addr,
++			      (u64)dma_addr + size - 1);
++	spin_unlock(&vdpasim->iommu_lock);
++
++	free_iova(&vdpasim->iova, iova_pfn(&vdpasim->iova, dma_addr));
++}
++
+ static dma_addr_t vdpasim_map_page(struct device *dev, struct page *page,
+ 				   unsigned long offset, size_t size,
+ 				   enum dma_data_direction dir,
+ 				   unsigned long attrs)
+ {
+ 	struct vdpasim *vdpasim = dev_to_sim(dev);
+-	struct vhost_iotlb *iommu = vdpasim->iommu;
+-	u64 pa = (page_to_pfn(page) << PAGE_SHIFT) + offset;
+-	int ret, perm = dir_to_perm(dir);
++	phys_addr_t paddr = page_to_phys(page) + offset;
++	int perm = dir_to_perm(dir);
+ 
+ 	if (perm < 0)
+ 		return DMA_MAPPING_ERROR;
+ 
+-	/* For simplicity, use identical mapping to avoid e.g iova
+-	 * allocator.
+-	 */
+-	spin_lock(&vdpasim->iommu_lock);
+-	ret = vhost_iotlb_add_range(iommu, pa, pa + size - 1,
+-				    pa, dir_to_perm(dir));
+-	spin_unlock(&vdpasim->iommu_lock);
+-	if (ret)
+-		return DMA_MAPPING_ERROR;
+-
+-	return (dma_addr_t)(pa);
++	return vdpasim_map_range(vdpasim, paddr, size, perm);
+ }
+ 
+ static void vdpasim_unmap_page(struct device *dev, dma_addr_t dma_addr,
+@@ -159,12 +187,8 @@ static void vdpasim_unmap_page(struct device *dev, dma_addr_t dma_addr,
+ 			       unsigned long attrs)
+ {
+ 	struct vdpasim *vdpasim = dev_to_sim(dev);
+-	struct vhost_iotlb *iommu = vdpasim->iommu;
+ 
+-	spin_lock(&vdpasim->iommu_lock);
+-	vhost_iotlb_del_range(iommu, (u64)dma_addr,
+-			      (u64)dma_addr + size - 1);
+-	spin_unlock(&vdpasim->iommu_lock);
++	vdpasim_unmap_range(vdpasim, dma_addr, size);
+ }
+ 
+ static void *vdpasim_alloc_coherent(struct device *dev, size_t size,
+@@ -172,27 +196,22 @@ static void *vdpasim_alloc_coherent(struct device *dev, size_t size,
+ 				    unsigned long attrs)
+ {
+ 	struct vdpasim *vdpasim = dev_to_sim(dev);
+-	struct vhost_iotlb *iommu = vdpasim->iommu;
+-	void *addr = kmalloc(size, flag);
+-	int ret;
++	phys_addr_t paddr;
++	void *addr;
+ 
+-	spin_lock(&vdpasim->iommu_lock);
++	addr = kmalloc(size, flag);
+ 	if (!addr) {
+ 		*dma_addr = DMA_MAPPING_ERROR;
+-	} else {
+-		u64 pa = virt_to_phys(addr);
+-
+-		ret = vhost_iotlb_add_range(iommu, (u64)pa,
+-					    (u64)pa + size - 1,
+-					    pa, VHOST_MAP_RW);
+-		if (ret) {
+-			*dma_addr = DMA_MAPPING_ERROR;
+-			kfree(addr);
+-			addr = NULL;
+-		} else
+-			*dma_addr = (dma_addr_t)pa;
++		return NULL;
++	}
++
++	paddr = virt_to_phys(addr);
++
++	*dma_addr = vdpasim_map_range(vdpasim, paddr, size, VHOST_MAP_RW);
++	if (*dma_addr == DMA_MAPPING_ERROR) {
++		kfree(addr);
++		return NULL;
+ 	}
+-	spin_unlock(&vdpasim->iommu_lock);
+ 
+ 	return addr;
+ }
+@@ -202,14 +221,10 @@ static void vdpasim_free_coherent(struct device *dev, size_t size,
+ 				  unsigned long attrs)
+ {
+ 	struct vdpasim *vdpasim = dev_to_sim(dev);
+-	struct vhost_iotlb *iommu = vdpasim->iommu;
+ 
+-	spin_lock(&vdpasim->iommu_lock);
+-	vhost_iotlb_del_range(iommu, (u64)dma_addr,
+-			      (u64)dma_addr + size - 1);
+-	spin_unlock(&vdpasim->iommu_lock);
++	vdpasim_unmap_range(vdpasim, dma_addr, size);
+ 
+-	kfree(phys_to_virt((uintptr_t)dma_addr));
++	kfree(vaddr);
+ }
+ 
+ static const struct dma_map_ops vdpasim_dma_ops = {
+@@ -271,6 +286,13 @@ struct vdpasim *vdpasim_create(struct vdpasim_dev_attr *dev_attr)
+ 	for (i = 0; i < dev_attr->nvqs; i++)
+ 		vringh_set_iotlb(&vdpasim->vqs[i].vring, vdpasim->iommu);
+ 
++	ret = iova_cache_get();
++	if (ret)
++		goto err_iommu;
++
++	/* For simplicity we use an IOVA allocator with byte granularity */
++	init_iova_domain(&vdpasim->iova, 1, 0);
++
+ 	vdpasim->vdpa.dma_dev = dev;
+ 
+ 	return vdpasim;
+@@ -541,6 +563,8 @@ static void vdpasim_free(struct vdpa_device *vdpa)
+ 	struct vdpasim *vdpasim = vdpa_to_sim(vdpa);
+ 
+ 	cancel_work_sync(&vdpasim->work);
++	put_iova_domain(&vdpasim->iova);
++	iova_cache_put();
+ 	kvfree(vdpasim->buffer);
+ 	if (vdpasim->iommu)
+ 		vhost_iotlb_free(vdpasim->iommu);
+diff --git a/drivers/vdpa/Kconfig b/drivers/vdpa/Kconfig
+index a245809c99d0..6e82a0e228c2 100644
+--- a/drivers/vdpa/Kconfig
++++ b/drivers/vdpa/Kconfig
+@@ -14,6 +14,7 @@ config VDPA_SIM
+ 	depends on RUNTIME_TESTING_MENU && HAS_DMA
+ 	select DMA_OPS
+ 	select VHOST_RING
++	select IOMMU_IOVA
+ 	help
+ 	  Enable this module to support vDPA device simulators. These devices
+ 	  are used for testing, prototyping and development of vDPA.
+
+From patchwork Mon Mar 15 16:34:38 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 12140007
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id B2639C4332E
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:35:48 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 7D1CF64F2A
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:35:48 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S232618AbhCOQfQ (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 15 Mar 2021 12:35:16 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:50264 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S232402AbhCOQfJ (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 15 Mar 2021 12:35:09 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615826109;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=jsUZUVCSRh1NO+z5Pe9JP5OUAGHMXds3G/W6I3hhmIQ=;
+        b=eoU14Ic8NxYi2VydyJVzvw/+0Y/lqP+zmJCIof+YmMm+SMM9+qJq75WnwHJ02L4WS8tTIh
+        gG+wLfkRLXG33dMPfhdc8QjSqcfSHgbze5KpYu7QuIbGwUZlW1aDOWvc3/p+yZd97/R37y
+        cgqnSVUvyupuqwAtEKOvNN0A372guAg=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-601-3TexvZA8O3SDA0bpXWHjLw-1; Mon, 15 Mar 2021 12:35:07 -0400
+X-MC-Unique: 3TexvZA8O3SDA0bpXWHjLw-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 54014100C667;
+        Mon, 15 Mar 2021 16:35:05 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-114-1.ams2.redhat.com [10.36.114.1])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id F14331F43D;
+        Mon, 15 Mar 2021 16:35:02 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: virtualization@lists.linux-foundation.org
+Cc: netdev@vger.kernel.org, Xie Yongji <xieyongji@bytedance.com>,
+        Laurent Vivier <lvivier@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>,
+        linux-kernel@vger.kernel.org, Max Gurtovoy <mgurtovoy@nvidia.com>,
+        Jason Wang <jasowang@redhat.com>,
+        Parav Pandit <parav@nvidia.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>, kvm@vger.kernel.org
+Subject: [PATCH v4 02/14] vringh: add 'iotlb_lock' to synchronize iotlb
+ accesses
+Date: Mon, 15 Mar 2021 17:34:38 +0100
+Message-Id: <20210315163450.254396-3-sgarzare@redhat.com>
+In-Reply-To: <20210315163450.254396-1-sgarzare@redhat.com>
+References: <20210315163450.254396-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Usually iotlb accesses are synchronized with a spinlock.
+Let's request it as a new parameter in vringh_set_iotlb() and
+hold it when we navigate the iotlb in iotlb_translate() to avoid
+race conditions with any new additions/deletions of ranges from
+the ioltb.
+
+Acked-by: Jason Wang <jasowang@redhat.com>
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+ include/linux/vringh.h           | 6 +++++-
+ drivers/vdpa/vdpa_sim/vdpa_sim.c | 3 ++-
+ drivers/vhost/vringh.c           | 9 ++++++++-
+ 3 files changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/include/linux/vringh.h b/include/linux/vringh.h
+index 59bd50f99291..9c077863c8f6 100644
+--- a/include/linux/vringh.h
++++ b/include/linux/vringh.h
+@@ -46,6 +46,9 @@ struct vringh {
+ 	/* IOTLB for this vring */
+ 	struct vhost_iotlb *iotlb;
+ 
++	/* spinlock to synchronize IOTLB accesses */
++	spinlock_t *iotlb_lock;
++
+ 	/* The function to call to notify the guest about added buffers */
+ 	void (*notify)(struct vringh *);
+ };
+@@ -258,7 +261,8 @@ static inline __virtio64 cpu_to_vringh64(const struct vringh *vrh, u64 val)
+ 
+ #if IS_REACHABLE(CONFIG_VHOST_IOTLB)
+ 
+-void vringh_set_iotlb(struct vringh *vrh, struct vhost_iotlb *iotlb);
++void vringh_set_iotlb(struct vringh *vrh, struct vhost_iotlb *iotlb,
++		      spinlock_t *iotlb_lock);
+ 
+ int vringh_init_iotlb(struct vringh *vrh, u64 features,
+ 		      unsigned int num, bool weak_barriers,
+diff --git a/drivers/vdpa/vdpa_sim/vdpa_sim.c b/drivers/vdpa/vdpa_sim/vdpa_sim.c
+index fc2ec9599753..a92c08880098 100644
+--- a/drivers/vdpa/vdpa_sim/vdpa_sim.c
++++ b/drivers/vdpa/vdpa_sim/vdpa_sim.c
+@@ -284,7 +284,8 @@ struct vdpasim *vdpasim_create(struct vdpasim_dev_attr *dev_attr)
+ 		goto err_iommu;
+ 
+ 	for (i = 0; i < dev_attr->nvqs; i++)
+-		vringh_set_iotlb(&vdpasim->vqs[i].vring, vdpasim->iommu);
++		vringh_set_iotlb(&vdpasim->vqs[i].vring, vdpasim->iommu,
++				 &vdpasim->iommu_lock);
+ 
+ 	ret = iova_cache_get();
+ 	if (ret)
+diff --git a/drivers/vhost/vringh.c b/drivers/vhost/vringh.c
+index 85d85faba058..f68122705719 100644
+--- a/drivers/vhost/vringh.c
++++ b/drivers/vhost/vringh.c
+@@ -1074,6 +1074,8 @@ static int iotlb_translate(const struct vringh *vrh,
+ 	int ret = 0;
+ 	u64 s = 0;
+ 
++	spin_lock(vrh->iotlb_lock);
++
+ 	while (len > s) {
+ 		u64 size, pa, pfn;
+ 
+@@ -1103,6 +1105,8 @@ static int iotlb_translate(const struct vringh *vrh,
+ 		++ret;
+ 	}
+ 
++	spin_unlock(vrh->iotlb_lock);
++
+ 	return ret;
+ }
+ 
+@@ -1262,10 +1266,13 @@ EXPORT_SYMBOL(vringh_init_iotlb);
+  * vringh_set_iotlb - initialize a vringh for a ring with IOTLB.
+  * @vrh: the vring
+  * @iotlb: iotlb associated with this vring
++ * @iotlb_lock: spinlock to synchronize the iotlb accesses
+  */
+-void vringh_set_iotlb(struct vringh *vrh, struct vhost_iotlb *iotlb)
++void vringh_set_iotlb(struct vringh *vrh, struct vhost_iotlb *iotlb,
++		      spinlock_t *iotlb_lock)
+ {
+ 	vrh->iotlb = iotlb;
++	vrh->iotlb_lock = iotlb_lock;
+ }
+ EXPORT_SYMBOL(vringh_set_iotlb);
+ 
+
+From patchwork Mon Mar 15 16:34:39 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 12140011
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id B8CC6C433DB
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:36:18 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 8853964F2A
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:36:18 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S232714AbhCOQfs (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 15 Mar 2021 12:35:48 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:40226 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S232520AbhCOQfP (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 15 Mar 2021 12:35:15 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615826114;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=iWEeA/FAS/KigzjoSRKMocKAAwvw80uXLY8wO5EAzzw=;
+        b=c2F3ahg99qF/eOXTI9lGkD5gw59SSOGx9KFGEUSlN4M3GYg4m8zIgX65fGpKI96Ud10z/N
+        3kvCwIkkbGa+3IX3Aj3Fy1y7FKdPKKBxwjXpPqZBkBQPFtmM/NgSZ6A9+NOtnfLQRBN6x6
+        aQ1R54UOuKDTMQSEbVggz5tPi4fdSIw=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-19-MK1OfIRxP2On-Rg_H_soRQ-1; Mon, 15 Mar 2021 12:35:09 -0400
+X-MC-Unique: MK1OfIRxP2On-Rg_H_soRQ-1
+Received: from smtp.corp.redhat.com (int-mx08.intmail.prod.int.phx2.redhat.com
+ [10.5.11.23])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 0E9FD80006E;
+        Mon, 15 Mar 2021 16:35:08 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-114-1.ams2.redhat.com [10.36.114.1])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id A3CE819D7C;
+        Mon, 15 Mar 2021 16:35:05 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: virtualization@lists.linux-foundation.org
+Cc: netdev@vger.kernel.org, Xie Yongji <xieyongji@bytedance.com>,
+        Laurent Vivier <lvivier@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>,
+        linux-kernel@vger.kernel.org, Max Gurtovoy <mgurtovoy@nvidia.com>,
+        Jason Wang <jasowang@redhat.com>,
+        Parav Pandit <parav@nvidia.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>, kvm@vger.kernel.org
+Subject: [PATCH v4 03/14] vringh: reset kiov 'consumed' field in
+ __vringh_iov()
+Date: Mon, 15 Mar 2021 17:34:39 +0100
+Message-Id: <20210315163450.254396-4-sgarzare@redhat.com>
+In-Reply-To: <20210315163450.254396-1-sgarzare@redhat.com>
+References: <20210315163450.254396-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.84 on 10.5.11.23
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+__vringh_iov() overwrites the contents of riov and wiov, in fact it
+resets the 'i' and 'used' fields, but also the 'consumed' field should
+be reset to avoid an inconsistent state.
+
+Acked-by: Jason Wang <jasowang@redhat.com>
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+ drivers/vhost/vringh.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/vhost/vringh.c b/drivers/vhost/vringh.c
+index f68122705719..bee63d68201a 100644
+--- a/drivers/vhost/vringh.c
++++ b/drivers/vhost/vringh.c
+@@ -290,9 +290,9 @@ __vringh_iov(struct vringh *vrh, u16 i,
+ 		return -EINVAL;
+ 
+ 	if (riov)
+-		riov->i = riov->used = 0;
++		riov->i = riov->used = riov->consumed = 0;
+ 	if (wiov)
+-		wiov->i = wiov->used = 0;
++		wiov->i = wiov->used = wiov->consumed = 0;
+ 
+ 	for (;;) {
+ 		void *addr;
+
+From patchwork Mon Mar 15 16:34:40 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 12140015
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id E9AA0C4332D
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:36:19 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id A28BA64F2F
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:36:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S230227AbhCOQfu (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 15 Mar 2021 12:35:50 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([63.128.21.124]:53597 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S233044AbhCOQfn (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 15 Mar 2021 12:35:43 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615826142;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=yS6yhrkWA8GbBenFIxogYtiFYE6uOSKcO/K046TS5vQ=;
+        b=I+sBY0MVqyDDm8UE4IMf7cWbP5QJGMl3YRhjfpRxb9wpfdW0PiYnAklfcFUFcEWQqbeppf
+        VoNl5TszJ/lmr0CJT7VnfchD8ZhyU9y2WcDNM/vEevCzazxkpTe4g/DyclGf8f7s1ifptM
+        ZOdj/jCr84FghPRVNA38LB9bl7JnehE=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-356-3PfeEznlOUi2AgTM_nG-EA-1; Mon, 15 Mar 2021 12:35:39 -0400
+X-MC-Unique: 3PfeEznlOUi2AgTM_nG-EA-1
+Received: from smtp.corp.redhat.com (int-mx01.intmail.prod.int.phx2.redhat.com
+ [10.5.11.11])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id A0B5C800C78;
+        Mon, 15 Mar 2021 16:35:37 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-114-1.ams2.redhat.com [10.36.114.1])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 376F72C169;
+        Mon, 15 Mar 2021 16:35:29 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: virtualization@lists.linux-foundation.org
+Cc: netdev@vger.kernel.org, Xie Yongji <xieyongji@bytedance.com>,
+        Laurent Vivier <lvivier@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>,
+        linux-kernel@vger.kernel.org, Max Gurtovoy <mgurtovoy@nvidia.com>,
+        Jason Wang <jasowang@redhat.com>,
+        Parav Pandit <parav@nvidia.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>, kvm@vger.kernel.org
+Subject: [PATCH v4 04/14] vringh: explain more about cleaning riov and wiov
+Date: Mon, 15 Mar 2021 17:34:40 +0100
+Message-Id: <20210315163450.254396-5-sgarzare@redhat.com>
+In-Reply-To: <20210315163450.254396-1-sgarzare@redhat.com>
+References: <20210315163450.254396-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.11
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+riov and wiov can be reused with subsequent calls of vringh_getdesc_*().
+
+Let's add a paragraph in the documentation of these functions to better
+explain when riov and wiov need to be cleaned up.
+
+Acked-by: Jason Wang <jasowang@redhat.com>
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+ drivers/vhost/vringh.c | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/vhost/vringh.c b/drivers/vhost/vringh.c
+index bee63d68201a..2a88e087afd8 100644
+--- a/drivers/vhost/vringh.c
++++ b/drivers/vhost/vringh.c
+@@ -662,7 +662,10 @@ EXPORT_SYMBOL(vringh_init_user);
+  * *head will be vrh->vring.num.  You may be able to ignore an invalid
+  * descriptor, but there's not much you can do with an invalid ring.
+  *
+- * Note that you may need to clean up riov and wiov, even on error!
++ * Note that you can reuse riov and wiov with subsequent calls. Content is
++ * overwritten and memory reallocated if more space is needed.
++ * When you don't have to use riov and wiov anymore, you should clean up them
++ * calling vringh_iov_cleanup() to release the memory, even on error!
+  */
+ int vringh_getdesc_user(struct vringh *vrh,
+ 			struct vringh_iov *riov,
+@@ -932,7 +935,10 @@ EXPORT_SYMBOL(vringh_init_kern);
+  * *head will be vrh->vring.num.  You may be able to ignore an invalid
+  * descriptor, but there's not much you can do with an invalid ring.
+  *
+- * Note that you may need to clean up riov and wiov, even on error!
++ * Note that you can reuse riov and wiov with subsequent calls. Content is
++ * overwritten and memory reallocated if more space is needed.
++ * When you don't have to use riov and wiov anymore, you should clean up them
++ * calling vringh_kiov_cleanup() to release the memory, even on error!
+  */
+ int vringh_getdesc_kern(struct vringh *vrh,
+ 			struct vringh_kiov *riov,
+@@ -1292,7 +1298,10 @@ EXPORT_SYMBOL(vringh_set_iotlb);
+  * *head will be vrh->vring.num.  You may be able to ignore an invalid
+  * descriptor, but there's not much you can do with an invalid ring.
+  *
+- * Note that you may need to clean up riov and wiov, even on error!
++ * Note that you can reuse riov and wiov with subsequent calls. Content is
++ * overwritten and memory reallocated if more space is needed.
++ * When you don't have to use riov and wiov anymore, you should clean up them
++ * calling vringh_kiov_cleanup() to release the memory, even on error!
+  */
+ int vringh_getdesc_iotlb(struct vringh *vrh,
+ 			 struct vringh_kiov *riov,
+
+From patchwork Mon Mar 15 16:34:41 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 12140013
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 49A60C433E9
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:36:19 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 0E8C964F2B
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:36:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S233255AbhCOQfv (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 15 Mar 2021 12:35:51 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([63.128.21.124]:34956 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S233079AbhCOQfo (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 15 Mar 2021 12:35:44 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615826143;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=rAqe4QGyCpp3qkhZfpBh66Chsnfm4h8juLPuFY2EjWo=;
+        b=OJm9OFMytm6+gkEiWax+4RJuznyv6M12eHd1f17sm2xlcrgydG5A49UkRFEksnlZIN2vFC
+        sK94EjjDCRhKRzDvv29nBx1BhtVdJPlczBhC8QkVGan72SWTzBBmb+kkCVCeifR5LKZCHD
+        W6bJshc9bUgufJxQ629eZYBXJGC7GFM=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-296-4-uIdZmYPZaQEFISoNoU9g-1; Mon, 15 Mar 2021 12:35:41 -0400
+X-MC-Unique: 4-uIdZmYPZaQEFISoNoU9g-1
+Received: from smtp.corp.redhat.com (int-mx01.intmail.prod.int.phx2.redhat.com
+ [10.5.11.11])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 5D5EF801817;
+        Mon, 15 Mar 2021 16:35:40 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-114-1.ams2.redhat.com [10.36.114.1])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id F00CA2C169;
+        Mon, 15 Mar 2021 16:35:37 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: virtualization@lists.linux-foundation.org
+Cc: netdev@vger.kernel.org, Xie Yongji <xieyongji@bytedance.com>,
+        Laurent Vivier <lvivier@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>,
+        linux-kernel@vger.kernel.org, Max Gurtovoy <mgurtovoy@nvidia.com>,
+        Jason Wang <jasowang@redhat.com>,
+        Parav Pandit <parav@nvidia.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>, kvm@vger.kernel.org
+Subject: [PATCH v4 05/14] vringh: implement vringh_kiov_advance()
+Date: Mon, 15 Mar 2021 17:34:41 +0100
+Message-Id: <20210315163450.254396-6-sgarzare@redhat.com>
+In-Reply-To: <20210315163450.254396-1-sgarzare@redhat.com>
+References: <20210315163450.254396-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.11
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+In some cases, it may be useful to provide a way to skip a number
+of bytes in a vringh_kiov.
+
+Let's implement vringh_kiov_advance() for this purpose, reusing the
+code from vringh_iov_xfer().
+We replace that code calling the new vringh_kiov_advance().
+
+Acked-by: Jason Wang <jasowang@redhat.com>
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+ include/linux/vringh.h |  2 ++
+ drivers/vhost/vringh.c | 41 +++++++++++++++++++++++++++++------------
+ 2 files changed, 31 insertions(+), 12 deletions(-)
+
+diff --git a/include/linux/vringh.h b/include/linux/vringh.h
+index 9c077863c8f6..755211ebd195 100644
+--- a/include/linux/vringh.h
++++ b/include/linux/vringh.h
+@@ -199,6 +199,8 @@ static inline void vringh_kiov_cleanup(struct vringh_kiov *kiov)
+ 	kiov->iov = NULL;
+ }
+ 
++void vringh_kiov_advance(struct vringh_kiov *kiov, size_t len);
++
+ int vringh_getdesc_kern(struct vringh *vrh,
+ 			struct vringh_kiov *riov,
+ 			struct vringh_kiov *wiov,
+diff --git a/drivers/vhost/vringh.c b/drivers/vhost/vringh.c
+index 2a88e087afd8..4af8fa259d65 100644
+--- a/drivers/vhost/vringh.c
++++ b/drivers/vhost/vringh.c
+@@ -75,6 +75,34 @@ static inline int __vringh_get_head(const struct vringh *vrh,
+ 	return head;
+ }
+ 
++/**
++ * vringh_kiov_advance - skip bytes from vring_kiov
++ * @iov: an iov passed to vringh_getdesc_*() (updated as we consume)
++ * @len: the maximum length to advance
++ */
++void vringh_kiov_advance(struct vringh_kiov *iov, size_t len)
++{
++	while (len && iov->i < iov->used) {
++		size_t partlen = min(iov->iov[iov->i].iov_len, len);
++
++		iov->consumed += partlen;
++		iov->iov[iov->i].iov_len -= partlen;
++		iov->iov[iov->i].iov_base += partlen;
++
++		if (!iov->iov[iov->i].iov_len) {
++			/* Fix up old iov element then increment. */
++			iov->iov[iov->i].iov_len = iov->consumed;
++			iov->iov[iov->i].iov_base -= iov->consumed;
++
++			iov->consumed = 0;
++			iov->i++;
++		}
++
++		len -= partlen;
++	}
++}
++EXPORT_SYMBOL(vringh_kiov_advance);
++
+ /* Copy some bytes to/from the iovec.  Returns num copied. */
+ static inline ssize_t vringh_iov_xfer(struct vringh *vrh,
+ 				      struct vringh_kiov *iov,
+@@ -95,19 +123,8 @@ static inline ssize_t vringh_iov_xfer(struct vringh *vrh,
+ 		done += partlen;
+ 		len -= partlen;
+ 		ptr += partlen;
+-		iov->consumed += partlen;
+-		iov->iov[iov->i].iov_len -= partlen;
+-		iov->iov[iov->i].iov_base += partlen;
+ 
+-		if (!iov->iov[iov->i].iov_len) {
+-			/* Fix up old iov element then increment. */
+-			iov->iov[iov->i].iov_len = iov->consumed;
+-			iov->iov[iov->i].iov_base -= iov->consumed;
+-
+-			
+-			iov->consumed = 0;
+-			iov->i++;
+-		}
++		vringh_kiov_advance(iov, partlen);
+ 	}
+ 	return done;
+ }
+
+From patchwork Mon Mar 15 16:34:42 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 12140017
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 45E21C43381
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:36:51 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 07F8164F36
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:36:51 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S233086AbhCOQgV (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 15 Mar 2021 12:36:21 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:55934 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S232752AbhCOQft (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 15 Mar 2021 12:35:49 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615826148;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=7g3riK+kiel5RnhV+7if+uZqH1INqufvdFTBxLL5Dg0=;
+        b=fH+x3cy6BXEq7TGCG6hlohqvj8NkPDri1gj4pcEZdlq5fgOPBpHbPLJjeAuDYArX6EMIAG
+        LDyZtpg5xHC8+f4O7pTaBBjUm80CyZaZ02dGj0qKIA7Q2Kz1qsy3PDwAK6Su4icQ6STO36
+        96iLMjNnE4atdDtV7SAXA4rTTiLuf4M=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-493-6JebKSrBMpmgE_N9qgdnkw-1; Mon, 15 Mar 2021 12:35:44 -0400
+X-MC-Unique: 6JebKSrBMpmgE_N9qgdnkw-1
+Received: from smtp.corp.redhat.com (int-mx01.intmail.prod.int.phx2.redhat.com
+ [10.5.11.11])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id F1AF6108BD07;
+        Mon, 15 Mar 2021 16:35:42 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-114-1.ams2.redhat.com [10.36.114.1])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id ABD952C169;
+        Mon, 15 Mar 2021 16:35:40 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: virtualization@lists.linux-foundation.org
+Cc: netdev@vger.kernel.org, Xie Yongji <xieyongji@bytedance.com>,
+        Laurent Vivier <lvivier@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>,
+        linux-kernel@vger.kernel.org, Max Gurtovoy <mgurtovoy@nvidia.com>,
+        Jason Wang <jasowang@redhat.com>,
+        Parav Pandit <parav@nvidia.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>, kvm@vger.kernel.org
+Subject: [PATCH v4 06/14] vringh: add vringh_kiov_length() helper
+Date: Mon, 15 Mar 2021 17:34:42 +0100
+Message-Id: <20210315163450.254396-7-sgarzare@redhat.com>
+In-Reply-To: <20210315163450.254396-1-sgarzare@redhat.com>
+References: <20210315163450.254396-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.11
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This new helper returns the total number of bytes covered by
+a vringh_kiov.
+
+Suggested-by: Jason Wang <jasowang@redhat.com>
+Acked-by: Jason Wang <jasowang@redhat.com>
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+ include/linux/vringh.h | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/include/linux/vringh.h b/include/linux/vringh.h
+index 755211ebd195..84db7b8f912f 100644
+--- a/include/linux/vringh.h
++++ b/include/linux/vringh.h
+@@ -199,6 +199,17 @@ static inline void vringh_kiov_cleanup(struct vringh_kiov *kiov)
+ 	kiov->iov = NULL;
+ }
+ 
++static inline size_t vringh_kiov_length(struct vringh_kiov *kiov)
++{
++	size_t len = 0;
++	int i;
++
++	for (i = kiov->i; i < kiov->used; i++)
++		len += kiov->iov[i].iov_len;
++
++	return len;
++}
++
+ void vringh_kiov_advance(struct vringh_kiov *kiov, size_t len);
+ 
+ int vringh_getdesc_kern(struct vringh *vrh,
+
+From patchwork Mon Mar 15 16:34:43 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 12140019
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 07842C4332B
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:36:53 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id BD84564F2A
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:36:50 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S232992AbhCOQgT (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 15 Mar 2021 12:36:19 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:50255 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S232775AbhCOQft (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 15 Mar 2021 12:35:49 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615826149;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=LWvD7piRcIEtTdvbzFeHb0ltjVOF/yZl48RApoWhQM0=;
+        b=gMzTKK8PdfnH5AeAgA2fVIyib9+NDiTlZBYwwa+x4vcGtX3xh/0jbDeS4ZVaZQYaEuc/I9
+        sLDwxlEMBrMgv6MA1lWeS/xSYbOAPkLPEL4PZmLjObtMQ89WL266JVWLXD7cPc+YkJYfAE
+        F/DS2ZEXGqCq0l6+ubrwA/0E6lYp33A=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-515-sVc_84YzO02y-b7S15pccQ-1; Mon, 15 Mar 2021 12:35:47 -0400
+X-MC-Unique: sVc_84YzO02y-b7S15pccQ-1
+Received: from smtp.corp.redhat.com (int-mx01.intmail.prod.int.phx2.redhat.com
+ [10.5.11.11])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id A03F5800C78;
+        Mon, 15 Mar 2021 16:35:45 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-114-1.ams2.redhat.com [10.36.114.1])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 4D8115B4A8;
+        Mon, 15 Mar 2021 16:35:43 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: virtualization@lists.linux-foundation.org
+Cc: netdev@vger.kernel.org, Xie Yongji <xieyongji@bytedance.com>,
+        Laurent Vivier <lvivier@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>,
+        linux-kernel@vger.kernel.org, Max Gurtovoy <mgurtovoy@nvidia.com>,
+        Jason Wang <jasowang@redhat.com>,
+        Parav Pandit <parav@nvidia.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>, kvm@vger.kernel.org
+Subject: [PATCH v4 07/14] vdpa_sim: cleanup kiovs in vdpasim_free()
+Date: Mon, 15 Mar 2021 17:34:43 +0100
+Message-Id: <20210315163450.254396-8-sgarzare@redhat.com>
+In-Reply-To: <20210315163450.254396-1-sgarzare@redhat.com>
+References: <20210315163450.254396-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.11
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+vringh_getdesc_iotlb() allocates memory to store the kvec, that
+is freed with vringh_kiov_cleanup().
+
+vringh_getdesc_iotlb() is able to reuse a kvec previously allocated,
+so in order to avoid to allocate the kvec for each request, we are
+not calling vringh_kiov_cleanup() when we finished to handle a
+request, but we should call it when we free the entire device.
+
+Acked-by: Jason Wang <jasowang@redhat.com>
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+ drivers/vdpa/vdpa_sim/vdpa_sim.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/drivers/vdpa/vdpa_sim/vdpa_sim.c b/drivers/vdpa/vdpa_sim/vdpa_sim.c
+index a92c08880098..14dc2d3d983e 100644
+--- a/drivers/vdpa/vdpa_sim/vdpa_sim.c
++++ b/drivers/vdpa/vdpa_sim/vdpa_sim.c
+@@ -562,8 +562,15 @@ static int vdpasim_dma_unmap(struct vdpa_device *vdpa, u64 iova, u64 size)
+ static void vdpasim_free(struct vdpa_device *vdpa)
+ {
+ 	struct vdpasim *vdpasim = vdpa_to_sim(vdpa);
++	int i;
+ 
+ 	cancel_work_sync(&vdpasim->work);
++
++	for (i = 0; i < vdpasim->dev_attr.nvqs; i++) {
++		vringh_kiov_cleanup(&vdpasim->vqs[i].out_iov);
++		vringh_kiov_cleanup(&vdpasim->vqs[i].in_iov);
++	}
++
+ 	put_iova_domain(&vdpasim->iova);
+ 	iova_cache_put();
+ 	kvfree(vdpasim->buffer);
+
+From patchwork Mon Mar 15 16:34:44 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 12140045
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id A4AC7C433E0
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:37:22 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 7CDD564F2B
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:37:22 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S232164AbhCOQgv (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 15 Mar 2021 12:36:51 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([63.128.21.124]:60114 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S233935AbhCOQg0 (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 15 Mar 2021 12:36:26 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615826185;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=z7lPMF4AhF+g6E7lQlwuYLZcnVAR9NBURQ63G4nVUIs=;
+        b=h2ljflxwnwDY3kxzPNpCTQjETShaSLxmGr5j5N1ZZra0se4CUBO10lsIDLO1iOrjeVntfz
+        OAZMcWAH3P6jPUi5L24hUnpNC3Qu8FFCsYRFgLIaB7iADp4+ZzuxkYo6edDXtmtFw3b7bB
+        lMoispjOxkhcd+qEOGXge0FYeojX8aY=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-200-gkViq4xxO_aVn93IdnQN0Q-1; Mon, 15 Mar 2021 12:36:21 -0400
+X-MC-Unique: gkViq4xxO_aVn93IdnQN0Q-1
+Received: from smtp.corp.redhat.com (int-mx06.intmail.prod.int.phx2.redhat.com
+ [10.5.11.16])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 699138189DC;
+        Mon, 15 Mar 2021 16:36:20 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-114-1.ams2.redhat.com [10.36.114.1])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id B32CD5F9B8;
+        Mon, 15 Mar 2021 16:36:06 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: virtualization@lists.linux-foundation.org
+Cc: netdev@vger.kernel.org, Xie Yongji <xieyongji@bytedance.com>,
+        Laurent Vivier <lvivier@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>,
+        linux-kernel@vger.kernel.org, Max Gurtovoy <mgurtovoy@nvidia.com>,
+        Jason Wang <jasowang@redhat.com>,
+        Parav Pandit <parav@nvidia.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>, kvm@vger.kernel.org
+Subject: [PATCH v4 08/14] vdpa: add get_config_size callback in
+ vdpa_config_ops
+Date: Mon, 15 Mar 2021 17:34:44 +0100
+Message-Id: <20210315163450.254396-9-sgarzare@redhat.com>
+In-Reply-To: <20210315163450.254396-1-sgarzare@redhat.com>
+References: <20210315163450.254396-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.16
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+This new callback is used to get the size of the configuration space
+of vDPA devices.
+
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+ include/linux/vdpa.h              | 4 ++++
+ drivers/vdpa/ifcvf/ifcvf_main.c   | 6 ++++++
+ drivers/vdpa/mlx5/net/mlx5_vnet.c | 6 ++++++
+ drivers/vdpa/vdpa_sim/vdpa_sim.c  | 9 +++++++++
+ drivers/vdpa/virtio_pci/vp_vdpa.c | 8 ++++++++
+ 5 files changed, 33 insertions(+)
+
+diff --git a/include/linux/vdpa.h b/include/linux/vdpa.h
+index 15fa085fab05..1b094c1531f2 100644
+--- a/include/linux/vdpa.h
++++ b/include/linux/vdpa.h
+@@ -150,6 +150,9 @@ struct vdpa_iova_range {
+  * @set_status:			Set the device status
+  *				@vdev: vdpa device
+  *				@status: virtio device status
++ * @get_config_size:		Get the size of the configuration space
++ *				@vdev: vdpa device
++ *				Returns size_t: configuration size
+  * @get_config:			Read from device specific configuration space
+  *				@vdev: vdpa device
+  *				@offset: offset from the beginning of
+@@ -231,6 +234,7 @@ struct vdpa_config_ops {
+ 	u32 (*get_vendor_id)(struct vdpa_device *vdev);
+ 	u8 (*get_status)(struct vdpa_device *vdev);
+ 	void (*set_status)(struct vdpa_device *vdev, u8 status);
++	size_t (*get_config_size)(struct vdpa_device *vdev);
+ 	void (*get_config)(struct vdpa_device *vdev, unsigned int offset,
+ 			   void *buf, unsigned int len);
+ 	void (*set_config)(struct vdpa_device *vdev, unsigned int offset,
+diff --git a/drivers/vdpa/ifcvf/ifcvf_main.c b/drivers/vdpa/ifcvf/ifcvf_main.c
+index d555a6a5d1ba..017ab07040c7 100644
+--- a/drivers/vdpa/ifcvf/ifcvf_main.c
++++ b/drivers/vdpa/ifcvf/ifcvf_main.c
+@@ -332,6 +332,11 @@ static u32 ifcvf_vdpa_get_vq_align(struct vdpa_device *vdpa_dev)
+ 	return IFCVF_QUEUE_ALIGNMENT;
+ }
+ 
++static size_t ifcvf_vdpa_get_config_size(struct vdpa_device *vdpa_dev)
++{
++	return sizeof(struct virtio_net_config);
++}
++
+ static void ifcvf_vdpa_get_config(struct vdpa_device *vdpa_dev,
+ 				  unsigned int offset,
+ 				  void *buf, unsigned int len)
+@@ -392,6 +397,7 @@ static const struct vdpa_config_ops ifc_vdpa_ops = {
+ 	.get_device_id	= ifcvf_vdpa_get_device_id,
+ 	.get_vendor_id	= ifcvf_vdpa_get_vendor_id,
+ 	.get_vq_align	= ifcvf_vdpa_get_vq_align,
++	.get_config_size	= ifcvf_vdpa_get_config_size,
+ 	.get_config	= ifcvf_vdpa_get_config,
+ 	.set_config	= ifcvf_vdpa_set_config,
+ 	.set_config_cb  = ifcvf_vdpa_set_config_cb,
+diff --git a/drivers/vdpa/mlx5/net/mlx5_vnet.c b/drivers/vdpa/mlx5/net/mlx5_vnet.c
+index 71397fdafa6a..f6e03bf49e3e 100644
+--- a/drivers/vdpa/mlx5/net/mlx5_vnet.c
++++ b/drivers/vdpa/mlx5/net/mlx5_vnet.c
+@@ -1814,6 +1814,11 @@ static void mlx5_vdpa_set_status(struct vdpa_device *vdev, u8 status)
+ 	ndev->mvdev.status |= VIRTIO_CONFIG_S_FAILED;
+ }
+ 
++static size_t mlx5_vdpa_get_config_size(struct vdpa_device *vdev)
++{
++	return sizeof(struct virtio_net_config);
++}
++
+ static void mlx5_vdpa_get_config(struct vdpa_device *vdev, unsigned int offset, void *buf,
+ 				 unsigned int len)
+ {
+@@ -1900,6 +1905,7 @@ static const struct vdpa_config_ops mlx5_vdpa_ops = {
+ 	.get_vendor_id = mlx5_vdpa_get_vendor_id,
+ 	.get_status = mlx5_vdpa_get_status,
+ 	.set_status = mlx5_vdpa_set_status,
++	.get_config_size = mlx5_vdpa_get_config_size,
+ 	.get_config = mlx5_vdpa_get_config,
+ 	.set_config = mlx5_vdpa_set_config,
+ 	.get_generation = mlx5_vdpa_get_generation,
+diff --git a/drivers/vdpa/vdpa_sim/vdpa_sim.c b/drivers/vdpa/vdpa_sim/vdpa_sim.c
+index 14dc2d3d983e..98f793bc9376 100644
+--- a/drivers/vdpa/vdpa_sim/vdpa_sim.c
++++ b/drivers/vdpa/vdpa_sim/vdpa_sim.c
+@@ -462,6 +462,13 @@ static void vdpasim_set_status(struct vdpa_device *vdpa, u8 status)
+ 	spin_unlock(&vdpasim->lock);
+ }
+ 
++static size_t vdpasim_get_config_size(struct vdpa_device *vdpa)
++{
++	struct vdpasim *vdpasim = vdpa_to_sim(vdpa);
++
++	return vdpasim->dev_attr.config_size;
++}
++
+ static void vdpasim_get_config(struct vdpa_device *vdpa, unsigned int offset,
+ 			     void *buf, unsigned int len)
+ {
+@@ -598,6 +605,7 @@ static const struct vdpa_config_ops vdpasim_config_ops = {
+ 	.get_vendor_id          = vdpasim_get_vendor_id,
+ 	.get_status             = vdpasim_get_status,
+ 	.set_status             = vdpasim_set_status,
++	.get_config_size        = vdpasim_get_config_size,
+ 	.get_config             = vdpasim_get_config,
+ 	.set_config             = vdpasim_set_config,
+ 	.get_generation         = vdpasim_get_generation,
+@@ -625,6 +633,7 @@ static const struct vdpa_config_ops vdpasim_batch_config_ops = {
+ 	.get_vendor_id          = vdpasim_get_vendor_id,
+ 	.get_status             = vdpasim_get_status,
+ 	.set_status             = vdpasim_set_status,
++	.get_config_size        = vdpasim_get_config_size,
+ 	.get_config             = vdpasim_get_config,
+ 	.set_config             = vdpasim_set_config,
+ 	.get_generation         = vdpasim_get_generation,
+diff --git a/drivers/vdpa/virtio_pci/vp_vdpa.c b/drivers/vdpa/virtio_pci/vp_vdpa.c
+index 1321a2fcd088..dc27ec970884 100644
+--- a/drivers/vdpa/virtio_pci/vp_vdpa.c
++++ b/drivers/vdpa/virtio_pci/vp_vdpa.c
+@@ -295,6 +295,13 @@ static u32 vp_vdpa_get_vq_align(struct vdpa_device *vdpa)
+ 	return PAGE_SIZE;
+ }
+ 
++static size_t vp_vdpa_get_config_size(struct vdpa_device *vdpa)
++{
++	struct virtio_pci_modern_device *mdev = vdpa_to_mdev(vdpa);
++
++	return mdev->device_len;
++}
++
+ static void vp_vdpa_get_config(struct vdpa_device *vdpa,
+ 			       unsigned int offset,
+ 			       void *buf, unsigned int len)
+@@ -354,6 +361,7 @@ static const struct vdpa_config_ops vp_vdpa_ops = {
+ 	.get_device_id	= vp_vdpa_get_device_id,
+ 	.get_vendor_id	= vp_vdpa_get_vendor_id,
+ 	.get_vq_align	= vp_vdpa_get_vq_align,
++	.get_config_size = vp_vdpa_get_config_size,
+ 	.get_config	= vp_vdpa_get_config,
+ 	.set_config	= vp_vdpa_set_config,
+ 	.set_config_cb  = vp_vdpa_set_config_cb,
+
+From patchwork Mon Mar 15 16:34:45 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 12140049
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 6498CC433E9
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:37:23 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 2E39864F26
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:37:23 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S233884AbhCOQgz (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 15 Mar 2021 12:36:55 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:40973 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S234131AbhCOQgg (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 15 Mar 2021 12:36:36 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615826193;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=KLOfu+3tvxBM9AOvHodnhHFlNdGDVuA5IWmra+LYM2A=;
+        b=Rkj8Z2LVGCt/aPu5A6Aey0w9GTxlBJQ5jV7VpQvTh/BZNbcBZF37KeZFYk4jyhuXUbB+7L
+        GAkfkPvkID+BWTXskpmp0EoGuLsw2UVo8IbrVeG0B8tUGYwPVBJjmYlDsPUb4X72CEzftS
+        tV7z+vqqeoIGA5DfOXanV2IrAX2x4Gk=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-329-ScObpkMJPE2pysMQHktPLQ-1; Mon, 15 Mar 2021 12:36:24 -0400
+X-MC-Unique: ScObpkMJPE2pysMQHktPLQ-1
+Received: from smtp.corp.redhat.com (int-mx06.intmail.prod.int.phx2.redhat.com
+ [10.5.11.16])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 0FE7394DE2;
+        Mon, 15 Mar 2021 16:36:23 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-114-1.ams2.redhat.com [10.36.114.1])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id BB0265FC17;
+        Mon, 15 Mar 2021 16:36:20 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: virtualization@lists.linux-foundation.org
+Cc: netdev@vger.kernel.org, Xie Yongji <xieyongji@bytedance.com>,
+        Laurent Vivier <lvivier@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>,
+        linux-kernel@vger.kernel.org, Max Gurtovoy <mgurtovoy@nvidia.com>,
+        Jason Wang <jasowang@redhat.com>,
+        Parav Pandit <parav@nvidia.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>, kvm@vger.kernel.org
+Subject: [PATCH v4 09/14] vhost/vdpa: use get_config_size callback in
+ vhost_vdpa_config_validate()
+Date: Mon, 15 Mar 2021 17:34:45 +0100
+Message-Id: <20210315163450.254396-10-sgarzare@redhat.com>
+In-Reply-To: <20210315163450.254396-1-sgarzare@redhat.com>
+References: <20210315163450.254396-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.16
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Let's use the new 'get_config_size()' callback available instead of
+using the 'virtio_id' to get the size of the device config space.
+
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+ drivers/vhost/vdpa.c | 9 ++-------
+ 1 file changed, 2 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/vhost/vdpa.c b/drivers/vhost/vdpa.c
+index e0a27e336293..7ae4080e57d8 100644
+--- a/drivers/vhost/vdpa.c
++++ b/drivers/vhost/vdpa.c
+@@ -188,13 +188,8 @@ static long vhost_vdpa_set_status(struct vhost_vdpa *v, u8 __user *statusp)
+ static int vhost_vdpa_config_validate(struct vhost_vdpa *v,
+ 				      struct vhost_vdpa_config *c)
+ {
+-	long size = 0;
+-
+-	switch (v->virtio_id) {
+-	case VIRTIO_ID_NET:
+-		size = sizeof(struct virtio_net_config);
+-		break;
+-	}
++	struct vdpa_device *vdpa = v->vdpa;
++	long size = vdpa->config->get_config_size(vdpa);
+ 
+ 	if (c->len == 0)
+ 		return -EINVAL;
+
+From patchwork Mon Mar 15 16:34:46 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 12140047
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 404BFC433E6
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:37:23 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 0E04C64F36
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:37:23 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S233539AbhCOQgy (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 15 Mar 2021 12:36:54 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:55510 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S234140AbhCOQgg (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 15 Mar 2021 12:36:36 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615826192;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=TySZqS37bNSDf+nHbLxQcHvMalZAV5YycVxJe257EIo=;
+        b=MVWd75gBXTD0M55mJTGoNnD1vhMbNPnYpxJUMC/rLNDNgJAbf+gULNZJfncF/xkKKt6ySq
+        XUIMx4+24jgIwiqD++UGF7PlQZNKKVe9NhIVKuAfLGjjDAeYaP7ndNts/1EODkf5I1/AaU
+        4K/7pZy7Myt5dss3TpfVWp7aTkVKu80=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-469-1Dj3RlHpPFGI1QjIc5EkxQ-1; Mon, 15 Mar 2021 12:36:27 -0400
+X-MC-Unique: 1Dj3RlHpPFGI1QjIc5EkxQ-1
+Received: from smtp.corp.redhat.com (int-mx06.intmail.prod.int.phx2.redhat.com
+ [10.5.11.16])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id A9213100C66A;
+        Mon, 15 Mar 2021 16:36:25 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-114-1.ams2.redhat.com [10.36.114.1])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 5E3FC5C8B3;
+        Mon, 15 Mar 2021 16:36:23 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: virtualization@lists.linux-foundation.org
+Cc: netdev@vger.kernel.org, Xie Yongji <xieyongji@bytedance.com>,
+        Laurent Vivier <lvivier@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>,
+        linux-kernel@vger.kernel.org, Max Gurtovoy <mgurtovoy@nvidia.com>,
+        Jason Wang <jasowang@redhat.com>,
+        Parav Pandit <parav@nvidia.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>, kvm@vger.kernel.org
+Subject: [PATCH v4 10/14] vhost/vdpa: Remove the restriction that only
+ supports virtio-net devices
+Date: Mon, 15 Mar 2021 17:34:46 +0100
+Message-Id: <20210315163450.254396-11-sgarzare@redhat.com>
+In-Reply-To: <20210315163450.254396-1-sgarzare@redhat.com>
+References: <20210315163450.254396-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.16
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Xie Yongji <xieyongji@bytedance.com>
+
+Since the config checks are done by the vDPA drivers, we can remove the
+virtio-net restriction and we should be able to support all kinds of
+virtio devices.
+
+<linux/virtio_net.h> is not needed anymore, but we need to include
+<linux/slab.h> to avoid compilation failures.
+
+Signed-off-by: Xie Yongji <xieyongji@bytedance.com>
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+ drivers/vhost/vdpa.c | 6 +-----
+ 1 file changed, 1 insertion(+), 5 deletions(-)
+
+diff --git a/drivers/vhost/vdpa.c b/drivers/vhost/vdpa.c
+index 7ae4080e57d8..850ed4b62942 100644
+--- a/drivers/vhost/vdpa.c
++++ b/drivers/vhost/vdpa.c
+@@ -16,12 +16,12 @@
+ #include <linux/cdev.h>
+ #include <linux/device.h>
+ #include <linux/mm.h>
++#include <linux/slab.h>
+ #include <linux/iommu.h>
+ #include <linux/uuid.h>
+ #include <linux/vdpa.h>
+ #include <linux/nospec.h>
+ #include <linux/vhost.h>
+-#include <linux/virtio_net.h>
+ 
+ #include "vhost.h"
+ 
+@@ -1018,10 +1018,6 @@ static int vhost_vdpa_probe(struct vdpa_device *vdpa)
+ 	int minor;
+ 	int r;
+ 
+-	/* Currently, we only accept the network devices. */
+-	if (ops->get_device_id(vdpa) != VIRTIO_ID_NET)
+-		return -ENOTSUPP;
+-
+ 	v = kzalloc(sizeof(*v), GFP_KERNEL | __GFP_RETRY_MAYFAIL);
+ 	if (!v)
+ 		return -ENOMEM;
+
+From patchwork Mon Mar 15 16:34:47 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 12140051
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 00BAEC43332
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:37:24 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id CE07964F2B
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:37:23 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S233986AbhCOQg4 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 15 Mar 2021 12:36:56 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([63.128.21.124]:53613 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S232373AbhCOQgi (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 15 Mar 2021 12:36:38 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615826197;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=ZUinSZo2vGgEHvlv5uRgIeCRbMAND3Dg4x/MP7jvcs0=;
+        b=Tw3BQa2DX9JQHV777gmZ4uHTKkYcTWrH8xanJGLC4KvshCSAzzwh4b1QmvIwYyUWd+PtDt
+        Bb4GgIyGR7QG+prXYvxCLCv5FIs9joDOrDN9cTFIhZs3jbkWBpkRXIzfVH1Wsvzh5K5XbL
+        uCe5AZRdYYKzmef0jkSw3zYu6I7ob/Q=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-240-jkKtV_PJOU6iWF4zu7KnIA-1; Mon, 15 Mar 2021 12:36:30 -0400
+X-MC-Unique: jkKtV_PJOU6iWF4zu7KnIA-1
+Received: from smtp.corp.redhat.com (int-mx06.intmail.prod.int.phx2.redhat.com
+ [10.5.11.16])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 596A7100C664;
+        Mon, 15 Mar 2021 16:36:28 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-114-1.ams2.redhat.com [10.36.114.1])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 05B9E171F4;
+        Mon, 15 Mar 2021 16:36:25 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: virtualization@lists.linux-foundation.org
+Cc: netdev@vger.kernel.org, Xie Yongji <xieyongji@bytedance.com>,
+        Laurent Vivier <lvivier@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>,
+        linux-kernel@vger.kernel.org, Max Gurtovoy <mgurtovoy@nvidia.com>,
+        Jason Wang <jasowang@redhat.com>,
+        Parav Pandit <parav@nvidia.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>, kvm@vger.kernel.org
+Subject: [PATCH v4 11/14] vdpa: add vdpa simulator for block device
+Date: Mon, 15 Mar 2021 17:34:47 +0100
+Message-Id: <20210315163450.254396-12-sgarzare@redhat.com>
+In-Reply-To: <20210315163450.254396-1-sgarzare@redhat.com>
+References: <20210315163450.254396-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.16
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Max Gurtovoy <mgurtovoy@nvidia.com>
+
+This will allow running vDPA for virtio block protocol.
+
+It's a preliminary implementation with a simple request handling:
+for each request, only the status (last byte) is set.
+It's always set to VIRTIO_BLK_S_OK.
+
+Also input validation is missing and will be added in the next commits.
+
+Signed-off-by: Max Gurtovoy <mgurtovoy@nvidia.com>
+[sgarzare: various cleanups/fixes]
+Acked-by: Jason Wang <jasowang@redhat.com>
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+v4:
+- include linux/blkdev.h to fix a build issue
+- fix vdpa_register_device() passing the new 'nvqs' params
+
+v3:
+- updated Mellanox copyright to NVIDIA [Max]
+- explained in the commit message that inputs are validated in subsequent
+  patches [Stefan]
+
+v2:
+- rebased on top of other changes (dev_attr, get_config(), notify(), etc.)
+- memset to 0 the config structure in vdpasim_blk_get_config()
+- used vdpasim pointer in vdpasim_blk_get_config()
+
+v1:
+- Removed unused headers
+- Used cpu_to_vdpasim*() to store config fields
+- Replaced 'select VDPA_SIM' with 'depends on VDPA_SIM' since selected
+  option can not depend on other [Jason]
+- Start with a single queue for now [Jason]
+- Add comments to memory barriers
+---
+ drivers/vdpa/vdpa_sim/vdpa_sim_blk.c | 145 +++++++++++++++++++++++++++
+ drivers/vdpa/Kconfig                 |   7 ++
+ drivers/vdpa/vdpa_sim/Makefile       |   1 +
+ 3 files changed, 153 insertions(+)
+ create mode 100644 drivers/vdpa/vdpa_sim/vdpa_sim_blk.c
+
+diff --git a/drivers/vdpa/vdpa_sim/vdpa_sim_blk.c b/drivers/vdpa/vdpa_sim/vdpa_sim_blk.c
+new file mode 100644
+index 000000000000..64926a70af5e
+--- /dev/null
++++ b/drivers/vdpa/vdpa_sim/vdpa_sim_blk.c
+@@ -0,0 +1,145 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * VDPA simulator for block device.
++ *
++ * Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
++ *
++ */
++
++#include <linux/init.h>
++#include <linux/module.h>
++#include <linux/device.h>
++#include <linux/kernel.h>
++#include <linux/sched.h>
++#include <linux/blkdev.h>
++#include <linux/vringh.h>
++#include <linux/vdpa.h>
++#include <uapi/linux/virtio_blk.h>
++
++#include "vdpa_sim.h"
++
++#define DRV_VERSION  "0.1"
++#define DRV_AUTHOR   "Max Gurtovoy <mgurtovoy@nvidia.com>"
++#define DRV_DESC     "vDPA Device Simulator for block device"
++#define DRV_LICENSE  "GPL v2"
++
++#define VDPASIM_BLK_FEATURES	(VDPASIM_FEATURES | \
++				 (1ULL << VIRTIO_BLK_F_SIZE_MAX) | \
++				 (1ULL << VIRTIO_BLK_F_SEG_MAX)  | \
++				 (1ULL << VIRTIO_BLK_F_BLK_SIZE) | \
++				 (1ULL << VIRTIO_BLK_F_TOPOLOGY) | \
++				 (1ULL << VIRTIO_BLK_F_MQ))
++
++#define VDPASIM_BLK_CAPACITY	0x40000
++#define VDPASIM_BLK_SIZE_MAX	0x1000
++#define VDPASIM_BLK_SEG_MAX	32
++#define VDPASIM_BLK_VQ_NUM	1
++
++static struct vdpasim *vdpasim_blk_dev;
++
++static void vdpasim_blk_work(struct work_struct *work)
++{
++	struct vdpasim *vdpasim = container_of(work, struct vdpasim, work);
++	u8 status = VIRTIO_BLK_S_OK;
++	int i;
++
++	spin_lock(&vdpasim->lock);
++
++	if (!(vdpasim->status & VIRTIO_CONFIG_S_DRIVER_OK))
++		goto out;
++
++	for (i = 0; i < VDPASIM_BLK_VQ_NUM; i++) {
++		struct vdpasim_virtqueue *vq = &vdpasim->vqs[i];
++
++		if (!vq->ready)
++			continue;
++
++		while (vringh_getdesc_iotlb(&vq->vring, &vq->out_iov,
++					    &vq->in_iov, &vq->head,
++					    GFP_ATOMIC) > 0) {
++			int write;
++
++			vq->in_iov.i = vq->in_iov.used - 1;
++			write = vringh_iov_push_iotlb(&vq->vring, &vq->in_iov,
++						      &status, 1);
++			if (write <= 0)
++				break;
++
++			/* Make sure data is wrote before advancing index */
++			smp_wmb();
++
++			vringh_complete_iotlb(&vq->vring, vq->head, write);
++
++			/* Make sure used is visible before rasing the interrupt. */
++			smp_wmb();
++
++			local_bh_disable();
++			if (vringh_need_notify_iotlb(&vq->vring) > 0)
++				vringh_notify(&vq->vring);
++			local_bh_enable();
++		}
++	}
++out:
++	spin_unlock(&vdpasim->lock);
++}
++
++static void vdpasim_blk_get_config(struct vdpasim *vdpasim, void *config)
++{
++	struct virtio_blk_config *blk_config = config;
++
++	memset(config, 0, sizeof(struct virtio_blk_config));
++
++	blk_config->capacity = cpu_to_vdpasim64(vdpasim, VDPASIM_BLK_CAPACITY);
++	blk_config->size_max = cpu_to_vdpasim32(vdpasim, VDPASIM_BLK_SIZE_MAX);
++	blk_config->seg_max = cpu_to_vdpasim32(vdpasim, VDPASIM_BLK_SEG_MAX);
++	blk_config->num_queues = cpu_to_vdpasim16(vdpasim, VDPASIM_BLK_VQ_NUM);
++	blk_config->min_io_size = cpu_to_vdpasim16(vdpasim, 1);
++	blk_config->opt_io_size = cpu_to_vdpasim32(vdpasim, 1);
++	blk_config->blk_size = cpu_to_vdpasim32(vdpasim, SECTOR_SIZE);
++}
++
++static int __init vdpasim_blk_init(void)
++{
++	struct vdpasim_dev_attr dev_attr = {};
++	int ret;
++
++	dev_attr.id = VIRTIO_ID_BLOCK;
++	dev_attr.supported_features = VDPASIM_BLK_FEATURES;
++	dev_attr.nvqs = VDPASIM_BLK_VQ_NUM;
++	dev_attr.config_size = sizeof(struct virtio_blk_config);
++	dev_attr.get_config = vdpasim_blk_get_config;
++	dev_attr.work_fn = vdpasim_blk_work;
++	dev_attr.buffer_size = PAGE_SIZE;
++
++	vdpasim_blk_dev = vdpasim_create(&dev_attr);
++	if (IS_ERR(vdpasim_blk_dev)) {
++		ret = PTR_ERR(vdpasim_blk_dev);
++		goto out;
++	}
++
++	ret = vdpa_register_device(&vdpasim_blk_dev->vdpa, VDPASIM_BLK_VQ_NUM);
++	if (ret)
++		goto put_dev;
++
++	return 0;
++
++put_dev:
++	put_device(&vdpasim_blk_dev->vdpa.dev);
++out:
++	return ret;
++}
++
++static void __exit vdpasim_blk_exit(void)
++{
++	struct vdpa_device *vdpa = &vdpasim_blk_dev->vdpa;
++
++	vdpa_unregister_device(vdpa);
++}
++
++module_init(vdpasim_blk_init)
++module_exit(vdpasim_blk_exit)
++
++MODULE_VERSION(DRV_VERSION);
++MODULE_LICENSE(DRV_LICENSE);
++MODULE_AUTHOR(DRV_AUTHOR);
++MODULE_DESCRIPTION(DRV_DESC);
+diff --git a/drivers/vdpa/Kconfig b/drivers/vdpa/Kconfig
+index 6e82a0e228c2..a503c1b2bfd9 100644
+--- a/drivers/vdpa/Kconfig
++++ b/drivers/vdpa/Kconfig
+@@ -26,6 +26,13 @@ config VDPA_SIM_NET
+ 	help
+ 	  vDPA networking device simulator which loops TX traffic back to RX.
+ 
++config VDPA_SIM_BLOCK
++	tristate "vDPA simulator for block device"
++	depends on VDPA_SIM
++	help
++	  vDPA block device simulator which terminates IO request in a
++	  memory buffer.
++
+ config IFCVF
+ 	tristate "Intel IFC VF vDPA driver"
+ 	depends on PCI_MSI
+diff --git a/drivers/vdpa/vdpa_sim/Makefile b/drivers/vdpa/vdpa_sim/Makefile
+index 79d4536d347e..d458103302f2 100644
+--- a/drivers/vdpa/vdpa_sim/Makefile
++++ b/drivers/vdpa/vdpa_sim/Makefile
+@@ -1,3 +1,4 @@
+ # SPDX-License-Identifier: GPL-2.0
+ obj-$(CONFIG_VDPA_SIM) += vdpa_sim.o
+ obj-$(CONFIG_VDPA_SIM_NET) += vdpa_sim_net.o
++obj-$(CONFIG_VDPA_SIM_BLOCK) += vdpa_sim_blk.o
+
+From patchwork Mon Mar 15 16:34:48 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 12140053
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 9B337C433DB
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:37:54 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 5829C64F2B
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:37:54 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S233606AbhCOQhX (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 15 Mar 2021 12:37:23 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([170.10.133.124]:36987 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S234235AbhCOQhC (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 15 Mar 2021 12:37:02 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615826221;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=bgdRda8gjRmGBNfAjmwV9NMHKH6Ye2bg31lslzLl2y4=;
+        b=RLlYVP8Ti5u6GgW0g/NvzGg7D77vPEj2n+evxi1/jhnCpA8Mpx7cvbLWXQVySkTZiLb4/7
+        Ax/LvPpxyGC+JcjLi6c4AwEPRLCEHIiAqhgYxyKHwPFEA4cwQSJ1cZbDJi5NaXXt94g5w2
+        viRqmzDzNhzQ5IRA80uoop+QBCngwjc=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-190-t039BIq9MEC9AW-OM_C7cw-1; Mon, 15 Mar 2021 12:36:59 -0400
+X-MC-Unique: t039BIq9MEC9AW-OM_C7cw-1
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id CD6D3A40C0;
+        Mon, 15 Mar 2021 16:36:57 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-114-1.ams2.redhat.com [10.36.114.1])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 85B745D705;
+        Mon, 15 Mar 2021 16:36:49 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: virtualization@lists.linux-foundation.org
+Cc: netdev@vger.kernel.org, Xie Yongji <xieyongji@bytedance.com>,
+        Laurent Vivier <lvivier@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>,
+        linux-kernel@vger.kernel.org, Max Gurtovoy <mgurtovoy@nvidia.com>,
+        Jason Wang <jasowang@redhat.com>,
+        Parav Pandit <parav@nvidia.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>, kvm@vger.kernel.org
+Subject: [PATCH v4 12/14] vdpa_sim_blk: implement ramdisk behaviour
+Date: Mon, 15 Mar 2021 17:34:48 +0100
+Message-Id: <20210315163450.254396-13-sgarzare@redhat.com>
+In-Reply-To: <20210315163450.254396-1-sgarzare@redhat.com>
+References: <20210315163450.254396-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+The previous implementation wrote only the status of each request.
+This patch implements a more accurate block device simulator,
+providing a ramdisk-like behavior and adding input validation.
+
+Acked-by: Jason Wang <jasowang@redhat.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+v2:
+- used %zd %zx to print size_t and ssize_t variables in dev_err()
+- removed unnecessary new line [Jason]
+- moved VIRTIO_BLK_T_GET_ID in another patch [Jason]
+- used push/pull instead of write/read terminology
+- added vdpasim_blk_check_range() to avoid overflows [Stefan]
+- use vdpasim*_to_cpu instead of le*_to_cpu
+- used vringh_kiov_length() helper [Jason]
+---
+ drivers/vdpa/vdpa_sim/vdpa_sim_blk.c | 164 ++++++++++++++++++++++++---
+ 1 file changed, 146 insertions(+), 18 deletions(-)
+
+diff --git a/drivers/vdpa/vdpa_sim/vdpa_sim_blk.c b/drivers/vdpa/vdpa_sim/vdpa_sim_blk.c
+index 64926a70af5e..a31964e3e5a4 100644
+--- a/drivers/vdpa/vdpa_sim/vdpa_sim_blk.c
++++ b/drivers/vdpa/vdpa_sim/vdpa_sim_blk.c
+@@ -3,6 +3,7 @@
+  * VDPA simulator for block device.
+  *
+  * Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
++ * Copyright (c) 2021, Red Hat Inc. All rights reserved.
+  *
+  */
+ 
+@@ -14,6 +15,7 @@
+ #include <linux/blkdev.h>
+ #include <linux/vringh.h>
+ #include <linux/vdpa.h>
++#include <linux/blkdev.h>
+ #include <uapi/linux/virtio_blk.h>
+ 
+ #include "vdpa_sim.h"
+@@ -37,10 +39,151 @@
+ 
+ static struct vdpasim *vdpasim_blk_dev;
+ 
++static bool vdpasim_blk_check_range(u64 start_sector, size_t range_size)
++{
++	u64 range_sectors = range_size >> SECTOR_SHIFT;
++
++	if (range_size > VDPASIM_BLK_SIZE_MAX * VDPASIM_BLK_SEG_MAX)
++		return false;
++
++	if (start_sector > VDPASIM_BLK_CAPACITY)
++		return false;
++
++	if (range_sectors > VDPASIM_BLK_CAPACITY - start_sector)
++		return false;
++
++	return true;
++}
++
++/* Returns 'true' if the request is handled (with or without an I/O error)
++ * and the status is correctly written in the last byte of the 'in iov',
++ * 'false' otherwise.
++ */
++static bool vdpasim_blk_handle_req(struct vdpasim *vdpasim,
++				   struct vdpasim_virtqueue *vq)
++{
++	size_t pushed = 0, to_pull, to_push;
++	struct virtio_blk_outhdr hdr;
++	ssize_t bytes;
++	loff_t offset;
++	u64 sector;
++	u8 status;
++	u32 type;
++	int ret;
++
++	ret = vringh_getdesc_iotlb(&vq->vring, &vq->out_iov, &vq->in_iov,
++				   &vq->head, GFP_ATOMIC);
++	if (ret != 1)
++		return false;
++
++	if (vq->out_iov.used < 1 || vq->in_iov.used < 1) {
++		dev_err(&vdpasim->vdpa.dev, "missing headers - out_iov: %u in_iov %u\n",
++			vq->out_iov.used, vq->in_iov.used);
++		return false;
++	}
++
++	if (vq->in_iov.iov[vq->in_iov.used - 1].iov_len < 1) {
++		dev_err(&vdpasim->vdpa.dev, "request in header too short\n");
++		return false;
++	}
++
++	/* The last byte is the status and we checked if the last iov has
++	 * enough room for it.
++	 */
++	to_push = vringh_kiov_length(&vq->in_iov) - 1;
++
++	to_pull = vringh_kiov_length(&vq->out_iov);
++
++	bytes = vringh_iov_pull_iotlb(&vq->vring, &vq->out_iov, &hdr,
++				      sizeof(hdr));
++	if (bytes != sizeof(hdr)) {
++		dev_err(&vdpasim->vdpa.dev, "request out header too short\n");
++		return false;
++	}
++
++	to_pull -= bytes;
++
++	type = vdpasim32_to_cpu(vdpasim, hdr.type);
++	sector = vdpasim64_to_cpu(vdpasim, hdr.sector);
++	offset = sector << SECTOR_SHIFT;
++	status = VIRTIO_BLK_S_OK;
++
++	switch (type) {
++	case VIRTIO_BLK_T_IN:
++		if (!vdpasim_blk_check_range(sector, to_push)) {
++			dev_err(&vdpasim->vdpa.dev,
++				"reading over the capacity - offset: 0x%llx len: 0x%zx\n",
++				offset, to_push);
++			status = VIRTIO_BLK_S_IOERR;
++			break;
++		}
++
++		bytes = vringh_iov_push_iotlb(&vq->vring, &vq->in_iov,
++					      vdpasim->buffer + offset,
++					      to_push);
++		if (bytes < 0) {
++			dev_err(&vdpasim->vdpa.dev,
++				"vringh_iov_push_iotlb() error: %zd offset: 0x%llx len: 0x%zx\n",
++				bytes, offset, to_push);
++			status = VIRTIO_BLK_S_IOERR;
++			break;
++		}
++
++		pushed += bytes;
++		break;
++
++	case VIRTIO_BLK_T_OUT:
++		if (!vdpasim_blk_check_range(sector, to_pull)) {
++			dev_err(&vdpasim->vdpa.dev,
++				"writing over the capacity - offset: 0x%llx len: 0x%zx\n",
++				offset, to_pull);
++			status = VIRTIO_BLK_S_IOERR;
++			break;
++		}
++
++		bytes = vringh_iov_pull_iotlb(&vq->vring, &vq->out_iov,
++					      vdpasim->buffer + offset,
++					      to_pull);
++		if (bytes < 0) {
++			dev_err(&vdpasim->vdpa.dev,
++				"vringh_iov_pull_iotlb() error: %zd offset: 0x%llx len: 0x%zx\n",
++				bytes, offset, to_pull);
++			status = VIRTIO_BLK_S_IOERR;
++			break;
++		}
++		break;
++
++	default:
++		dev_warn(&vdpasim->vdpa.dev,
++			 "Unsupported request type %d\n", type);
++		status = VIRTIO_BLK_S_IOERR;
++		break;
++	}
++
++	/* If some operations fail, we need to skip the remaining bytes
++	 * to put the status in the last byte
++	 */
++	if (to_push - pushed > 0)
++		vringh_kiov_advance(&vq->in_iov, to_push - pushed);
++
++	/* Last byte is the status */
++	bytes = vringh_iov_push_iotlb(&vq->vring, &vq->in_iov, &status, 1);
++	if (bytes != 1)
++		return false;
++
++	pushed += bytes;
++
++	/* Make sure data is wrote before advancing index */
++	smp_wmb();
++
++	vringh_complete_iotlb(&vq->vring, vq->head, pushed);
++
++	return true;
++}
++
+ static void vdpasim_blk_work(struct work_struct *work)
+ {
+ 	struct vdpasim *vdpasim = container_of(work, struct vdpasim, work);
+-	u8 status = VIRTIO_BLK_S_OK;
+ 	int i;
+ 
+ 	spin_lock(&vdpasim->lock);
+@@ -54,22 +197,7 @@ static void vdpasim_blk_work(struct work_struct *work)
+ 		if (!vq->ready)
+ 			continue;
+ 
+-		while (vringh_getdesc_iotlb(&vq->vring, &vq->out_iov,
+-					    &vq->in_iov, &vq->head,
+-					    GFP_ATOMIC) > 0) {
+-			int write;
+-
+-			vq->in_iov.i = vq->in_iov.used - 1;
+-			write = vringh_iov_push_iotlb(&vq->vring, &vq->in_iov,
+-						      &status, 1);
+-			if (write <= 0)
+-				break;
+-
+-			/* Make sure data is wrote before advancing index */
+-			smp_wmb();
+-
+-			vringh_complete_iotlb(&vq->vring, vq->head, write);
+-
++		while (vdpasim_blk_handle_req(vdpasim, vq)) {
+ 			/* Make sure used is visible before rasing the interrupt. */
+ 			smp_wmb();
+ 
+@@ -109,7 +237,7 @@ static int __init vdpasim_blk_init(void)
+ 	dev_attr.config_size = sizeof(struct virtio_blk_config);
+ 	dev_attr.get_config = vdpasim_blk_get_config;
+ 	dev_attr.work_fn = vdpasim_blk_work;
+-	dev_attr.buffer_size = PAGE_SIZE;
++	dev_attr.buffer_size = VDPASIM_BLK_CAPACITY << SECTOR_SHIFT;
+ 
+ 	vdpasim_blk_dev = vdpasim_create(&dev_attr);
+ 	if (IS_ERR(vdpasim_blk_dev)) {
+
+From patchwork Mon Mar 15 16:34:49 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 12140057
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.0 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 7F5A6C432C3
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:37:55 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 6521A64F36
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:37:55 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S234143AbhCOQhY (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 15 Mar 2021 12:37:24 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([63.128.21.124]:48051 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S234459AbhCOQhG (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 15 Mar 2021 12:37:06 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615826225;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=W/EEuFoOcyPn1SUcWyeJ5vYdXnhD/91DvFQCCSz3fhQ=;
+        b=VvCVULxMs36bpAwlbyCQSQo2/D/hx1NWFkQaGaWE9RLVioZfw3GQ67zORJia8bO6XHbBlm
+        cfFtLQpf/Lsk2zIJDewjC1q/1n2SR+trwT8mLBrtPCdy+WKegfVuer0ES7RVW1Fx0sg4Si
+        sApL2+swntNNWs9jcOWaPMsYKrLxtGA=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-422-FebLI3jpM9CFVelpKa80mQ-1; Mon, 15 Mar 2021 12:37:01 -0400
+X-MC-Unique: FebLI3jpM9CFVelpKa80mQ-1
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 787228015BD;
+        Mon, 15 Mar 2021 16:37:00 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-114-1.ams2.redhat.com [10.36.114.1])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 295415D745;
+        Mon, 15 Mar 2021 16:36:57 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: virtualization@lists.linux-foundation.org
+Cc: netdev@vger.kernel.org, Xie Yongji <xieyongji@bytedance.com>,
+        Laurent Vivier <lvivier@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>,
+        linux-kernel@vger.kernel.org, Max Gurtovoy <mgurtovoy@nvidia.com>,
+        Jason Wang <jasowang@redhat.com>,
+        Parav Pandit <parav@nvidia.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>, kvm@vger.kernel.org
+Subject: [PATCH v4 13/14] vdpa_sim_blk: handle VIRTIO_BLK_T_GET_ID
+Date: Mon, 15 Mar 2021 17:34:49 +0100
+Message-Id: <20210315163450.254396-14-sgarzare@redhat.com>
+In-Reply-To: <20210315163450.254396-1-sgarzare@redhat.com>
+References: <20210315163450.254396-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Handle VIRTIO_BLK_T_GET_ID request, always answering the
+"vdpa_blk_sim" string.
+
+Acked-by: Jason Wang <jasowang@redhat.com>
+Reviewed-by: Stefan Hajnoczi <stefanha@redhat.com>
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+v2:
+- made 'vdpasim_blk_id' static [Jason]
+---
+ drivers/vdpa/vdpa_sim/vdpa_sim_blk.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/drivers/vdpa/vdpa_sim/vdpa_sim_blk.c b/drivers/vdpa/vdpa_sim/vdpa_sim_blk.c
+index a31964e3e5a4..643ae3bc62c0 100644
+--- a/drivers/vdpa/vdpa_sim/vdpa_sim_blk.c
++++ b/drivers/vdpa/vdpa_sim/vdpa_sim_blk.c
+@@ -38,6 +38,7 @@
+ #define VDPASIM_BLK_VQ_NUM	1
+ 
+ static struct vdpasim *vdpasim_blk_dev;
++static char vdpasim_blk_id[VIRTIO_BLK_ID_BYTES] = "vdpa_blk_sim";
+ 
+ static bool vdpasim_blk_check_range(u64 start_sector, size_t range_size)
+ {
+@@ -153,6 +154,20 @@ static bool vdpasim_blk_handle_req(struct vdpasim *vdpasim,
+ 		}
+ 		break;
+ 
++	case VIRTIO_BLK_T_GET_ID:
++		bytes = vringh_iov_push_iotlb(&vq->vring, &vq->in_iov,
++					      vdpasim_blk_id,
++					      VIRTIO_BLK_ID_BYTES);
++		if (bytes < 0) {
++			dev_err(&vdpasim->vdpa.dev,
++				"vringh_iov_push_iotlb() error: %zd\n", bytes);
++			status = VIRTIO_BLK_S_IOERR;
++			break;
++		}
++
++		pushed += bytes;
++		break;
++
+ 	default:
+ 		dev_warn(&vdpasim->vdpa.dev,
+ 			 "Unsupported request type %d\n", type);
+
+From patchwork Mon Mar 15 16:34:50 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Stefano Garzarella <sgarzare@redhat.com>
+X-Patchwork-Id: 12140055
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-13.2 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,
+	UNWANTED_LANGUAGE_BODY autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id DA058C43381
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:37:54 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id AA6CD64F39
+	for <kvm@archiver.kernel.org>; Mon, 15 Mar 2021 16:37:54 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S234429AbhCOQhZ (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Mon, 15 Mar 2021 12:37:25 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:45185 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S234484AbhCOQhJ (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Mon, 15 Mar 2021 12:37:09 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1615826228;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=U8vUFAmjRmjmnzMs61Tq8yFKJeXqpEIeLAUIhyE/5+k=;
+        b=MEJG96W9fL6LolbbFsMZay8+S8WfuMf+VDxJBlHEiwQH6bHYQx45TTXhHH1pR+uvE7tZyZ
+        zwcN+6EQVxK29irO1mdz/46Oh//F7cZwrUZV5G6eLg9edQeRlkiYCsA70ir3a/G63AnOk7
+        G23HH9SszcQ44kDunp48X16JQ4bvIUE=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-485-rnp7GeiANpG-K6VdCCLdvg-1; Mon, 15 Mar 2021 12:37:05 -0400
+X-MC-Unique: rnp7GeiANpG-K6VdCCLdvg-1
+Received: from smtp.corp.redhat.com (int-mx05.intmail.prod.int.phx2.redhat.com
+ [10.5.11.15])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 22B4C8015BD;
+        Mon, 15 Mar 2021 16:37:03 +0000 (UTC)
+Received: from steredhat.redhat.com (ovpn-114-1.ams2.redhat.com [10.36.114.1])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id C8AC55D705;
+        Mon, 15 Mar 2021 16:37:00 +0000 (UTC)
+From: Stefano Garzarella <sgarzare@redhat.com>
+To: virtualization@lists.linux-foundation.org
+Cc: netdev@vger.kernel.org, Xie Yongji <xieyongji@bytedance.com>,
+        Laurent Vivier <lvivier@redhat.com>,
+        Stefan Hajnoczi <stefanha@redhat.com>,
+        linux-kernel@vger.kernel.org, Max Gurtovoy <mgurtovoy@nvidia.com>,
+        Jason Wang <jasowang@redhat.com>,
+        Parav Pandit <parav@nvidia.com>,
+        "Michael S. Tsirkin" <mst@redhat.com>, kvm@vger.kernel.org
+Subject: [PATCH v4 14/14] vdpa_sim_blk: add support for vdpa management tool
+Date: Mon, 15 Mar 2021 17:34:50 +0100
+Message-Id: <20210315163450.254396-15-sgarzare@redhat.com>
+In-Reply-To: <20210315163450.254396-1-sgarzare@redhat.com>
+References: <20210315163450.254396-1-sgarzare@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.15
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Enable the user to create vDPA block simulator devices using the
+vdpa management tool:
+
+    # Show vDPA supported devices
+    $ vdpa mgmtdev show
+    vdpasim_blk:
+      supported_classes block
+
+    # Create a vDPA block device named as 'blk0' from the management
+    # device vdpasim:
+    $ vdpa dev add mgmtdev vdpasim_blk name blk0
+
+    # Show the info of the 'blk0' device just created
+    $ vdpa dev show blk0 -jp
+    {
+        "dev": {
+            "blk0": {
+                "type": "block",
+                "mgmtdev": "vdpasim_blk",
+                "vendor_id": 0,
+                "max_vqs": 1,
+                "max_vq_size": 256
+            }
+        }
+    }
+
+    # Delete the vDPA device after its use
+    $ vdpa dev del blk0
+
+Signed-off-by: Stefano Garzarella <sgarzare@redhat.com>
+---
+ drivers/vdpa/vdpa_sim/vdpa_sim_blk.c | 76 +++++++++++++++++++++++-----
+ 1 file changed, 63 insertions(+), 13 deletions(-)
+
+diff --git a/drivers/vdpa/vdpa_sim/vdpa_sim_blk.c b/drivers/vdpa/vdpa_sim/vdpa_sim_blk.c
+index 643ae3bc62c0..5bfe1c281645 100644
+--- a/drivers/vdpa/vdpa_sim/vdpa_sim_blk.c
++++ b/drivers/vdpa/vdpa_sim/vdpa_sim_blk.c
+@@ -37,7 +37,6 @@
+ #define VDPASIM_BLK_SEG_MAX	32
+ #define VDPASIM_BLK_VQ_NUM	1
+ 
+-static struct vdpasim *vdpasim_blk_dev;
+ static char vdpasim_blk_id[VIRTIO_BLK_ID_BYTES] = "vdpa_blk_sim";
+ 
+ static bool vdpasim_blk_check_range(u64 start_sector, size_t range_size)
+@@ -241,11 +240,23 @@ static void vdpasim_blk_get_config(struct vdpasim *vdpasim, void *config)
+ 	blk_config->blk_size = cpu_to_vdpasim32(vdpasim, SECTOR_SIZE);
+ }
+ 
+-static int __init vdpasim_blk_init(void)
++static void vdpasim_blk_mgmtdev_release(struct device *dev)
++{
++}
++
++static struct device vdpasim_blk_mgmtdev = {
++	.init_name = "vdpasim_blk",
++	.release = vdpasim_blk_mgmtdev_release,
++};
++
++static int vdpasim_blk_dev_add(struct vdpa_mgmt_dev *mdev, const char *name)
+ {
+ 	struct vdpasim_dev_attr dev_attr = {};
++	struct vdpasim *simdev;
+ 	int ret;
+ 
++	dev_attr.mgmt_dev = mdev;
++	dev_attr.name = name;
+ 	dev_attr.id = VIRTIO_ID_BLOCK;
+ 	dev_attr.supported_features = VDPASIM_BLK_FEATURES;
+ 	dev_attr.nvqs = VDPASIM_BLK_VQ_NUM;
+@@ -254,29 +265,68 @@ static int __init vdpasim_blk_init(void)
+ 	dev_attr.work_fn = vdpasim_blk_work;
+ 	dev_attr.buffer_size = VDPASIM_BLK_CAPACITY << SECTOR_SHIFT;
+ 
+-	vdpasim_blk_dev = vdpasim_create(&dev_attr);
+-	if (IS_ERR(vdpasim_blk_dev)) {
+-		ret = PTR_ERR(vdpasim_blk_dev);
+-		goto out;
+-	}
++	simdev = vdpasim_create(&dev_attr);
++	if (IS_ERR(simdev))
++		return PTR_ERR(simdev);
+ 
+-	ret = vdpa_register_device(&vdpasim_blk_dev->vdpa, VDPASIM_BLK_VQ_NUM);
++	ret = _vdpa_register_device(&simdev->vdpa, VDPASIM_BLK_VQ_NUM);
+ 	if (ret)
+ 		goto put_dev;
+ 
+ 	return 0;
+ 
+ put_dev:
+-	put_device(&vdpasim_blk_dev->vdpa.dev);
+-out:
++	put_device(&simdev->vdpa.dev);
+ 	return ret;
+ }
+ 
+-static void __exit vdpasim_blk_exit(void)
++static void vdpasim_blk_dev_del(struct vdpa_mgmt_dev *mdev,
++				struct vdpa_device *dev)
+ {
+-	struct vdpa_device *vdpa = &vdpasim_blk_dev->vdpa;
++	struct vdpasim *simdev = container_of(dev, struct vdpasim, vdpa);
++
++	_vdpa_unregister_device(&simdev->vdpa);
++}
++
++static const struct vdpa_mgmtdev_ops vdpasim_blk_mgmtdev_ops = {
++	.dev_add = vdpasim_blk_dev_add,
++	.dev_del = vdpasim_blk_dev_del
++};
+ 
+-	vdpa_unregister_device(vdpa);
++static struct virtio_device_id id_table[] = {
++	{ VIRTIO_ID_BLOCK, VIRTIO_DEV_ANY_ID },
++	{ 0 },
++};
++
++static struct vdpa_mgmt_dev mgmt_dev = {
++	.device = &vdpasim_blk_mgmtdev,
++	.id_table = id_table,
++	.ops = &vdpasim_blk_mgmtdev_ops,
++};
++
++static int __init vdpasim_blk_init(void)
++{
++	int ret;
++
++	ret = device_register(&vdpasim_blk_mgmtdev);
++	if (ret)
++		return ret;
++
++	ret = vdpa_mgmtdev_register(&mgmt_dev);
++	if (ret)
++		goto parent_err;
++
++	return 0;
++
++parent_err:
++	device_unregister(&vdpasim_blk_mgmtdev);
++	return ret;
++}
++
++static void __exit vdpasim_blk_exit(void)
++{
++	vdpa_mgmtdev_unregister(&mgmt_dev);
++	device_unregister(&vdpasim_blk_mgmtdev);
+ }
+ 
+ module_init(vdpasim_blk_init)
