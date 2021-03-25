@@ -1,0 +1,83 @@
+From patchwork Wed Mar 24 12:01:29 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: John Levon <john.levon@nutanix.com>
+X-Patchwork-Id: 12160843
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.8 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 0BB35C433DB
+	for <kvm@archiver.kernel.org>; Wed, 24 Mar 2021 12:02:47 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id C229C619FC
+	for <kvm@archiver.kernel.org>; Wed, 24 Mar 2021 12:02:46 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S232107AbhCXMCP (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 24 Mar 2021 08:02:15 -0400
+Received: from 88-98-93-30.dsl.in-addr.zen.co.uk ([88.98.93.30]:44218 "EHLO
+        sent" rhost-flags-OK-FAIL-OK-FAIL) by vger.kernel.org with ESMTP
+        id S231960AbhCXMB6 (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 24 Mar 2021 08:01:58 -0400
+Received: from jlevon by sent with local (Exim 4.93)
+        (envelope-from <john.levon@nutanix.com>)
+        id 1lP2Cv-004d0V-4d; Wed, 24 Mar 2021 12:01:53 +0000
+From: John Levon <john.levon@nutanix.com>
+To: john.levon@nutanix.com
+Cc: jasowang@redhat.com, kvm@vger.kernel.org, levon@movementarian.org,
+        mst@redhat.com, virtualization@lists.linux-foundation.org,
+        David Edmondson <david.edmondson@oracle.com>
+Subject: [RESEND] [PATCH] use pr_warn_ratelimited() for vq_err()
+Date: Wed, 24 Mar 2021 12:01:29 +0000
+Message-Id: <20210324120129.1103172-1-john.levon@nutanix.com>
+X-Mailer: git-send-email 2.25.1
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+vq_err() is used to report various failure states in vhost code, but by
+default uses pr_debug(), and as a result doesn't record anything unless
+enabled via dynamic debug. We'll change this so we get something recorded
+in the log in these failure cases. Guest VMs (and userspace) can trigger
+some of these messages, so we want to use the pr_warn_ratelimited()
+variant. However, on DEBUG kernels, we'd like to get everything, so we use
+pr_warn() then.
+
+Signed-off-by: John Levon <john.levon@nutanix.com>
+Reviewed-by: David Edmondson <david.edmondson@oracle.com>
+---
+ drivers/vhost/vhost.h | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/vhost/vhost.h b/drivers/vhost/vhost.h
+index b063324c7669..10007bd49f84 100644
+--- a/drivers/vhost/vhost.h
++++ b/drivers/vhost/vhost.h
+@@ -228,10 +228,16 @@ int vhost_init_device_iotlb(struct vhost_dev *d, bool enabled);
+ void vhost_iotlb_map_free(struct vhost_iotlb *iotlb,
+ 			  struct vhost_iotlb_map *map);
+ 
+-#define vq_err(vq, fmt, ...) do {                                  \
+-		pr_debug(pr_fmt(fmt), ##__VA_ARGS__);       \
+-		if ((vq)->error_ctx)                               \
+-				eventfd_signal((vq)->error_ctx, 1);\
++#ifdef DEBUG
++#define vq_pr_warn pr_warn
++#else
++#define vq_pr_warn pr_warn_ratelimited
++#endif
++
++#define vq_err(vq, fmt, ...) do {                                \
++		vq_pr_warn(pr_fmt(fmt), ##__VA_ARGS__);          \
++		if ((vq)->error_ctx)                             \
++			eventfd_signal((vq)->error_ctx, 1);      \
+ 	} while (0)
+ 
+ enum {
