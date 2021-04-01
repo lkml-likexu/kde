@@ -1,0 +1,252 @@
+From patchwork Wed Mar 31 12:41:29 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 12175421
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-15.8 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 7771BC43600
+	for <kvm@archiver.kernel.org>; Wed, 31 Mar 2021 12:42:48 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 365DA61959
+	for <kvm@archiver.kernel.org>; Wed, 31 Mar 2021 12:42:48 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S235665AbhCaMmO (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 31 Mar 2021 08:42:14 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:57978 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S235613AbhCaMll (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Wed, 31 Mar 2021 08:41:41 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1617194500;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=CJ7CAhfyI891QLLS7moyInEYvvulvtUZ6HJ9gvElXsM=;
+        b=bwburUgPmMENYMuplvzqS4fjGg+Wt/ylsj7E84waA6iyBgk83tz5moy6nvmOJkesT3/GFF
+        6FZ81rCB+4/MCXPbXDnfD60hTUVFRy+ri75oHB/ujHkK7yLGmzKCkmz/RkYMOp8994pkPg
+        gJiixwGYW2Z6t8yeH8sA32KFwWpcwP4=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-473-oLRSX5A8OnyGFcPonUWJWg-1; Wed, 31 Mar 2021 08:41:39 -0400
+X-MC-Unique: oLRSX5A8OnyGFcPonUWJWg-1
+Received: from smtp.corp.redhat.com (int-mx03.intmail.prod.int.phx2.redhat.com
+ [10.5.11.13])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 97D178143FE;
+        Wed, 31 Mar 2021 12:41:37 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.193.13])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 64BC360861;
+        Wed, 31 Mar 2021 12:41:35 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <seanjc@google.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Marcelo Tosatti <mtosatti@redhat.com>,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v3 1/2] KVM: x86: Prevent 'hv_clock->system_time' from going
+ negative in kvm_guest_time_update()
+Date: Wed, 31 Mar 2021 14:41:29 +0200
+Message-Id: <20210331124130.337992-2-vkuznets@redhat.com>
+In-Reply-To: <20210331124130.337992-1-vkuznets@redhat.com>
+References: <20210331124130.337992-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.13
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+When guest time is reset with KVM_SET_CLOCK(0), it is possible for
+'hv_clock->system_time' to become a small negative number. This happens
+because in KVM_SET_CLOCK handling we set 'kvm->arch.kvmclock_offset' based
+on get_kvmclock_ns(kvm) but when KVM_REQ_CLOCK_UPDATE is handled,
+kvm_guest_time_update() does (masterclock in use case):
+
+hv_clock.system_time = ka->master_kernel_ns + v->kvm->arch.kvmclock_offset;
+
+And 'master_kernel_ns' represents the last time when masterclock
+got updated, it can precede KVM_SET_CLOCK() call. Normally, this is not a
+problem, the difference is very small, e.g. I'm observing
+hv_clock.system_time = -70 ns. The issue comes from the fact that
+'hv_clock.system_time' is stored as unsigned and 'system_time / 100' in
+compute_tsc_page_parameters() becomes a very big number.
+
+Use 'master_kernel_ns' instead of get_kvmclock_ns() when masterclock is in
+use and get_kvmclock_base_ns() when it's not to prevent 'system_time' from
+going negative.
+
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ arch/x86/kvm/x86.c | 19 +++++++++++++++++--
+ 1 file changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 2bfd00da465f..2f54beed0105 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -5728,6 +5728,7 @@ long kvm_arch_vm_ioctl(struct file *filp,
+ 	}
+ #endif
+ 	case KVM_SET_CLOCK: {
++		struct kvm_arch *ka = &kvm->arch;
+ 		struct kvm_clock_data user_ns;
+ 		u64 now_ns;
+ 
+@@ -5746,8 +5747,22 @@ long kvm_arch_vm_ioctl(struct file *filp,
+ 		 * pvclock_update_vm_gtod_copy().
+ 		 */
+ 		kvm_gen_update_masterclock(kvm);
+-		now_ns = get_kvmclock_ns(kvm);
+-		kvm->arch.kvmclock_offset += user_ns.clock - now_ns;
++
++		/*
++		 * This pairs with kvm_guest_time_update(): when masterclock is
++		 * in use, we use master_kernel_ns + kvmclock_offset to set
++		 * unsigned 'system_time' so if we use get_kvmclock_ns() (which
++		 * is slightly ahead) here we risk going negative on unsigned
++		 * 'system_time' when 'user_ns.clock' is very small.
++		 */
++		spin_lock_irq(&ka->pvclock_gtod_sync_lock);
++		if (kvm->arch.use_master_clock)
++			now_ns = ka->master_kernel_ns;
++		else
++			now_ns = get_kvmclock_base_ns();
++		ka->kvmclock_offset = user_ns.clock - now_ns;
++		spin_unlock_irq(&ka->pvclock_gtod_sync_lock);
++
+ 		kvm_make_all_cpus_request(kvm, KVM_REQ_CLOCK_UPDATE);
+ 		break;
+ 	}
+
+From patchwork Wed Mar 31 12:41:30 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 12175419
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-15.8 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 08F7CC43460
+	for <kvm@archiver.kernel.org>; Wed, 31 Mar 2021 12:42:48 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id CF0966196C
+	for <kvm@archiver.kernel.org>; Wed, 31 Mar 2021 12:42:47 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S235386AbhCaMmQ (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 31 Mar 2021 08:42:16 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([170.10.133.124]:55940 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S235470AbhCaMln (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Wed, 31 Mar 2021 08:41:43 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1617194502;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=H7dNXYaOTclqUn9MijXwZ7hg6tnWG/YqlnOo2zWP1Ro=;
+        b=QMFkUeM3/FhzJ3hVyDmAsSxF/Hat94myuKhCr5lPpMnl+/uBDo/s1sQmlqw1sXEAXQRrkb
+        1ImL4e3CUAbEXiGyscm2WWOb5rUxdl/SXkylcYObFABms0JAWv41hDvDg0xA6KrSGrAlIL
+        uOl5paXvDlnP7mZWCSUfvmr1vvbfJ2k=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-238-YZromXsBOru0T6J7NaNcQA-1; Wed, 31 Mar 2021 08:41:41 -0400
+X-MC-Unique: YZromXsBOru0T6J7NaNcQA-1
+Received: from smtp.corp.redhat.com (int-mx03.intmail.prod.int.phx2.redhat.com
+ [10.5.11.13])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 14270108BD0C;
+        Wed, 31 Mar 2021 12:41:40 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.193.13])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 01E9B60861;
+        Wed, 31 Mar 2021 12:41:37 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: Sean Christopherson <seanjc@google.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Marcelo Tosatti <mtosatti@redhat.com>,
+        linux-kernel@vger.kernel.org
+Subject: [PATCH v3 2/2] selftests: kvm: Check that TSC page value is small
+ after KVM_SET_CLOCK(0)
+Date: Wed, 31 Mar 2021 14:41:30 +0200
+Message-Id: <20210331124130.337992-3-vkuznets@redhat.com>
+In-Reply-To: <20210331124130.337992-1-vkuznets@redhat.com>
+References: <20210331124130.337992-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.13
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Add a test for the issue when KVM_SET_CLOCK(0) call could cause
+TSC page value to go very big because of a signedness issue around
+hv_clock->system_time.
+
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ tools/testing/selftests/kvm/x86_64/hyperv_clock.c | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/tools/testing/selftests/kvm/x86_64/hyperv_clock.c b/tools/testing/selftests/kvm/x86_64/hyperv_clock.c
+index ffbc4555c6e2..7f1d2765572c 100644
+--- a/tools/testing/selftests/kvm/x86_64/hyperv_clock.c
++++ b/tools/testing/selftests/kvm/x86_64/hyperv_clock.c
+@@ -80,19 +80,24 @@ static inline void check_tsc_msr_rdtsc(void)
+ 	GUEST_ASSERT(delta_ns * 100 < (t2 - t1) * 100);
+ }
+ 
++static inline u64 get_tscpage_ts(struct ms_hyperv_tsc_page *tsc_page)
++{
++	return mul_u64_u64_shr64(rdtsc(), tsc_page->tsc_scale) + tsc_page->tsc_offset;
++}
++
+ static inline void check_tsc_msr_tsc_page(struct ms_hyperv_tsc_page *tsc_page)
+ {
+ 	u64 r1, r2, t1, t2;
+ 
+ 	/* Compare TSC page clocksource with HV_X64_MSR_TIME_REF_COUNT */
+-	t1 = mul_u64_u64_shr64(rdtsc(), tsc_page->tsc_scale) + tsc_page->tsc_offset;
++	t1 = get_tscpage_ts(tsc_page);
+ 	r1 = rdmsr(HV_X64_MSR_TIME_REF_COUNT);
+ 
+ 	/* 10 ms tolerance */
+ 	GUEST_ASSERT(r1 >= t1 && r1 - t1 < 100000);
+ 	nop_loop();
+ 
+-	t2 = mul_u64_u64_shr64(rdtsc(), tsc_page->tsc_scale) + tsc_page->tsc_offset;
++	t2 = get_tscpage_ts(tsc_page);
+ 	r2 = rdmsr(HV_X64_MSR_TIME_REF_COUNT);
+ 	GUEST_ASSERT(r2 >= t1 && r2 - t2 < 100000);
+ }
+@@ -130,7 +135,11 @@ static void guest_main(struct ms_hyperv_tsc_page *tsc_page, vm_paddr_t tsc_page_
+ 
+ 	tsc_offset = tsc_page->tsc_offset;
+ 	/* Call KVM_SET_CLOCK from userspace, check that TSC page was updated */
++
+ 	GUEST_SYNC(7);
++	/* Sanity check TSC page timestamp, it should be close to 0 */
++	GUEST_ASSERT(get_tscpage_ts(tsc_page) < 100000);
++
+ 	GUEST_ASSERT(tsc_page->tsc_offset != tsc_offset);
+ 
+ 	nop_loop();
