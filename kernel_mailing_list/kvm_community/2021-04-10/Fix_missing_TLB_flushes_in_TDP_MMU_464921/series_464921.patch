@@ -1,0 +1,1503 @@
+From patchwork Sat Apr 10 15:12:21 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 12195665
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-15.8 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 50738C43618
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:41 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 33332611CA
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:41 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S234886AbhDJPMy (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Sat, 10 Apr 2021 11:12:54 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:24316 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S234816AbhDJPMv (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Sat, 10 Apr 2021 11:12:51 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1618067556;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=9VnaEyLiKlk+abqPIP972RBU+gLglyTb6uphMyujnCk=;
+        b=JGMokxzlAl08tDOJvZRqp0VikbwPrcaTCBpYpbhetRgA3LekQ4xN04UTe1b8oN2sMKe6h/
+        lKZ5FJoDSgAUkE99pwKZNTpHhMj367UZy6DkdoBm24hK14RA/1QlqpxXXIGGd1p1fGwLQe
+        J4VIZHnu8UcuFSZTbASYhQhNOXeTpJw=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-485-iagYyFR0NayepOtaIbD-YA-1; Sat, 10 Apr 2021 11:12:31 -0400
+X-MC-Unique: iagYyFR0NayepOtaIbD-YA-1
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id CA0191006701;
+        Sat, 10 Apr 2021 15:12:30 +0000 (UTC)
+Received: from virtlab701.virt.lab.eng.bos.redhat.com
+ (virtlab701.virt.lab.eng.bos.redhat.com [10.19.152.228])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 789195D9D3;
+        Sat, 10 Apr 2021 15:12:30 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: stable@vger.kernel.org
+Cc: kvm@vger.kernel.org, sasha@kernel.org
+Subject: [PATCH 5.10/5.11 1/9] KVM: x86/mmu: change TDP MMU yield function
+ returns to match cond_resched
+Date: Sat, 10 Apr 2021 11:12:21 -0400
+Message-Id: <20210410151229.4062930-2-pbonzini@redhat.com>
+In-Reply-To: <20210410151229.4062930-1-pbonzini@redhat.com>
+References: <20210410151229.4062930-1-pbonzini@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Ben Gardon <bgardon@google.com>
+
+[ Upstream commit e28a436ca4f65384cceaf3f4da0e00aa74244e6a ]
+
+Currently the TDP MMU yield / cond_resched functions either return
+nothing or return true if the TLBs were not flushed. These are confusing
+semantics, especially when making control flow decisions in calling
+functions.
+
+To clean things up, change both functions to have the same
+return value semantics as cond_resched: true if the thread yielded,
+false if it did not. If the function yielded in the _flush_ version,
+then the TLBs will have been flushed.
+
+Reviewed-by: Peter Feiner <pfeiner@google.com>
+Acked-by: Paolo Bonzini <pbonzini@redhat.com>
+Signed-off-by: Ben Gardon <bgardon@google.com>
+Message-Id: <20210202185734.1680553-2-bgardon@google.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/mmu/tdp_mmu.c | 39 ++++++++++++++++++++++++++++----------
+ 1 file changed, 29 insertions(+), 10 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu/tdp_mmu.c b/arch/x86/kvm/mmu/tdp_mmu.c
+index 17976998bffb..abdd89771b9b 100644
+--- a/arch/x86/kvm/mmu/tdp_mmu.c
++++ b/arch/x86/kvm/mmu/tdp_mmu.c
+@@ -413,8 +413,15 @@ static inline void tdp_mmu_set_spte_no_dirty_log(struct kvm *kvm,
+ 			 _mmu->shadow_root_level, _start, _end)
+ 
+ /*
+- * Flush the TLB if the process should drop kvm->mmu_lock.
+- * Return whether the caller still needs to flush the tlb.
++ * Flush the TLB and yield if the MMU lock is contended or this thread needs to
++ * return control to the scheduler.
++ *
++ * If this function yields, it will also reset the tdp_iter's walk over the
++ * paging structure and the calling function should allow the iterator to
++ * continue its traversal from the paging structure root.
++ *
++ * Return true if this function yielded, the TLBs were flushed, and the
++ * iterator's traversal was reset. Return false if a yield was not needed.
+  */
+ static bool tdp_mmu_iter_flush_cond_resched(struct kvm *kvm, struct tdp_iter *iter)
+ {
+@@ -422,18 +429,32 @@ static bool tdp_mmu_iter_flush_cond_resched(struct kvm *kvm, struct tdp_iter *it
+ 		kvm_flush_remote_tlbs(kvm);
+ 		cond_resched_lock(&kvm->mmu_lock);
+ 		tdp_iter_refresh_walk(iter);
+-		return false;
+-	} else {
+ 		return true;
+ 	}
++
++	return false;
+ }
+ 
+-static void tdp_mmu_iter_cond_resched(struct kvm *kvm, struct tdp_iter *iter)
++/*
++ * Yield if the MMU lock is contended or this thread needs to return control
++ * to the scheduler.
++ *
++ * If this function yields, it will also reset the tdp_iter's walk over the
++ * paging structure and the calling function should allow the iterator to
++ * continue its traversal from the paging structure root.
++ *
++ * Return true if this function yielded and the iterator's traversal was reset.
++ * Return false if a yield was not needed.
++ */
++static bool tdp_mmu_iter_cond_resched(struct kvm *kvm, struct tdp_iter *iter)
+ {
+ 	if (need_resched() || spin_needbreak(&kvm->mmu_lock)) {
+ 		cond_resched_lock(&kvm->mmu_lock);
+ 		tdp_iter_refresh_walk(iter);
++		return true;
+ 	}
++
++	return false;
+ }
+ 
+ /*
+@@ -469,10 +490,8 @@ static bool zap_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+ 
+ 		tdp_mmu_set_spte(kvm, &iter, 0);
+ 
+-		if (can_yield)
+-			flush_needed = tdp_mmu_iter_flush_cond_resched(kvm, &iter);
+-		else
+-			flush_needed = true;
++		flush_needed = !can_yield ||
++			       !tdp_mmu_iter_flush_cond_resched(kvm, &iter);
+ 	}
+ 	return flush_needed;
+ }
+@@ -1073,7 +1092,7 @@ static void zap_collapsible_spte_range(struct kvm *kvm,
+ 
+ 		tdp_mmu_set_spte(kvm, &iter, 0);
+ 
+-		spte_set = tdp_mmu_iter_flush_cond_resched(kvm, &iter);
++		spte_set = !tdp_mmu_iter_flush_cond_resched(kvm, &iter);
+ 	}
+ 
+ 	if (spte_set)
+
+From patchwork Sat Apr 10 15:12:22 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 12195659
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-15.8 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 20F9DC43470
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:40 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 005C0611C9
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:39 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S234838AbhDJPMv (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Sat, 10 Apr 2021 11:12:51 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:42570 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S234768AbhDJPMu (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Sat, 10 Apr 2021 11:12:50 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1618067555;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=uzhRrfCt9pWIBDC08ZfuRJUiSWLNiQTMxzXRQmQs4PQ=;
+        b=btb9YIPDURose6uMgG63k7NIu944n/lQpet+67aOtZ1zKEWMKN/86NqeSEq7dtbKRut1Ep
+        k1YrFQETemHNU7IOkXA3AeiGxXvKyeWcYPu6s+FQlK+p7d+oGcgYeq1g5NO6rAe8O5uIrR
+        vzDBS5M6A6HQDfpArQ35YyFQlVyQ8gQ=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-487-TrbDwnz0MKWI27-gSgq4Rw-1; Sat, 10 Apr 2021 11:12:32 -0400
+X-MC-Unique: TrbDwnz0MKWI27-gSgq4Rw-1
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 4007F5B38C;
+        Sat, 10 Apr 2021 15:12:31 +0000 (UTC)
+Received: from virtlab701.virt.lab.eng.bos.redhat.com
+ (virtlab701.virt.lab.eng.bos.redhat.com [10.19.152.228])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id E4C0E18A5A;
+        Sat, 10 Apr 2021 15:12:30 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: stable@vger.kernel.org
+Cc: kvm@vger.kernel.org, sasha@kernel.org
+Subject: [PATCH 5.10/5.11 2/9] KVM: x86/mmu: Merge flush and non-flush
+ tdp_mmu_iter_cond_resched
+Date: Sat, 10 Apr 2021 11:12:22 -0400
+Message-Id: <20210410151229.4062930-3-pbonzini@redhat.com>
+In-Reply-To: <20210410151229.4062930-1-pbonzini@redhat.com>
+References: <20210410151229.4062930-1-pbonzini@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Ben Gardon <bgardon@google.com>
+
+[ Upstream commit e139a34ef9d5627a41e1c02210229082140d1f92 ]
+
+The flushing and non-flushing variants of tdp_mmu_iter_cond_resched have
+almost identical implementations. Merge the two functions and add a
+flush parameter.
+
+Signed-off-by: Ben Gardon <bgardon@google.com>
+Message-Id: <20210202185734.1680553-12-bgardon@google.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/mmu/tdp_mmu.c | 42 ++++++++++++--------------------------
+ 1 file changed, 13 insertions(+), 29 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu/tdp_mmu.c b/arch/x86/kvm/mmu/tdp_mmu.c
+index abdd89771b9b..0dd27767c770 100644
+--- a/arch/x86/kvm/mmu/tdp_mmu.c
++++ b/arch/x86/kvm/mmu/tdp_mmu.c
+@@ -412,33 +412,13 @@ static inline void tdp_mmu_set_spte_no_dirty_log(struct kvm *kvm,
+ 	for_each_tdp_pte(_iter, __va(_mmu->root_hpa),		\
+ 			 _mmu->shadow_root_level, _start, _end)
+ 
+-/*
+- * Flush the TLB and yield if the MMU lock is contended or this thread needs to
+- * return control to the scheduler.
+- *
+- * If this function yields, it will also reset the tdp_iter's walk over the
+- * paging structure and the calling function should allow the iterator to
+- * continue its traversal from the paging structure root.
+- *
+- * Return true if this function yielded, the TLBs were flushed, and the
+- * iterator's traversal was reset. Return false if a yield was not needed.
+- */
+-static bool tdp_mmu_iter_flush_cond_resched(struct kvm *kvm, struct tdp_iter *iter)
+-{
+-	if (need_resched() || spin_needbreak(&kvm->mmu_lock)) {
+-		kvm_flush_remote_tlbs(kvm);
+-		cond_resched_lock(&kvm->mmu_lock);
+-		tdp_iter_refresh_walk(iter);
+-		return true;
+-	}
+-
+-	return false;
+-}
+-
+ /*
+  * Yield if the MMU lock is contended or this thread needs to return control
+  * to the scheduler.
+  *
++ * If this function should yield and flush is set, it will perform a remote
++ * TLB flush before yielding.
++ *
+  * If this function yields, it will also reset the tdp_iter's walk over the
+  * paging structure and the calling function should allow the iterator to
+  * continue its traversal from the paging structure root.
+@@ -446,9 +426,13 @@ static bool tdp_mmu_iter_flush_cond_resched(struct kvm *kvm, struct tdp_iter *it
+  * Return true if this function yielded and the iterator's traversal was reset.
+  * Return false if a yield was not needed.
+  */
+-static bool tdp_mmu_iter_cond_resched(struct kvm *kvm, struct tdp_iter *iter)
++static inline bool tdp_mmu_iter_cond_resched(struct kvm *kvm,
++					     struct tdp_iter *iter, bool flush)
+ {
+ 	if (need_resched() || spin_needbreak(&kvm->mmu_lock)) {
++		if (flush)
++			kvm_flush_remote_tlbs(kvm);
++
+ 		cond_resched_lock(&kvm->mmu_lock);
+ 		tdp_iter_refresh_walk(iter);
+ 		return true;
+@@ -491,7 +475,7 @@ static bool zap_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+ 		tdp_mmu_set_spte(kvm, &iter, 0);
+ 
+ 		flush_needed = !can_yield ||
+-			       !tdp_mmu_iter_flush_cond_resched(kvm, &iter);
++			       !tdp_mmu_iter_cond_resched(kvm, &iter, true);
+ 	}
+ 	return flush_needed;
+ }
+@@ -864,7 +848,7 @@ static bool wrprot_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+ 		tdp_mmu_set_spte_no_dirty_log(kvm, &iter, new_spte);
+ 		spte_set = true;
+ 
+-		tdp_mmu_iter_cond_resched(kvm, &iter);
++		tdp_mmu_iter_cond_resched(kvm, &iter, false);
+ 	}
+ 	return spte_set;
+ }
+@@ -923,7 +907,7 @@ static bool clear_dirty_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+ 		tdp_mmu_set_spte_no_dirty_log(kvm, &iter, new_spte);
+ 		spte_set = true;
+ 
+-		tdp_mmu_iter_cond_resched(kvm, &iter);
++		tdp_mmu_iter_cond_resched(kvm, &iter, false);
+ 	}
+ 	return spte_set;
+ }
+@@ -1039,7 +1023,7 @@ static bool set_dirty_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+ 		tdp_mmu_set_spte(kvm, &iter, new_spte);
+ 		spte_set = true;
+ 
+-		tdp_mmu_iter_cond_resched(kvm, &iter);
++		tdp_mmu_iter_cond_resched(kvm, &iter, false);
+ 	}
+ 
+ 	return spte_set;
+@@ -1092,7 +1076,7 @@ static void zap_collapsible_spte_range(struct kvm *kvm,
+ 
+ 		tdp_mmu_set_spte(kvm, &iter, 0);
+ 
+-		spte_set = !tdp_mmu_iter_flush_cond_resched(kvm, &iter);
++		spte_set = !tdp_mmu_iter_cond_resched(kvm, &iter, true);
+ 	}
+ 
+ 	if (spte_set)
+
+From patchwork Sat Apr 10 15:12:23 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 12195657
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-15.8 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id E4EF5C433B4
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:39 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id BBDA7611C9
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:39 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S234821AbhDJPMv (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Sat, 10 Apr 2021 11:12:51 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([170.10.133.124]:33889 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S234738AbhDJPMt (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Sat, 10 Apr 2021 11:12:49 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1618067554;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=6SyHI7qAP6/9cu703oa1R7UT5+/BkdlcwzRYz7m9g7c=;
+        b=aNlaEwclZ7DbnvTUtdmEQEONE5w3LUeQ2lrICC32E8KgUmZeGZOCkZ/7MVc452KQBITfIr
+        4AFvUs0+1fvq9rOQhCxH/BmvLF9pN07RQ2H5B9nkCuwdMZE2oG0K7kQZxyNzPj7C/nVDmr
+        JxylTvaGGX39CEH3sHD4kh1OJH8dru0=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-282-7ANCXBcJP9CIkeoIVeBLWA-1; Sat, 10 Apr 2021 11:12:32 -0400
+X-MC-Unique: 7ANCXBcJP9CIkeoIVeBLWA-1
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id AA8CD81744F;
+        Sat, 10 Apr 2021 15:12:31 +0000 (UTC)
+Received: from virtlab701.virt.lab.eng.bos.redhat.com
+ (virtlab701.virt.lab.eng.bos.redhat.com [10.19.152.228])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 5A9935D9D3;
+        Sat, 10 Apr 2021 15:12:31 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: stable@vger.kernel.org
+Cc: kvm@vger.kernel.org, sasha@kernel.org
+Subject: [PATCH 5.10/5.11 3/9] KVM: x86/mmu: Rename goal_gfn to
+ next_last_level_gfn
+Date: Sat, 10 Apr 2021 11:12:23 -0400
+Message-Id: <20210410151229.4062930-4-pbonzini@redhat.com>
+In-Reply-To: <20210410151229.4062930-1-pbonzini@redhat.com>
+References: <20210410151229.4062930-1-pbonzini@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Ben Gardon <bgardon@google.com>
+
+[ Upstream commit 74953d3530280dc53256054e1906f58d07bfba44 ]
+
+The goal_gfn field in tdp_iter can be misleading as it implies that it
+is the iterator's final goal. It is really a target for the lowest gfn
+mapped by the leaf level SPTE the iterator will traverse towards. Change
+the field's name to be more precise.
+
+Signed-off-by: Ben Gardon <bgardon@google.com>
+Message-Id: <20210202185734.1680553-13-bgardon@google.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/mmu/tdp_iter.c | 20 ++++++++++----------
+ arch/x86/kvm/mmu/tdp_iter.h |  4 ++--
+ 2 files changed, 12 insertions(+), 12 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu/tdp_iter.c b/arch/x86/kvm/mmu/tdp_iter.c
+index 87b7e16911db..9917c55b7d24 100644
+--- a/arch/x86/kvm/mmu/tdp_iter.c
++++ b/arch/x86/kvm/mmu/tdp_iter.c
+@@ -22,21 +22,21 @@ static gfn_t round_gfn_for_level(gfn_t gfn, int level)
+ 
+ /*
+  * Sets a TDP iterator to walk a pre-order traversal of the paging structure
+- * rooted at root_pt, starting with the walk to translate goal_gfn.
++ * rooted at root_pt, starting with the walk to translate next_last_level_gfn.
+  */
+ void tdp_iter_start(struct tdp_iter *iter, u64 *root_pt, int root_level,
+-		    int min_level, gfn_t goal_gfn)
++		    int min_level, gfn_t next_last_level_gfn)
+ {
+ 	WARN_ON(root_level < 1);
+ 	WARN_ON(root_level > PT64_ROOT_MAX_LEVEL);
+ 
+-	iter->goal_gfn = goal_gfn;
++	iter->next_last_level_gfn = next_last_level_gfn;
+ 	iter->root_level = root_level;
+ 	iter->min_level = min_level;
+ 	iter->level = root_level;
+ 	iter->pt_path[iter->level - 1] = root_pt;
+ 
+-	iter->gfn = round_gfn_for_level(iter->goal_gfn, iter->level);
++	iter->gfn = round_gfn_for_level(iter->next_last_level_gfn, iter->level);
+ 	tdp_iter_refresh_sptep(iter);
+ 
+ 	iter->valid = true;
+@@ -82,7 +82,7 @@ static bool try_step_down(struct tdp_iter *iter)
+ 
+ 	iter->level--;
+ 	iter->pt_path[iter->level - 1] = child_pt;
+-	iter->gfn = round_gfn_for_level(iter->goal_gfn, iter->level);
++	iter->gfn = round_gfn_for_level(iter->next_last_level_gfn, iter->level);
+ 	tdp_iter_refresh_sptep(iter);
+ 
+ 	return true;
+@@ -106,7 +106,7 @@ static bool try_step_side(struct tdp_iter *iter)
+ 		return false;
+ 
+ 	iter->gfn += KVM_PAGES_PER_HPAGE(iter->level);
+-	iter->goal_gfn = iter->gfn;
++	iter->next_last_level_gfn = iter->gfn;
+ 	iter->sptep++;
+ 	iter->old_spte = READ_ONCE(*iter->sptep);
+ 
+@@ -166,13 +166,13 @@ void tdp_iter_next(struct tdp_iter *iter)
+  */
+ void tdp_iter_refresh_walk(struct tdp_iter *iter)
+ {
+-	gfn_t goal_gfn = iter->goal_gfn;
++	gfn_t next_last_level_gfn = iter->next_last_level_gfn;
+ 
+-	if (iter->gfn > goal_gfn)
+-		goal_gfn = iter->gfn;
++	if (iter->gfn > next_last_level_gfn)
++		next_last_level_gfn = iter->gfn;
+ 
+ 	tdp_iter_start(iter, iter->pt_path[iter->root_level - 1],
+-		       iter->root_level, iter->min_level, goal_gfn);
++		       iter->root_level, iter->min_level, next_last_level_gfn);
+ }
+ 
+ u64 *tdp_iter_root_pt(struct tdp_iter *iter)
+diff --git a/arch/x86/kvm/mmu/tdp_iter.h b/arch/x86/kvm/mmu/tdp_iter.h
+index 47170d0dc98e..b2dd269c631f 100644
+--- a/arch/x86/kvm/mmu/tdp_iter.h
++++ b/arch/x86/kvm/mmu/tdp_iter.h
+@@ -15,7 +15,7 @@ struct tdp_iter {
+ 	 * The iterator will traverse the paging structure towards the mapping
+ 	 * for this GFN.
+ 	 */
+-	gfn_t goal_gfn;
++	gfn_t next_last_level_gfn;
+ 	/* Pointers to the page tables traversed to reach the current SPTE */
+ 	u64 *pt_path[PT64_ROOT_MAX_LEVEL];
+ 	/* A pointer to the current SPTE */
+@@ -52,7 +52,7 @@ struct tdp_iter {
+ u64 *spte_to_child_pt(u64 pte, int level);
+ 
+ void tdp_iter_start(struct tdp_iter *iter, u64 *root_pt, int root_level,
+-		    int min_level, gfn_t goal_gfn);
++		    int min_level, gfn_t next_last_level_gfn);
+ void tdp_iter_next(struct tdp_iter *iter);
+ void tdp_iter_refresh_walk(struct tdp_iter *iter);
+ u64 *tdp_iter_root_pt(struct tdp_iter *iter);
+
+From patchwork Sat Apr 10 15:12:24 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 12195661
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-15.8 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 2FC5CC43462
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:40 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 1AE0D61029
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:40 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S234856AbhDJPMw (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Sat, 10 Apr 2021 11:12:52 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([170.10.133.124]:35469 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S234708AbhDJPMu (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Sat, 10 Apr 2021 11:12:50 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1618067555;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=g0ycKSFpwPxcT2ilZ/AJl/uYLmiQ+lFD0fif24aNEQc=;
+        b=DMDQnF+oPDry0teZfnNL41b6LmwYX1UA0kAEhu0FJxZC1lMCpRkTmS6jYpFDYvooTWHRY9
+        8/fmsLJyGnMfQ4V3Ocjlo7HhUO5GHARPkxM/gcRURzK0+9Eroqrtd4zsp3EvX9DFpHabus
+        /HqPUhy4g04DytyRfgjn3Y34V9p1Hl0=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-222-qaMJmdwNP4aSL6LfG37Xnw-1; Sat, 10 Apr 2021 11:12:33 -0400
+X-MC-Unique: qaMJmdwNP4aSL6LfG37Xnw-1
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 1FBAE107ACC7;
+        Sat, 10 Apr 2021 15:12:32 +0000 (UTC)
+Received: from virtlab701.virt.lab.eng.bos.redhat.com
+ (virtlab701.virt.lab.eng.bos.redhat.com [10.19.152.228])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id C481A5D9D3;
+        Sat, 10 Apr 2021 15:12:31 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: stable@vger.kernel.org
+Cc: kvm@vger.kernel.org, sasha@kernel.org
+Subject: [PATCH 5.10/5.11 4/9] KVM: x86/mmu: Ensure forward progress when
+ yielding in TDP MMU iter
+Date: Sat, 10 Apr 2021 11:12:24 -0400
+Message-Id: <20210410151229.4062930-5-pbonzini@redhat.com>
+In-Reply-To: <20210410151229.4062930-1-pbonzini@redhat.com>
+References: <20210410151229.4062930-1-pbonzini@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Ben Gardon <bgardon@google.com>
+
+[ Upstream commit ed5e484b79e8a9b8be714bd85b6fc70bd6dc99a7 ]
+
+In some functions the TDP iter risks not making forward progress if two
+threads livelock yielding to one another. This is possible if two threads
+are trying to execute wrprot_gfn_range. Each could write protect an entry
+and then yield. This would reset the tdp_iter's walk over the paging
+structure and the loop would end up repeating the same entry over and
+over, preventing either thread from making forward progress.
+
+Fix this issue by only yielding if the loop has made forward progress
+since the last yield.
+
+Fixes: a6a0b05da9f3 ("kvm: x86/mmu: Support dirty logging for the TDP MMU")
+Reviewed-by: Peter Feiner <pfeiner@google.com>
+Signed-off-by: Ben Gardon <bgardon@google.com>
+
+Message-Id: <20210202185734.1680553-14-bgardon@google.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/mmu/tdp_iter.c | 18 +-----------------
+ arch/x86/kvm/mmu/tdp_iter.h |  7 ++++++-
+ arch/x86/kvm/mmu/tdp_mmu.c  | 21 ++++++++++++++++-----
+ 3 files changed, 23 insertions(+), 23 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu/tdp_iter.c b/arch/x86/kvm/mmu/tdp_iter.c
+index 9917c55b7d24..1a09d212186b 100644
+--- a/arch/x86/kvm/mmu/tdp_iter.c
++++ b/arch/x86/kvm/mmu/tdp_iter.c
+@@ -31,6 +31,7 @@ void tdp_iter_start(struct tdp_iter *iter, u64 *root_pt, int root_level,
+ 	WARN_ON(root_level > PT64_ROOT_MAX_LEVEL);
+ 
+ 	iter->next_last_level_gfn = next_last_level_gfn;
++	iter->yielded_gfn = iter->next_last_level_gfn;
+ 	iter->root_level = root_level;
+ 	iter->min_level = min_level;
+ 	iter->level = root_level;
+@@ -158,23 +159,6 @@ void tdp_iter_next(struct tdp_iter *iter)
+ 	iter->valid = false;
+ }
+ 
+-/*
+- * Restart the walk over the paging structure from the root, starting from the
+- * highest gfn the iterator had previously reached. Assumes that the entire
+- * paging structure, except the root page, may have been completely torn down
+- * and rebuilt.
+- */
+-void tdp_iter_refresh_walk(struct tdp_iter *iter)
+-{
+-	gfn_t next_last_level_gfn = iter->next_last_level_gfn;
+-
+-	if (iter->gfn > next_last_level_gfn)
+-		next_last_level_gfn = iter->gfn;
+-
+-	tdp_iter_start(iter, iter->pt_path[iter->root_level - 1],
+-		       iter->root_level, iter->min_level, next_last_level_gfn);
+-}
+-
+ u64 *tdp_iter_root_pt(struct tdp_iter *iter)
+ {
+ 	return iter->pt_path[iter->root_level - 1];
+diff --git a/arch/x86/kvm/mmu/tdp_iter.h b/arch/x86/kvm/mmu/tdp_iter.h
+index b2dd269c631f..d480c540ee27 100644
+--- a/arch/x86/kvm/mmu/tdp_iter.h
++++ b/arch/x86/kvm/mmu/tdp_iter.h
+@@ -16,6 +16,12 @@ struct tdp_iter {
+ 	 * for this GFN.
+ 	 */
+ 	gfn_t next_last_level_gfn;
++	/*
++	 * The next_last_level_gfn at the time when the thread last
++	 * yielded. Only yielding when the next_last_level_gfn !=
++	 * yielded_gfn helps ensure forward progress.
++	 */
++	gfn_t yielded_gfn;
+ 	/* Pointers to the page tables traversed to reach the current SPTE */
+ 	u64 *pt_path[PT64_ROOT_MAX_LEVEL];
+ 	/* A pointer to the current SPTE */
+@@ -54,7 +60,6 @@ u64 *spte_to_child_pt(u64 pte, int level);
+ void tdp_iter_start(struct tdp_iter *iter, u64 *root_pt, int root_level,
+ 		    int min_level, gfn_t next_last_level_gfn);
+ void tdp_iter_next(struct tdp_iter *iter);
+-void tdp_iter_refresh_walk(struct tdp_iter *iter);
+ u64 *tdp_iter_root_pt(struct tdp_iter *iter);
+ 
+ #endif /* __KVM_X86_MMU_TDP_ITER_H */
+diff --git a/arch/x86/kvm/mmu/tdp_mmu.c b/arch/x86/kvm/mmu/tdp_mmu.c
+index 0dd27767c770..a07d37abb63f 100644
+--- a/arch/x86/kvm/mmu/tdp_mmu.c
++++ b/arch/x86/kvm/mmu/tdp_mmu.c
+@@ -420,8 +420,9 @@ static inline void tdp_mmu_set_spte_no_dirty_log(struct kvm *kvm,
+  * TLB flush before yielding.
+  *
+  * If this function yields, it will also reset the tdp_iter's walk over the
+- * paging structure and the calling function should allow the iterator to
+- * continue its traversal from the paging structure root.
++ * paging structure and the calling function should skip to the next
++ * iteration to allow the iterator to continue its traversal from the
++ * paging structure root.
+  *
+  * Return true if this function yielded and the iterator's traversal was reset.
+  * Return false if a yield was not needed.
+@@ -429,12 +430,22 @@ static inline void tdp_mmu_set_spte_no_dirty_log(struct kvm *kvm,
+ static inline bool tdp_mmu_iter_cond_resched(struct kvm *kvm,
+ 					     struct tdp_iter *iter, bool flush)
+ {
++	/* Ensure forward progress has been made before yielding. */
++	if (iter->next_last_level_gfn == iter->yielded_gfn)
++		return false;
++
+ 	if (need_resched() || spin_needbreak(&kvm->mmu_lock)) {
+ 		if (flush)
+ 			kvm_flush_remote_tlbs(kvm);
+ 
+ 		cond_resched_lock(&kvm->mmu_lock);
+-		tdp_iter_refresh_walk(iter);
++
++		WARN_ON(iter->gfn > iter->next_last_level_gfn);
++
++		tdp_iter_start(iter, iter->pt_path[iter->root_level - 1],
++			       iter->root_level, iter->min_level,
++			       iter->next_last_level_gfn);
++
+ 		return true;
+ 	}
+ 
+@@ -474,8 +485,8 @@ static bool zap_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+ 
+ 		tdp_mmu_set_spte(kvm, &iter, 0);
+ 
+-		flush_needed = !can_yield ||
+-			       !tdp_mmu_iter_cond_resched(kvm, &iter, true);
++		flush_needed = !(can_yield &&
++				 tdp_mmu_iter_cond_resched(kvm, &iter, true));
+ 	}
+ 	return flush_needed;
+ }
+
+From patchwork Sat Apr 10 15:12:25 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 12195663
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-15.8 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 91298C4360C
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:40 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 5EFE2611C9
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:40 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S234874AbhDJPMx (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Sat, 10 Apr 2021 11:12:53 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([170.10.133.124]:42561 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S234781AbhDJPMu (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Sat, 10 Apr 2021 11:12:50 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1618067555;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=M63dk+91m8y1VcBY11jFkduHNayFGU1elL26wYM8FTU=;
+        b=N0AH582ecEhz9dEnJ+9/4tV7oOiMboeL56GQYwM/WNoCZoVViIq21Vlf2HNa9YrQF52WsB
+        HknsBwTgcNFDzekzLnHLEFrTGB+pJDRGv+C9eJ8iulqIKCs2YsO+tGghd0Aq1Wox5kBEDH
+        cN515M7AIiuRJwoongiVRBvpiBSTGI8=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-348-OFfpu3V4PcGpnT4tHo1sow-1; Sat, 10 Apr 2021 11:12:33 -0400
+X-MC-Unique: OFfpu3V4PcGpnT4tHo1sow-1
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 89AFD107ACCA;
+        Sat, 10 Apr 2021 15:12:32 +0000 (UTC)
+Received: from virtlab701.virt.lab.eng.bos.redhat.com
+ (virtlab701.virt.lab.eng.bos.redhat.com [10.19.152.228])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 3A5C65D9D3;
+        Sat, 10 Apr 2021 15:12:32 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: stable@vger.kernel.org
+Cc: kvm@vger.kernel.org, sasha@kernel.org
+Subject: [PATCH 5.10/5.11 5/9] KVM: x86/mmu: Yield in TDU MMU iter even if no
+ SPTES changed
+Date: Sat, 10 Apr 2021 11:12:25 -0400
+Message-Id: <20210410151229.4062930-6-pbonzini@redhat.com>
+In-Reply-To: <20210410151229.4062930-1-pbonzini@redhat.com>
+References: <20210410151229.4062930-1-pbonzini@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Ben Gardon <bgardon@google.com>
+
+[ Upstream commit 1af4a96025b33587ca953c7ef12a1b20c6e70412 ]
+
+Given certain conditions, some TDP MMU functions may not yield
+reliably / frequently enough. For example, if a paging structure was
+very large but had few, if any writable entries, wrprot_gfn_range
+could traverse many entries before finding a writable entry and yielding
+because the check for yielding only happens after an SPTE is modified.
+
+Fix this issue by moving the yield to the beginning of the loop.
+
+Fixes: a6a0b05da9f3 ("kvm: x86/mmu: Support dirty logging for the TDP MMU")
+Reviewed-by: Peter Feiner <pfeiner@google.com>
+Signed-off-by: Ben Gardon <bgardon@google.com>
+
+Message-Id: <20210202185734.1680553-15-bgardon@google.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/mmu/tdp_mmu.c | 32 ++++++++++++++++++++++----------
+ 1 file changed, 22 insertions(+), 10 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu/tdp_mmu.c b/arch/x86/kvm/mmu/tdp_mmu.c
+index a07d37abb63f..0567286fba39 100644
+--- a/arch/x86/kvm/mmu/tdp_mmu.c
++++ b/arch/x86/kvm/mmu/tdp_mmu.c
+@@ -470,6 +470,12 @@ static bool zap_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+ 	bool flush_needed = false;
+ 
+ 	tdp_root_for_each_pte(iter, root, start, end) {
++		if (can_yield &&
++		    tdp_mmu_iter_cond_resched(kvm, &iter, flush_needed)) {
++			flush_needed = false;
++			continue;
++		}
++
+ 		if (!is_shadow_present_pte(iter.old_spte))
+ 			continue;
+ 
+@@ -484,9 +490,7 @@ static bool zap_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+ 			continue;
+ 
+ 		tdp_mmu_set_spte(kvm, &iter, 0);
+-
+-		flush_needed = !(can_yield &&
+-				 tdp_mmu_iter_cond_resched(kvm, &iter, true));
++		flush_needed = true;
+ 	}
+ 	return flush_needed;
+ }
+@@ -850,6 +854,9 @@ static bool wrprot_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+ 
+ 	for_each_tdp_pte_min_level(iter, root->spt, root->role.level,
+ 				   min_level, start, end) {
++		if (tdp_mmu_iter_cond_resched(kvm, &iter, false))
++			continue;
++
+ 		if (!is_shadow_present_pte(iter.old_spte) ||
+ 		    !is_last_spte(iter.old_spte, iter.level))
+ 			continue;
+@@ -858,8 +865,6 @@ static bool wrprot_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+ 
+ 		tdp_mmu_set_spte_no_dirty_log(kvm, &iter, new_spte);
+ 		spte_set = true;
+-
+-		tdp_mmu_iter_cond_resched(kvm, &iter, false);
+ 	}
+ 	return spte_set;
+ }
+@@ -903,6 +908,9 @@ static bool clear_dirty_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+ 	bool spte_set = false;
+ 
+ 	tdp_root_for_each_leaf_pte(iter, root, start, end) {
++		if (tdp_mmu_iter_cond_resched(kvm, &iter, false))
++			continue;
++
+ 		if (spte_ad_need_write_protect(iter.old_spte)) {
+ 			if (is_writable_pte(iter.old_spte))
+ 				new_spte = iter.old_spte & ~PT_WRITABLE_MASK;
+@@ -917,8 +925,6 @@ static bool clear_dirty_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+ 
+ 		tdp_mmu_set_spte_no_dirty_log(kvm, &iter, new_spte);
+ 		spte_set = true;
+-
+-		tdp_mmu_iter_cond_resched(kvm, &iter, false);
+ 	}
+ 	return spte_set;
+ }
+@@ -1026,6 +1032,9 @@ static bool set_dirty_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+ 	bool spte_set = false;
+ 
+ 	tdp_root_for_each_pte(iter, root, start, end) {
++		if (tdp_mmu_iter_cond_resched(kvm, &iter, false))
++			continue;
++
+ 		if (!is_shadow_present_pte(iter.old_spte))
+ 			continue;
+ 
+@@ -1033,8 +1042,6 @@ static bool set_dirty_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+ 
+ 		tdp_mmu_set_spte(kvm, &iter, new_spte);
+ 		spte_set = true;
+-
+-		tdp_mmu_iter_cond_resched(kvm, &iter, false);
+ 	}
+ 
+ 	return spte_set;
+@@ -1075,6 +1082,11 @@ static void zap_collapsible_spte_range(struct kvm *kvm,
+ 	bool spte_set = false;
+ 
+ 	tdp_root_for_each_pte(iter, root, start, end) {
++		if (tdp_mmu_iter_cond_resched(kvm, &iter, spte_set)) {
++			spte_set = false;
++			continue;
++		}
++
+ 		if (!is_shadow_present_pte(iter.old_spte) ||
+ 		    !is_last_spte(iter.old_spte, iter.level))
+ 			continue;
+@@ -1087,7 +1099,7 @@ static void zap_collapsible_spte_range(struct kvm *kvm,
+ 
+ 		tdp_mmu_set_spte(kvm, &iter, 0);
+ 
+-		spte_set = !tdp_mmu_iter_cond_resched(kvm, &iter, true);
++		spte_set = true;
+ 	}
+ 
+ 	if (spte_set)
+
+From patchwork Sat Apr 10 15:12:26 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 12195669
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-15.8 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id A2FB2C433ED
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:42 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 7C1EF611C2
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:42 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S234898AbhDJPMz (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Sat, 10 Apr 2021 11:12:55 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:34609 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S234519AbhDJPMv (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Sat, 10 Apr 2021 11:12:51 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1618067556;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=oktMs7lkpM0GXdwO2HUaIBMFKeDXHdYaotmkuKpmYt0=;
+        b=NzWM+H64VR+GtOBmNQkhEMDidFBS+gXuD0eGxi5Si/0E489J1yc4rdg3nVw/lnNZhnZORO
+        4V8CojD5po6VFWMcDgXstJF6VtP1t2pPXzRpWrbyeJIXR+LxEbp1koxHXjR3mFnZBb9EN2
+        Mc3ruscpC7e0LDbPLVcYYijLLtLkKc8=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-157-KwGpkgFnNFOQ8jBIPEHtNA-1; Sat, 10 Apr 2021 11:12:34 -0400
+X-MC-Unique: KwGpkgFnNFOQ8jBIPEHtNA-1
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id F403D1856A64;
+        Sat, 10 Apr 2021 15:12:32 +0000 (UTC)
+Received: from virtlab701.virt.lab.eng.bos.redhat.com
+ (virtlab701.virt.lab.eng.bos.redhat.com [10.19.152.228])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id A43B85D9D3;
+        Sat, 10 Apr 2021 15:12:32 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: stable@vger.kernel.org
+Cc: kvm@vger.kernel.org, sasha@kernel.org
+Subject: [PATCH 5.10/5.11 6/9] KVM: x86/mmu: Ensure TLBs are flushed when
+ yielding during GFN range zap
+Date: Sat, 10 Apr 2021 11:12:26 -0400
+Message-Id: <20210410151229.4062930-7-pbonzini@redhat.com>
+In-Reply-To: <20210410151229.4062930-1-pbonzini@redhat.com>
+References: <20210410151229.4062930-1-pbonzini@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Sean Christopherson <seanjc@google.com>
+
+[ Upstream commit a835429cda91621fca915d80672a157b47738afb ]
+
+When flushing a range of GFNs across multiple roots, ensure any pending
+flush from a previous root is honored before yielding while walking the
+tables of the current root.
+
+Note, kvm_tdp_mmu_zap_gfn_range() now intentionally overwrites its local
+"flush" with the result to avoid redundant flushes.  zap_gfn_range()
+preserves and return the incoming "flush", unless of course the flush was
+performed prior to yielding and no new flush was triggered.
+
+Fixes: 1af4a96025b3 ("KVM: x86/mmu: Yield in TDU MMU iter even if no SPTES changed")
+Cc: stable@vger.kernel.org
+Reviewed-by: Ben Gardon <bgardon@google.com>
+Signed-off-by: Sean Christopherson <seanjc@google.com>
+Message-Id: <20210325200119.1359384-2-seanjc@google.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/mmu/tdp_mmu.c | 24 +++++++++++++-----------
+ 1 file changed, 13 insertions(+), 11 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu/tdp_mmu.c b/arch/x86/kvm/mmu/tdp_mmu.c
+index 0567286fba39..0bb62b89476a 100644
+--- a/arch/x86/kvm/mmu/tdp_mmu.c
++++ b/arch/x86/kvm/mmu/tdp_mmu.c
+@@ -105,7 +105,7 @@ bool is_tdp_mmu_root(struct kvm *kvm, hpa_t hpa)
+ }
+ 
+ static bool zap_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+-			  gfn_t start, gfn_t end, bool can_yield);
++			  gfn_t start, gfn_t end, bool can_yield, bool flush);
+ 
+ void kvm_tdp_mmu_free_root(struct kvm *kvm, struct kvm_mmu_page *root)
+ {
+@@ -118,7 +118,7 @@ void kvm_tdp_mmu_free_root(struct kvm *kvm, struct kvm_mmu_page *root)
+ 
+ 	list_del(&root->link);
+ 
+-	zap_gfn_range(kvm, root, 0, max_gfn, false);
++	zap_gfn_range(kvm, root, 0, max_gfn, false, false);
+ 
+ 	free_page((unsigned long)root->spt);
+ 	kmem_cache_free(mmu_page_header_cache, root);
+@@ -461,18 +461,19 @@ static inline bool tdp_mmu_iter_cond_resched(struct kvm *kvm,
+  * scheduler needs the CPU or there is contention on the MMU lock. If this
+  * function cannot yield, it will not release the MMU lock or reschedule and
+  * the caller must ensure it does not supply too large a GFN range, or the
+- * operation can cause a soft lockup.
++ * operation can cause a soft lockup.  Note, in some use cases a flush may be
++ * required by prior actions.  Ensure the pending flush is performed prior to
++ * yielding.
+  */
+ static bool zap_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+-			  gfn_t start, gfn_t end, bool can_yield)
++			  gfn_t start, gfn_t end, bool can_yield, bool flush)
+ {
+ 	struct tdp_iter iter;
+-	bool flush_needed = false;
+ 
+ 	tdp_root_for_each_pte(iter, root, start, end) {
+ 		if (can_yield &&
+-		    tdp_mmu_iter_cond_resched(kvm, &iter, flush_needed)) {
+-			flush_needed = false;
++		    tdp_mmu_iter_cond_resched(kvm, &iter, flush)) {
++			flush = false;
+ 			continue;
+ 		}
+ 
+@@ -490,9 +491,10 @@ static bool zap_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+ 			continue;
+ 
+ 		tdp_mmu_set_spte(kvm, &iter, 0);
+-		flush_needed = true;
++		flush = true;
+ 	}
+-	return flush_needed;
++
++	return flush;
+ }
+ 
+ /*
+@@ -507,7 +509,7 @@ bool kvm_tdp_mmu_zap_gfn_range(struct kvm *kvm, gfn_t start, gfn_t end)
+ 	bool flush = false;
+ 
+ 	for_each_tdp_mmu_root_yield_safe(kvm, root)
+-		flush |= zap_gfn_range(kvm, root, start, end, true);
++		flush = zap_gfn_range(kvm, root, start, end, true, flush);
+ 
+ 	return flush;
+ }
+@@ -701,7 +703,7 @@ static int zap_gfn_range_hva_wrapper(struct kvm *kvm,
+ 				     struct kvm_mmu_page *root, gfn_t start,
+ 				     gfn_t end, unsigned long unused)
+ {
+-	return zap_gfn_range(kvm, root, start, end, false);
++	return zap_gfn_range(kvm, root, start, end, false, false);
+ }
+ 
+ int kvm_tdp_mmu_zap_hva_range(struct kvm *kvm, unsigned long start,
+
+From patchwork Sat Apr 10 15:12:27 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 12195673
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-15.8 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id C1E3EC4361B
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:43 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id A0905611C9
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:43 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S234920AbhDJPM5 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Sat, 10 Apr 2021 11:12:57 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:20227 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S234781AbhDJPMy (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Sat, 10 Apr 2021 11:12:54 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1618067559;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=yMatXKvHBR/N7qKy05z8BU1ZA0WuGdf7P1b2HvkGO14=;
+        b=dD2/Qdk+vxqaO63oPd2AB/wuOgxaqPFsXun6OHGk+JqAKsnu89rBWoIDE6jHDM3U4gAYY1
+        KPDSIKFqMh8PKru2+dE9JwkPrp2ffsCPYVSbVmeG1rTaAcDF3/yzjE9bysgu3eZ+eSpC0D
+        EYXC++mk10SBd/9ANg4HcQolhJfM76E=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-197-x8FzLk24PSeQ4GOl_prCfA-1; Sat, 10 Apr 2021 11:12:34 -0400
+X-MC-Unique: x8FzLk24PSeQ4GOl_prCfA-1
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 6B70F107ACCD;
+        Sat, 10 Apr 2021 15:12:33 +0000 (UTC)
+Received: from virtlab701.virt.lab.eng.bos.redhat.com
+ (virtlab701.virt.lab.eng.bos.redhat.com [10.19.152.228])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 1AD7A5D9D3;
+        Sat, 10 Apr 2021 15:12:33 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: stable@vger.kernel.org
+Cc: kvm@vger.kernel.org, sasha@kernel.org
+Subject: [PATCH 5.10/5.11 7/9] KVM: x86/mmu: Ensure TLBs are flushed for TDP
+ MMU during NX zapping
+Date: Sat, 10 Apr 2021 11:12:27 -0400
+Message-Id: <20210410151229.4062930-8-pbonzini@redhat.com>
+In-Reply-To: <20210410151229.4062930-1-pbonzini@redhat.com>
+References: <20210410151229.4062930-1-pbonzini@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Sean Christopherson <seanjc@google.com>
+
+[ Upstream commit 048f49809c526348775425420fb5b8e84fd9a133 ]
+
+Honor the "flush needed" return from kvm_tdp_mmu_zap_gfn_range(), which
+does the flush itself if and only if it yields (which it will never do in
+this particular scenario), and otherwise expects the caller to do the
+flush.  If pages are zapped from the TDP MMU but not the legacy MMU, then
+no flush will occur.
+
+Fixes: 29cf0f5007a2 ("kvm: x86/mmu: NX largepage recovery for TDP MMU")
+Cc: stable@vger.kernel.org
+Cc: Ben Gardon <bgardon@google.com>
+Signed-off-by: Sean Christopherson <seanjc@google.com>
+Message-Id: <20210325200119.1359384-3-seanjc@google.com>
+Reviewed-by: Ben Gardon <bgardon@google.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/mmu/mmu.c | 13 ++++++++-----
+ 1 file changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index ed861245ecf0..64ac8ae4f7a1 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -5985,6 +5985,8 @@ static void kvm_recover_nx_lpages(struct kvm *kvm)
+ 	struct kvm_mmu_page *sp;
+ 	unsigned int ratio;
+ 	LIST_HEAD(invalid_list);
++	bool flush = false;
++	gfn_t gfn_end;
+ 	ulong to_zap;
+ 
+ 	rcu_idx = srcu_read_lock(&kvm->srcu);
+@@ -6006,19 +6008,20 @@ static void kvm_recover_nx_lpages(struct kvm *kvm)
+ 				      lpage_disallowed_link);
+ 		WARN_ON_ONCE(!sp->lpage_disallowed);
+ 		if (sp->tdp_mmu_page)
+-			kvm_tdp_mmu_zap_gfn_range(kvm, sp->gfn,
+-				sp->gfn + KVM_PAGES_PER_HPAGE(sp->role.level));
+-		else {
++			gfn_end = sp->gfn + KVM_PAGES_PER_HPAGE(sp->role.level);
++			flush = kvm_tdp_mmu_zap_gfn_range(kvm, sp->gfn, gfn_end);
++		} else {
+ 			kvm_mmu_prepare_zap_page(kvm, sp, &invalid_list);
+ 			WARN_ON_ONCE(sp->lpage_disallowed);
+ 		}
+ 
+ 		if (need_resched() || spin_needbreak(&kvm->mmu_lock)) {
+-			kvm_mmu_commit_zap_page(kvm, &invalid_list);
++			kvm_mmu_remote_flush_or_zap(kvm, &invalid_list, flush);
+ 			cond_resched_lock(&kvm->mmu_lock);
++			flush = false;
+ 		}
+ 	}
+-	kvm_mmu_commit_zap_page(kvm, &invalid_list);
++	kvm_mmu_remote_flush_or_zap(kvm, &invalid_list, flush);
+ 
+ 	spin_unlock(&kvm->mmu_lock);
+ 	srcu_read_unlock(&kvm->srcu, rcu_idx);
+
+From patchwork Sat Apr 10 15:12:28 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 12195671
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-15.8 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 5FD84C43619
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:43 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 2A48861029
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:43 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S234890AbhDJPM4 (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Sat, 10 Apr 2021 11:12:56 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([170.10.133.124]:38375 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S234851AbhDJPMw (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Sat, 10 Apr 2021 11:12:52 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1618067557;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=hDva0dnzaaZXfvgB/zILofJK57fF8uIyaFVI0o3zlUs=;
+        b=EB/M7RK9BsTgTjxpbreGeYU/kSncHVSHE7ZgzJoieszce7+4P+W+43LRIt3y+9YumZlIoI
+        UmgtfE8JWxIBTtiDKJKsJx2Fz1KgXshI3IAKlq7Daan7mKVBMU+7/XIOgxGNZKrXyzGjQl
+        b8x2i3aj57YjP26SR2MCkv+EziajoUM=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-394-olsF9Kd8NQaLIZF2xU9pzQ-1; Sat, 10 Apr 2021 11:12:34 -0400
+X-MC-Unique: olsF9Kd8NQaLIZF2xU9pzQ-1
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id D421881746F;
+        Sat, 10 Apr 2021 15:12:33 +0000 (UTC)
+Received: from virtlab701.virt.lab.eng.bos.redhat.com
+ (virtlab701.virt.lab.eng.bos.redhat.com [10.19.152.228])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 84C375D9D3;
+        Sat, 10 Apr 2021 15:12:33 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: stable@vger.kernel.org
+Cc: kvm@vger.kernel.org, sasha@kernel.org
+Subject: [PATCH 5.10/5.11 8/9] KVM: x86/mmu: Don't allow TDP MMU to yield when
+ recovering NX pages
+Date: Sat, 10 Apr 2021 11:12:28 -0400
+Message-Id: <20210410151229.4062930-9-pbonzini@redhat.com>
+In-Reply-To: <20210410151229.4062930-1-pbonzini@redhat.com>
+References: <20210410151229.4062930-1-pbonzini@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Sean Christopherson <seanjc@google.com>
+
+[ Upstream commit 33a3164161fc86b9cc238f7f2aa2ccb1d5559b1c ]
+
+Prevent the TDP MMU from yielding when zapping a gfn range during NX
+page recovery.  If a flush is pending from a previous invocation of the
+zapping helper, either in the TDP MMU or the legacy MMU, but the TDP MMU
+has not accumulated a flush for the current invocation, then yielding
+will release mmu_lock with stale TLB entries.
+
+That being said, this isn't technically a bug fix in the current code, as
+the TDP MMU will never yield in this case.  tdp_mmu_iter_cond_resched()
+will yield if and only if it has made forward progress, as defined by the
+current gfn vs. the last yielded (or starting) gfn.  Because zapping a
+single shadow page is guaranteed to (a) find that page and (b) step
+sideways at the level of the shadow page, the TDP iter will break its loop
+before getting a chance to yield.
+
+But that is all very, very subtle, and will break at the slightest sneeze,
+e.g. zapping while holding mmu_lock for read would break as the TDP MMU
+wouldn't be guaranteed to see the present shadow page, and thus could step
+sideways at a lower level.
+
+Cc: Ben Gardon <bgardon@google.com>
+Signed-off-by: Sean Christopherson <seanjc@google.com>
+Message-Id: <20210325200119.1359384-4-seanjc@google.com>
+[Add lockdep assertion. - Paolo]
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/mmu/mmu.c     |  6 ++----
+ arch/x86/kvm/mmu/tdp_mmu.c |  5 +++--
+ arch/x86/kvm/mmu/tdp_mmu.h | 18 +++++++++++++++++-
+ 3 files changed, 22 insertions(+), 7 deletions(-)
+
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index 64ac8ae4f7a1..387dca3f81cd 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -5986,7 +5986,6 @@ static void kvm_recover_nx_lpages(struct kvm *kvm)
+ 	unsigned int ratio;
+ 	LIST_HEAD(invalid_list);
+ 	bool flush = false;
+-	gfn_t gfn_end;
+ 	ulong to_zap;
+ 
+ 	rcu_idx = srcu_read_lock(&kvm->srcu);
+@@ -6007,9 +6006,8 @@ static void kvm_recover_nx_lpages(struct kvm *kvm)
+ 				      struct kvm_mmu_page,
+ 				      lpage_disallowed_link);
+ 		WARN_ON_ONCE(!sp->lpage_disallowed);
+-		if (sp->tdp_mmu_page)
+-			gfn_end = sp->gfn + KVM_PAGES_PER_HPAGE(sp->role.level);
+-			flush = kvm_tdp_mmu_zap_gfn_range(kvm, sp->gfn, gfn_end);
++		if (sp->tdp_mmu_page) {
++			flush = kvm_tdp_mmu_zap_sp(kvm, sp);
+ 		} else {
+ 			kvm_mmu_prepare_zap_page(kvm, sp, &invalid_list);
+ 			WARN_ON_ONCE(sp->lpage_disallowed);
+diff --git a/arch/x86/kvm/mmu/tdp_mmu.c b/arch/x86/kvm/mmu/tdp_mmu.c
+index 0bb62b89476a..a16559f31d94 100644
+--- a/arch/x86/kvm/mmu/tdp_mmu.c
++++ b/arch/x86/kvm/mmu/tdp_mmu.c
+@@ -503,13 +503,14 @@ static bool zap_gfn_range(struct kvm *kvm, struct kvm_mmu_page *root,
+  * SPTEs have been cleared and a TLB flush is needed before releasing the
+  * MMU lock.
+  */
+-bool kvm_tdp_mmu_zap_gfn_range(struct kvm *kvm, gfn_t start, gfn_t end)
++bool __kvm_tdp_mmu_zap_gfn_range(struct kvm *kvm, gfn_t start, gfn_t end,
++				 bool can_yield)
+ {
+ 	struct kvm_mmu_page *root;
+ 	bool flush = false;
+ 
+ 	for_each_tdp_mmu_root_yield_safe(kvm, root)
+-		flush = zap_gfn_range(kvm, root, start, end, true, flush);
++		flush = zap_gfn_range(kvm, root, start, end, can_yield, flush);
+ 
+ 	return flush;
+ }
+diff --git a/arch/x86/kvm/mmu/tdp_mmu.h b/arch/x86/kvm/mmu/tdp_mmu.h
+index cbbdbadd1526..a7a3f6db263d 100644
+--- a/arch/x86/kvm/mmu/tdp_mmu.h
++++ b/arch/x86/kvm/mmu/tdp_mmu.h
+@@ -12,7 +12,23 @@ bool is_tdp_mmu_root(struct kvm *kvm, hpa_t root);
+ hpa_t kvm_tdp_mmu_get_vcpu_root_hpa(struct kvm_vcpu *vcpu);
+ void kvm_tdp_mmu_free_root(struct kvm *kvm, struct kvm_mmu_page *root);
+ 
+-bool kvm_tdp_mmu_zap_gfn_range(struct kvm *kvm, gfn_t start, gfn_t end);
++bool __kvm_tdp_mmu_zap_gfn_range(struct kvm *kvm, gfn_t start, gfn_t end,
++				 bool can_yield);
++static inline bool kvm_tdp_mmu_zap_gfn_range(struct kvm *kvm, gfn_t start,
++					     gfn_t end)
++{
++	return __kvm_tdp_mmu_zap_gfn_range(kvm, start, end, true);
++}
++static inline bool kvm_tdp_mmu_zap_sp(struct kvm *kvm, struct kvm_mmu_page *sp)
++{
++	gfn_t end = sp->gfn + KVM_PAGES_PER_HPAGE(sp->role.level);
++
++	/*
++	 * Don't allow yielding, as the caller may have pending pages to zap
++	 * on the shadow MMU.
++	 */
++	return __kvm_tdp_mmu_zap_gfn_range(kvm, sp->gfn, end, false);
++}
+ void kvm_tdp_mmu_zap_all(struct kvm *kvm);
+ 
+ int kvm_tdp_mmu_map(struct kvm_vcpu *vcpu, gpa_t gpa, u32 error_code,
+
+From patchwork Sat Apr 10 15:12:29 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Paolo Bonzini <pbonzini@redhat.com>
+X-Patchwork-Id: 12195667
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-15.8 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id D8DDCC433B4
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:42 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 9F7D661029
+	for <kvm@archiver.kernel.org>; Sat, 10 Apr 2021 15:12:42 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S234909AbhDJPMz (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Sat, 10 Apr 2021 11:12:55 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([170.10.133.124]:36786 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S234849AbhDJPMw (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Sat, 10 Apr 2021 11:12:52 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1618067556;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=OrBtVD1Y0D9odrfgzq64Weq+qeRKDVw+tz4kVEzyGlo=;
+        b=Y5RNHqtsOCFGhkK1xUKROu/yZK2exZeQJc9SWkTpF3S5ttWR2/IekgI/u2WuzM0a7egnuC
+        TyxBt1mXTzjpVZLrBvLQQ7o5atA3FOc/muPeIFged9rCHBmQOm1+fwgUf2PSpDlSG+LKhY
+        4iEl7cCXu96URhq69txv68mYPyonHYA=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-410-F57BZBvePtmA8XJrbBy7VA-1; Sat, 10 Apr 2021 11:12:35 -0400
+X-MC-Unique: F57BZBvePtmA8XJrbBy7VA-1
+Received: from smtp.corp.redhat.com (int-mx04.intmail.prod.int.phx2.redhat.com
+ [10.5.11.14])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 4A6EC107ACF4;
+        Sat, 10 Apr 2021 15:12:34 +0000 (UTC)
+Received: from virtlab701.virt.lab.eng.bos.redhat.com
+ (virtlab701.virt.lab.eng.bos.redhat.com [10.19.152.228])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id EEAEC5D9D3;
+        Sat, 10 Apr 2021 15:12:33 +0000 (UTC)
+From: Paolo Bonzini <pbonzini@redhat.com>
+To: stable@vger.kernel.org
+Cc: kvm@vger.kernel.org, sasha@kernel.org
+Subject: [PATCH 5.10/5.11 9/9] KVM: x86/mmu: preserve pending TLB flush across
+ calls to kvm_tdp_mmu_zap_sp
+Date: Sat, 10 Apr 2021 11:12:29 -0400
+Message-Id: <20210410151229.4062930-10-pbonzini@redhat.com>
+In-Reply-To: <20210410151229.4062930-1-pbonzini@redhat.com>
+References: <20210410151229.4062930-1-pbonzini@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.14
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+[ Upstream commit 315f02c60d9425b38eb8ad7f21b8a35e40db23f9 ]
+
+Right now, if a call to kvm_tdp_mmu_zap_sp returns false, the caller
+will skip the TLB flush, which is wrong.  There are two ways to fix
+it:
+
+- since kvm_tdp_mmu_zap_sp will not yield and therefore will not flush
+  the TLB itself, we could change the call to kvm_tdp_mmu_zap_sp to
+  use "flush |= ..."
+
+- or we can chain the flush argument through kvm_tdp_mmu_zap_sp down
+  to __kvm_tdp_mmu_zap_gfn_range.  Note that kvm_tdp_mmu_zap_sp will
+  neither yield nor flush, so flush would never go from true to
+  false.
+
+This patch does the former to simplify application to stable kernels,
+and to make it further clearer that kvm_tdp_mmu_zap_sp will not flush.
+
+Cc: seanjc@google.com
+Fixes: 048f49809c526 ("KVM: x86/mmu: Ensure TLBs are flushed for TDP MMU during NX zapping")
+Cc: <stable@vger.kernel.org> # 5.10.x: 048f49809c: KVM: x86/mmu: Ensure TLBs are flushed for TDP MMU during NX zapping
+Cc: <stable@vger.kernel.org> # 5.10.x: 33a3164161: KVM: x86/mmu: Don't allow TDP MMU to yield when recovering NX pages
+Cc: <stable@vger.kernel.org>
+Reviewed-by: Sean Christopherson <seanjc@google.com>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+---
+ arch/x86/kvm/mmu/mmu.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index 387dca3f81cd..86cedf32526a 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -6007,7 +6007,7 @@ static void kvm_recover_nx_lpages(struct kvm *kvm)
+ 				      lpage_disallowed_link);
+ 		WARN_ON_ONCE(!sp->lpage_disallowed);
+ 		if (sp->tdp_mmu_page) {
+-			flush = kvm_tdp_mmu_zap_sp(kvm, sp);
++			flush |= kvm_tdp_mmu_zap_sp(kvm, sp);
+ 		} else {
+ 			kvm_mmu_prepare_zap_page(kvm, sp, &invalid_list);
+ 			WARN_ON_ONCE(sp->lpage_disallowed);
