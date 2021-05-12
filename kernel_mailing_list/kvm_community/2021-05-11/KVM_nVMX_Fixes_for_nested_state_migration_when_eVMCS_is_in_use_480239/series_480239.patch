@@ -1,0 +1,1006 @@
+From patchwork Tue May 11 11:19:50 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 12250685
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.5 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 60D5CC433ED
+	for <kvm@archiver.kernel.org>; Tue, 11 May 2021 11:20:18 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 38EF36193A
+	for <kvm@archiver.kernel.org>; Tue, 11 May 2021 11:20:18 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231424AbhEKLVW (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 11 May 2021 07:21:22 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([170.10.133.124]:39192 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S231426AbhEKLVU (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Tue, 11 May 2021 07:21:20 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1620732013;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=Y1h+GXoE1AglicQ5eVRu0sY2YtprSiqq8Kcm1LeP5rA=;
+        b=XBdL9zZfEgafhtdXiVXuYjPgGtXbu8x+i9bk5F4SVfSNq09CSogWAGIGl4ss8s7prQwXhU
+        gl4nBxttcVxCtdEPFjR/LBcweKBTWFka/r1CnvHQ+NRVPycbBuSmsEGqOUjWto0FB8FP/O
+        VOGaGL6I7axAC8jxor5DC+WJswPPduY=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-600-d0NkOwW0MJeqmELthxzuxg-1; Tue, 11 May 2021 07:20:10 -0400
+X-MC-Unique: d0NkOwW0MJeqmELthxzuxg-1
+Received: from smtp.corp.redhat.com (int-mx06.intmail.prod.int.phx2.redhat.com
+ [10.5.11.16])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 2E040801106;
+        Tue, 11 May 2021 11:20:09 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.193.2])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 2BB8663746;
+        Tue, 11 May 2021 11:20:01 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: linux-kernel@vger.kernel.org,
+        Sean Christopherson <seanjc@google.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Maxim Levitsky <mlevitsk@redhat.com>
+Subject: [PATCH 1/7] KVM: nVMX: Introduce nested_evmcs_is_used()
+Date: Tue, 11 May 2021 13:19:50 +0200
+Message-Id: <20210511111956.1555830-2-vkuznets@redhat.com>
+In-Reply-To: <20210511111956.1555830-1-vkuznets@redhat.com>
+References: <20210511111956.1555830-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.16
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Unlike regular set_current_vmptr(), nested_vmx_handle_enlightened_vmptrld()
+can not be called directly from vmx_set_nested_state() as KVM may not have
+all the information yet (e.g. HV_X64_MSR_VP_ASSIST_PAGE MSR may not be
+restored yet). Enlightened VMCS is mapped later while getting nested state
+pages. In the meantime, vmx->nested.hv_evmcs remains NULL and using it
+for various checks is incorrect. In particular, if KVM_GET_NESTED_STATE is
+called right after KVM_SET_NESTED_STATE, KVM_STATE_NESTED_EVMCS flag in the
+resulting state will be unset (and such state will later fail to load).
+
+Introduce nested_evmcs_is_used() and use 'is_guest_mode(vcpu) &&
+vmx->nested.current_vmptr == -1ull' check to detect not-yet-mapped eVMCS
+after restore.
+
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ arch/x86/kvm/vmx/nested.c | 31 ++++++++++++++++++++++++++-----
+ 1 file changed, 26 insertions(+), 5 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 6058a65a6ede..3080e00c8f90 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -141,6 +141,27 @@ static void init_vmcs_shadow_fields(void)
+ 	max_shadow_read_write_fields = j;
+ }
+ 
++static inline bool nested_evmcs_is_used(struct vcpu_vmx *vmx)
++{
++	struct kvm_vcpu *vcpu = &vmx->vcpu;
++
++	if (vmx->nested.hv_evmcs)
++		return true;
++
++	/*
++	 * After KVM_SET_NESTED_STATE, enlightened VMCS is mapped during
++	 * KVM_REQ_GET_NESTED_STATE_PAGES handling and until the request is
++	 * processed vmx->nested.hv_evmcs is NULL. It is, however, possible to
++	 * detect such state by checking 'nested.current_vmptr == -1ull' when
++	 * vCPU is in guest mode, it is only possible with eVMCS.
++	 */
++	if (unlikely(vmx->nested.enlightened_vmcs_enabled && is_guest_mode(vcpu) &&
++		     (vmx->nested.current_vmptr == -1ull)))
++		return true;
++
++	return false;
++}
++
+ /*
+  * The following 3 functions, nested_vmx_succeed()/failValid()/failInvalid(),
+  * set the success or error code of an emulated VMX instruction (as specified
+@@ -187,7 +208,7 @@ static int nested_vmx_fail(struct kvm_vcpu *vcpu, u32 vm_instruction_error)
+ 	 * failValid writes the error number to the current VMCS, which
+ 	 * can't be done if there isn't a current VMCS.
+ 	 */
+-	if (vmx->nested.current_vmptr == -1ull && !vmx->nested.hv_evmcs)
++	if (vmx->nested.current_vmptr == -1ull && !nested_evmcs_is_used(vmx))
+ 		return nested_vmx_failInvalid(vcpu);
+ 
+ 	return nested_vmx_failValid(vcpu, vm_instruction_error);
+@@ -2208,7 +2229,7 @@ static void prepare_vmcs02_early(struct vcpu_vmx *vmx, struct vmcs12 *vmcs12)
+ 	u32 exec_control;
+ 	u64 guest_efer = nested_vmx_calc_efer(vmx, vmcs12);
+ 
+-	if (vmx->nested.dirty_vmcs12 || vmx->nested.hv_evmcs)
++	if (vmx->nested.dirty_vmcs12 || nested_evmcs_is_used(vmx))
+ 		prepare_vmcs02_early_rare(vmx, vmcs12);
+ 
+ 	/*
+@@ -3437,7 +3458,7 @@ enum nvmx_vmentry_status nested_vmx_enter_non_root_mode(struct kvm_vcpu *vcpu,
+ 
+ 	load_vmcs12_host_state(vcpu, vmcs12);
+ 	vmcs12->vm_exit_reason = exit_reason.full;
+-	if (enable_shadow_vmcs || vmx->nested.hv_evmcs)
++	if (enable_shadow_vmcs || nested_evmcs_is_used(vmx))
+ 		vmx->nested.need_vmcs12_to_shadow_sync = true;
+ 	return NVMX_VMENTRY_VMEXIT;
+ }
+@@ -4032,7 +4053,7 @@ static void sync_vmcs02_to_vmcs12(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12)
+ {
+ 	struct vcpu_vmx *vmx = to_vmx(vcpu);
+ 
+-	if (vmx->nested.hv_evmcs)
++	if (nested_evmcs_is_used(vmx))
+ 		sync_vmcs02_to_vmcs12_rare(vcpu, vmcs12);
+ 
+ 	vmx->nested.need_sync_vmcs02_to_vmcs12_rare = !vmx->nested.hv_evmcs;
+@@ -6056,7 +6077,7 @@ static int vmx_get_nested_state(struct kvm_vcpu *vcpu,
+ 		if (vmx_has_valid_vmcs12(vcpu)) {
+ 			kvm_state.size += sizeof(user_vmx_nested_state->vmcs12);
+ 
+-			if (vmx->nested.hv_evmcs)
++			if (nested_evmcs_is_used(vmx))
+ 				kvm_state.flags |= KVM_STATE_NESTED_EVMCS;
+ 
+ 			if (is_guest_mode(vcpu) &&
+
+From patchwork Tue May 11 11:19:51 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 12250687
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.5 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 2A7C5C433B4
+	for <kvm@archiver.kernel.org>; Tue, 11 May 2021 11:20:27 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id F100A61363
+	for <kvm@archiver.kernel.org>; Tue, 11 May 2021 11:20:26 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231484AbhEKLVb (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 11 May 2021 07:21:31 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:42077 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S231437AbhEKLVZ (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Tue, 11 May 2021 07:21:25 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1620732018;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=iQGXKcpbTj9W5HMDC/xqbHnC/drWo+ssAo6yFyhsgGc=;
+        b=NMCnxztPtfZIhAOh+t3qoCCikZxPGOd+pId36D3Rja+hRFpbzJcfbI4Xh2C8PdJU2KPIsj
+        6/hW817W48B7C84oYKiTwFToMTH7dYCLVXKhKEnr2ZmZ4XyBkIHZJFTQL7n0e4atveh0cM
+        uorL0NtKjIKozv34n8Ybdi0wB8rKSYk=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-553-Ne0XkzhRO-itrzJlNBE64g-1; Tue, 11 May 2021 07:20:15 -0400
+X-MC-Unique: Ne0XkzhRO-itrzJlNBE64g-1
+Received: from smtp.corp.redhat.com (int-mx06.intmail.prod.int.phx2.redhat.com
+ [10.5.11.16])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 353611006C80;
+        Tue, 11 May 2021 11:20:14 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.193.2])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 7ED1C63C40;
+        Tue, 11 May 2021 11:20:09 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: linux-kernel@vger.kernel.org,
+        Sean Christopherson <seanjc@google.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Maxim Levitsky <mlevitsk@redhat.com>
+Subject: [PATCH 2/7] KVM: nVMX: Release enlightened VMCS on VMCLEAR
+Date: Tue, 11 May 2021 13:19:51 +0200
+Message-Id: <20210511111956.1555830-3-vkuznets@redhat.com>
+In-Reply-To: <20210511111956.1555830-1-vkuznets@redhat.com>
+References: <20210511111956.1555830-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.16
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Unlike VMREAD/VMWRITE/VMPTRLD, VMCLEAR is a valid instruction when
+enlightened VMCS is in use. TLFS has the following brief description:
+"The L1 hypervisor can execute a VMCLEAR instruction to transition an
+enlightened VMCS from the active to the non-active state". Normally,
+this change can be ignored as unmapping active eVMCS can be postponed
+until the next VMLAUNCH instruction but in case nested state is migrated
+with KVM_GET_NESTED_STATE/KVM_SET_NESTED_STATE, keeping eVMCS mapped
+may result in its synchronization with VMCS12 and this is incorrect:
+L1 hypervisor is free to reuse inactive eVMCS memory for something else.
+
+Inactive eVMCS after VMCLEAR can just be unmapped.
+
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ arch/x86/kvm/vmx/nested.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 3080e00c8f90..ea2869d8b823 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -5008,6 +5008,8 @@ static int handle_vmclear(struct kvm_vcpu *vcpu)
+ 				     vmptr + offsetof(struct vmcs12,
+ 						      launch_state),
+ 				     &zero, sizeof(zero));
++	} else if (vmx->nested.hv_evmcs && vmptr == vmx->nested.hv_evmcs_vmptr) {
++		nested_release_evmcs(vcpu);
+ 	}
+ 
+ 	return nested_vmx_succeed(vcpu);
+
+From patchwork Tue May 11 11:19:52 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 12250689
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.5 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id CBCB7C433B4
+	for <kvm@archiver.kernel.org>; Tue, 11 May 2021 11:20:29 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id A0D2F6193E
+	for <kvm@archiver.kernel.org>; Tue, 11 May 2021 11:20:29 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231493AbhEKLVc (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 11 May 2021 07:21:32 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:51117 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S231458AbhEKLVZ (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Tue, 11 May 2021 07:21:25 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1620732019;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=C3b61Yuwvt3N0MQTtX7AvqmxOl5llWOw8BX/K7ilrjc=;
+        b=iUZ7KgwDOBX4eW+vlWuFClE6XCf4aLLxq2QF6m4WXE2dpMAsB6+mXsJK+tNpKQ2tazrfIU
+        CZWwO08aDhLWaknLYXtzcQ8341DKXdHZjckKPdIAf08rW0eW3/s4xg+r4WFKvpCdZAwTSa
+        iXy1xhC2PE1j9KDLQ/18o/9KWsmCNHM=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-347-EhtPxcdOMJGlHrUKI5rIJw-1; Tue, 11 May 2021 07:20:17 -0400
+X-MC-Unique: EhtPxcdOMJGlHrUKI5rIJw-1
+Received: from smtp.corp.redhat.com (int-mx06.intmail.prod.int.phx2.redhat.com
+ [10.5.11.16])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 7F9E0803620;
+        Tue, 11 May 2021 11:20:16 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.193.2])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 87D1A63C40;
+        Tue, 11 May 2021 11:20:14 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: linux-kernel@vger.kernel.org,
+        Sean Christopherson <seanjc@google.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Maxim Levitsky <mlevitsk@redhat.com>
+Subject: [PATCH 3/7] KVM: nVMX: Ignore 'hv_clean_fields' data when eVMCS data
+ is copied in vmx_get_nested_state()
+Date: Tue, 11 May 2021 13:19:52 +0200
+Message-Id: <20210511111956.1555830-4-vkuznets@redhat.com>
+In-Reply-To: <20210511111956.1555830-1-vkuznets@redhat.com>
+References: <20210511111956.1555830-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.16
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+'Clean fields' data from enlightened VMCS is only valid upon vmentry: L1
+hypervisor is not obliged to keep it up-to-date while it is mangling L2's
+state, KVM_GET_NESTED_STATE request may come at a wrong moment when actual
+eVMCS changes are unsynchronized with 'hv_clean_fields'. As upon migration
+VMCS12 is used as a source of ultimate truce, we must make sure we pick all
+the changes to eVMCS and thus 'clean fields' data must be ignored.
+
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ arch/x86/kvm/vmx/nested.c | 43 +++++++++++++++++++++++----------------
+ 1 file changed, 25 insertions(+), 18 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index ea2869d8b823..7970a16ee6b1 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -1607,16 +1607,23 @@ static void copy_vmcs12_to_shadow(struct vcpu_vmx *vmx)
+ 	vmcs_load(vmx->loaded_vmcs->vmcs);
+ }
+ 
+-static int copy_enlightened_to_vmcs12(struct vcpu_vmx *vmx)
++static int copy_enlightened_to_vmcs12(struct vcpu_vmx *vmx, bool from_vmentry)
+ {
+ 	struct vmcs12 *vmcs12 = vmx->nested.cached_vmcs12;
+ 	struct hv_enlightened_vmcs *evmcs = vmx->nested.hv_evmcs;
++	u32 hv_clean_fields;
+ 
+ 	/* HV_VMX_ENLIGHTENED_CLEAN_FIELD_NONE */
+ 	vmcs12->tpr_threshold = evmcs->tpr_threshold;
+ 	vmcs12->guest_rip = evmcs->guest_rip;
+ 
+-	if (unlikely(!(evmcs->hv_clean_fields &
++	/* Clean fields data can only be trusted upon vmentry */
++	if (likely(from_vmentry))
++		hv_clean_fields = evmcs->hv_clean_fields;
++	else
++		hv_clean_fields = 0;
++
++	if (unlikely(!(hv_clean_fields &
+ 		       HV_VMX_ENLIGHTENED_CLEAN_FIELD_GUEST_BASIC))) {
+ 		vmcs12->guest_rsp = evmcs->guest_rsp;
+ 		vmcs12->guest_rflags = evmcs->guest_rflags;
+@@ -1624,23 +1631,23 @@ static int copy_enlightened_to_vmcs12(struct vcpu_vmx *vmx)
+ 			evmcs->guest_interruptibility_info;
+ 	}
+ 
+-	if (unlikely(!(evmcs->hv_clean_fields &
++	if (unlikely(!(hv_clean_fields &
+ 		       HV_VMX_ENLIGHTENED_CLEAN_FIELD_CONTROL_PROC))) {
+ 		vmcs12->cpu_based_vm_exec_control =
+ 			evmcs->cpu_based_vm_exec_control;
+ 	}
+ 
+-	if (unlikely(!(evmcs->hv_clean_fields &
++	if (unlikely(!(hv_clean_fields &
+ 		       HV_VMX_ENLIGHTENED_CLEAN_FIELD_CONTROL_EXCPN))) {
+ 		vmcs12->exception_bitmap = evmcs->exception_bitmap;
+ 	}
+ 
+-	if (unlikely(!(evmcs->hv_clean_fields &
++	if (unlikely(!(hv_clean_fields &
+ 		       HV_VMX_ENLIGHTENED_CLEAN_FIELD_CONTROL_ENTRY))) {
+ 		vmcs12->vm_entry_controls = evmcs->vm_entry_controls;
+ 	}
+ 
+-	if (unlikely(!(evmcs->hv_clean_fields &
++	if (unlikely(!(hv_clean_fields &
+ 		       HV_VMX_ENLIGHTENED_CLEAN_FIELD_CONTROL_EVENT))) {
+ 		vmcs12->vm_entry_intr_info_field =
+ 			evmcs->vm_entry_intr_info_field;
+@@ -1650,7 +1657,7 @@ static int copy_enlightened_to_vmcs12(struct vcpu_vmx *vmx)
+ 			evmcs->vm_entry_instruction_len;
+ 	}
+ 
+-	if (unlikely(!(evmcs->hv_clean_fields &
++	if (unlikely(!(hv_clean_fields &
+ 		       HV_VMX_ENLIGHTENED_CLEAN_FIELD_HOST_GRP1))) {
+ 		vmcs12->host_ia32_pat = evmcs->host_ia32_pat;
+ 		vmcs12->host_ia32_efer = evmcs->host_ia32_efer;
+@@ -1670,7 +1677,7 @@ static int copy_enlightened_to_vmcs12(struct vcpu_vmx *vmx)
+ 		vmcs12->host_tr_selector = evmcs->host_tr_selector;
+ 	}
+ 
+-	if (unlikely(!(evmcs->hv_clean_fields &
++	if (unlikely(!(hv_clean_fields &
+ 		       HV_VMX_ENLIGHTENED_CLEAN_FIELD_CONTROL_GRP1))) {
+ 		vmcs12->pin_based_vm_exec_control =
+ 			evmcs->pin_based_vm_exec_control;
+@@ -1679,18 +1686,18 @@ static int copy_enlightened_to_vmcs12(struct vcpu_vmx *vmx)
+ 			evmcs->secondary_vm_exec_control;
+ 	}
+ 
+-	if (unlikely(!(evmcs->hv_clean_fields &
++	if (unlikely(!(hv_clean_fields &
+ 		       HV_VMX_ENLIGHTENED_CLEAN_FIELD_IO_BITMAP))) {
+ 		vmcs12->io_bitmap_a = evmcs->io_bitmap_a;
+ 		vmcs12->io_bitmap_b = evmcs->io_bitmap_b;
+ 	}
+ 
+-	if (unlikely(!(evmcs->hv_clean_fields &
++	if (unlikely(!(hv_clean_fields &
+ 		       HV_VMX_ENLIGHTENED_CLEAN_FIELD_MSR_BITMAP))) {
+ 		vmcs12->msr_bitmap = evmcs->msr_bitmap;
+ 	}
+ 
+-	if (unlikely(!(evmcs->hv_clean_fields &
++	if (unlikely(!(hv_clean_fields &
+ 		       HV_VMX_ENLIGHTENED_CLEAN_FIELD_GUEST_GRP2))) {
+ 		vmcs12->guest_es_base = evmcs->guest_es_base;
+ 		vmcs12->guest_cs_base = evmcs->guest_cs_base;
+@@ -1730,14 +1737,14 @@ static int copy_enlightened_to_vmcs12(struct vcpu_vmx *vmx)
+ 		vmcs12->guest_tr_selector = evmcs->guest_tr_selector;
+ 	}
+ 
+-	if (unlikely(!(evmcs->hv_clean_fields &
++	if (unlikely(!(hv_clean_fields &
+ 		       HV_VMX_ENLIGHTENED_CLEAN_FIELD_CONTROL_GRP2))) {
+ 		vmcs12->tsc_offset = evmcs->tsc_offset;
+ 		vmcs12->virtual_apic_page_addr = evmcs->virtual_apic_page_addr;
+ 		vmcs12->xss_exit_bitmap = evmcs->xss_exit_bitmap;
+ 	}
+ 
+-	if (unlikely(!(evmcs->hv_clean_fields &
++	if (unlikely(!(hv_clean_fields &
+ 		       HV_VMX_ENLIGHTENED_CLEAN_FIELD_CRDR))) {
+ 		vmcs12->cr0_guest_host_mask = evmcs->cr0_guest_host_mask;
+ 		vmcs12->cr4_guest_host_mask = evmcs->cr4_guest_host_mask;
+@@ -1749,7 +1756,7 @@ static int copy_enlightened_to_vmcs12(struct vcpu_vmx *vmx)
+ 		vmcs12->guest_dr7 = evmcs->guest_dr7;
+ 	}
+ 
+-	if (unlikely(!(evmcs->hv_clean_fields &
++	if (unlikely(!(hv_clean_fields &
+ 		       HV_VMX_ENLIGHTENED_CLEAN_FIELD_HOST_POINTER))) {
+ 		vmcs12->host_fs_base = evmcs->host_fs_base;
+ 		vmcs12->host_gs_base = evmcs->host_gs_base;
+@@ -1759,13 +1766,13 @@ static int copy_enlightened_to_vmcs12(struct vcpu_vmx *vmx)
+ 		vmcs12->host_rsp = evmcs->host_rsp;
+ 	}
+ 
+-	if (unlikely(!(evmcs->hv_clean_fields &
++	if (unlikely(!(hv_clean_fields &
+ 		       HV_VMX_ENLIGHTENED_CLEAN_FIELD_CONTROL_XLAT))) {
+ 		vmcs12->ept_pointer = evmcs->ept_pointer;
+ 		vmcs12->virtual_processor_id = evmcs->virtual_processor_id;
+ 	}
+ 
+-	if (unlikely(!(evmcs->hv_clean_fields &
++	if (unlikely(!(hv_clean_fields &
+ 		       HV_VMX_ENLIGHTENED_CLEAN_FIELD_GUEST_GRP1))) {
+ 		vmcs12->vmcs_link_pointer = evmcs->vmcs_link_pointer;
+ 		vmcs12->guest_ia32_debugctl = evmcs->guest_ia32_debugctl;
+@@ -3503,7 +3510,7 @@ static int nested_vmx_run(struct kvm_vcpu *vcpu, bool launch)
+ 		return nested_vmx_failInvalid(vcpu);
+ 
+ 	if (vmx->nested.hv_evmcs) {
+-		copy_enlightened_to_vmcs12(vmx);
++		copy_enlightened_to_vmcs12(vmx, true);
+ 		/* Enlightened VMCS doesn't have launch state */
+ 		vmcs12->launch_state = !launch;
+ 	} else if (enable_shadow_vmcs) {
+@@ -6136,7 +6143,7 @@ static int vmx_get_nested_state(struct kvm_vcpu *vcpu,
+ 		copy_vmcs02_to_vmcs12_rare(vcpu, get_vmcs12(vcpu));
+ 		if (!vmx->nested.need_vmcs12_to_shadow_sync) {
+ 			if (vmx->nested.hv_evmcs)
+-				copy_enlightened_to_vmcs12(vmx);
++				copy_enlightened_to_vmcs12(vmx, false);
+ 			else if (enable_shadow_vmcs)
+ 				copy_shadow_to_vmcs12(vmx);
+ 		}
+
+From patchwork Tue May 11 11:19:53 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 12250691
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.5 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 4F4A7C43462
+	for <kvm@archiver.kernel.org>; Tue, 11 May 2021 11:20:31 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 2408B6193D
+	for <kvm@archiver.kernel.org>; Tue, 11 May 2021 11:20:31 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231495AbhEKLVg (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 11 May 2021 07:21:36 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([170.10.133.124]:48543 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S231479AbhEKLVb (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Tue, 11 May 2021 07:21:31 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1620732024;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=6VdfZtVq1Osm8Hb40n9j/822T1bZFpdUzI7OH3sy8Hg=;
+        b=cFrEC6CUljV0FoQXus0rN1uQ7iDk68xBhjVQ9UXAFPthRhsr/oLR0uYRC+FV85u5Jybg84
+        z8BiDobEXPbJAdh++0D0HMG/a0MhjftCKlhLY6lTjgosH3tFZJVRg31Qf1ReHUYfW3CLcI
+        1IPEWU5/QFTmGtkNikTVic5ZgO46Mgc=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-502-d9_f4xHsPSy747llmD-ijw-1; Tue, 11 May 2021 07:20:22 -0400
+X-MC-Unique: d9_f4xHsPSy747llmD-ijw-1
+Received: from smtp.corp.redhat.com (int-mx06.intmail.prod.int.phx2.redhat.com
+ [10.5.11.16])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id CB955107ACC7;
+        Tue, 11 May 2021 11:20:21 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.193.2])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id E353563746;
+        Tue, 11 May 2021 11:20:16 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: linux-kernel@vger.kernel.org,
+        Sean Christopherson <seanjc@google.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Maxim Levitsky <mlevitsk@redhat.com>
+Subject: [PATCH 4/7] KVM: nVMX: Force enlightened VMCS sync from
+ nested_vmx_failValid()
+Date: Tue, 11 May 2021 13:19:53 +0200
+Message-Id: <20210511111956.1555830-5-vkuznets@redhat.com>
+In-Reply-To: <20210511111956.1555830-1-vkuznets@redhat.com>
+References: <20210511111956.1555830-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.16
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+'need_vmcs12_to_shadow_sync' is used for both shadow and enlightened
+VMCS sync when we exit to L1. The comment in nested_vmx_failValid()
+validly states why shadow vmcs sync can be omitted but this doesn't
+apply to enlightened VMCS as it 'shadows' all VMCS12 fields.
+
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ arch/x86/kvm/vmx/nested.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 7970a16ee6b1..3257a2291693 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -194,9 +194,13 @@ static int nested_vmx_failValid(struct kvm_vcpu *vcpu,
+ 			| X86_EFLAGS_ZF);
+ 	get_vmcs12(vcpu)->vm_instruction_error = vm_instruction_error;
+ 	/*
+-	 * We don't need to force a shadow sync because
+-	 * VM_INSTRUCTION_ERROR is not shadowed
++	 * We don't need to force sync to shadow VMCS because
++	 * VM_INSTRUCTION_ERROR is not shadowed. Enlightened VMCS 'shadows' all
++	 * fields and thus must be synced.
+ 	 */
++	if (nested_evmcs_is_used(to_vmx(vcpu)))
++		to_vmx(vcpu)->nested.need_vmcs12_to_shadow_sync = true;
++
+ 	return kvm_skip_emulated_instruction(vcpu);
+ }
+ 
+
+From patchwork Tue May 11 11:19:54 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 12250693
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.5 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 7E0F2C43460
+	for <kvm@archiver.kernel.org>; Tue, 11 May 2021 11:20:32 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 45D2A6193A
+	for <kvm@archiver.kernel.org>; Tue, 11 May 2021 11:20:32 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231530AbhEKLVh (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 11 May 2021 07:21:37 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:44761 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S231502AbhEKLVd (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Tue, 11 May 2021 07:21:33 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1620732027;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=+M62xJvp0rLs4StjFsMWIRrfd2lRGy018Ij8SrHeZcQ=;
+        b=g9A9DCD5sfw3Raz/HljbXh+ksrqyE58oTZ/vKXdH2NR5QdRtGJxD0nr0hc5I8uztz7pd1s
+        WtSKp8VnhK4H4L7ZROZgT+C83pU6M5/qKYMLfv54fU1ENUWVP1r0oPnASkyWAkCLe0WrYi
+        hlZ1HPUpRD1Xt4FadkAAJqQXgiDUUlI=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-185-oZxZ-7vRP8i9dtXjbBbWCA-1; Tue, 11 May 2021 07:20:25 -0400
+X-MC-Unique: oZxZ-7vRP8i9dtXjbBbWCA-1
+Received: from smtp.corp.redhat.com (int-mx06.intmail.prod.int.phx2.redhat.com
+ [10.5.11.16])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 35B791922023;
+        Tue, 11 May 2021 11:20:24 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.193.2])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 31B8863746;
+        Tue, 11 May 2021 11:20:22 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: linux-kernel@vger.kernel.org,
+        Sean Christopherson <seanjc@google.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Maxim Levitsky <mlevitsk@redhat.com>
+Subject: [PATCH 5/7] KVM: nVMX: Reset eVMCS clean fields data from
+ prepare_vmcs02()
+Date: Tue, 11 May 2021 13:19:54 +0200
+Message-Id: <20210511111956.1555830-6-vkuznets@redhat.com>
+In-Reply-To: <20210511111956.1555830-1-vkuznets@redhat.com>
+References: <20210511111956.1555830-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.16
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+When nested state migration happens during L1's execution, it
+is incorrect to modify eVMCS as it is L1 who 'owns' it at the moment.
+At lease genuine Hyper-v seems to not be very happy when 'clean fields'
+data changes underneath it.
+
+'Clean fields' data is used in KVM twice: by copy_enlightened_to_vmcs12()
+and prepare_vmcs02_rare() so we can reset it from prepare_vmcs02() instead.
+
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ arch/x86/kvm/vmx/nested.c | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 3257a2291693..1661e2e19560 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -2090,9 +2090,6 @@ void nested_sync_vmcs12_to_shadow(struct kvm_vcpu *vcpu)
+ 
+ 	if (vmx->nested.hv_evmcs) {
+ 		copy_vmcs12_to_enlightened(vmx);
+-		/* All fields are clean */
+-		vmx->nested.hv_evmcs->hv_clean_fields |=
+-			HV_VMX_ENLIGHTENED_CLEAN_FIELD_ALL;
+ 	} else {
+ 		copy_vmcs12_to_shadow(vmx);
+ 	}
+@@ -2636,6 +2633,12 @@ static int prepare_vmcs02(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12,
+ 
+ 	kvm_rsp_write(vcpu, vmcs12->guest_rsp);
+ 	kvm_rip_write(vcpu, vmcs12->guest_rip);
++
++	/* Mark all fields as clean so L1 hypervisor can set what's dirty */
++	if (hv_evmcs)
++		vmx->nested.hv_evmcs->hv_clean_fields |=
++			HV_VMX_ENLIGHTENED_CLEAN_FIELD_ALL;
++
+ 	return 0;
+ }
+ 
+
+From patchwork Tue May 11 11:19:55 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 12250695
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.5 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 84C2CC433B4
+	for <kvm@archiver.kernel.org>; Tue, 11 May 2021 11:20:39 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 58AE76193A
+	for <kvm@archiver.kernel.org>; Tue, 11 May 2021 11:20:39 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231449AbhEKLVo (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 11 May 2021 07:21:44 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:21937 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S231462AbhEKLVf (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Tue, 11 May 2021 07:21:35 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1620732029;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=I0ueWWk8MA4qCwUdyosYoBxKBlQEKK7nPY4khneXt80=;
+        b=Q1/cc+sHfOu4Cyy1ihepm56Arf/Yxvhm64a+tuiHITgRRayLqeptXgWyYjSxJU4vy/Sh86
+        Bv/T2DEMxfRiV9P5EKbx9sdG592UNnHqJCS6loB0GlMyXpxa6wcajMjfFa3a5Nhe1RrXH8
+        abpY96S9mTLEJ95gw6PG4Z+2jPPzO8k=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-409-Uc0eZisCPJam2FS0GxlbuA-1; Tue, 11 May 2021 07:20:28 -0400
+X-MC-Unique: Uc0eZisCPJam2FS0GxlbuA-1
+Received: from smtp.corp.redhat.com (int-mx06.intmail.prod.int.phx2.redhat.com
+ [10.5.11.16])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id C0C291006C83;
+        Tue, 11 May 2021 11:20:26 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.193.2])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 93BCD63C40;
+        Tue, 11 May 2021 11:20:24 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: linux-kernel@vger.kernel.org,
+        Sean Christopherson <seanjc@google.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Maxim Levitsky <mlevitsk@redhat.com>
+Subject: [PATCH 6/7] KVM: nVMX: Request to sync eVMCS from VMCS12 after
+ migration
+Date: Tue, 11 May 2021 13:19:55 +0200
+Message-Id: <20210511111956.1555830-7-vkuznets@redhat.com>
+In-Reply-To: <20210511111956.1555830-1-vkuznets@redhat.com>
+References: <20210511111956.1555830-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.16
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+VMCS12 is used to keep the authoritative state during nested state
+migration. In case 'need_vmcs12_to_shadow_sync' flag is set, we're
+in between L2->L1 vmexit and L1 guest run when actual sync to
+enlightened (or shadow) VMCS happens. Nested state, however, has
+no flag for 'need_vmcs12_to_shadow_sync' so vmx_set_nested_state()->
+set_current_vmptr() always sets it. Enlightened vmptrld path, however,
+doesn't have the quirk so some VMCS12 changes may not get properly
+reflected to eVMCS and L1 will see an incorrect state.
+
+Note, during L2 execution or when need_vmcs12_to_shadow_sync is not
+set the change is effectively a nop: in the former case all changes
+will get reflected during the first L2->L1 vmexit and in the later
+case VMCS12 and eVMCS are already in sync (thanks to
+copy_enlightened_to_vmcs12() in vmx_get_nested_state()).
+
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ arch/x86/kvm/vmx/nested.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index 1661e2e19560..0a422c6091dc 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -3135,6 +3135,12 @@ static bool nested_get_evmcs_page(struct kvm_vcpu *vcpu)
+ 		if (evmptrld_status == EVMPTRLD_VMFAIL ||
+ 		    evmptrld_status == EVMPTRLD_ERROR)
+ 			return false;
++
++		/*
++		 * Post migration VMCS12 always provides the most actual
++		 * information, copy it to eVMCS upon entry.
++		 */
++		vmx->nested.need_vmcs12_to_shadow_sync = true;
+ 	}
+ 
+ 	return true;
+
+From patchwork Tue May 11 11:19:56 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Vitaly Kuznetsov <vkuznets@redhat.com>
+X-Patchwork-Id: 12250697
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.5 required=3.0 tests=BAYES_00,DKIMWL_WL_HIGH,
+	DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,HEADER_FROM_DIFFERENT_DOMAINS,
+	INCLUDES_CR_TRAILER,INCLUDES_PATCH,MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 56D01C433ED
+	for <kvm@archiver.kernel.org>; Tue, 11 May 2021 11:20:53 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 1C77361363
+	for <kvm@archiver.kernel.org>; Tue, 11 May 2021 11:20:53 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S231639AbhEKLVz (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Tue, 11 May 2021 07:21:55 -0400
+Received: from us-smtp-delivery-124.mimecast.com ([216.205.24.124]:34449 "EHLO
+        us-smtp-delivery-124.mimecast.com" rhost-flags-OK-OK-OK-OK)
+        by vger.kernel.org with ESMTP id S231560AbhEKLVk (ORCPT
+        <rfc822;kvm@vger.kernel.org>); Tue, 11 May 2021 07:21:40 -0400
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=redhat.com;
+        s=mimecast20190719; t=1620732034;
+        h=from:from:reply-to:subject:subject:date:date:message-id:message-id:
+         to:to:cc:cc:mime-version:mime-version:
+         content-transfer-encoding:content-transfer-encoding:
+         in-reply-to:in-reply-to:references:references;
+        bh=jgezwu+Ka/2x1z5dm2QC7G75OxkPVMK5k1J0nHkF7Ds=;
+        b=PNPpOuqkAmZUdhPZsWbxH7VwBM6pgK3ET4nhLX1XJk28m+5y4SS1vy/CZHMB0vOZ4YEy6/
+        W3D3332bHIj5aKHcpHBZUDwv9ckmbagfsCah6f4GnvkCZRtsI7ABeLSXhdE6I0b6TpmctN
+        V5E4gFmBZF+V5rte/PNLhLrjX0SZcE4=
+Received: from mimecast-mx01.redhat.com (mimecast-mx01.redhat.com
+ [209.132.183.4]) (Using TLS) by relay.mimecast.com with ESMTP id
+ us-mta-23-UVUDOauwOq-nIxbW-5YncQ-1; Tue, 11 May 2021 07:20:31 -0400
+X-MC-Unique: UVUDOauwOq-nIxbW-5YncQ-1
+Received: from smtp.corp.redhat.com (int-mx06.intmail.prod.int.phx2.redhat.com
+ [10.5.11.16])
+        (using TLSv1.2 with cipher AECDH-AES256-SHA (256/256 bits))
+        (No client certificate requested)
+        by mimecast-mx01.redhat.com (Postfix) with ESMTPS id 393831922038;
+        Tue, 11 May 2021 11:20:29 +0000 (UTC)
+Received: from vitty.brq.redhat.com (unknown [10.40.193.2])
+        by smtp.corp.redhat.com (Postfix) with ESMTP id 286D463C40;
+        Tue, 11 May 2021 11:20:26 +0000 (UTC)
+From: Vitaly Kuznetsov <vkuznets@redhat.com>
+To: kvm@vger.kernel.org, Paolo Bonzini <pbonzini@redhat.com>
+Cc: linux-kernel@vger.kernel.org,
+        Sean Christopherson <seanjc@google.com>,
+        Wanpeng Li <wanpengli@tencent.com>,
+        Jim Mattson <jmattson@google.com>,
+        Maxim Levitsky <mlevitsk@redhat.com>
+Subject: [PATCH 7/7] KVM: selftests: evmcs_test: Test that
+ KVM_STATE_NESTED_EVMCS is never lost
+Date: Tue, 11 May 2021 13:19:56 +0200
+Message-Id: <20210511111956.1555830-8-vkuznets@redhat.com>
+In-Reply-To: <20210511111956.1555830-1-vkuznets@redhat.com>
+References: <20210511111956.1555830-1-vkuznets@redhat.com>
+MIME-Version: 1.0
+X-Scanned-By: MIMEDefang 2.79 on 10.5.11.16
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+Do KVM_GET_NESTED_STATE/KVM_SET_NESTED_STATE for a freshly restored VM
+(before the first KVM_RUN) to check that KVM_STATE_NESTED_EVMCS is not
+lost.
+
+Signed-off-by: Vitaly Kuznetsov <vkuznets@redhat.com>
+---
+ .../testing/selftests/kvm/x86_64/evmcs_test.c | 64 +++++++++++--------
+ 1 file changed, 38 insertions(+), 26 deletions(-)
+
+diff --git a/tools/testing/selftests/kvm/x86_64/evmcs_test.c b/tools/testing/selftests/kvm/x86_64/evmcs_test.c
+index 63096cea26c6..fcef347a681a 100644
+--- a/tools/testing/selftests/kvm/x86_64/evmcs_test.c
++++ b/tools/testing/selftests/kvm/x86_64/evmcs_test.c
+@@ -121,14 +121,38 @@ void inject_nmi(struct kvm_vm *vm)
+ 	vcpu_events_set(vm, VCPU_ID, &events);
+ }
+ 
++static void save_restore_vm(struct kvm_vm *vm)
++{
++	struct kvm_regs regs1, regs2;
++	struct kvm_x86_state *state;
++
++	state = vcpu_save_state(vm, VCPU_ID);
++	memset(&regs1, 0, sizeof(regs1));
++	vcpu_regs_get(vm, VCPU_ID, &regs1);
++
++	kvm_vm_release(vm);
++
++	/* Restore state in a new VM.  */
++	kvm_vm_restart(vm, O_RDWR);
++	vm_vcpu_add(vm, VCPU_ID);
++	vcpu_set_hv_cpuid(vm, VCPU_ID);
++	vcpu_enable_evmcs(vm, VCPU_ID);
++	vcpu_load_state(vm, VCPU_ID, state);
++	free(state);
++
++	memset(&regs2, 0, sizeof(regs2));
++	vcpu_regs_get(vm, VCPU_ID, &regs2);
++	TEST_ASSERT(!memcmp(&regs1, &regs2, sizeof(regs2)),
++		    "Unexpected register values after vcpu_load_state; rdi: %lx rsi: %lx",
++		    (ulong) regs2.rdi, (ulong) regs2.rsi);
++}
++
+ int main(int argc, char *argv[])
+ {
+ 	vm_vaddr_t vmx_pages_gva = 0;
+ 
+-	struct kvm_regs regs1, regs2;
+ 	struct kvm_vm *vm;
+ 	struct kvm_run *run;
+-	struct kvm_x86_state *state;
+ 	struct ucall uc;
+ 	int stage;
+ 
+@@ -145,10 +169,6 @@ int main(int argc, char *argv[])
+ 	vcpu_set_hv_cpuid(vm, VCPU_ID);
+ 	vcpu_enable_evmcs(vm, VCPU_ID);
+ 
+-	run = vcpu_state(vm, VCPU_ID);
+-
+-	vcpu_regs_get(vm, VCPU_ID, &regs1);
+-
+ 	vcpu_alloc_vmx(vm, &vmx_pages_gva);
+ 	vcpu_args_set(vm, VCPU_ID, 1, vmx_pages_gva);
+ 
+@@ -160,6 +180,7 @@ int main(int argc, char *argv[])
+ 	pr_info("Running L1 which uses EVMCS to run L2\n");
+ 
+ 	for (stage = 1;; stage++) {
++		run = vcpu_state(vm, VCPU_ID);
+ 		_vcpu_run(vm, VCPU_ID);
+ 		TEST_ASSERT(run->exit_reason == KVM_EXIT_IO,
+ 			    "Stage %d: unexpected exit reason: %u (%s),\n",
+@@ -184,32 +205,23 @@ int main(int argc, char *argv[])
+ 			    uc.args[1] == stage, "Stage %d: Unexpected register values vmexit, got %lx",
+ 			    stage, (ulong)uc.args[1]);
+ 
+-		state = vcpu_save_state(vm, VCPU_ID);
+-		memset(&regs1, 0, sizeof(regs1));
+-		vcpu_regs_get(vm, VCPU_ID, &regs1);
+-
+-		kvm_vm_release(vm);
+-
+-		/* Restore state in a new VM.  */
+-		kvm_vm_restart(vm, O_RDWR);
+-		vm_vcpu_add(vm, VCPU_ID);
+-		vcpu_set_hv_cpuid(vm, VCPU_ID);
+-		vcpu_enable_evmcs(vm, VCPU_ID);
+-		vcpu_load_state(vm, VCPU_ID, state);
+-		run = vcpu_state(vm, VCPU_ID);
+-		free(state);
+-
+-		memset(&regs2, 0, sizeof(regs2));
+-		vcpu_regs_get(vm, VCPU_ID, &regs2);
+-		TEST_ASSERT(!memcmp(&regs1, &regs2, sizeof(regs2)),
+-			    "Unexpected register values after vcpu_load_state; rdi: %lx rsi: %lx",
+-			    (ulong) regs2.rdi, (ulong) regs2.rsi);
++		save_restore_vm(vm);
+ 
+ 		/* Force immediate L2->L1 exit before resuming */
+ 		if (stage == 8) {
+ 			pr_info("Injecting NMI into L1 before L2 had a chance to run after restore\n");
+ 			inject_nmi(vm);
+ 		}
++
++		/*
++		 * Do KVM_GET_NESTED_STATE/KVM_SET_NESTED_STATE for a freshly
++		 * restored VM (before the first KVM_RUN) to check that
++		 * KVM_STATE_NESTED_EVMCS is not lost.
++		 */
++		if (stage == 9) {
++			pr_info("Trying extra KVM_GET_NESTED_STATE/KVM_SET_NESTED_STATE cycle\n");
++			save_restore_vm(vm);
++		}
+ 	}
+ 
+ done:
