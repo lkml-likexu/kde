@@ -1,0 +1,1145 @@
+From patchwork Wed May 19 13:52:44 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 12267387
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 3EE28C433B4
+	for <kvm@archiver.kernel.org>; Wed, 19 May 2021 13:53:18 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 29357611AE
+	for <kvm@archiver.kernel.org>; Wed, 19 May 2021 13:53:18 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1353808AbhESNyg (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 19 May 2021 09:54:36 -0400
+Received: from 8bytes.org ([81.169.241.247]:40008 "EHLO theia.8bytes.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1353773AbhESNyc (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 19 May 2021 09:54:32 -0400
+Received: from cap.home.8bytes.org (p549ad305.dip0.t-ipconnect.de
+ [84.154.211.5])
+        (using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits))
+        (No client certificate requested)
+        by theia.8bytes.org (Postfix) with ESMTPSA id 82BEC2FA;
+        Wed, 19 May 2021 15:53:08 +0200 (CEST)
+From: Joerg Roedel <joro@8bytes.org>
+To: x86@kernel.org, Hyunwook Baek <baekhw@google.com>
+Cc: Joerg Roedel <joro@8bytes.org>, Joerg Roedel <jroedel@suse.de>,
+        stable@vger.kernel.org, hpa@zytor.com,
+        Andy Lutomirski <luto@kernel.org>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Jiri Slaby <jslaby@suse.cz>,
+        Dan Williams <dan.j.williams@intel.com>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Juergen Gross <jgross@suse.com>,
+        Kees Cook <keescook@chromium.org>,
+        David Rientjes <rientjes@google.com>,
+        Cfir Cohen <cfir@google.com>,
+        Erdem Aktas <erdemaktas@google.com>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Mike Stunes <mstunes@vmware.com>,
+        Sean Christopherson <seanjc@google.com>,
+        Martin Radev <martin.b.radev@gmail.com>,
+        Arvind Sankar <nivedita@alum.mit.edu>,
+        linux-coco@lists.linux.dev, linux-kernel@vger.kernel.org,
+        kvm@vger.kernel.org, virtualization@lists.linux-foundation.org
+Subject: [PATCH v2 1/8] x86/sev-es: Don't return NULL from sev_es_get_ghcb()
+Date: Wed, 19 May 2021 15:52:44 +0200
+Message-Id: <20210519135251.30093-2-joro@8bytes.org>
+X-Mailer: git-send-email 2.31.1
+In-Reply-To: <20210519135251.30093-1-joro@8bytes.org>
+References: <20210519135251.30093-1-joro@8bytes.org>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joerg Roedel <jroedel@suse.de>
+
+The sev_es_get_ghcb() is called from several places, but only one of
+them checks the return value. The reaction to returning NULL is always
+the same: Calling panic() and kill the machine.
+
+Instead of adding checks to all call-places, move the panic() into the
+function itself so that it will no longer return NULL.
+
+Fixes: 0786138c78e7 ("x86/sev-es: Add a Runtime #VC Exception Handler")
+Cc: stable@vger.kernel.org # v5.10+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ arch/x86/kernel/sev.c | 25 ++++++++++++-------------
+ 1 file changed, 12 insertions(+), 13 deletions(-)
+
+diff --git a/arch/x86/kernel/sev.c b/arch/x86/kernel/sev.c
+index 4fa111becc93..82bced88153b 100644
+--- a/arch/x86/kernel/sev.c
++++ b/arch/x86/kernel/sev.c
+@@ -203,8 +203,18 @@ static __always_inline struct ghcb *sev_es_get_ghcb(struct ghcb_state *state)
+ 	if (unlikely(data->ghcb_active)) {
+ 		/* GHCB is already in use - save its contents */
+ 
+-		if (unlikely(data->backup_ghcb_active))
+-			return NULL;
++		if (unlikely(data->backup_ghcb_active)) {
++			/*
++			 * Backup-GHCB is also already in use. There is no way
++			 * to continue here so just kill the machine. To make
++			 * panic() work, mark GHCBs inactive so that messages
++			 * can be printed out.
++			 */
++			data->ghcb_active        = false;
++			data->backup_ghcb_active = false;
++
++			panic("Unable to handle #VC exception! GHCB and Backup GHCB are already in use");
++		}
+ 
+ 		/* Mark backup_ghcb active before writing to it */
+ 		data->backup_ghcb_active = true;
+@@ -1289,7 +1299,6 @@ static __always_inline bool on_vc_fallback_stack(struct pt_regs *regs)
+  */
+ DEFINE_IDTENTRY_VC_SAFE_STACK(exc_vmm_communication)
+ {
+-	struct sev_es_runtime_data *data = this_cpu_read(runtime_data);
+ 	irqentry_state_t irq_state;
+ 	struct ghcb_state state;
+ 	struct es_em_ctxt ctxt;
+@@ -1315,16 +1324,6 @@ DEFINE_IDTENTRY_VC_SAFE_STACK(exc_vmm_communication)
+ 	 */
+ 
+ 	ghcb = sev_es_get_ghcb(&state);
+-	if (!ghcb) {
+-		/*
+-		 * Mark GHCBs inactive so that panic() is able to print the
+-		 * message.
+-		 */
+-		data->ghcb_active        = false;
+-		data->backup_ghcb_active = false;
+-
+-		panic("Unable to handle #VC exception! GHCB and Backup GHCB are already in use");
+-	}
+ 
+ 	vc_ghcb_invalidate(ghcb);
+ 	result = vc_init_em_ctxt(&ctxt, regs, error_code);
+
+From patchwork Wed May 19 13:52:45 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 12267389
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 8010CC43460
+	for <kvm@archiver.kernel.org>; Wed, 19 May 2021 13:53:19 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 5F07E611AE
+	for <kvm@archiver.kernel.org>; Wed, 19 May 2021 13:53:19 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1353814AbhESNyh (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 19 May 2021 09:54:37 -0400
+Received: from 8bytes.org ([81.169.241.247]:40046 "EHLO theia.8bytes.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1353774AbhESNyd (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 19 May 2021 09:54:33 -0400
+Received: from cap.home.8bytes.org (p549ad305.dip0.t-ipconnect.de
+ [84.154.211.5])
+        (using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits))
+        (No client certificate requested)
+        by theia.8bytes.org (Postfix) with ESMTPSA id 14C4E3FF;
+        Wed, 19 May 2021 15:53:09 +0200 (CEST)
+From: Joerg Roedel <joro@8bytes.org>
+To: x86@kernel.org, Hyunwook Baek <baekhw@google.com>
+Cc: Joerg Roedel <joro@8bytes.org>, Joerg Roedel <jroedel@suse.de>,
+        stable@vger.kernel.org, hpa@zytor.com,
+        Andy Lutomirski <luto@kernel.org>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Jiri Slaby <jslaby@suse.cz>,
+        Dan Williams <dan.j.williams@intel.com>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Juergen Gross <jgross@suse.com>,
+        Kees Cook <keescook@chromium.org>,
+        David Rientjes <rientjes@google.com>,
+        Cfir Cohen <cfir@google.com>,
+        Erdem Aktas <erdemaktas@google.com>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Mike Stunes <mstunes@vmware.com>,
+        Sean Christopherson <seanjc@google.com>,
+        Martin Radev <martin.b.radev@gmail.com>,
+        Arvind Sankar <nivedita@alum.mit.edu>,
+        linux-coco@lists.linux.dev, linux-kernel@vger.kernel.org,
+        kvm@vger.kernel.org, virtualization@lists.linux-foundation.org
+Subject: [PATCH v2 2/8] x86/sev-es: Forward page-faults which happen during
+ emulation
+Date: Wed, 19 May 2021 15:52:45 +0200
+Message-Id: <20210519135251.30093-3-joro@8bytes.org>
+X-Mailer: git-send-email 2.31.1
+In-Reply-To: <20210519135251.30093-1-joro@8bytes.org>
+References: <20210519135251.30093-1-joro@8bytes.org>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joerg Roedel <jroedel@suse.de>
+
+When emulating guest instructions for MMIO or IOIO accesses the #VC
+handler might get a page-fault and will not be able to complete. Forward
+the page-fault in this case to the correct handler instead of killing
+the machine.
+
+Fixes: 0786138c78e7 ("x86/sev-es: Add a Runtime #VC Exception Handler")
+Cc: stable@vger.kernel.org # v5.10+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ arch/x86/kernel/sev.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/arch/x86/kernel/sev.c b/arch/x86/kernel/sev.c
+index 82bced88153b..1f428f401bed 100644
+--- a/arch/x86/kernel/sev.c
++++ b/arch/x86/kernel/sev.c
+@@ -1270,6 +1270,10 @@ static __always_inline void vc_forward_exception(struct es_em_ctxt *ctxt)
+ 	case X86_TRAP_UD:
+ 		exc_invalid_op(ctxt->regs);
+ 		break;
++	case X86_TRAP_PF:
++		write_cr2(ctxt->fi.cr2);
++		exc_page_fault(ctxt->regs, error_code);
++		break;
+ 	case X86_TRAP_AC:
+ 		exc_alignment_check(ctxt->regs, error_code);
+ 		break;
+
+From patchwork Wed May 19 13:52:46 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 12267395
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 24B7AC43461
+	for <kvm@archiver.kernel.org>; Wed, 19 May 2021 13:53:24 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id F312A6100C
+	for <kvm@archiver.kernel.org>; Wed, 19 May 2021 13:53:23 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1353783AbhESNyd (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 19 May 2021 09:54:33 -0400
+Received: from lindbergh.monkeyblade.net ([23.128.96.19]:60876 "EHLO
+        lindbergh.monkeyblade.net" rhost-flags-OK-OK-OK-OK) by vger.kernel.org
+        with ESMTP id S1353776AbhESNyc (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 19 May 2021 09:54:32 -0400
+Received: from theia.8bytes.org (8bytes.org
+ [IPv6:2a01:238:4383:600:38bc:a715:4b6d:a889])
+        by lindbergh.monkeyblade.net (Postfix) with ESMTPS id 5E8C0C06175F;
+        Wed, 19 May 2021 06:53:12 -0700 (PDT)
+Received: from cap.home.8bytes.org (p549ad305.dip0.t-ipconnect.de
+ [84.154.211.5])
+        (using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits))
+        (No client certificate requested)
+        by theia.8bytes.org (Postfix) with ESMTPSA id 9D3EB416;
+        Wed, 19 May 2021 15:53:09 +0200 (CEST)
+From: Joerg Roedel <joro@8bytes.org>
+To: x86@kernel.org, Hyunwook Baek <baekhw@google.com>
+Cc: Joerg Roedel <joro@8bytes.org>, Joerg Roedel <jroedel@suse.de>,
+        stable@vger.kernel.org, hpa@zytor.com,
+        Andy Lutomirski <luto@kernel.org>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Jiri Slaby <jslaby@suse.cz>,
+        Dan Williams <dan.j.williams@intel.com>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Juergen Gross <jgross@suse.com>,
+        Kees Cook <keescook@chromium.org>,
+        David Rientjes <rientjes@google.com>,
+        Cfir Cohen <cfir@google.com>,
+        Erdem Aktas <erdemaktas@google.com>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Mike Stunes <mstunes@vmware.com>,
+        Sean Christopherson <seanjc@google.com>,
+        Martin Radev <martin.b.radev@gmail.com>,
+        Arvind Sankar <nivedita@alum.mit.edu>,
+        linux-coco@lists.linux.dev, linux-kernel@vger.kernel.org,
+        kvm@vger.kernel.org, virtualization@lists.linux-foundation.org
+Subject: [PATCH v2 3/8] x86/sev-es: Use __put_user()/__get_user() for data
+ accesses
+Date: Wed, 19 May 2021 15:52:46 +0200
+Message-Id: <20210519135251.30093-4-joro@8bytes.org>
+X-Mailer: git-send-email 2.31.1
+In-Reply-To: <20210519135251.30093-1-joro@8bytes.org>
+References: <20210519135251.30093-1-joro@8bytes.org>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joerg Roedel <jroedel@suse.de>
+
+The put_user() and get_user() functions do checks on the address which is
+passed to them. They check whether the address is actually a user-space
+address and whether its fine to access it. They also call might_fault()
+to indicate that they could fault and possibly sleep.
+
+All of these checks are neither wanted nor needed in the #VC exception
+handler, which can be invoked from almost any context and also for MMIO
+instructions from kernel space on kernel memory. All the #VC handler
+wants to know is whether a fault happened when the access was tried.
+
+This is provided by __put_user()/__get_user(), which just do the access
+no matter what. Also add comments explaining why __get_user() and
+__put_user() are the best choice here and why it is safe to use them
+in this context. Also explain why copy_to/from_user can't be used.
+
+In addition, also revert commit
+
+	024f60d6552 x86/sev-es: ("Handle string port IO to kernel memory properly")
+
+because using __get_user()/__put_user() fixes the same problem while
+the above commit introduced several problems:
+
+	1) It uses access_ok() which is only allowed in task context.
+
+	2) It uses memcpy() which has no fault handling at all and is
+	   thus unsafe to use here.
+
+Fixes: f980f9c31a92 ("x86/sev-es: Compile early handler code into kernel image")
+Cc: stable@vger.kernel.org # v5.10+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ arch/x86/kernel/sev.c | 66 ++++++++++++++++++++++++++++++-------------
+ 1 file changed, 46 insertions(+), 20 deletions(-)
+
+diff --git a/arch/x86/kernel/sev.c b/arch/x86/kernel/sev.c
+index 1f428f401bed..651b81cd648e 100644
+--- a/arch/x86/kernel/sev.c
++++ b/arch/x86/kernel/sev.c
+@@ -315,31 +315,44 @@ static enum es_result vc_write_mem(struct es_em_ctxt *ctxt,
+ 	u16 d2;
+ 	u8  d1;
+ 
+-	/* If instruction ran in kernel mode and the I/O buffer is in kernel space */
+-	if (!user_mode(ctxt->regs) && !access_ok(target, size)) {
+-		memcpy(dst, buf, size);
+-		return ES_OK;
+-	}
+-
++	/*
++	 * This function uses __put_user() independent of whether kernel or user
++	 * memory is accessed. This works fine because __put_user() does no
++	 * sanity checks of the pointer being accessed. All that it does is
++	 * to report when the access failed.
++	 *
++	 * Also, this function runs in atomic context, so __put_user() is not
++	 * allowed to sleep. The page-fault handler detects that it is running
++	 * in atomic context and will not try to take mmap_sem and handle the
++	 * fault, so additional pagefault_enable()/disable() calls are not
++	 * needed.
++	 *
++	 * The access can't be done via copy_to_user() here because
++	 * vc_write_mem() must not use string instructions to access unsafe
++	 * memory. The reason is that MOVS is emulated by the #VC handler by
++	 * splitting the move up into a read and a write and taking a nested #VC
++	 * exception on whatever of them is the MMIO access. Using string
++	 * instructions here would cause infinite nesting.
++	 */
+ 	switch (size) {
+ 	case 1:
+ 		memcpy(&d1, buf, 1);
+-		if (put_user(d1, target))
++		if (__put_user(d1, target))
+ 			goto fault;
+ 		break;
+ 	case 2:
+ 		memcpy(&d2, buf, 2);
+-		if (put_user(d2, target))
++		if (__put_user(d2, target))
+ 			goto fault;
+ 		break;
+ 	case 4:
+ 		memcpy(&d4, buf, 4);
+-		if (put_user(d4, target))
++		if (__put_user(d4, target))
+ 			goto fault;
+ 		break;
+ 	case 8:
+ 		memcpy(&d8, buf, 8);
+-		if (put_user(d8, target))
++		if (__put_user(d8, target))
+ 			goto fault;
+ 		break;
+ 	default:
+@@ -370,30 +383,43 @@ static enum es_result vc_read_mem(struct es_em_ctxt *ctxt,
+ 	u16 d2;
+ 	u8  d1;
+ 
+-	/* If instruction ran in kernel mode and the I/O buffer is in kernel space */
+-	if (!user_mode(ctxt->regs) && !access_ok(s, size)) {
+-		memcpy(buf, src, size);
+-		return ES_OK;
+-	}
+-
++	/*
++	 * This function uses __get_user() independent of whether kernel or user
++	 * memory is accessed. This works fine because __get_user() does no
++	 * sanity checks of the pointer being accessed. All that it does is
++	 * to report when the access failed.
++	 *
++	 * Also, this function runs in atomic context, so __get_user() is not
++	 * allowed to sleep. The page-fault handler detects that it is running
++	 * in atomic context and will not try to take mmap_sem and handle the
++	 * fault, so additional pagefault_enable()/disable() calls are not
++	 * needed.
++	 *
++	 * The access can't be done via copy_from_user() here because
++	 * vc_read_mem() must not use string instructions to access unsafe
++	 * memory. The reason is that MOVS is emulated by the #VC handler by
++	 * splitting the move up into a read and a write and taking a nested #VC
++	 * exception on whatever of them is the MMIO access. Using string
++	 * instructions here would cause infinite nesting.
++	 */
+ 	switch (size) {
+ 	case 1:
+-		if (get_user(d1, s))
++		if (__get_user(d1, s))
+ 			goto fault;
+ 		memcpy(buf, &d1, 1);
+ 		break;
+ 	case 2:
+-		if (get_user(d2, s))
++		if (__get_user(d2, s))
+ 			goto fault;
+ 		memcpy(buf, &d2, 2);
+ 		break;
+ 	case 4:
+-		if (get_user(d4, s))
++		if (__get_user(d4, s))
+ 			goto fault;
+ 		memcpy(buf, &d4, 4);
+ 		break;
+ 	case 8:
+-		if (get_user(d8, s))
++		if (__get_user(d8, s))
+ 			goto fault;
+ 		memcpy(buf, &d8, 8);
+ 		break;
+
+From patchwork Wed May 19 13:52:47 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 12267385
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 8E703C43470
+	for <kvm@archiver.kernel.org>; Wed, 19 May 2021 13:53:17 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 6D72B61363
+	for <kvm@archiver.kernel.org>; Wed, 19 May 2021 13:53:17 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1353800AbhESNyf (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 19 May 2021 09:54:35 -0400
+Received: from 8bytes.org ([81.169.241.247]:40116 "EHLO theia.8bytes.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1353775AbhESNyc (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 19 May 2021 09:54:32 -0400
+Received: from cap.home.8bytes.org (p549ad305.dip0.t-ipconnect.de
+ [84.154.211.5])
+        (using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits))
+        (No client certificate requested)
+        by theia.8bytes.org (Postfix) with ESMTPSA id 3E2894B4;
+        Wed, 19 May 2021 15:53:10 +0200 (CEST)
+From: Joerg Roedel <joro@8bytes.org>
+To: x86@kernel.org, Hyunwook Baek <baekhw@google.com>
+Cc: Joerg Roedel <joro@8bytes.org>, Joerg Roedel <jroedel@suse.de>,
+        hpa@zytor.com, Andy Lutomirski <luto@kernel.org>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Jiri Slaby <jslaby@suse.cz>,
+        Dan Williams <dan.j.williams@intel.com>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Juergen Gross <jgross@suse.com>,
+        Kees Cook <keescook@chromium.org>,
+        David Rientjes <rientjes@google.com>,
+        Cfir Cohen <cfir@google.com>,
+        Erdem Aktas <erdemaktas@google.com>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Mike Stunes <mstunes@vmware.com>,
+        Sean Christopherson <seanjc@google.com>,
+        Martin Radev <martin.b.radev@gmail.com>,
+        Arvind Sankar <nivedita@alum.mit.edu>,
+        linux-coco@lists.linux.dev, linux-kernel@vger.kernel.org,
+        kvm@vger.kernel.org, virtualization@lists.linux-foundation.org
+Subject: [PATCH v2 4/8] x86/sev-es: Fix error message in runtime #VC handler
+Date: Wed, 19 May 2021 15:52:47 +0200
+Message-Id: <20210519135251.30093-5-joro@8bytes.org>
+X-Mailer: git-send-email 2.31.1
+In-Reply-To: <20210519135251.30093-1-joro@8bytes.org>
+References: <20210519135251.30093-1-joro@8bytes.org>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joerg Roedel <jroedel@suse.de>
+
+The runtime #VC handler is not "early" anymore. Fix the copy&paste error
+and remove that word from the error message.
+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ arch/x86/kernel/sev.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kernel/sev.c b/arch/x86/kernel/sev.c
+index 651b81cd648e..4fd997bbf059 100644
+--- a/arch/x86/kernel/sev.c
++++ b/arch/x86/kernel/sev.c
+@@ -1369,7 +1369,7 @@ DEFINE_IDTENTRY_VC_SAFE_STACK(exc_vmm_communication)
+ 		vc_finish_insn(&ctxt);
+ 		break;
+ 	case ES_UNSUPPORTED:
+-		pr_err_ratelimited("Unsupported exit-code 0x%02lx in early #VC exception (IP: 0x%lx)\n",
++		pr_err_ratelimited("Unsupported exit-code 0x%02lx in #VC exception (IP: 0x%lx)\n",
+ 				   error_code, regs->ip);
+ 		goto fail;
+ 	case ES_VMM_ERROR:
+
+From patchwork Wed May 19 13:52:48 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 12267391
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id C08AFC43603
+	for <kvm@archiver.kernel.org>; Wed, 19 May 2021 13:53:20 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id A214F611B0
+	for <kvm@archiver.kernel.org>; Wed, 19 May 2021 13:53:20 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1353824AbhESNyi (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 19 May 2021 09:54:38 -0400
+Received: from 8bytes.org ([81.169.241.247]:40204 "EHLO theia.8bytes.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1353770AbhESNyd (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 19 May 2021 09:54:33 -0400
+Received: from cap.home.8bytes.org (p549ad305.dip0.t-ipconnect.de
+ [84.154.211.5])
+        (using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits))
+        (No client certificate requested)
+        by theia.8bytes.org (Postfix) with ESMTPSA id CEA4C4CA;
+        Wed, 19 May 2021 15:53:10 +0200 (CEST)
+From: Joerg Roedel <joro@8bytes.org>
+To: x86@kernel.org, Hyunwook Baek <baekhw@google.com>
+Cc: Joerg Roedel <joro@8bytes.org>, Joerg Roedel <jroedel@suse.de>,
+        hpa@zytor.com, Andy Lutomirski <luto@kernel.org>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Jiri Slaby <jslaby@suse.cz>,
+        Dan Williams <dan.j.williams@intel.com>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Juergen Gross <jgross@suse.com>,
+        Kees Cook <keescook@chromium.org>,
+        David Rientjes <rientjes@google.com>,
+        Cfir Cohen <cfir@google.com>,
+        Erdem Aktas <erdemaktas@google.com>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Mike Stunes <mstunes@vmware.com>,
+        Sean Christopherson <seanjc@google.com>,
+        Martin Radev <martin.b.radev@gmail.com>,
+        Arvind Sankar <nivedita@alum.mit.edu>,
+        linux-coco@lists.linux.dev, linux-kernel@vger.kernel.org,
+        kvm@vger.kernel.org, virtualization@lists.linux-foundation.org
+Subject: [PATCH v2 5/8] x86/sev-es: Leave NMI-mode before sending signals
+Date: Wed, 19 May 2021 15:52:48 +0200
+Message-Id: <20210519135251.30093-6-joro@8bytes.org>
+X-Mailer: git-send-email 2.31.1
+In-Reply-To: <20210519135251.30093-1-joro@8bytes.org>
+References: <20210519135251.30093-1-joro@8bytes.org>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joerg Roedel <jroedel@suse.de>
+
+The error path in the runtime #VC handler sends a signal to kill the
+current task if the exception was raised from user-space. Some parts of
+the #VC handler run in NMI mode, because it is critical that it is not
+interrupted (except from an NMI) while the GHCB is in use.
+
+But sending signals in NMI-mode is actually broken and triggers lockdep
+warnings. On the other side, when the signal is sent, there is no reason
+for the handler to still be in NMI-mode, as the GHCB is not used
+anymore.
+
+Leave NMI-mode before entering the error path to get rid of the lockdep
+warnings.
+
+Fixes: 62441a1fb532 ("x86/sev-es: Correctly track IRQ states in runtime #VC handler")
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ arch/x86/kernel/sev.c | 17 +++++++++++++----
+ 1 file changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/arch/x86/kernel/sev.c b/arch/x86/kernel/sev.c
+index 4fd997bbf059..9a64030e74c0 100644
+--- a/arch/x86/kernel/sev.c
++++ b/arch/x86/kernel/sev.c
+@@ -1343,9 +1343,10 @@ DEFINE_IDTENTRY_VC_SAFE_STACK(exc_vmm_communication)
+ 		return;
+ 	}
+ 
++	instrumentation_begin();
++
+ 	irq_state = irqentry_nmi_enter(regs);
+ 	lockdep_assert_irqs_disabled();
+-	instrumentation_begin();
+ 
+ 	/*
+ 	 * This is invoked through an interrupt gate, so IRQs are disabled. The
+@@ -1395,13 +1396,19 @@ DEFINE_IDTENTRY_VC_SAFE_STACK(exc_vmm_communication)
+ 		BUG();
+ 	}
+ 
+-out:
+-	instrumentation_end();
+ 	irqentry_nmi_exit(regs, irq_state);
++	instrumentation_end();
+ 
+ 	return;
+ 
+ fail:
++	/*
++	 * Leave NMI mode - the GHCB is not busy anymore and depending on where
++	 * the #VC came from this code is about to either kill the task (when in
++	 * task context) or kill the machine.
++	 */
++	irqentry_nmi_exit(regs, irq_state);
++
+ 	if (user_mode(regs)) {
+ 		/*
+ 		 * Do not kill the machine if user-space triggered the
+@@ -1423,7 +1430,9 @@ DEFINE_IDTENTRY_VC_SAFE_STACK(exc_vmm_communication)
+ 		panic("Returned from Terminate-Request to Hypervisor\n");
+ 	}
+ 
+-	goto out;
++	instrumentation_end();
++
++	return;
+ }
+ 
+ /* This handler runs on the #VC fall-back stack. It can cause further #VC exceptions */
+
+From patchwork Wed May 19 13:52:49 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 12267399
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 74772C43460
+	for <kvm@archiver.kernel.org>; Wed, 19 May 2021 13:53:28 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 5E782611AE
+	for <kvm@archiver.kernel.org>; Wed, 19 May 2021 13:53:28 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1353879AbhESNyq (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 19 May 2021 09:54:46 -0400
+Received: from 8bytes.org ([81.169.241.247]:40206 "EHLO theia.8bytes.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1353772AbhESNyd (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 19 May 2021 09:54:33 -0400
+Received: from cap.home.8bytes.org (p549ad305.dip0.t-ipconnect.de
+ [84.154.211.5])
+        (using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits))
+        (No client certificate requested)
+        by theia.8bytes.org (Postfix) with ESMTPSA id 6F9B24D9;
+        Wed, 19 May 2021 15:53:11 +0200 (CEST)
+From: Joerg Roedel <joro@8bytes.org>
+To: x86@kernel.org, Hyunwook Baek <baekhw@google.com>
+Cc: Joerg Roedel <joro@8bytes.org>, Joerg Roedel <jroedel@suse.de>,
+        hpa@zytor.com, Andy Lutomirski <luto@kernel.org>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Jiri Slaby <jslaby@suse.cz>,
+        Dan Williams <dan.j.williams@intel.com>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Juergen Gross <jgross@suse.com>,
+        Kees Cook <keescook@chromium.org>,
+        David Rientjes <rientjes@google.com>,
+        Cfir Cohen <cfir@google.com>,
+        Erdem Aktas <erdemaktas@google.com>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Mike Stunes <mstunes@vmware.com>,
+        Sean Christopherson <seanjc@google.com>,
+        Martin Radev <martin.b.radev@gmail.com>,
+        Arvind Sankar <nivedita@alum.mit.edu>,
+        linux-coco@lists.linux.dev, linux-kernel@vger.kernel.org,
+        kvm@vger.kernel.org, virtualization@lists.linux-foundation.org
+Subject: [PATCH v2 6/8] x86/insn-eval: Make 0 a valid RIP for
+ insn_get_effective_ip()
+Date: Wed, 19 May 2021 15:52:49 +0200
+Message-Id: <20210519135251.30093-7-joro@8bytes.org>
+X-Mailer: git-send-email 2.31.1
+In-Reply-To: <20210519135251.30093-1-joro@8bytes.org>
+References: <20210519135251.30093-1-joro@8bytes.org>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joerg Roedel <jroedel@suse.de>
+
+In theory 0 is a valid value for the instruction pointer, so don't use
+it as the error return value from insn_get_effective_ip().
+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ arch/x86/lib/insn-eval.c | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/arch/x86/lib/insn-eval.c b/arch/x86/lib/insn-eval.c
+index a67afd74232c..4eecb9c7c6a0 100644
+--- a/arch/x86/lib/insn-eval.c
++++ b/arch/x86/lib/insn-eval.c
+@@ -1417,7 +1417,7 @@ void __user *insn_get_addr_ref(struct insn *insn, struct pt_regs *regs)
+ 	}
+ }
+ 
+-static unsigned long insn_get_effective_ip(struct pt_regs *regs)
++static int insn_get_effective_ip(struct pt_regs *regs, unsigned long *ip)
+ {
+ 	unsigned long seg_base = 0;
+ 
+@@ -1430,10 +1430,12 @@ static unsigned long insn_get_effective_ip(struct pt_regs *regs)
+ 	if (!user_64bit_mode(regs)) {
+ 		seg_base = insn_get_seg_base(regs, INAT_SEG_REG_CS);
+ 		if (seg_base == -1L)
+-			return 0;
++			return -EINVAL;
+ 	}
+ 
+-	return seg_base + regs->ip;
++	*ip = seg_base + regs->ip;
++
++	return 0;
+ }
+ 
+ /**
+@@ -1455,8 +1457,7 @@ int insn_fetch_from_user(struct pt_regs *regs, unsigned char buf[MAX_INSN_SIZE])
+ 	unsigned long ip;
+ 	int not_copied;
+ 
+-	ip = insn_get_effective_ip(regs);
+-	if (!ip)
++	if (insn_get_effective_ip(regs, &ip))
+ 		return 0;
+ 
+ 	not_copied = copy_from_user(buf, (void __user *)ip, MAX_INSN_SIZE);
+@@ -1484,8 +1485,7 @@ int insn_fetch_from_user_inatomic(struct pt_regs *regs, unsigned char buf[MAX_IN
+ 	unsigned long ip;
+ 	int not_copied;
+ 
+-	ip = insn_get_effective_ip(regs);
+-	if (!ip)
++	if (insn_get_effective_ip(regs, &ip))
+ 		return 0;
+ 
+ 	not_copied = __copy_from_user_inatomic(buf, (void __user *)ip, MAX_INSN_SIZE);
+
+From patchwork Wed May 19 13:52:50 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 12267397
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=unavailable autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 5230BC43618
+	for <kvm@archiver.kernel.org>; Wed, 19 May 2021 13:53:25 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 289906100C
+	for <kvm@archiver.kernel.org>; Wed, 19 May 2021 13:53:25 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1353852AbhESNyn (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 19 May 2021 09:54:43 -0400
+Received: from 8bytes.org ([81.169.241.247]:40238 "EHLO theia.8bytes.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1353785AbhESNye (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 19 May 2021 09:54:34 -0400
+Received: from cap.home.8bytes.org (p549ad305.dip0.t-ipconnect.de
+ [84.154.211.5])
+        (using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits))
+        (No client certificate requested)
+        by theia.8bytes.org (Postfix) with ESMTPSA id 016484E1;
+        Wed, 19 May 2021 15:53:11 +0200 (CEST)
+From: Joerg Roedel <joro@8bytes.org>
+To: x86@kernel.org, Hyunwook Baek <baekhw@google.com>
+Cc: Joerg Roedel <joro@8bytes.org>, Joerg Roedel <jroedel@suse.de>,
+        hpa@zytor.com, Andy Lutomirski <luto@kernel.org>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Jiri Slaby <jslaby@suse.cz>,
+        Dan Williams <dan.j.williams@intel.com>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Juergen Gross <jgross@suse.com>,
+        Kees Cook <keescook@chromium.org>,
+        David Rientjes <rientjes@google.com>,
+        Cfir Cohen <cfir@google.com>,
+        Erdem Aktas <erdemaktas@google.com>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Mike Stunes <mstunes@vmware.com>,
+        Sean Christopherson <seanjc@google.com>,
+        Martin Radev <martin.b.radev@gmail.com>,
+        Arvind Sankar <nivedita@alum.mit.edu>,
+        linux-coco@lists.linux.dev, linux-kernel@vger.kernel.org,
+        kvm@vger.kernel.org, virtualization@lists.linux-foundation.org
+Subject: [PATCH v2 7/8] x86/insn: Extend error reporting from
+ insn_fetch_from_user[_inatomic]()
+Date: Wed, 19 May 2021 15:52:50 +0200
+Message-Id: <20210519135251.30093-8-joro@8bytes.org>
+X-Mailer: git-send-email 2.31.1
+In-Reply-To: <20210519135251.30093-1-joro@8bytes.org>
+References: <20210519135251.30093-1-joro@8bytes.org>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joerg Roedel <jroedel@suse.de>
+
+The error reporting from the insn_fetch_from_user*() functions is not
+very verbose. Extend it to include information on whether the linear
+RIP could not be calculated or whether the memory access faulted.
+
+This will be used in the SEV-ES code to propagate the correct
+exception depending on what went wrong during instruction fetch.
+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ arch/x86/include/asm/insn-eval.h |  6 +++--
+ arch/x86/kernel/sev.c            |  8 +++----
+ arch/x86/kernel/umip.c           | 10 ++++-----
+ arch/x86/lib/insn-eval.c         | 38 +++++++++++++++++++++++---------
+ 4 files changed, 41 insertions(+), 21 deletions(-)
+
+diff --git a/arch/x86/include/asm/insn-eval.h b/arch/x86/include/asm/insn-eval.h
+index 91d7182ad2d6..8362f1ce4b00 100644
+--- a/arch/x86/include/asm/insn-eval.h
++++ b/arch/x86/include/asm/insn-eval.h
+@@ -22,9 +22,11 @@ int insn_get_modrm_reg_off(struct insn *insn, struct pt_regs *regs);
+ unsigned long insn_get_seg_base(struct pt_regs *regs, int seg_reg_idx);
+ int insn_get_code_seg_params(struct pt_regs *regs);
+ int insn_fetch_from_user(struct pt_regs *regs,
+-			 unsigned char buf[MAX_INSN_SIZE]);
++			 unsigned char buf[MAX_INSN_SIZE],
++			 int *copied);
+ int insn_fetch_from_user_inatomic(struct pt_regs *regs,
+-				  unsigned char buf[MAX_INSN_SIZE]);
++				  unsigned char buf[MAX_INSN_SIZE],
++				  int *copied);
+ bool insn_decode_from_regs(struct insn *insn, struct pt_regs *regs,
+ 			   unsigned char buf[MAX_INSN_SIZE], int buf_size);
+ 
+diff --git a/arch/x86/kernel/sev.c b/arch/x86/kernel/sev.c
+index 9a64030e74c0..1edb6cd5e308 100644
+--- a/arch/x86/kernel/sev.c
++++ b/arch/x86/kernel/sev.c
+@@ -258,17 +258,17 @@ static int vc_fetch_insn_kernel(struct es_em_ctxt *ctxt,
+ static enum es_result __vc_decode_user_insn(struct es_em_ctxt *ctxt)
+ {
+ 	char buffer[MAX_INSN_SIZE];
+-	int res;
++	int insn_bytes = 0, res;
+ 
+-	res = insn_fetch_from_user_inatomic(ctxt->regs, buffer);
+-	if (!res) {
++	res = insn_fetch_from_user_inatomic(ctxt->regs, buffer, &insn_bytes);
++	if (res) {
+ 		ctxt->fi.vector     = X86_TRAP_PF;
+ 		ctxt->fi.error_code = X86_PF_INSTR | X86_PF_USER;
+ 		ctxt->fi.cr2        = ctxt->regs->ip;
+ 		return ES_EXCEPTION;
+ 	}
+ 
+-	if (!insn_decode_from_regs(&ctxt->insn, ctxt->regs, buffer, res))
++	if (!insn_decode_from_regs(&ctxt->insn, ctxt->regs, buffer, insn_bytes))
+ 		return ES_DECODE_FAILED;
+ 
+ 	if (ctxt->insn.immediate.got)
+diff --git a/arch/x86/kernel/umip.c b/arch/x86/kernel/umip.c
+index 8daa70b0d2da..b005ef42682e 100644
+--- a/arch/x86/kernel/umip.c
++++ b/arch/x86/kernel/umip.c
+@@ -346,13 +346,13 @@ bool fixup_umip_exception(struct pt_regs *regs)
+ 	if (!regs)
+ 		return false;
+ 
+-	nr_copied = insn_fetch_from_user(regs, buf);
+-
+ 	/*
+-	 * The insn_fetch_from_user above could have failed if user code
+-	 * is protected by a memory protection key. Give up on emulation
+-	 * in such a case.  Should we issue a page fault?
++	 * Give up on emulation if fetching the instruction failed. Should we
++	 * issue a page fault or a #GP?
+ 	 */
++	if (!insn_fetch_from_user(regs, buf, NULL))
++		return false;
++
+ 	if (!nr_copied)
+ 		return false;
+ 
+diff --git a/arch/x86/lib/insn-eval.c b/arch/x86/lib/insn-eval.c
+index 4eecb9c7c6a0..d8a057ba0895 100644
+--- a/arch/x86/lib/insn-eval.c
++++ b/arch/x86/lib/insn-eval.c
+@@ -1442,27 +1442,36 @@ static int insn_get_effective_ip(struct pt_regs *regs, unsigned long *ip)
+  * insn_fetch_from_user() - Copy instruction bytes from user-space memory
+  * @regs:	Structure with register values as seen when entering kernel mode
+  * @buf:	Array to store the fetched instruction
++ * @copied:	Pointer to an int where the number of copied instruction bytes
++ *		is stored. Can be NULL.
+  *
+  * Gets the linear address of the instruction and copies the instruction bytes
+  * to the buf.
+  *
+  * Returns:
+  *
+- * Number of instruction bytes copied.
++ * -EINVAL if the linear address of the instruction could not be calculated
++ * -EFAULT if nothing was copied
++ *       0 on success
+  *
+- * 0 if nothing was copied.
+  */
+-int insn_fetch_from_user(struct pt_regs *regs, unsigned char buf[MAX_INSN_SIZE])
++int insn_fetch_from_user(struct pt_regs *regs, unsigned char buf[MAX_INSN_SIZE],
++			 int *copied)
+ {
+ 	unsigned long ip;
+ 	int not_copied;
++	int bytes;
+ 
+ 	if (insn_get_effective_ip(regs, &ip))
+-		return 0;
++		return -EINVAL;
+ 
+ 	not_copied = copy_from_user(buf, (void __user *)ip, MAX_INSN_SIZE);
+ 
+-	return MAX_INSN_SIZE - not_copied;
++	bytes = MAX_INSN_SIZE - not_copied;
++	if (copied)
++		*copied = bytes;
++
++	return bytes ? 0 : -EFAULT;
+ }
+ 
+ /**
+@@ -1470,27 +1479,36 @@ int insn_fetch_from_user(struct pt_regs *regs, unsigned char buf[MAX_INSN_SIZE])
+  *                                   while in atomic code
+  * @regs:	Structure with register values as seen when entering kernel mode
+  * @buf:	Array to store the fetched instruction
++ * @copied:	Pointer to an int where the number of copied instruction bytes
++ *		is stored. Can be NULL.
+  *
+  * Gets the linear address of the instruction and copies the instruction bytes
+  * to the buf. This function must be used in atomic context.
+  *
+  * Returns:
+  *
+- * Number of instruction bytes copied.
++ * -EINVAL if the linear address of the instruction could not be calculated
++ * -EFAULT if nothing was copied
++ *       0 on success
+  *
+- * 0 if nothing was copied.
+  */
+-int insn_fetch_from_user_inatomic(struct pt_regs *regs, unsigned char buf[MAX_INSN_SIZE])
++int insn_fetch_from_user_inatomic(struct pt_regs *regs, unsigned char buf[MAX_INSN_SIZE],
++				  int *copied)
+ {
+ 	unsigned long ip;
+ 	int not_copied;
++	int bytes;
+ 
+ 	if (insn_get_effective_ip(regs, &ip))
+-		return 0;
++		return -EINVAL;
+ 
+ 	not_copied = __copy_from_user_inatomic(buf, (void __user *)ip, MAX_INSN_SIZE);
+ 
+-	return MAX_INSN_SIZE - not_copied;
++	bytes = MAX_INSN_SIZE - not_copied;
++	if (copied)
++		*copied = bytes;
++
++	return bytes ? 0 : -EFAULT;
+ }
+ 
+ /**
+
+From patchwork Wed May 19 13:52:51 2021
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+X-Patchwork-Submitter: Joerg Roedel <joro@8bytes.org>
+X-Patchwork-Id: 12267393
+Return-Path: <kvm-owner@kernel.org>
+X-Spam-Checker-Version: SpamAssassin 3.4.0 (2014-02-07) on
+	aws-us-west-2-korg-lkml-1.web.codeaurora.org
+X-Spam-Level: 
+X-Spam-Status: No, score=-16.7 required=3.0 tests=BAYES_00,
+	HEADER_FROM_DIFFERENT_DOMAINS,INCLUDES_CR_TRAILER,INCLUDES_PATCH,
+	MAILING_LIST_MULTI,SPF_HELO_NONE,SPF_PASS,URIBL_BLOCKED,USER_AGENT_GIT
+	autolearn=ham autolearn_force=no version=3.4.0
+Received: from mail.kernel.org (mail.kernel.org [198.145.29.99])
+	by smtp.lore.kernel.org (Postfix) with ESMTP id 72F97C433B4
+	for <kvm@archiver.kernel.org>; Wed, 19 May 2021 13:53:21 +0000 (UTC)
+Received: from vger.kernel.org (vger.kernel.org [23.128.96.18])
+	by mail.kernel.org (Postfix) with ESMTP id 568D06100C
+	for <kvm@archiver.kernel.org>; Wed, 19 May 2021 13:53:21 +0000 (UTC)
+Received: (majordomo@vger.kernel.org) by vger.kernel.org via listexpand
+        id S1353829AbhESNyj (ORCPT <rfc822;kvm@archiver.kernel.org>);
+        Wed, 19 May 2021 09:54:39 -0400
+Received: from 8bytes.org ([81.169.241.247]:40240 "EHLO theia.8bytes.org"
+        rhost-flags-OK-OK-OK-OK) by vger.kernel.org with ESMTP
+        id S1353786AbhESNye (ORCPT <rfc822;kvm@vger.kernel.org>);
+        Wed, 19 May 2021 09:54:34 -0400
+Received: from cap.home.8bytes.org (p549ad305.dip0.t-ipconnect.de
+ [84.154.211.5])
+        (using TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits))
+        (No client certificate requested)
+        by theia.8bytes.org (Postfix) with ESMTPSA id 7FCAC50F;
+        Wed, 19 May 2021 15:53:12 +0200 (CEST)
+From: Joerg Roedel <joro@8bytes.org>
+To: x86@kernel.org, Hyunwook Baek <baekhw@google.com>
+Cc: Joerg Roedel <joro@8bytes.org>, Joerg Roedel <jroedel@suse.de>,
+        hpa@zytor.com, Andy Lutomirski <luto@kernel.org>,
+        Dave Hansen <dave.hansen@linux.intel.com>,
+        Peter Zijlstra <peterz@infradead.org>,
+        Jiri Slaby <jslaby@suse.cz>,
+        Dan Williams <dan.j.williams@intel.com>,
+        Tom Lendacky <thomas.lendacky@amd.com>,
+        Juergen Gross <jgross@suse.com>,
+        Kees Cook <keescook@chromium.org>,
+        David Rientjes <rientjes@google.com>,
+        Cfir Cohen <cfir@google.com>,
+        Erdem Aktas <erdemaktas@google.com>,
+        Masami Hiramatsu <mhiramat@kernel.org>,
+        Mike Stunes <mstunes@vmware.com>,
+        Sean Christopherson <seanjc@google.com>,
+        Martin Radev <martin.b.radev@gmail.com>,
+        Arvind Sankar <nivedita@alum.mit.edu>,
+        linux-coco@lists.linux.dev, linux-kernel@vger.kernel.org,
+        kvm@vger.kernel.org, virtualization@lists.linux-foundation.org
+Subject: [PATCH v2 8/8] x86/sev-es: Propagate #GP if getting linear
+ instruction address failed
+Date: Wed, 19 May 2021 15:52:51 +0200
+Message-Id: <20210519135251.30093-9-joro@8bytes.org>
+X-Mailer: git-send-email 2.31.1
+In-Reply-To: <20210519135251.30093-1-joro@8bytes.org>
+References: <20210519135251.30093-1-joro@8bytes.org>
+MIME-Version: 1.0
+Precedence: bulk
+List-ID: <kvm.vger.kernel.org>
+X-Mailing-List: kvm@vger.kernel.org
+
+From: Joerg Roedel <jroedel@suse.de>
+
+When an instruction is fetched from user-space, segmentation needs to
+be taken into account. This means that getting the linear address of
+an instruction can fail. Hardware would raise a #GP
+exception in that case, but the #VC exception handler would emulate it
+as a page-fault.
+
+The insn_fetch_from_user*() functions now provide the relevant
+information in case of an failure. Use that and propagate a #GP when
+the linear address of an instruction to fetch could not be calculated.
+
+Signed-off-by: Joerg Roedel <jroedel@suse.de>
+---
+ arch/x86/kernel/sev.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/kernel/sev.c b/arch/x86/kernel/sev.c
+index 1edb6cd5e308..4736290361e4 100644
+--- a/arch/x86/kernel/sev.c
++++ b/arch/x86/kernel/sev.c
+@@ -261,11 +261,16 @@ static enum es_result __vc_decode_user_insn(struct es_em_ctxt *ctxt)
+ 	int insn_bytes = 0, res;
+ 
+ 	res = insn_fetch_from_user_inatomic(ctxt->regs, buffer, &insn_bytes);
+-	if (res) {
++	if (res == -EFAULT) {
+ 		ctxt->fi.vector     = X86_TRAP_PF;
+ 		ctxt->fi.error_code = X86_PF_INSTR | X86_PF_USER;
+ 		ctxt->fi.cr2        = ctxt->regs->ip;
+ 		return ES_EXCEPTION;
++	} else if (res == -EINVAL) {
++		ctxt->fi.vector     = X86_TRAP_GP;
++		ctxt->fi.error_code = 0;
++		ctxt->fi.cr2        = 0;
++		return ES_EXCEPTION;
+ 	}
+ 
+ 	if (!insn_decode_from_regs(&ctxt->insn, ctxt->regs, buffer, insn_bytes))
