@@ -37,7 +37,7 @@ void time_mprotect(void *addr, size_t size, size_t ntimes)
     }
     clock_t end = clock();
     double seconds = (double)(end - start) / CLOCKS_PER_SEC;
-    printf("mprotect %zu MB -> %.2lf us\n", size / 1024 / 1024, seconds / ntimes * 1000000);
+    printf("mprotect %zu MB %.2lf us\n", size / 1024 / 1024, seconds / ntimes * 1000000);
 }
 
 int main(int argc, char *argv[])
