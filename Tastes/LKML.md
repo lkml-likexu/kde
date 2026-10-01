@@ -8,6 +8,30 @@
 >    - ❔ 未自动检索到合入记录：**并不等于未合入**——文档常链接早期版本（RFC/v1），而合入的多为改版；此类需人工确认。
 > 3. 自动判定为高精度但低召回（确认合入 96 条），存在漏判；如需对某条深入核实可单独指出。
 
+## 2026年 第10期 (Start From 2026/10/01)
+### KVM: arm64: FEAT_HDBSS support for stage-2 dirty tracking
+ - https://lore.kernel.org/all/20260929103655.85107-1-zhengtian10@huawei.com/
+ - 该 v5 系列用 FEAT_HDBSS 在 arm64 上实现硬件辅助的 stage-2 脏页跟踪，融合了 Leonardo Bras 的 HAFDBS 描述符重构与在其上的 HDBSS 缓冲支持。描述符编码把 stage-2 写权限从 S2AP[1] 移到 DBM，并复用 S2AP[1] 作脏状态：RO（DBM=0,S2AP[1]=0）、可写干净 WC（DBM=1,S2AP[1]=0，写时由硬件提升）、可写脏 WD（1,1）。其余补丁实现缓冲机制：首次创建 vCPU 前配置大小、创建时分配、缓冲满触发 fault 强制退出、每次 VM 退出把条目刷入脏位图或 dirty ring；大小 ioctl 仅适用于位图模式，ring 模式固定 PAGE_SIZE。派生的硬件脏模式按迁移需求选择配置（HDBSS / 关闭改写保护 fault / 仅 HD|HA 记录已写页）。HDBSS 寄存器在 vCPU load 时编程（需在 KVM_RUN 中途启用时 `HDBSSBR_EL2` 已指向其缓冲）。HAFDBS 不受嵌套限制（shadow stage-2 经 `kvm_get_vtcr()` 自建不带 HD 的 VTCR），HDBSS 仍受 NV 门控，因嵌套退出刷新与收割路径未经审计，且本系列仅在非嵌套客户机上测过。新增 selftest 验证 `KVM_CAP_ARM_HDBSS_BUFFER_SIZE`，含 ring 模式固定大小的约定。
+### KVM/vfio: Use file-based reference counting for KVM
+ - https://lore.kernel.org/all/20260924-vfio-v3-0-4a294307797b@linux.ibm.com
+ - 该系列把 KVM-VFIO 接口及外部使用者改用标准文件引用计数，从而彻底去掉对外的 KVM 符号导出。现状是 VFIO 通过 `symbol_get()` 动态查找 `kvm_get_kvm_safe()`/`kvm_put_kvm()`，手工维护模块引用计数并在 `vfio_device` 存 `put_kvm` 指针。动机来自 ARM64-on-s390 系列：该架构需在原生 KVM 之外并行引入第二个 KVM 模块（kvm-arm64）以运行硬件加速的 ARM64 客户机，而导出的全局符号会造成冲突、阻碍两模块共存；文件计数同时简化代码、复用 fs 的引用计数。做法是接口改为在 VFIO 及相关架构子系统中传递 VM 的 file descriptor，并引入按架构命名空间的辅助机制校验文件确属预期 KVM 实现后再访问内部状态；KVM 实例到其文件的回指针全程维护以便按需取文件引用。VFIO、架构页跟踪与设备钩子改用文件引用后，剩余 KVM 引用计数导出仅限 KVM 内部模块使用。
+### cgroup: charge kernel work to the cgroup it is done for
+ - https://lore.kernel.org/all/20260924184529.879516-1-shakeel.butt@linux.dev/
+ - 内核线程替某 cgroup 干活，CPU 时间却记在 root。该系列让 kworker 用 `set_active_cgroup()` 声明所服务的 cgroup：时间计入其 cpu.stat 与 memory.pressure，并事后从 cpu.max 配额扣回，PSI 跟随。首个用户是 memcg 的 high_work 回收。
+### Add Rust PCI SR-IOV support
+ - https://lore.kernel.org/all/20260924190556.1620886-1-zhiw@nvidia.com
+ - v2 为 Rust PCI 驱动补上 SR-IOV 支持：PF 驱动可开关 SR-IOV，并以类型化注册数据向 VF 驱动共享 PF 功能，数据在 VF 绑定期间保持有效（移植自 Peter Colberg 的 v3，注册设计沿用 Danilo 的 vGPU/VFIO PoC）。新增 SR-IOV 操作与回调、PF 解绑前先移除 VF，以及 pinned `VfRegistration`——在 VF 启用前发布 PF 数据，VF 驱动经类型检查后借用。含 Rust PF/VF 示例，用 QEMU 82576 模拟演示 VF 调用 PF 提供的操作。相对 v1：rebase 到 driver-core-testing；删除通用 C FFI 描述符、C PF 数据访问器和 C VF 示例；移除 `managed_sriov` 标志与 PF/VF 设备链接，改由 Rust 移除回调调用 `sriov_configure(0)` 并禁用残余 VF；直接用 `pci::Device`，去掉单独的 `pci::sriov::Device` 包装。
+### luo: tmpfs preservation
+ - https://lore.kernel.org/all/20260923224408.3745689-1-pratyush@kernel.org
+ - 这是 LUO（Live Update Orchestrator）的 RFC 系列，为**内存文件保留**补上 tmpfs 路径。现有实现只能保留 memfd，而 memfd 无法链接到用户可见文件系统，导致无盘主机上做 live update 时 VMM 包无法快速取用（冷启动从网络抓二进制太慢）。核心思路：允许用户态保留一个 tmpfs 挂载的 FD，再把该挂载内的普通文件送入保留，文件对挂载 token 建立依赖以在正确挂载中恢复；从而避免整文件系统保留，且逐文件显式化。当前仅支持根目录下文件，子目录被拒，内存策略、id mapping、casefold 等复杂挂载特性也不支持，可在恢复后重配。代码大量复用 memfd 保留/恢复逻辑，只加了文件与挂载元数据。作者明说这是用 LLM 快速生成的 POC，自己做了清理（从约 1600 行压到 977 行），但**对 VFS API 的使用没有把握**，未按常规评审，故未抄送 VFS 维护者。它也是 David 的 `LIVEUPDATE_SESSION_RETRIEVE_INTO_FD` 方案的替代。
+### pghot: x86: IBS Memory Profiler for hot page promotion
+ - https://lore.kernel.org/all/20260924062206.319314-1-bharata@amd.com/
+ - AMD Zen6 新增独立于主 IBS 的轻量 IBS Memory Profiler，专用于内存访问剖析。该 RFC 把它从 pghot 系列拆出单独评审，依赖 pghot 基础设施。硬件按可编程周期采样，样本直接给出线性与物理地址（内核无需页表扫描或 hint fault 即得 PFN），并带数据来源标识以区分本地 DRAM 与 CXL；支持硬件过滤（仅 L3 miss、延迟阈值、按指令地址 bit63 区分用户/内核），被滤除样本不产生中断。它用独立于主 IBS 的扩展 LVT offset，故不干扰 perf 等现有 IBS 用户。pghot 是统一热页检测（hint fault、页表扫描、硬件提示）与迁移、由每低层节点 kmigrated 线程集中提升的子系统，profiler 通过 `pghot_record_access()` 上报。基准（DRAM + 无 CPU 的 CXL 三层系统，相对无分层基线）：带宽型提升基本追平主线 NUMAB=2（NAS BT 2.15x vs 2.34x），Graph500 反超（3.17x vs 2.34x，提升量约 1/4），llama 解码持平，Redis 因采样覆盖不足持平；ptr-chase 在 period=5008 时最优（3.48x，延迟 92ns vs NUMAB2 143ns）。已做全 Kconfig 编译矩阵与 CPU 热插拔压力测试，无告警。本轮改进包括改用 `CPUHP_AP_ONLINE_DYN`、修正 SPSC 尾指针同步、加锁保护 debugfs/sysfs、最小周期改 5008、加 suspend/resume 与 `X86_FEATURE_IBS` 门控等。
+### bpf: Indirect calls of bpf subprogs (callx)
+ - https://lore.kernel.org/all/20260924031042.1690890-1-alexei.starovoitov@gmail.com/
+ - 该系列为 BPF 新增 `callx` 指令（`BPF_JMP | BPF_CALL | BPF_X`），支持用寄存器中的地址间接调用**静态子程序**，LLVM 在函数指针调用时会生成它。被调者在主校验前须已知：来自 `ld_imm64` 伪函数，或只读数据中的函数指针表（如 vtable、handlers 数组，Rust 需要）。指针由 libbpf 存入每 prog 一份的冻结只读 map，需 CAP_PERFMON。仅 x86-64/arm64 JIT 支持，无解释器；不支持 FineIBT、可写数据指针、错位指针及被调者中的尾调用。v2 修正了栈深计算、cfg 探索丢失副作用、常量折叠、liveness 与多处 selftest 问题，并新增 patch 3 处理取未调用函数地址导致的 `verifier_bug()`。
+
+
 ## 2026年 第09期 (Start From 2026/09/01)
 
 #### arm64: entry: Convert to Generic Entry
