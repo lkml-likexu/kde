@@ -9,6 +9,24 @@
 > 3. 自动判定为高精度但低召回（确认合入 96 条），存在漏判；如需对某条深入核实可单独指出。
 
 ## 2026年 第10期 (Start From 2026/10/01)
+### mm: Memory providers for guest_memfd and iommufd
+ - https://lore.kernel.org/all/20261006183235.16576-1-griffoul@gmail.com
+ - 该 RFC 引入通用内存提供者接口，让管理 page allocator 之外 RAM（carve-out、设备内存等）的驱动同时向 guest_memfd 和 iommufd 提供帧，并支持统一撤销：撤销时 KVM 清 stage-2、iommufd 清 IOMMU 页表、guest_memfd 清 VMM 映射，不再需要各自 symbol_get()。不支持机密虚拟机，作者借助 AI 辅助编写，以 RFC 形式征求接口评审。
+### mm/mglru: frequency guided promotion (MGLRU-FG) and flag cleanup
+ - https://lore.kernel.org/all/20261003-mglru-fg-v3-0-cbd4546a5bd9@tencent.com/
+ - 该系列为 MGLRU 引入频率引导提升（FG）：根据访问频率动态提升 folio 的代数，使 LRU 更准确区分热工作集，同时减少一位 page flag 占用。多项基准（内核构建、MongoDB、FIO zipf、Android）显示 refault 降低 10–40%，IOPS 提升约 10%；唯 SSD swap 下有轻微 anon 过回收，留待后续修复。
+### iommupt: Introduce IO page table shrinker
+ - https://lore.kernel.org/all/20261001230219.818128-1-praan@google.com/
+ - 该 RFC 为基于 generic_pt 的 IOMMU 页表引入无锁延迟回收框架：VMM/用户态驱动多次部分 unmap 后留下的空目录无法在内存压力下回收，导致 OOM。方案在 `struct ioptdesc` 中为叶目录原生引用计数，注册域感知 MM shrinker，压力下修剪空目录并刷 IOTLB 后释放。存在 map 重试、xarray 键冲突、cmpxchg 失败后引用计数归零等已知问题，待下一版修复，将在 LPC 2026 对齐设计。
+### Another attempt at HVO support on arm64
+ - https://lore.kernel.org/all/20261003002123.505555-1-jthoughton@google.com
+ - 该 v2 系列用 arm64 硬件 Access Flag 更新的"AF trick"（AF=0 时 TLB 不缓存，可无故障原子替换 PTE）在 arm64 实现 HVO，避免 break-before-make 引发的 vmemmap 访问故障。大内存系统可节省约 1.5% 系统内存，含故障注入与压力测试。
+### arm64: Add support for TLBI domains
+ - https://lore.kernel.org/all/20261001110655.461473-1-kristina.martsenko@arm.com/
+ - 该 RFC 为 arm64 添加 TLBI 域（FEAT_TLBID）支持，让 TLB 失效指令只发往进程实际运行过的 CPU 子集而非全系统广播，以提升多核服务器性能。域信息通过新 ACPI 表描述，设备树暂无绑定。目前尚无实际硬件，仅在 FVP 上测试，作者自述对 TLB/mm 代码不熟，以 RFC 形式征求方案正确性反馈。
+### iommu/virtio: batch the mapping replay
+ - https://lore.kernel.org/all/tencent_85AC6E749F6A912B7BB9FF360F8ECB3F5C09@qq.com/
+ - virtio-iommu 在首个端点挂载已有映射的域时需重放所有映射，原实现每条映射发一次同步请求且持锁禁中断，8192 个映射耗时 233ms，百万级达 29s。该系列改为批量排队、一次等待，将中断关闭窗口压至 1–2ms，并修复了 `nr_endpoints` 无锁竞态及 unmap 路径在锁外分配内存的两个旧缺陷。
 ### KVM: arm64: FEAT_HDBSS support for stage-2 dirty tracking
  - https://lore.kernel.org/all/20260929103655.85107-1-zhengtian10@huawei.com/
  - 该 v5 系列用 FEAT_HDBSS 在 arm64 上实现硬件辅助的 stage-2 脏页跟踪，融合了 Leonardo Bras 的 HAFDBS 描述符重构与在其上的 HDBSS 缓冲支持。描述符编码把 stage-2 写权限从 S2AP[1] 移到 DBM，并复用 S2AP[1] 作脏状态：RO（DBM=0,S2AP[1]=0）、可写干净 WC（DBM=1,S2AP[1]=0，写时由硬件提升）、可写脏 WD（1,1）。其余补丁实现缓冲机制：首次创建 vCPU 前配置大小、创建时分配、缓冲满触发 fault 强制退出、每次 VM 退出把条目刷入脏位图或 dirty ring；大小 ioctl 仅适用于位图模式，ring 模式固定 PAGE_SIZE。派生的硬件脏模式按迁移需求选择配置（HDBSS / 关闭改写保护 fault / 仅 HD|HA 记录已写页）。HDBSS 寄存器在 vCPU load 时编程（需在 KVM_RUN 中途启用时 `HDBSSBR_EL2` 已指向其缓冲）。HAFDBS 不受嵌套限制（shadow stage-2 经 `kvm_get_vtcr()` 自建不带 HD 的 VTCR），HDBSS 仍受 NV 门控，因嵌套退出刷新与收割路径未经审计，且本系列仅在非嵌套客户机上测过。新增 selftest 验证 `KVM_CAP_ARM_HDBSS_BUFFER_SIZE`，含 ring 模式固定大小的约定。
