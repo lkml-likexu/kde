@@ -9,6 +9,36 @@
 > 3. 自动判定为高精度但低召回（确认合入 96 条），存在漏判；如需对某条深入核实可单独指出。
 
 ## 2026年 第10期 (Start From 2026/10/01)
+### KVM/VFIO: guest_memfd support for device MMIO resources
+ - https://lore.kernel.org/all/20261010072504.536230-1-aneesh.kumar@kernel.org/
+ - 该 RFC v1 补丁集（6 个）为 guest_memfd 新增"设备资源"框架，用于把 PCI BAR MMIO 暴露给虚拟机，面向机密设备直通场景。用户以 VFIO 设备 fd 作为 resource_fd，配合 USE_RESOURCE/DEVICE/INIT_SHARED 标志创建设备型 guest_memfd，沿用 VFIO region offset 命名空间，可覆盖多个 BAR 区间；此类 fd 禁止 mmap 与 fallocate，共享缺页直接取裸 BAR PFN。IOMMUFD 负责解析并锁定 vDEVICE、以互斥锁串行化 MMIO 私有/共享转换，VFIO 提供 PFN 并校验区间、排除 dma-buf 导出，转换前撤销已缓存映射。Arm CCA 后端另行提供，依赖 tmpfs 资源提供者与 IOMMUFD/TSM 两个前置系列。
+### KVM: nSVM: Optimize nSVM TLB flushes
+ - https://lore.kernel.org/all/20261008001425.2458927-1-yosry@kernel.org/
+ - 该 v2 补丁集（29 个）优化 nested SVM 的 TLB 刷新：仿照 VMX 处理 VPID，为每个 vCPU 的 L2 维护独立 ASID，取代共用 ASID、每次 nested 切换全刷的做法；并废除动态 ASID 分配，改为每 vCPU 静态分配一到两个（现代 CPU 已提供 32K 个 ASID）。经新增的跨 SVM/VMX selftest 与 AI 生成的压力脚本验证，各抓到一个真实 bug，故取消 RFC 标记。Hyper-V 仅编译测试，SEV 仅用 selftest 验证。
+### vsock/virtio: reduce RX per-packet socket overhead
+ - https://lore.kernel.org/all/20261010142247.99223-1-physicalmtea@gmail.com/
+ - 该 net-next v2 补丁集共5个补丁，旨在降低 virtio-vsock 接收（RX）工作线程中每个数据包的套接字开销：分离套接字查找与加锁处理、对同一套接字的多个已建立 STREAM/RW 包复用一次锁、按地址元组复用已加锁套接字、在持锁期间合并写空间通知、将可读回调延迟到批处理解锁之后。测试基于单流 vsock 连接（Guest 接收线程绑定 CPU0、RX 中断绑定 CPU1，主机用 vhost-vsock 发送）。结果显示吞吐量提升约 34%–135%（4K 负载增益最明显，达约 97%），每字节 CPU 周期下降约 8%–16%，往返延迟略降约 2%。分段测试表明补丁 2–3 主要提升吞吐，补丁 4–5 主要改善周期开销与延迟。
+### Improve page refcount scalability
+ - https://lore.kernel.org/all/CAHk-=wjLjgfwgSZ1RDk4YdNFcV0ntosMO5AmBoHD76Zb3HFY7Q@mail.gmail.com/
+ - Linus 发布了提升页面引用计数（page refcount）可扩展性的补丁系列（git 分支 rcu-free-v3，共 10 个补丁）。该问题源于多年来普通 pread() 读路径上 folio 引用计数导致的缓存行争用，此前 Willy、Kiryl、Ilya 等人多次尝试修复但均存在缺陷；这次他借助 LLM 协助完成（也呼应了本年度内核维护者峰会关于 LLM 用于内核开发的议题）。核心思路：在 folio 查找时识别 “热” folio，标记为延迟到 RCU 周期后再释放，从而不仅查找、连实际数据访问也可在 RCU 保护下进行；只要用户拷贝不触发缺页，快速路径完全无需获取引用计数，也不再需要双缓冲。效果：在 Ryzen Threadripper 上 64 线程人为测试中，读取速率从 1330 万/秒提升至 3.04 亿/秒（约 23 倍），每次读取周期数从约 2 万降至约 735，实现近乎完美的扩展性。他强调该数值极为人为化，实际负载收益会小得多，但此 RCU 延迟释放机制或可用于其他场景。
+### ext4: use iomap for regular file's buffered I/O path
+ - https://lore.kernel.org/all/20261009103033.2920530-1-yi.zhang@huaweicloud.com/
+ - Zhang Yi 发布 v7 版补丁集（共 31 个补丁），将 ext4 常规文件的缓冲 I/O 路径从 buffer_head 转换为 iomap。内容包括：简化 truncate 与 EOF 块清零的准备工作、扩展 ext4_map_blocks() 并实现 iomap 的读写、回写、mmap 与部分块清零、处理文件扩展时 EOF 清零与 i_disksize 更新的顺序问题，最后通过 buffered_iomap 挂载选项启用（默认关闭）。由于锁顺序相反，该路径不支持 data=ordered，改以始终分配 unwritten 区段加 DISKSIZE_GROW_PENDING 机制替代，并始终启用 dioread_nolock；在线碎片整理、inline data、fscrypt、data=journal 等场景自动回退到 buffer_head 路径。
+### iommufd: vIOMMUs and TSM guest requests for confidential guests
+ - https://lore.kernel.org/all/20261008055955.4014342-1-aneesh.kumar@kernel.org
+ - Aneesh Kumar 发布 v7 补丁集（共 16 个），为将 PCI 设备分配给机密虚拟机提供 IOMMUFD 与 PCI/TSM 基础设施，新增 IOMMU_VDEVICE_TSM_REQ ioctl；Arm CCA 主机后端将另行提交，本系列仅提供其所需接口。机制上，物理 IOMMU 驱动和 PCI TSM 后端在 IOMMUFD 校验父 HWPT 之前提供 vIOMMU ops（含分配大小、初始化回调及是否需要父 HWPT 的标志）。默认需要嵌套父级；若设置 IOMMUFD_VIOMMU_NO_HWPT，用户态须传入 hwpt_id 为 0，初始化回调收到 NULL 父域，且此类 vIOMMU 不允许分配嵌套 HWPT 和硬件队列。IOMMUFD 优先查询设备所挂 TSM（查找时固定后端模块，直到 vIOMMU 销毁回调后释放引用），无对应 ops 时回退到物理 IOMMU 驱动，但查询出错则直接返回错误。此外，vdevice 上下文取代原有 PCI/TSM bind/unbind 接口，获取时校验设备 TSM 与 vIOMMU 的 TSM 一致；存在活跃上下文时 sysfs 显式断开返回 EBUSY。guest 请求经 vIOMMU ops 分派，并先校验 guest 架构与 vdevice 支持的操作掩码，请求/响应长度限制为 INT_MAX 以便剩余量能由 ioctl 返回值表示。
+### ptp: make virtual clock sampling and teardown failure-safe
+ - https://lore.kernel.org/all/20261013-ptp-vclock-sampling-v3-0-d3ee4ea62fc6@gmail.com
+ - 该 net v3 补丁集（共 5 个）使 PTP 虚拟时钟（virtual clock）的采样与销毁过程具备故障安全性，分别修复三类问题：虚拟时钟采样错误、注册失败时的回滚，以及父设备的 teardown 流程。具体做法：将读取失败的 PHC（物理时钟）结果排除在 timecounter 之外，避免污染计时；对扩展采样与虚拟时钟调整操作进行串行化；同时保留对无硬件时间戳数据包的零值哨兵语义。与 v2 不同，本版保留了现有的 cyclecounter 掩码、缩放与转换窗口，不假定采样为全宽纳秒值，也不承诺在计数器发生未被观测到的回绕后能恢复已流逝的时间。
+### iommu/riscv: Add irqbypass support without MSI page table
+ - https://lore.kernel.org/all/20261008140001.94508-1-fangyu.yu@linux.alibaba.com/
+ - Fangyu Yu 发布 RFC 补丁集（共 3 个），为 RISC-V IOMMU 在无 MSI 页表的情况下实现 irqbypass 支持。背景：MSI 页表是 RISC-V IOMMU 规范中的可选特性，不具备 MSI_FLAT 能力的硬件没有该表，设备发出的 MSI 写入会像普通 DMA 一样由第二阶段（second-stage）页表翻译。思路：既然 MSI 写入的落点由第二阶段页表决定，就可在该域中把 guest IMSIC 的 GPA 映射到 host IMSIC 的 HPA，使设备 MSI 写入直达 vCPU 的中断文件，完全绕过主机 MSI 路径，从而在没有 MSI 页表时同样实现中断转发，作为功能补充。
+### bpf, x86: Support fetching AND/OR/XOR atomics in arena
+ - https://lore.kernel.org/all/20261014125017.1426212-1-puranjay@kernel.org/
+ - Puranjay 发布 v4 补丁集（共 3 个），让 x86-64 的 BPF JIT 支持在 arena 内存上执行带返回值（fetching）的 AND/OR/XOR 原子操作，此前会报 “BPF_ATOMIC stores into R1 arena is not allowed”。原因：x86-64 没有对应单条指令，JIT 需降级为 CMPXCHG 循环，其中 “读旧值” 和 CMPXCHG 两处访存都可能缺页，而校验器每条指令只预留一个异常表项，故直接拒绝这三个操作码。其他架构（riscv64、s390、带 LSE 的 arm64、powerpc64）有原生指令已可用；无 LSE 的 arm64 与 loongarch 则拒绝所有 arena RMW 原子操作。补丁 1：用 R12 索引寻址生成该循环，并为 load 与 CMPXCHG 各分配一个异常表项（缺页后跳出整个循环并清零 fetch 目标寄存器），在 bpf_int_jit_compile() 中重扫指令流以计入额外表项；通过数字访问（地址存于 BPF_REG_AX）仍被拒绝。补丁 2：完善 selftests，改用 __sync_fetch_and_*() 实际覆盖 fetching 路径，新增 fetch_r0 与 uaf 测试，x86 从 uaf 排除列表移除。补丁 3：删除 sched_ext 的 cid.bpf.h 中因该限制而手写的 cmpxchg 循环，直接使用 fetching 原子操作。
+### unwind, arm64: add sframe unwinder for kernel
+ - https://lore.kernel.org/all/20261007114335.440322-1-dylanbhatch@google.com
+ - Dylan Bhatch 发布 v8 补丁集（共 11 个），为内核实现通用的基于 SFrame 的栈回溯器（unwinder），主要目标是改善 arm64 上的可靠栈回溯，使其能跨异常边界展开。背景：x86 通过 ORC unwinder 以类似方式提供可靠栈回溯，但 arm64 缺少 objtool 生成 ORC 展开表所需的支持。本系列参考已有的用户态 SFrame unwinder 方案实现了类似的 SFrame 查找库，但因无需用户空间访问而做了大量简化，仅保留 arm64 内核回溯所必需的最小特性集，同时为将来内核与用户态展开共用定义和算法留有余地。与以往版本不同，本版直接基于 v7.3-rc3，不再依赖用户态 SFrame 系列；作者从该系列中采纳并合并、修改了若干补丁以适配内核场景，并通过 Co-developed-by 标注共同作者。目前仅 GNU Binutils 支持 SFrame，本系列依赖 binutils 2.46 起支持的 SFrame V3 格式，完整系列已发布于 GitHub。
 ### mm: Memory providers for guest_memfd and iommufd
  - https://lore.kernel.org/all/20261006183235.16576-1-griffoul@gmail.com
  - 该 RFC 引入通用内存提供者接口，让管理 page allocator 之外 RAM（carve-out、设备内存等）的驱动同时向 guest_memfd 和 iommufd 提供帧，并支持统一撤销：撤销时 KVM 清 stage-2、iommufd 清 IOMMU 页表、guest_memfd 清 VMM 映射，不再需要各自 symbol_get()。不支持机密虚拟机，作者借助 AI 辅助编写，以 RFC 形式征求接口评审。
