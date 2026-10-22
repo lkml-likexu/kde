@@ -9,6 +9,27 @@
 > 3. 自动判定为高精度但低召回（确认合入 96 条），存在漏判；如需对某条深入核实可单独指出。
 
 ## 2026年 第10期 (Start From 2026/10/01)
+### mm: zswap: reduce request contention on loads
+ - https://lore.kernel.org/all/20261017160918.2738626-1-usama.arif@linux.dev/
+ - 该3补丁系列减少zswap加载路径的请求争用。此前存取共用per-CPU的acomp请求与互斥锁，低优先级store在释放压缩流锁后仍持zswap锁时被抢占，会阻塞同CPU上高优先级的load。补丁1为压缩与解压分离请求/等待/互斥锁；补丁2（Herbert Xu）在初始化同步ACOMP变换时强制MAX_SYNC_COMP_REQSIZE；补丁3让同步解压使用栈上请求，彻底不取zswap锁（异步算法仍用per-CPU请求）。代价是per-CPU上下文增72字节、栈深约270字节。实测最慢读取从22.3ms降至0.97ms、314ms降至7.0ms。
+### mm: hugetlb: add CMA support for PMD-sized page
+ - https://lore.kernel.org/all/cover.1792136742.git.zhengqi.arch@bytedance.com/
+ - 该5补丁系列为HugeTLB的PMD大小页（如x86-64的2M）增加CMA支持。运行时分配PMD页会因内存碎片变慢或失败，启动时预留则使未用页无法用于普通分配；而现有仅针对gigantic页的CMA在1GiB对齐范围不足（受KASLR等早期预留影响）或页不可迁移时易失败。方案为hugetlb_cma参数新增可选@<page-size>后缀并建立独立的PMD池，如hugetlb_cma=4G hugetlb_cma=1G@2M，兼容原有无后缀用法。前置补丁引入每池状态并防止迁移时递归CMA分配。
+### erofs: enable iomap for file-backed mounts on unencoded inodes
+ - https://lore.kernel.org/all/20261017002758.52193-1-xiang@kernel.org/
+ - 该补丁为erofs在file-backed挂载（基于普通文件而非块设备）的未编码（unencoded，即非压缩）inode上启用iomap。自commit b2f35ac4146d为iomap添加了调用者提供的读/readahead回调后，iomap已支持非bdev的I/O，因此适用于此场景。启用后可在file-backed挂载上支持子folio粒度的缓冲I/O，并简化erofs代码实现。
+### fuse: DAX device based extent maps (famfs)
+ - https://lore.kernel.org/all/20261016151638.2962413-1-mszeredi@redhat.com/
+ - 这是famfs-fuse补丁集的FUSE化版本（v5，10个补丁），为FUSE引入基于DAX设备的extent map支持：extent map绑定到由服务端管理的64位backing ID；映射可为线性或循环（条带化）；API已预留嵌套能力（即单inode多条带extent，如famfs），但尚未实现。作者提供了libfuse与famfs测试分支及fuse.git的for-next分支，已在模拟dax设备上通过famfs smoke测试。
+### BPF-based per-cgroup NUMA balancing mode selection
+ - https://lore.kernel.org/all/20261019064157.29885-1-laoar.shao@gmail.com/
+ - 该RFC系列（5个补丁）为NUMA balancing引入按cgroup的细粒度控制，以满足同机上延迟敏感型与批处理型workload的不同需求。cgroup::numab_mode保存请求：-1表示沿用全局sysctl，否则为NUMA_BALANCING_*位掩码，通过bpf_numab_set_mode/get_mode两个kfunc读写，热路径经static key遍历祖先链，无请求时开销仅为一条被patch掉的分支。链上任意DISABLED即令该cgroup任务整体退出（但其内存仍遵循祖先其余请求），其余请求按位OR叠加，故祖先无法限制后代重新开启TIERING。schbench实测开销不可测量，性能等同对应的全局设置。
+### liveupdate: tmpfs preservation and early freeze
+ - https://lore.kernel.org/all/20261015093816.2438942-1-pasha.tatashin@soleen.com/
+ - 该系列7个补丁为LUO（live update orchestrator）增加tmpfs文件保存与提前冻结能力。一是新增LIVEUPDATE_SESSION_FREEZE ioctl，让用户态在用完会话后立即（可并行）冻结，避免kexec关机时串行冻结，缩短停机时间；已冻结会话跳过自动冻结，提前关闭则通过unfreeze回滚。二是为preserve/retrieve ioctl增加64位handler专用arg参数（含size字段，兼容旧用户态），并支持retrieve早期校验失败可重试。三是借该参数扩展memfd_luo，支持保存/恢复shmem-backed的tmpfs文件（以标志区分memfd与tmpfs），恢复时由用户态传入空的可写tmpfs fd供内核填充已保存页。
+### x86, sched, mm: Speed up CPU hotplug on large systems
+ - https://lore.kernel.org/all/20261019011446.834487-1-pasha.tatashin@soleen.com
+ - 这组8个补丁旨在加速大规模x86服务器的CPU热插拔（为live update服务）。补丁1-4优化x86硬件瓶颈：删除trampoline中过时的WBINVD、跳过mwait_play_dead中冗余的WBINVD、限定cmci_rediscover的IPI范围、在MTRR已匹配时跳过stop_machine集合。补丁5-8消除调度域构建、deadline带宽统计（dl_clear_root_domain）及vmstat阈值刷新中的O(N²)/O(N³)开销。结果：480核Intel总耗时从106.23秒降至5.07秒（快21倍），512核AMD从8.41秒降至3.38秒（快2.5倍）。
 ### KVM/VFIO: guest_memfd support for device MMIO resources
  - https://lore.kernel.org/all/20261010072504.536230-1-aneesh.kumar@kernel.org/
  - 该 RFC v1 补丁集（6 个）为 guest_memfd 新增"设备资源"框架，用于把 PCI BAR MMIO 暴露给虚拟机，面向机密设备直通场景。用户以 VFIO 设备 fd 作为 resource_fd，配合 USE_RESOURCE/DEVICE/INIT_SHARED 标志创建设备型 guest_memfd，沿用 VFIO region offset 命名空间，可覆盖多个 BAR 区间；此类 fd 禁止 mmap 与 fallocate，共享缺页直接取裸 BAR PFN。IOMMUFD 负责解析并锁定 vDEVICE、以互斥锁串行化 MMIO 私有/共享转换，VFIO 提供 PFN 并校验区间、排除 dma-buf 导出，转换前撤销已缓存映射。Arm CCA 后端另行提供，依赖 tmpfs 资源提供者与 IOMMUFD/TSM 两个前置系列。
