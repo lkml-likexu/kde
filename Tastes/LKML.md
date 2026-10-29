@@ -9,6 +9,33 @@
 > 3. 自动判定为高精度但低召回（确认合入 96 条），存在漏判；如需对某条深入核实可单独指出。
 
 ## 2026年 第10期 (Start From 2026/10/01)
+### memcg: dma-buf cgroup accounting and charge transfer
+- https://lore.kernel.org/all/20261021-v2_20230123_tjmercier_google_com-v2-0-ef6ee2dd8c5c@redhat.com/
+- 该RFC为dma-buf引入memcg记账：在dma_buf上统一记录MEMCG_DMABUF计费，取代__GFP_ACCOUNT；分配时可用pidfd或cgroupfd指定计费cgroup，新增ioctl支持事后转移计费，并配套LSM/SELinux权限控制及自测。现仅支持单一所有者。
+### guest_memfd: Export guest_memfd files to iommufd
+- https://lore.kernel.org/all/20261027154649.91571-1-griffoul@gmail.com/
+- 该RFC基于Ackerley的guest_memfd替代提供者系列，新增导出接口及update回调，使iommufd无需固定页面即可映射guest_memfd，并在转换、打洞、内存故障或撤销时同步设备映射。另含PFN模式改进，iommufd实现仅作演示。
+### alloc_tag: Introduce selective tracing for MAP
+- https://lore.kernel.org/all/cover.1792690544.git.abhishekbapat@google.com/
+- 该补丁集为内存分配分析(MAP)引入选择性追踪：在alloc_hooks_tag快速路径中新增alloc_tag_hit、alloc_tag_mem_alloced、alloc_tag_mem_freed三个追踪点，弥补仅有聚合计数器的不足。为避免全局追踪开销，新增IOCTL供特权用户借助现有过滤机制指定需追踪的分配标签。
+### pidfd: add task path ioctls
+- https://lore.kernel.org/all/20261027-pidfd-get-paths-v4-0-e2a6a47e3c95@black-desk.cn/
+- 该补丁集为pidfd新增PIDFD_GET_EXE、PIDFD_GET_CWD和PIDFD_GET_ROOT三个ioctl，返回目标任务可执行文件、工作目录、根目录的O_PATH文件描述符，无需依赖procfs。沿用ptrace权限检查，并在exec_update_lock下取样，防止与execve竞争。
+### sched_ext: Add NUMA balancing support
+- https://lore.kernel.org/all/20261027041536.3317971-1-arighi@nvidia.com/
+- 该补丁集让sched_ext支持NUMA均衡：BPF调度器实现ops.set_numa_node()即可启用提示缺页扫描，获知任务首选节点并自主决定放置，内核只迁移内存而不迁移任务。另增scx_bpf_task_numa_nid()及自测，后续将支持指定内存迁移节点。
+### kho: add read-only Kexec Handover mode
+- https://lore.kernel.org/all/20261025174017.3870481-1-pasha.tatashin@soleen.com/
+- 该补丁集新增只读KHO模式，通过kho_ro=<pa>启动。与主内核并行运行的精简看护(LC)内核可借此在Live Update期间只读访问KHO数据，维持虚拟机软件设备服务（停顿<30ms），且不破坏保留数据。另含公共代码抽取、加固及测试。
+### liveupdate: Preserve tmpfs files across Live Update
+- https://lore.kernel.org/all/20261022225035.377445-1-dmatlack@google.com/
+- 该补丁集让Live Update可保留tmpfs文件（不限于memfd）的内容、大小、位置和密封，恢复后由用户态选定挂载点和路径。新增handler专用参数，memfd_luo更名为shmem_luo，修复检索缺陷，保留需改尺寸权限，支持只读检索，并新增自测。
+### io_uring: futex wakeups that a preempted lower-priority task can't delay
+- https://lore.kernel.org/all/20261022024701.1574811-1-austin.linux@gmail.com/
+- PREEMPT_RT下，io_uring实时任务间的futex、MSG_RING、信号等唤醒，会因睡眠锁被低优先级任务持有而延迟达毫秒级。该RFC提出持久futex等待与注册唤醒，无需哈希桶锁和内存分配，实测最坏延迟降至约30微秒，并修复DEFER_TASKRUN唤醒问题。
+### Unwinding for synchronous callbacks
+- https://lore.kernel.org/all/cover.1793147364.git.memxor@gmail.com/
+- 该RFC补丁集让BPF同步回调可跨helper展开：新宏bpf_call_cb()借助异常表，使回调展开时先返回helper释放资源，再转至展开点，正常路径零开销。已覆盖bpf_loop等helper，并在x86-64上测试。
 ### mm: zswap: reduce request contention on loads
  - https://lore.kernel.org/all/20261017160918.2738626-1-usama.arif@linux.dev/
  - 该3补丁系列减少zswap加载路径的请求争用。此前存取共用per-CPU的acomp请求与互斥锁，低优先级store在释放压缩流锁后仍持zswap锁时被抢占，会阻塞同CPU上高优先级的load。补丁1为压缩与解压分离请求/等待/互斥锁；补丁2（Herbert Xu）在初始化同步ACOMP变换时强制MAX_SYNC_COMP_REQSIZE；补丁3让同步解压使用栈上请求，彻底不取zswap锁（异步算法仍用per-CPU请求）。代价是per-CPU上下文增72字节、栈深约270字节。实测最慢读取从22.3ms降至0.97ms、314ms降至7.0ms。
