@@ -8,6 +8,20 @@
 >    - ❔ 未自动检索到合入记录：**并不等于未合入**——文档常链接早期版本（RFC/v1），而合入的多为改版；此类需人工确认。
 > 3. 自动判定为高精度但低召回（确认合入 96 条），存在漏判；如需对某条深入核实可单独指出。
 
+## 2026年 第11期 (Start From 2026/11/01)
+### Introduce per-CPU debugfs files
+ - https://lore.kernel.org/all/20261030013817.753804-1-atomlin@atomlin.com/
+ - 该v10补丁系列修复调度器debugfs的内存安全与并发问题：为rq->rd添加__rcu注解，用RCU或task_lock修复多处释放后使用及竞态，修正CFS链表的RCU遍历，并新增每CPU debugfs文件。
+### sched: Scale cache-aware aggregation at LLC granularity
+ - https://lore.kernel.org/all/20261029022036.4002331-1-wujianyong@hygon.cn/
+ - 该RFC补丁集将缓存感知调度扩展至LLC粒度，跨LLC和NUMA节点聚合线程，用三角数打破距离平局以构建LLC亲和序列，并改进迁移判断。Hygon和Intel测试中，hackbench和schbench多数提升明显，少数配置回退待查。
+### resctrl: Generalize monitor events across resources
+ - https://lore.kernel.org/all/20261029123611.1108424-1-ruanjinjie@huawei.com
+ - 该RFC补丁集将resctrl监控事件从仅支持L3推广至多种资源：事件表按资源与事件索引，新增L2的l2c_occupancy和mbm_core_bytes，MBM状态、溢出处理等改为按资源管理。MPAM可选L2类，x86行为不变，已在QEMU中验证。
+### cells: a container as one kernel object
+ - https://lore.kernel.org/all/20261026-cells-rfc-v2-b41d7e0c95a3@toxicpanda.com/
+ - 该RFC v2提出“cell”内核对象，将容器作为单一实体：由外部用fd构建并密封，任务生于其中且不可进出，持cellfd即拥有权限。v2改用空pidfd创建任务，网络由外部配置，并就Pod、预算和嵌套命名空间等征求意见。
+
 ## 2026年 第10期 (Start From 2026/10/01)
 ### memcg: dma-buf cgroup accounting and charge transfer
 - https://lore.kernel.org/all/20261021-v2_20230123_tjmercier_google_com-v2-0-ef6ee2dd8c5c@redhat.com/
