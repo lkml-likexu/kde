@@ -9,6 +9,16 @@
 > 3. 自动判定为高精度但低召回（确认合入 96 条），存在漏判；如需对某条深入核实可单独指出。
 
 ## 2026年 第11期 (Start From 2026/11/01)
+
+### liveupdate: Add LIVEUPDATE_SESSION_FREEZE ioctl
+ - https://lore.kernel.org/all/20261105050053.3063001-1-pasha.tatashin@soleen.com/
+ - LUO 原先只在 kexec 路径里串行冻结各 session，且 session 生命周期严格绑定 FD。本系列（6 个补丁）新增 `LIVEUPDATE_SESSION_FREEZE` ioctl：flags=0 时按 per-session 锁并发冻结、关闭 FD 即解冻回收；带 `_COMMIT` 时冻结后立即以 O(1) 发布进 KHO，close() 后仍由 LUO 持有至重启。配套解耦 `luo_file_freeze()`、新增 KHO/session/FLB 增量发布辅助函数、uAPI 文档与 selftest。
+### kho, liveupdate: Add feature header for fine-grained ABI compatibility
+ - https://lore.kernel.org/all/20261110050202.529473-1-tarunsahu@google.com/
+ - v4 为正式版：为 KHO/LUO/PCI 的 13 个序列化结构加可扩展 `kho_ser_hdr`——定长头加变长 `flags[]`，required/optional 各占独立位段，取代固定 128 字节与特性数上限；`kho_vmalloc`、`luo_file_set_ser` 的内嵌结构改用 `KHOSER_PTR` 以保证跨内核字段偏移不变。
+### Improving latency of short slice tasks
+ - https://lore.kernel.org/all/20261106151947.3991524-1-vincent.guittot@linaro.org
+ - v3 共18补丁，五部分降低短 slice 任务延迟：正 lag 衰减、选核考虑 slice、fair 加 push 回调、push 迁移入队未跑成的短 slice 任务、feec 选核考虑 slice，并处理多任务同选空闲核。四短任务并发平均延迟 1051→61us，hackbench 最高 +25%；99.9 分位因 lag 衰减略差。
 ### Introduce per-CPU debugfs files
  - https://lore.kernel.org/all/20261030013817.753804-1-atomlin@atomlin.com/
  - 该v10补丁系列修复调度器debugfs的内存安全与并发问题：为rq->rd添加__rcu注解，用RCU或task_lock修复多处释放后使用及竞态，修正CFS链表的RCU遍历，并新增每CPU debugfs文件。
