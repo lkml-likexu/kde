@@ -10,6 +10,27 @@
 
 ## 2026年 第11期 (Start From 2026/11/01)
 
+### **[srcu: NMI-safe atomic SRCU readers, and their irqsave forms (v2 0/7)](https://lore.kernel.org/all/20261111145949.70845-1-mathieu.desnoyers@efficios.com)**  
+- Mathieu Desnoyers 为支持 RCU 伪事务而改造 atomic SRCU。修复 Tiny 版中 `synchronize_srcu_atomic()` 错误调用 `synchronize_rcu()` 的问题；明确在中断里等待时，所有调用方都必须关中断；让读端可在 NMI 中使用，新增 irqsave 读锁变体，并扩展 rcutorture 测试。
+
+### **[mm/damon: let users report their data attribute findings (RFC 00/27)](https://lore.kernel.org/all/20261115202849.99134-1-sj@kernel.org/)**  
+- SJ Park 为 DAMON 构建数据属性上报系统。新增可在任意上下文（含 NMI）调用的 `damon_submit_report()`，以及 REPORT_MADE 类型的探测过滤器。用户可通过 sysfs 手动上报自己掌握的热数据等信息，与 DAMON 自身的监控结果共同驱动内存操作。
+
+### **[add provenance time (ptime) (RFC v4 00/10)](https://lore.kernel.org/all/20261115180343.576773-1-koray.fra@gmail.com/)**  
+- 新增可由用户设置的文件"起源时间" ptime，通过 `file_setattr()`/`file_getattr()` 读写。新建文件时它等于 btime，备份、拷贝或迁移时可像 mtime 一样保留原始创建时间。已支持 btrfs、ntfs3、exfat、NFS 和 SMB，命名仍未最终确定。
+
+### **[mm/swap: introduce priority queues for swap device allocation (RFC v4 00/18)](https://lore.kernel.org/all/cover.1794666741.git.lianux.mm@gmail.com/)**  
+- Lian Wang 接手 Kairui Song 的 swap 优先级队列方案，把选择 swap 设备与设备内部的 cluster 分配解耦。每个设备拥有独立的 per-CPU cluster 缓存，原有 plist 被替换为"按优先级排列、同优先级成环"的数组，为后续 swap tier 集成铺路。性能测试结果基本持平。
+
+### **[memfd-based Userspace MFR Policy for HugeTLB (v4 0/3)](https://lore.kernel.org/all/20261115160105.2507650-1-jiaqiyan@google.com/)**  
+- Jiaqi Yan 新增 memfd 标志 `MFD_MF_KEEP_UE_MAPPED`。HugeTLB 大页出现可恢复内存错误时，内核不再丢弃整个大页，而是保留映射并发送 SIGBUS，由用户态（如 VMM）决定如何处理。截断、打洞或释放 memfd 时，健康的子页回归伙伴系统，损坏的子页被隔离。
+
+### **[mm: add in-memory compression of reclaimed pages (RFC 00/16)](https://lore.kernel.org/all/20261116110122.309748-1-nakixii@gmail.com/)**  
+- 基于 6.12 的概念验证 memcomp，用于征求社区意见。被回收的匿名页和 shmem 页压缩后直接存放在内存中（使用 zsmalloc），无需块设备，冷页可写回 swap。与 zram/zswap 相比，部分场景下缺页回填（refault）延迟更低，但在有真实 swap 时表现较差。代码约 4.6 万行。
+
+### **[KVM: guest_memfd: Add a common framework for device memory providers (RFC v5 00/16)](https://lore.kernel.org/all/20261112074120.1570072-1-aneesh.kumar@kernel.org/)**  
+- Aneesh Kumar 为机密设备直通扩展 guest_memfd，使其能够管理 PCI BAR 等设备 MMIO 内存。通过统一的 provider 回调处理 PFN 获取、属性校验、分配释放、host mmap 和缺页。v5 去掉了 VFIO 部分，先就所有 provider 都适用的 guest_memfd 核心改动达成共识。
+   
 ### liveupdate: Add LIVEUPDATE_SESSION_FREEZE ioctl
  - https://lore.kernel.org/all/20261105050053.3063001-1-pasha.tatashin@soleen.com/
  - LUO 原先只在 kexec 路径里串行冻结各 session，且 session 生命周期严格绑定 FD。本系列（6 个补丁）新增 `LIVEUPDATE_SESSION_FREEZE` ioctl：flags=0 时按 per-session 锁并发冻结、关闭 FD 即解冻回收；带 `_COMMIT` 时冻结后立即以 O(1) 发布进 KHO，close() 后仍由 LUO 持有至重启。配套解耦 `luo_file_freeze()`、新增 KHO/session/FLB 增量发布辅助函数、uAPI 文档与 selftest。
